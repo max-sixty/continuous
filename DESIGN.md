@@ -28,12 +28,9 @@ Three pieces:
    ```yaml
    bot_name: worktrunk-bot
    bot_id: "254187624"
-   auth: pat                          # or "app"
    secrets:
      bot_token: WORKTRUNK_BOT_TOKEN
      claude_token: CLAUDE_CODE_OAUTH_TOKEN
-   # app_id_var: APP_ID              # when auth: app
-   # app_private_key_secret: ...     # when auth: app
    ```
 
    The generator reads this and produces workflows. `continuous update`
@@ -70,9 +67,6 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    env:
-      CARGO_TERM_COLOR: always
-      RUSTFLAGS: "-C debuginfo=0"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -82,6 +76,7 @@ jobs:
 
       # --- project setup (edit this section) ---
       - uses: ./.github/actions/claude-setup
+      - run: echo "CARGO_TERM_COLOR=always" >> "$GITHUB_ENV"
       # --- end project setup ---
 
       - uses: max-sixty/continuous@v1
@@ -93,8 +88,9 @@ jobs:
           prompt: /review-pr ${{ github.event.pull_request.number }}
 ```
 
-The `# --- project setup ---` section is preserved across `continuous update`
-regenerations. Everything outside it is owned by the generator.
+The generator owns everything outside the `# --- project setup ---` markers.
+`continuous update` regenerates the owned sections while preserving the
+adopter's setup block (same approach as `cargo-dist`'s marker comments).
 
 ## What the composite action does
 
@@ -142,7 +138,7 @@ everything else.
 | Permissions | Generator | generated workflow |
 | Checkout | Generator | generated workflow |
 | Project setup (build tools, cache) | Adopter | `# --- project setup ---` section |
-| `env:` vars | Adopter | generated workflow (in project setup or job-level) |
+| `env:` vars | Adopter | `# --- project setup ---` section (as env-setting steps) |
 | Composite action call | Generator | generated workflow |
 | Bot identity, auth config | Adopter | `.continuous.yml` |
 | Skills (generic) | Continuous | installed at runtime by action |
@@ -230,8 +226,9 @@ running a CLI.
 The adopter's experience:
 
 1. Install our GitHub App
-2. Add `.continuous.yml` to their repo
-3. Our CI detects the config and opens a PR adding the workflow files
+2. Add `.continuous.yml` to their repo and push
+3. A webhook fires (App is installed, so we receive push events). Our
+   service detects the config and opens a PR adding the workflow files
 
 *Where workflows live:* In the adopter's repo, proposed by us via PR. The
 adopter reviews and merges. Once merged, they're identical to Model A
@@ -273,8 +270,10 @@ the other models lives in our code instead.
 adopter's runners — see Anthropic token options below). We check out the
 adopter's repo, install skills, and run Claude.
 
-This is the most cohesive UX and the only model that solves the fork PR
-inline comment gap (we receive all webhooks regardless of fork status).
+This is the most cohesive UX. It also partially addresses the fork PR gap:
+we receive all webhooks (including inline review comments on fork PRs) and
+can respond via the API regardless of fork status. Pushing code to fork
+branches still requires the fork author to enable maintainer edits.
 
 *Token leak risk:* Our service holds the App's private key and executes
 code in the context of the adopter's repo. A compromise of our
