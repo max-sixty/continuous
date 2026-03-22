@@ -34,7 +34,6 @@ jobs:
       bot_id: "YOUR_BOT_ID"
       pr_number: ${{ github.event.pull_request.number }}
       event_name: ${{ github.event_name }}
-      event_json: ${{ toJSON(github.event) }}
       trigger_phrase: "@YOUR_BOT"
     secrets:
       bot_token: ${{ secrets.BOT_TOKEN }}

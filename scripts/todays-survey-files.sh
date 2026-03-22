@@ -15,7 +15,7 @@ set -euo pipefail
 if [ $# -gt 0 ]; then
   PATTERNS=("$@")
 else
-  PATTERNS=('*.rs' '*.md' '*.toml' '*.yaml' '*.yml' '*.sh')
+  PATTERNS=('*.md' '*.yaml' '*.yml' '*.json' '*.sh')
 fi
 
 CYCLE_LENGTH=28

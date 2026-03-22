@@ -14,8 +14,10 @@ set -euo pipefail
 # Prevent gh from emitting ANSI color codes in non-TTY contexts.
 export NO_COLOR=1
 
-# Dynamically discover all claude-* workflows instead of maintaining a hardcoded list.
-mapfile -t WORKFLOWS < <(gh workflow list --json name --jq '.[].name | select(startswith("claude-"))')
+# Dynamically discover CD workflows. Accepts a prefix argument (default: "cd-").
+# Usage: ./list-recent-runs.sh [prefix]
+PREFIX="${1:-cd-}"
+mapfile -t WORKFLOWS < <(gh workflow list --json name --jq ".[].name | select(startswith(\"$PREFIX\"))")
 
 CREATED_SINCE=$(date -d '3 hours ago' +%Y-%m-%dT%H:%M:%S)
 COMPLETED_AFTER=$(date -d '1 hour ago' +%s)

@@ -1,11 +1,6 @@
 name: Continuous Development Setup
 description: Install CD generic skills and scripts for Claude CI workflows
 
-inputs:
-  skills-ref:
-    description: "Git ref to install skills from (default: v1)"
-    default: "v1"
-
 runs:
   using: composite
   steps:
