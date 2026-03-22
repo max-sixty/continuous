@@ -160,54 +160,81 @@ installed on, which means whoever holds the key has write access to every
 adopter's repo. Adopters who want ephemeral tokens can register their own
 GitHub App, but that's not part of the initial product.
 
-### Alternative auth models
+### Alternative models
 
-If we wanted a more cohesive offering — adopters install an App and get
-bot identity + tokens without creating their own bot account — there are
-three options, each with increasing scope.
+The design above (composite action + generator + PAT) optimizes for
+simplicity and zero trust — we never touch the adopter's repo. Below are
+three progressively more managed alternatives.
 
-**Shared App, adopter holds the key (no infra).** We publish a GitHub App.
-Each adopter installs it and stores the private key as their own repo secret.
-Tokens are ephemeral (~1h). The problem: the private key is the same for all
-installations. If any adopter's key leaks, the attacker can mint tokens for
-every repo the App is installed on. Each adopter could register their own App
-instead, but then we're back to each-adopter-does-setup.
+**Model A: Token-minting service (stateless infra).**
 
-**Token-minting service (stateless infra).** We hold the App's private key
-on a small service (Lambda, Cloud Run). The adopter's workflow authenticates
-to our service via GitHub's OIDC token (`id-token: write`) — this proves
-which repo is calling without any shared secret. Our service verifies the
-OIDC token, mints a scoped installation token for that specific repo, and
-returns it. The adopter's workflow uses the token for the rest of the job.
+The adopter's experience:
 
-The adopter's workflow adds one step:
+1. Install our GitHub App on their repo
+2. Run `continuous init` (generates workflow files, no secrets to configure
+   for GitHub — only the Claude token)
+3. Push the generated workflows. Done.
+
+Each workflow run authenticates to our service via GitHub's OIDC token
+(`id-token: write`), which proves the caller's repo identity without any
+shared secret. Our service mints a scoped installation token (~1h lifetime)
+for that repo and returns it. The workflow uses this token for the rest of
+the job.
 
 ```yaml
-- uses: max-sixty/continuous/auth@v1  # calls our service
+# In the generated workflow
+- uses: max-sixty/continuous/auth@v1  # OIDC → our service → scoped token
   id: auth
+- uses: actions/checkout@v6
+  with:
+    token: ${{ steps.auth.outputs.token }}
+- uses: ./.github/actions/project-setup   # adopter's own setup
 - uses: max-sixty/continuous@v1
   with:
     github_token: ${{ steps.auth.outputs.token }}
+    claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
-No bot account, no PAT, no private key in the adopter's repo. The service
-is stateless — it just validates OIDC and mints tokens. Operational cost is
-low (a single function, called once per workflow run). The trade-off is that
-we run infrastructure and the service is a trust boundary — adopters trust
-us not to abuse write access to their repos.
+No bot account, no PAT, no GitHub private key in the adopter's repo.
+Trigger logic and project setup remain in the adopter's generated
+workflows. The service is a single stateless function (Lambda / Cloud Run)
+called once per workflow run. We hold the App's private key; adopters trust
+us not to abuse write access. If the service is down, workflows fail at
+the auth step.
 
-**Full webhook handler (stateful infra).** We hold the private key and
-receive webhooks directly from GitHub. No workflow files in the adopter's
-repo at all — they install the App and configure via `.continuous.yml`. Our
-service handles trigger logic, engagement verification, concurrency, and
-dispatches Claude sessions on our infrastructure (or dispatches
-`workflow_dispatch` back to the adopter's repo for execution).
+**Model B: Managed workflows (stateless infra + generator).**
 
-This is the most cohesive UX — install and configure, nothing else. It also
-solves the fork PR inline comment gap (we receive all webhooks regardless
-of fork status). But it requires running a persistent service, handling
-webhook delivery, managing Claude session infrastructure, and billing.
-The adopter trusts us with both write access and workflow execution.
+Same as Model A, plus the generator runs as a GitHub Action in our repo
+instead of a local CLI. The adopter's experience:
+
+1. Install our GitHub App
+2. Add `.continuous.yml` to their repo
+3. Our CI detects the config and opens a PR adding the workflow files
+
+Updates work the same way — we push a PR when the generator changes.
+Adopters review and merge. Same trust model as A (we have write access via
+the App, but we only use it to propose workflow file changes via PRs — the
+adopter merges). Same auth (OIDC → token-minting service).
+
+**Model C: Full webhook handler (stateful infra).**
+
+The adopter's experience:
+
+1. Install our GitHub App
+2. Add `.continuous.yml` to their repo
+3. Done. No workflow files.
+
+We receive webhooks directly from GitHub. Our service handles trigger
+logic, engagement verification, concurrency, checkout, and Claude session
+execution. The adopter's repo has no workflow files for continuous at all —
+just the config file and optionally project-specific skills in
+`.claude/skills/`.
+
+This is the most cohesive UX and the only model that solves the fork PR
+inline comment gap (we receive all webhooks regardless of fork status). But
+it requires persistent infrastructure, Claude session management, and
+billing. The adopter trusts us with both repo write access and code
+execution.
 
 ## What lives in the continuous repo
 
