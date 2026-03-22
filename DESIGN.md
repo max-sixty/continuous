@@ -160,6 +160,55 @@ installed on, which means whoever holds the key has write access to every
 adopter's repo. Adopters who want ephemeral tokens can register their own
 GitHub App, but that's not part of the initial product.
 
+### Alternative auth models
+
+If we wanted a more cohesive offering — adopters install an App and get
+bot identity + tokens without creating their own bot account — there are
+three options, each with increasing scope.
+
+**Shared App, adopter holds the key (no infra).** We publish a GitHub App.
+Each adopter installs it and stores the private key as their own repo secret.
+Tokens are ephemeral (~1h). The problem: the private key is the same for all
+installations. If any adopter's key leaks, the attacker can mint tokens for
+every repo the App is installed on. Each adopter could register their own App
+instead, but then we're back to each-adopter-does-setup.
+
+**Token-minting service (stateless infra).** We hold the App's private key
+on a small service (Lambda, Cloud Run). The adopter's workflow authenticates
+to our service via GitHub's OIDC token (`id-token: write`) — this proves
+which repo is calling without any shared secret. Our service verifies the
+OIDC token, mints a scoped installation token for that specific repo, and
+returns it. The adopter's workflow uses the token for the rest of the job.
+
+The adopter's workflow adds one step:
+
+```yaml
+- uses: max-sixty/continuous/auth@v1  # calls our service
+  id: auth
+- uses: max-sixty/continuous@v1
+  with:
+    github_token: ${{ steps.auth.outputs.token }}
+```
+
+No bot account, no PAT, no private key in the adopter's repo. The service
+is stateless — it just validates OIDC and mints tokens. Operational cost is
+low (a single function, called once per workflow run). The trade-off is that
+we run infrastructure and the service is a trust boundary — adopters trust
+us not to abuse write access to their repos.
+
+**Full webhook handler (stateful infra).** We hold the private key and
+receive webhooks directly from GitHub. No workflow files in the adopter's
+repo at all — they install the App and configure via `.continuous.yml`. Our
+service handles trigger logic, engagement verification, concurrency, and
+dispatches Claude sessions on our infrastructure (or dispatches
+`workflow_dispatch` back to the adopter's repo for execution).
+
+This is the most cohesive UX — install and configure, nothing else. It also
+solves the fork PR inline comment gap (we receive all webhooks regardless
+of fork status). But it requires running a persistent service, handling
+webhook delivery, managing Claude session infrastructure, and billing.
+The adopter trusts us with both write access and workflow execution.
+
 ## What lives in the continuous repo
 
 ```
