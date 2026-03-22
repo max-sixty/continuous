@@ -178,13 +178,16 @@ model.
 default model. The only difference is how the GitHub token is obtained — an
 OIDC call to our service replaces reading a PAT from repo secrets.
 
-We register a GitHub App and hold its private key on our service — the
-adopter never sees it. When the adopter installs the App on their repo,
-GitHub records the installation. Each workflow run authenticates to our
-service via GitHub's OIDC token (`id-token: write`), which proves the
-caller's repo identity without any shared secret. Our service verifies the
-OIDC token, uses the private key to mint a scoped installation token (~1h
-lifetime) for that specific repo, and returns it.
+We register a GitHub App and hold its private key — same as any GitHub
+App (Codecov, Renovate, etc.). The adopter installs the App on their repo,
+granting it the permissions it requests. This is the standard GitHub App
+trust model: the adopter trusts the App by installing it, like installing
+any third-party App.
+
+Each workflow run authenticates to our service via GitHub's OIDC token
+(`id-token: write`), which proves the caller's repo identity. Our service
+mints a scoped installation token (~1h lifetime) for that repo and
+returns it.
 
 ```yaml
 - uses: max-sixty/continuous/auth@v1  # OIDC → our service → scoped token
@@ -201,19 +204,15 @@ lifetime) for that specific repo, and returns it.
 
 *Token leak risk:* The GitHub token minted during a workflow run is scoped
 to that single repo and expires in ~1h. A prompt injection that exfiltrates
-it gets temporary write access to one repo — same blast radius as the
-default model's PAT during a single run, but the exposure window is bounded.
-The App's private key never touches the adopter's repo or workflow; it lives
-only on our service.
+it gets temporary, single-repo write access — vs the default model's PAT
+which is permanent and potentially multi-repo.
 
 *Anthropic token:* The adopter stores their own `CLAUDE_CODE_OAUTH_TOKEN` as
 a repo secret. We never see it — it's passed directly from the workflow to
 `claude-code-action`. Each adopter uses their own Anthropic billing.
 
-Our service holds the App's private key — this is a persistent secret,
-though the service itself has no database or other state. Model A could be
-extended to push workflow updates via PR, but this requires a webhook
-handler to detect config changes.
+Model A could be extended to push workflow updates via PR, but this
+requires a webhook handler to detect config changes.
 
 **Model B: Full webhook handler.**
 
@@ -241,8 +240,8 @@ we receive all webhooks (including inline review comments on fork PRs) and
 can respond via the API regardless of fork status. Pushing code to fork
 branches still requires the fork author to enable maintainer edits.
 
-*Token leak risk:* Same as Model A, we hold the App's private key. But
-here our service also executes code in the context of the adopter's repo. A compromise of our
+*Token leak risk:* Same App key arrangement as Model A, but here our
+service also executes code in the context of the adopter's repo. A compromise of our
 infrastructure exposes write access to every adopter's repo and their
 code. This is a fundamentally different trust model — the adopter trusts
 us with code execution, not just token minting.
