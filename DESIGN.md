@@ -10,11 +10,27 @@ dependency updates.
 
 Three pieces:
 
-1. **Composite action** (`max-sixty/continuous@v1`) — installs generic CD
-   skills into `.claude/skills/`, invokes `claude-code-action`, uploads session
-   logs. This is the stable interface. It receives a `github_token`, a
-   `claude_code_oauth_token`, a `prompt`, and bot identity. It doesn't know or
-   care about triggers, checkout, or project setup.
+1. **Composite action** (`max-sixty/continuous@v1`) — the stable interface.
+   Three steps: install generic CD skills into `.claude/skills/`, invoke
+   `claude-code-action`, upload session logs. Inputs:
+
+   ```yaml
+   inputs:
+     github_token: { required: true }
+     claude_code_oauth_token: { required: true }
+     bot_name: { required: true }
+     bot_id: { required: true }
+     prompt: { required: true }
+     model: { default: "opus" }
+     allowed_tools: { default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill" }
+     system_prompt_append: { default: "..." }
+     trigger_phrase: { default: "" }
+     allowed_bots: { default: "*" }
+     allowed_non_write_users: { default: "*" }
+     show_full_output: { default: "true" }
+   ```
+
+   It doesn't know or care about triggers, checkout, or project setup.
 
 2. **Generator** (`continuous init` / `continuous update`) — stamps out caller
    workflows into the adopter's `.github/workflows/`. These contain the trigger
@@ -91,41 +107,6 @@ jobs:
 The generator owns everything outside the `# --- project setup ---` markers.
 `continuous update` regenerates the owned sections while preserving the
 adopter's setup block (same approach as `cargo-dist`'s marker comments).
-
-## What the composite action does
-
-```yaml
-# max-sixty/continuous/action.yaml
-inputs:
-  github_token: { required: true }
-  claude_code_oauth_token: { required: true }
-  bot_name: { required: true }
-  bot_id: { required: true }
-  prompt: { required: true }
-  model: { default: "opus" }
-  allowed_tools: { default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill" }
-  system_prompt_append: { default: "..." }
-  trigger_phrase: { default: "" }
-  allowed_bots: { default: "*" }
-  allowed_non_write_users: { default: "*" }
-  show_full_output: { default: "true" }
-
-steps:
-  - name: Install CD skills
-    # copies skills/ into .claude/skills/ (won't overwrite existing)
-
-  - name: Run Claude Code
-    uses: anthropics/claude-code-action@v1
-    with: ...
-
-  - name: Upload session logs
-    if: always()
-    uses: actions/upload-artifact@v7
-    with: ...
-```
-
-Small surface area. Three steps, one set of inputs. The caller handles
-everything else.
 
 ## What the generator owns vs what the adopter owns
 
@@ -218,38 +199,11 @@ only on our service.
 a repo secret. We never see it — it's passed directly from the workflow to
 `claude-code-action`. Each adopter uses their own Anthropic billing.
 
-**Model B: Managed workflows (stateless infra + generator).**
+Model A could be extended to push workflow updates via PR (instead of the
+adopter running `continuous update`), but this requires a webhook handler
+to detect config changes — adding infra for a marginal UX improvement.
 
-Same as Model A, except we push workflow updates instead of the adopter
-running a CLI.
-
-The adopter's experience:
-
-1. Install our GitHub App
-2. Add `.continuous.yml` to their repo and push
-3. A webhook fires (App is installed, so we receive push events). Our
-   service detects the config and opens a PR adding the workflow files
-
-*Where workflows live:* In the adopter's repo, proposed by us via PR. The
-adopter reviews and merges. Once merged, they're identical to Model A
-workflows.
-
-*Where triggers are defined:* Same as A — in the generated workflow files
-in the adopter's repo.
-
-*Where workflows run:* Same as A — on the adopter's runners.
-
-Updates work the same way — we push a PR when the generator changes.
-The App's write access is used only to open PRs; the adopter decides
-whether to merge.
-
-*Token leak risk:* Same as Model A — OIDC-minted tokens, ~1h lifetime,
-single-repo scope.
-
-*Anthropic token:* Same as Model A — adopter's own repo secret, we never
-see it.
-
-**Model C: Full webhook handler (stateful infra).**
+**Model B: Full webhook handler (stateful infra).**
 
 The adopter's experience:
 
