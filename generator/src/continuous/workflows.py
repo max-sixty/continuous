@@ -22,6 +22,12 @@ def _claude_token(cfg: Config) -> str:
     return f"${{{{ secrets.{cfg.claude_token_secret} }}}}"
 
 
+def _append_sys_prompt(lines: list[str], cfg: Config) -> None:
+    """Add system_prompt_append to the action block if configured."""
+    if cfg.system_prompt_append:
+        lines.append(f'          system_prompt_append: "{cfg.system_prompt_append}"')
+
+
 def _permissions(*, issues: bool = True) -> dict:
     perms = {
         "contents": "write",
@@ -121,6 +127,7 @@ def _render_review_yaml(cfg: Config, pr_num: str) -> str:
     lines.append(f"          claude_code_oauth_token: {_claude_token(cfg)}")
     lines.append(f"          bot_name: {cfg.bot_name}")
     lines.append(f'          bot_id: "{cfg.bot_id}"')
+    _append_sys_prompt(lines, cfg)
     lines.append(f"          trigger_phrase: \"@{cfg.bot_name}\"")
     lines.append("          use_sticky_comment: ${{ github.event_name == 'pull_request_target' }}")
     lines.append(f"          prompt: >-")
@@ -301,6 +308,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     lines.append(f"          claude_code_oauth_token: {_claude_token(cfg)}")
     lines.append(f"          bot_name: {cfg.bot_name}")
     lines.append(f'          bot_id: "{cfg.bot_id}"')
+    _append_sys_prompt(lines, cfg)
     lines.append("          prompt: >-")
 
     # Issue edit prompt
@@ -368,6 +376,7 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
     lines.append(f"          claude_code_oauth_token: {_claude_token(cfg)}")
     lines.append(f"          bot_name: {cfg.bot_name}")
     lines.append(f'          bot_id: "{cfg.bot_id}"')
+    _append_sys_prompt(lines, cfg)
     lines.append(f"          prompt: \"{prompt}\"")
 
     lines.append("")
@@ -424,6 +433,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     lines.append(f"          claude_code_oauth_token: {_claude_token(cfg)}")
     lines.append(f"          bot_name: {cfg.bot_name}")
     lines.append(f'          bot_id: "{cfg.bot_id}"')
+    _append_sys_prompt(lines, cfg)
     lines.append("          prompt: |")
     lines.append(f"            {prompt_expr}")
     lines.append("            - Run URL: ${{ github.event.workflow_run.html_url }}")
@@ -474,6 +484,7 @@ def _generate_scheduled(cfg: Config, name: str, default_cron: str, default_promp
     lines.append(f"          claude_code_oauth_token: {_claude_token(cfg)}")
     lines.append(f"          bot_name: {cfg.bot_name}")
     lines.append(f'          bot_id: "{cfg.bot_id}"')
+    _append_sys_prompt(lines, cfg)
     if "\n" in prompt:
         lines.append("          prompt: |")
         for pline in prompt.split("\n"):

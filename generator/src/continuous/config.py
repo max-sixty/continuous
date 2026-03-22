@@ -23,6 +23,7 @@ class Config:
     bot_id: str
     bot_token_secret: str
     claude_token_secret: str
+    system_prompt_append: str
     workflows: dict[str, WorkflowConfig]
 
     @classmethod
@@ -52,5 +53,6 @@ class Config:
             bot_id=str(raw["bot_id"]),
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
             claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
+            system_prompt_append=raw.get("system_prompt_append", ""),
             workflows=workflows,
         )
