@@ -10,6 +10,14 @@ import click
 
 
 @dataclass
+class SetupStep:
+    """A single project setup step — either a `uses:` action or a `run:` command."""
+
+    uses: str = ""
+    run: str = ""
+
+
+@dataclass
 class WorkflowConfig:
     enabled: bool = True
     prompt: str = ""
@@ -24,6 +32,7 @@ class Config:
     bot_token_secret: str
     claude_token_secret: str
     system_prompt_append: str
+    setup: list[SetupStep]
     workflows: dict[str, WorkflowConfig]
 
     @classmethod
@@ -36,6 +45,15 @@ class Config:
             raw = tomllib.load(f)
 
         secrets = raw.get("secrets", {})
+
+        # Parse setup steps
+        setup: list[SetupStep] = []
+        setup_raw = raw.get("setup", {})
+        for action in setup_raw.get("uses", []):
+            setup.append(SetupStep(uses=action))
+        for cmd in setup_raw.get("run", []):
+            setup.append(SetupStep(run=cmd))
+
         workflows: dict[str, WorkflowConfig] = {}
         for name, wf_raw in raw.get("workflows", {}).items():
             if isinstance(wf_raw, dict):
@@ -54,5 +72,6 @@ class Config:
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
             claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
             system_prompt_append=raw.get("system_prompt_append", ""),
+            setup=setup,
             workflows=workflows,
         )
