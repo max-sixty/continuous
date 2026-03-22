@@ -37,16 +37,24 @@ Three pieces:
    events, `if:` conditions, engagement verification, concurrency groups,
    checkout, and the call to the composite action. The adopter commits the
    generated files. Regeneration preserves project-specific config from
-   `.continuous.yml`.
+   `.config/continuous.toml`.
 
-3. **Config** (`.continuous.yml`) — stores the inputs to the generator:
+3. **Config** (`.config/continuous.toml`) — stores the inputs to the generator:
 
-   ```yaml
-   bot_name: worktrunk-bot
-   bot_id: "254187624"
-   secrets:
-     bot_token: WORKTRUNK_BOT_TOKEN
-     claude_token: CLAUDE_CODE_OAUTH_TOKEN
+   ```toml
+   bot_name = "worktrunk-bot"
+   bot_id = "254187624"
+
+   [secrets]
+   bot_token = "WORKTRUNK_BOT_TOKEN"
+   claude_token = "CLAUDE_CODE_OAUTH_TOKEN"
+
+   [workflows.review]
+   [workflows.mention]
+   [workflows.triage]
+   [workflows.ci-fix]
+   [workflows.nightly]
+   [workflows.renovate]
    ```
 
    The generator reads this and produces workflows. `continuous update`
@@ -121,7 +129,7 @@ adopter's setup block (same approach as `cargo-dist`'s marker comments).
 | Project setup (build tools, cache) | Adopter | `# --- project setup ---` section |
 | `env:` vars | Adopter | `# --- project setup ---` section (as env-setting steps) |
 | Composite action call | Generator | generated workflow |
-| Bot identity, auth config | Adopter | `.continuous.yml` |
+| Bot identity, auth config | Adopter | `.config/continuous.toml` |
 | Skills (generic) | Continuous | installed at runtime by action |
 | Skills (project-specific) | Adopter | `.claude/skills/` in their repo |
 
@@ -275,24 +283,13 @@ continuous/
 │   ├── cd-ci-fix/
 │   └── cd-nightly/
 ├── scripts/                # Helper scripts installed by the action
-├── generator/              # Workflow generator (continuous init/update)
+├── generator/              # Python package (uvx continuous init/update)
+│   ├── pyproject.toml
+│   └── src/continuous/
 ├── docs/
 │   └── security-model.md
 └── README.md
 ```
 
-No reusable workflows. No templates directory (the generator replaces
-templates). The skills and composite action are the product; the generator is
-the distribution mechanism.
-
-## Migration from current branch
-
-The `extract-cd` branch has reusable workflows + caller workflows. To pivot:
-
-1. Replace the 7 reusable workflows in continuous with one composite action
-2. Delete `ci-setup.sh` from worktrunk (setup goes back to the composite
-   action, referenced in the generated workflow's project setup section)
-3. Convert worktrunk's caller workflows from `uses: workflow_call` to
-   standalone `steps:` jobs that call the composite action
-4. Add `.continuous.yml` to worktrunk
-5. Build the generator (v1 can be a shell script)
+No reusable workflows. The skills and composite action are the product; the
+generator is the distribution mechanism.
