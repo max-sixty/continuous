@@ -7,7 +7,6 @@ name: review-reviewers
 #
 # TODO: Move repo list to a config file so adding a repo doesn't require a workflow change
 # TODO: Cross-repo pattern detection — correlate findings across repos
-# TODO: Add tend itself (max-sixty/tend) once it has sufficient CI history
 on:
   schedule:
     - cron: '47 * * * *'
@@ -21,6 +20,8 @@ jobs:
         include:
           - repo: max-sixty/worktrunk
             token_secret: WORKTRUNK_BOT_TOKEN
+          - repo: max-sixty/tend
+            token_secret: BOT_TOKEN
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
