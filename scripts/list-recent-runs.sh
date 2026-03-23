@@ -28,10 +28,19 @@ if [ -n "${TARGET_REPO:-}" ]; then
   repo_args=(-R "$TARGET_REPO")
 fi
 
-# Dynamically discover tend workflows. Accepts a prefix argument (default: "tend-").
-# Usage: ./list-recent-runs.sh [prefix]
-PREFIX="${1:-tend-}"
-mapfile -t WORKFLOWS < <(gh workflow list "${repo_args[@]}" --json name --jq ".[].name | select(startswith(\"$PREFIX\"))")
+# Dynamically discover workflows by prefix. Multiple prefixes supported.
+# Usage: ./list-recent-runs.sh [prefix ...]
+if [ $# -eq 0 ]; then
+  PREFIXES=("tend-")
+else
+  PREFIXES=("$@")
+fi
+
+WORKFLOWS=()
+for prefix in "${PREFIXES[@]}"; do
+  mapfile -t matches < <(gh workflow list "${repo_args[@]}" --json name --jq ".[].name | select(startswith(\"$prefix\"))")
+  WORKFLOWS+=("${matches[@]}")
+done
 
 CREATED_SINCE=$(date -d '3 hours ago' +%Y-%m-%dT%H:%M:%S)
 COMPLETED_AFTER=$(date -d '1 hour ago' +%s)

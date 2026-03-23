@@ -189,7 +189,10 @@ List recently completed Claude CI runs on the target repo:
 TARGET_REPO=$ARGUMENTS .github/scripts/list-recent-runs.sh
 ```
 
-The script uses `TARGET_REPO` and `TARGET_REPO_TOKEN` from the environment.
+The script discovers `tend-*` workflows by default. Pass additional prefixes
+as arguments to include other workflows (e.g., `review-reviewers` when
+analyzing tend itself).
+
 If empty, report "no runs to review" and exit.
 
 ## Step 2: Download and analyze session logs
