@@ -63,5 +63,5 @@ Automated fix for [failed run](run-url)
 
 ### 4. Monitor CI
 
-Poll CI using the approach from `/tend-running-in-ci`. If CI fails, diagnose with
+Poll CI using the approach from `/tend:tend-running-in-ci`. If CI fails, diagnose with
 `gh run view <run-id> --log-failed`, fix, commit, push, and repeat.

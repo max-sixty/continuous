@@ -23,7 +23,7 @@ inputs:
     default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill"
     description: Comma-separated list of allowed tools
   system_prompt_append:
-    default: "You are operating in a GitHub Actions CI environment. Use /tend-running-in-ci before starting work."
+    default: "You are operating in a GitHub Actions CI environment. Use /tend:tend-running-in-ci before starting work."
     description: Text appended to the system prompt
   allowed_bots:
     default: "*"
