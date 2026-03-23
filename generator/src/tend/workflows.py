@@ -327,7 +327,7 @@ jobs:
                 && format('A user left an inline review comment on a PR where you previously participated (PR #{{0}}, {{1}}, review comment ID {{2}}). Read the full context. Only respond if the comment is directed at you or requests changes. Reply in the review thread using `gh api repos/{{3}}/pulls/{{0}}/comments/{{2}}/replies -f body="..."`.', {pr}, github.event.comment.html_url, github.event.comment.id, github.repository))
               || (contains(github.event.comment.body, '@{bn}')
                 && format('You were mentioned in a comment ({{0}}). Read the full issue or PR (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push.', github.event.comment.html_url))
-              || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between humans, exit silently.', github.event.comment.html_url)
+              || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. A comment that responds to concerns you raised in a review is directed at you — briefly acknowledge that the concerns are resolved (or explain why they are not). If the conversation is between humans, exit silently.', github.event.comment.html_url)
             }}}}
 """
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
