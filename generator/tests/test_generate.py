@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -118,9 +119,9 @@ def test_watched_workflows(tmp_path: Path) -> None:
     assert '"lint"' in ci_fix.content
 
 
-def test_cli_init_dry_run(tmp_path: Path, monkeypatch: object) -> None:
+def test_cli_init_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _minimal_config(tmp_path)
-    monkeypatch.chdir(tmp_path)  # type: ignore[union-attr]
+    monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     result = runner.invoke(main, ["init", "--dry-run"])
     assert result.exit_code == 0
@@ -129,9 +130,9 @@ def test_cli_init_dry_run(tmp_path: Path, monkeypatch: object) -> None:
     assert not (tmp_path / ".github" / "workflows").exists()
 
 
-def test_cli_init_writes_files(tmp_path: Path, monkeypatch: object) -> None:
+def test_cli_init_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _minimal_config(tmp_path)
-    monkeypatch.chdir(tmp_path)  # type: ignore[union-attr]
+    monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     result = runner.invoke(main, ["init"])
     assert result.exit_code == 0

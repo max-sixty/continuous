@@ -44,6 +44,19 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Security preflight
+      shell: bash
+      run: |
+        DEFAULT_BRANCH=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')
+        PROTECTED=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq '.protected')
+        if [ "$PROTECTED" != "true" ]; then
+          echo "::error::Default branch '${DEFAULT_BRANCH}' is NOT protected. Without branch protection, the bot can merge PRs without review. Add a branch protection rule or ruleset before using Continuous. See docs/security-model.md in the Continuous repo."
+          exit 1
+        fi
+        echo "Security preflight passed: default branch '${DEFAULT_BRANCH}' is protected"
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+
     - name: Install CI skills
       shell: bash
       run: |

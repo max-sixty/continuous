@@ -73,6 +73,7 @@ claude_token = "MY_CLAUDE_TOKEN"
 
 ```bash
 uvx tend init
+uvx tend check          # verify branch protection, secrets, bot access
 git add .github/workflows/continuous-*.yaml .config/continuous.toml
 git commit -m "Add continuous workflows"
 git push
