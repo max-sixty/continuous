@@ -59,7 +59,7 @@ class GeneratedWorkflow:
 
 def generate_review(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("review", WorkflowConfig())
-    raw_prompt = wf.prompt or "/cd-review {pr_number}"
+    raw_prompt = wf.prompt or "/continuous-review {pr_number}"
     escaped = _escape(raw_prompt.replace("{pr_number}", "{0}"))
     needs_format = "{0}" in escaped
     if needs_format:
@@ -76,7 +76,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
 
     content = f"""\
 {HEADER}
-name: cd-review
+name: continuous-review
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
@@ -139,7 +139,7 @@ jobs:
                 github.event.review.html_url
               ) }}}}
 """
-    return GeneratedWorkflow(filename="cd-review.yaml", content=content)
+    return GeneratedWorkflow(filename="continuous-review.yaml", content=content)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
 
     content = f"""\
 {HEADER}
-name: cd-mention
+name: continuous-mention
 on:
   issues:
     types: [edited]
@@ -307,7 +307,7 @@ jobs:
               || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between humans, exit silently.', github.event.comment.html_url)
             }}}}
 """
-    return GeneratedWorkflow(filename="cd-mention.yaml", content=content)
+    return GeneratedWorkflow(filename="continuous-mention.yaml", content=content)
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ jobs:
 
 def generate_triage(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("triage", WorkflowConfig())
-    prompt = (wf.prompt or "/cd-triage {issue_number}").replace(
+    prompt = (wf.prompt or "/continuous-triage {issue_number}").replace(
         "{issue_number}", "${{ github.event.issue.number }}"
     )
     bt = _bot_token(cfg)
@@ -328,7 +328,7 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
 
     content = f"""\
 {HEADER}
-name: cd-triage
+name: continuous-triage
 on:
   issues:
     types: [opened]
@@ -363,7 +363,7 @@ jobs:
           bot_name: {bn}
           prompt: "{prompt}"
 """
-    return GeneratedWorkflow(filename="cd-triage.yaml", content=content)
+    return GeneratedWorkflow(filename="continuous-triage.yaml", content=content)
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +373,7 @@ jobs:
 def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("ci-fix", WorkflowConfig())
     watched = wf.watched_workflows or ["ci"]
-    prompt = (wf.prompt or "/fix-ci {run_id}").replace(
+    prompt = (wf.prompt or "/continuous-ci-fix {run_id}").replace(
         "{run_id}", "${{ github.event.workflow_run.id }}"
     )
     bt = _bot_token(cfg)
@@ -386,7 +386,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
 
     content = f"""\
 {HEADER}
-name: cd-ci-fix
+name: continuous-ci-fix
 on:
   workflow_run:
     workflows: [{watched_yaml}]
@@ -421,7 +421,7 @@ jobs:
             - Commit: ${{{{ github.event.workflow_run.head_sha }}}}
             - Commit message: ${{{{ github.event.workflow_run.head_commit.message }}}}
 """
-    return GeneratedWorkflow(filename="cd-ci-fix.yaml", content=content)
+    return GeneratedWorkflow(filename="continuous-ci-fix.yaml", content=content)
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +448,7 @@ def _generate_scheduled(cfg: Config, name: str, default_cron: str, default_promp
 
     content = f"""\
 {HEADER}
-name: cd-{name}
+name: continuous-{name}
 on:
   schedule:
     - cron: '{cron}'
@@ -477,15 +477,15 @@ jobs:
           bot_name: {bn}
           {prompt_yaml}
 """
-    return GeneratedWorkflow(filename=f"cd-{name}.yaml", content=content)
+    return GeneratedWorkflow(filename=f"continuous-{name}.yaml", content=content)
 
 
 def generate_nightly(cfg: Config) -> GeneratedWorkflow:
-    return _generate_scheduled(cfg, "nightly", "17 6 * * *", "/cd-nightly")
+    return _generate_scheduled(cfg, "nightly", "17 6 * * *", "/continuous-nightly")
 
 
 def generate_renovate(cfg: Config) -> GeneratedWorkflow:
-    return _generate_scheduled(cfg, "renovate", "17 9 * * 0", "/cd-renovate")
+    return _generate_scheduled(cfg, "renovate", "17 9 * * 0", "/continuous-renovate")
 
 
 # ---------------------------------------------------------------------------
