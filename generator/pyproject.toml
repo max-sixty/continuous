@@ -1,24 +1,32 @@
-[project]
-name = "continuous"
-version = "0.1.0"
-description = "Generator for Claude-powered CI workflows"
-requires-python = ">=3.11"
-dependencies = [
-    "click>=8.0",
-]
-
-[project.scripts]
-continuous = "continuous.cli:main"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project]
+name = "tend"
+version = "0.0.1"
+description = "Claude-powered CI for GitHub repos"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Maximilian Roos", email = "m@maxroos.com" }]
+classifiers = [
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = ["click>=8.0"]
+
+[project.scripts]
+tend = "continuous.cli:main"
+
+[project.urls]
+homepage = "https://github.com/max-sixty/tend"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/continuous"]
 
 [dependency-groups]
-dev = [
-    "pytest>=9.0.2",
-    "pyyaml>=6.0.3",
-]
+dev = ["pytest>=9.0.2", "pyyaml>=6.0.3"]
