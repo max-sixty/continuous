@@ -141,9 +141,10 @@ jobs:
 
       - name: Check out PR branch (review response)
         if: github.event_name == 'pull_request_review'
-        run: gh pr checkout ${{{{ github.event.pull_request.number }}}}
+        run: gh pr checkout "$PR_NUMBER"
         env:
           GH_TOKEN: {bt}
+          PR_NUMBER: ${{{{ github.event.pull_request.number }}}}
 {setup}
       - uses: max-sixty/continuous@v1
         with:
@@ -302,7 +303,6 @@ jobs:
           (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
           github.event_name == 'pull_request_review_comment'
         run: |
-          PR_NUMBER=${{{{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}}}
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
           if [ "$PR_STATE" = "OPEN" ]; then
             gh pr checkout "$PR_NUMBER"
@@ -311,6 +311,7 @@ jobs:
           fi
         env:
           GH_TOKEN: {bt}
+          PR_NUMBER: ${{{{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}}}
 {setup}
       - uses: max-sixty/continuous@v1
         with:
