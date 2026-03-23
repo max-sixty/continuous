@@ -10,7 +10,7 @@ dependency updates.
 
 Three pieces:
 
-1. **Composite action** (`max-sixty/continuous@v1`) — the stable interface.
+1. **Composite action** (`max-sixty/tend@v1`) — the stable interface.
    Installs generic skills into `.claude/skills/`, resolves the bot's numeric
    ID at runtime, invokes `claude-code-action`, uploads session logs. Inputs:
 
@@ -35,7 +35,7 @@ Three pieces:
 
    The action doesn't know or care about triggers, checkout, or project setup.
 
-2. **Generator** (`uvx continuous init`) — stamps out workflow files into the
+2. **Generator** (`uvx tend init`) — stamps out workflow files into the
    adopter's `.github/workflows/`. These contain the trigger events, `if:`
    conditions, engagement verification, concurrency groups, checkout, project
    setup steps, and the call to the composite action. The adopter commits the
@@ -101,7 +101,7 @@ jobs:
 
       - uses: ./.github/actions/claude-setup
 
-      - uses: max-sixty/continuous@v1
+      - uses: max-sixty/tend@v1
         with:
           github_token: ${{ secrets.WORKTRUNK_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -191,13 +191,13 @@ mints a scoped installation token (~1h lifetime) for that repo and
 returns it.
 
 ```yaml
-- uses: max-sixty/continuous/auth@v1  # OIDC → our service → scoped token
+- uses: max-sixty/tend/auth@v1  # OIDC → our service → scoped token
   id: auth
 - uses: actions/checkout@v6
   with:
     token: ${{ steps.auth.outputs.token }}
 - uses: ./.github/actions/project-setup
-- uses: max-sixty/continuous@v1
+- uses: max-sixty/tend@v1
   with:
     github_token: ${{ steps.auth.outputs.token }}
     claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -278,7 +278,7 @@ continuous/
 │   ├── continuous-renovate/
 │   └── continuous-review-reviewers/
 ├── scripts/                # Helper scripts installed by the action
-├── generator/              # Python package (uvx continuous init)
+├── generator/              # Python package (uvx tend init)
 │   ├── pyproject.toml
 │   └── src/continuous/
 ├── docs/

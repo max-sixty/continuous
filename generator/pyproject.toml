@@ -23,7 +23,7 @@ dependencies = ["click>=8.0"]
 tend = "continuous.cli:main"
 
 [project.urls]
-homepage = "https://github.com/max-sixty/continuous"
+homepage = "https://github.com/max-sixty/tend"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/continuous"]

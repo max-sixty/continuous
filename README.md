@@ -9,7 +9,7 @@ CI fixes, nightly sweeps, dependency updates.
 
 Three pieces:
 
-1. **Composite action** (`max-sixty/continuous@v1`) — installs generic skills,
+1. **Composite action** (`max-sixty/tend@v1`) — installs generic skills,
    resolves bot ID at runtime, runs Claude Code, uploads session logs. The
    stable interface.
 

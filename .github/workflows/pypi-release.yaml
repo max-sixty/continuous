@@ -7,7 +7,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    if: github.repository == 'max-sixty/continuous'
+    if: github.repository == 'max-sixty/tend'
     steps:
       - uses: actions/checkout@v6
 
