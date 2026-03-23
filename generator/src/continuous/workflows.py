@@ -30,13 +30,6 @@ def _setup_yaml(cfg: Config, indent: int = 6) -> str:
     return "\n".join(lines)
 
 
-def _sys_prompt_yaml(cfg: Config, indent: int = 10) -> str:
-    if not cfg.system_prompt_append:
-        return ""
-    pad = " " * indent
-    return f'\n{pad}system_prompt_append: "{cfg.system_prompt_append}"'
-
-
 def _permissions(issues: bool = True) -> str:
     lines = [
         "      contents: write",
@@ -77,7 +70,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    sp = _sys_prompt_yaml(cfg)
+
     setup = _setup_yaml(cfg)
     perms = _permissions()
 
@@ -135,7 +128,7 @@ jobs:
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
-          bot_name: {bn}{sp}
+          bot_name: {bn}
           use_sticky_comment: ${{{{ github.event_name == 'pull_request_target' }}}}
           prompt: >-
             ${{{{ github.event_name == 'pull_request_target'
@@ -157,7 +150,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    sp = _sys_prompt_yaml(cfg)
+
     setup = _setup_yaml(cfg)
     perms = _permissions()
     pr = "(github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number)"
@@ -301,7 +294,7 @@ jobs:
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
-          bot_name: {bn}{sp}
+          bot_name: {bn}
           prompt: >-
             ${{{{ github.event_name == 'issues'
               && format('An issue was updated with a mention of you ({{0}}). Read it and respond.', github.event.issue.html_url)
@@ -329,7 +322,7 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    sp = _sys_prompt_yaml(cfg)
+
     setup = _setup_yaml(cfg)
     perms = _permissions()
 
@@ -367,7 +360,7 @@ jobs:
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
-          bot_name: {bn}{sp}
+          bot_name: {bn}
           prompt: "{prompt}"
 """
     return GeneratedWorkflow(filename="cd-triage.yaml", content=content)
@@ -386,7 +379,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    sp = _sys_prompt_yaml(cfg)
+
     setup = _setup_yaml(cfg)
     perms = _permissions(issues=False)
     watched_yaml = ", ".join(watched)
@@ -421,7 +414,7 @@ jobs:
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
-          bot_name: {bn}{sp}
+          bot_name: {bn}
           prompt: |
             {prompt}
             - Run URL: ${{{{ github.event.workflow_run.html_url }}}}
@@ -442,7 +435,7 @@ def _generate_scheduled(cfg: Config, name: str, default_cron: str, default_promp
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    sp = _sys_prompt_yaml(cfg)
+
     setup = _setup_yaml(cfg)
     perms = _permissions()
 
@@ -481,7 +474,7 @@ jobs:
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
-          bot_name: {bn}{sp}
+          bot_name: {bn}
           {prompt_yaml}
 """
     return GeneratedWorkflow(filename=f"cd-{name}.yaml", content=content)

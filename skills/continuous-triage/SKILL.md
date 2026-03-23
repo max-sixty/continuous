@@ -1,5 +1,5 @@
 ---
-name: cd-triage
+name: continuous-triage
 description: Triages new GitHub issues — classifies, reproduces bugs, attempts conservative fixes, and comments. Use when a new issue is opened and needs automated triage.
 argument-hint: "[issue number]"
 metadata:
@@ -14,7 +14,7 @@ Triage a newly opened GitHub issue.
 
 ## Step 1: Setup
 
-Load `/cd-running-in-ci` first (CI environment rules, security).
+Load `/continuous-running-in-ci` first (CI environment rules, security).
 
 Follow the AD FONTES principle throughout: reproduce before fixing, evidence
 before speculation, test before committing.
@@ -140,7 +140,7 @@ missing code. Before adding guidance to a skill:
    ---
    Closes #<issue-number> — automated triage"
    ```
-5. Monitor CI using the approach from /cd-running-in-ci.
+5. Monitor CI using the approach from /continuous-running-in-ci.
 
 ### If reproduction test works but fix is not confident
 
@@ -172,7 +172,7 @@ automation alone.
 characterize something as "known" unless you find prior issues or documentation
 about it. Don't speculate beyond the code you read.
 
-Use the heredoc pattern from `/cd-running-in-ci` for `--body` arguments to avoid
+Use the heredoc pattern from `/continuous-running-in-ci` for `--body` arguments to avoid
 shell quoting issues.
 
 Choose the appropriate template:

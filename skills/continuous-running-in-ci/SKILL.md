@@ -1,5 +1,5 @@
 ---
-name: cd-running-in-ci
+name: continuous-running-in-ci
 description: Generic CI environment rules for GitHub Actions workflows. Use when operating in CI — covers security, CI monitoring, comment formatting, and investigating session logs from other runs.
 metadata:
   internal: true

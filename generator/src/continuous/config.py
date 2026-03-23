@@ -30,7 +30,6 @@ class Config:
     bot_name: str
     bot_token_secret: str
     claude_token_secret: str
-    system_prompt_append: str
     setup: list[SetupStep]
     workflows: dict[str, WorkflowConfig]
 
@@ -68,7 +67,6 @@ class Config:
             bot_name=raw["bot_name"],
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
             claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
-            system_prompt_append=raw.get("system_prompt_append", ""),
             setup=setup,
             workflows=workflows,
         )
