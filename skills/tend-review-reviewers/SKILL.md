@@ -117,7 +117,7 @@ text alone, which lacks sufficient context to judge relatedness:
 
 ```bash
 # Each tracking entry has a Run ID — use it to pull the actual logs
-gh -R $ARGUMENTS run download <run-id> --name claude-session-logs --dir /tmp/logs/<run-id>/
+gh -R $ARGUMENTS run download <run-id> --pattern 'claude-session-logs*' --dir /tmp/logs/<run-id>/
 ```
 
 Trace the original decision chain in the session JSONL to confirm the historical
@@ -187,7 +187,7 @@ If empty, report "no runs to review" and exit.
 ## Step 2: Download and analyze session logs
 
 ```bash
-gh -R $ARGUMENTS run download <run-id> --name claude-session-logs --dir /tmp/logs/<run-id>/
+gh -R $ARGUMENTS run download <run-id> --pattern 'claude-session-logs*' --dir /tmp/logs/<run-id>/
 ```
 
 Skip runs without artifacts. Find JSONL files under `/tmp/logs/` and extract:

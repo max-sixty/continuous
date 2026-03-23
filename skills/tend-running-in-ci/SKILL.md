@@ -204,7 +204,7 @@ The primary evidence for diagnosing bot behavior is the session log artifact —
 not console output (`show_full_output` defaults to `false`).
 
 ```bash
-gh run download <run-id> -n claude-session-logs -D /tmp/session-logs-<run-id>
+gh run download <run-id> --pattern 'claude-session-logs*' -D /tmp/session-logs-<run-id>
 ```
 
 The artifact contains JSONL files. Each line has a `type` field (`user`,

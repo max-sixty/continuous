@@ -99,11 +99,21 @@ runs:
           --append-system-prompt "${{ inputs.system_prompt_append }}"
           --plugin-dir ${{ github.action_path }}
 
+    - name: Compute artifact name
+      if: always()
+      id: artifact
+      shell: bash
+      run: |
+        # Use INVOCATION_ID (unique per job in matrix workflows) to avoid
+        # artifact name collisions when the action runs in multiple matrix jobs
+        suffix="${INVOCATION_ID:+"-${INVOCATION_ID:0:8}"}"
+        echo "name=claude-session-logs${suffix}" >> "$GITHUB_OUTPUT"
+
     - name: Upload session logs
       if: always()
       uses: actions/upload-artifact@v7
       with:
-        name: claude-session-logs
+        name: ${{ steps.artifact.outputs.name }}
         path: /home/runner/.claude/projects/
         retention-days: 30
         if-no-files-found: warn
