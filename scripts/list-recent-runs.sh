@@ -8,8 +8,7 @@
 # started 50min ago may still be running. See #1301 for details.
 #
 # Environment variables:
-#   TARGET_REPO       - Query a different repo (default: current repo)
-#   TARGET_REPO_TOKEN - Auth token for the target repo (default: GH_TOKEN)
+#   TARGET_REPO - Query a different repo (default: current repo)
 #
 # Output: JSON array of {databaseId, conclusion, createdAt, updatedAt} objects.
 
@@ -17,11 +16,6 @@ set -euo pipefail
 
 # Prevent gh from emitting ANSI color codes in non-TTY contexts.
 export NO_COLOR=1
-
-# Use target repo token if provided.
-if [ -n "${TARGET_REPO_TOKEN:-}" ]; then
-  export GH_TOKEN="$TARGET_REPO_TOKEN"
-fi
 
 repo_args=()
 if [ -n "${TARGET_REPO:-}" ]; then

@@ -2,8 +2,8 @@ name: review-reviewers
 # Hourly analysis of Claude CI session logs from adopter repos to improve tend.
 #
 # Each matrix entry is a repo to analyze. The job checks out the tend repo
-# (for creating improvement PRs/issues) and uses TARGET_REPO_TOKEN to read
-# the target repo's CI data.
+# (for creating improvement PRs/issues). BOT_TOKEN is sufficient for reading
+# CI data from public adopter repos.
 #
 # TODO: Move repo list to a config file so adding a repo doesn't require a workflow change
 # TODO: Cross-repo pattern detection — correlate findings across repos
@@ -17,11 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - repo: max-sixty/worktrunk
-            token_secret: WORKTRUNK_BOT_TOKEN
-          - repo: max-sixty/tend
-            token_secret: BOT_TOKEN
+        repo:
+          - max-sixty/worktrunk
+          - max-sixty/tend
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -43,5 +41,3 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           bot_name: continuous-bot
           prompt: /tend:tend-review-reviewers ${{ matrix.repo }}
-        env:
-          TARGET_REPO_TOKEN: ${{ secrets[matrix.token_secret] }}
