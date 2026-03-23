@@ -7,17 +7,20 @@ CI fixes, nightly sweeps, dependency updates.
 
 ## How it works
 
-Three pieces:
+Four pieces:
 
-1. **Composite action** (`max-sixty/continuous@v1`) — installs generic skills,
-   resolves bot ID at runtime, runs Claude Code, uploads session logs. The
-   stable interface.
+1. **Plugin** (`continuous`) — Claude Code plugin providing CI skills (review,
+   triage, ci-fix, nightly, renovate, etc.). Install from the marketplace or
+   directly from the repo.
 
-2. **Generator** (`uvx continuous init`) — stamps out workflow files into
+2. **Composite action** (`max-sixty/continuous@v1`) — resolves bot ID at
+   runtime, runs Claude Code, uploads session logs. The stable interface.
+
+3. **Generator** (`uvx continuous init`) — stamps out workflow files into
    `.github/workflows/`. Handles triggers, conditions, engagement verification,
    checkout. Idempotent — always overwrites from config.
 
-3. **Config** (`.config/continuous.toml`) — bot identity, secret names, project
+4. **Config** (`.config/continuous.toml`) — bot identity, secret names, project
    setup steps. Only overrides from defaults are needed.
 
 ## Quick start
@@ -69,7 +72,15 @@ bot_token = "MY_BOT_PAT"
 claude_token = "MY_CLAUDE_TOKEN"
 ```
 
-### 5. Generate and commit
+### 5. Install the plugin
+
+Install the `continuous` Claude Code plugin so the CI skills are available:
+
+```bash
+claude plugin add max-sixty/continuous
+```
+
+### 6. Generate and commit
 
 ```bash
 uvx continuous init
@@ -79,7 +90,7 @@ git commit -m "Add continuous workflows"
 git push
 ```
 
-### 6. Add project context (recommended)
+### 7. Add project context (recommended)
 
 Without project-specific guidance, Claude uses only the generic CI skills. For
 better results, add a `.claude/CLAUDE.md` with build commands, test commands,
@@ -138,8 +149,10 @@ All six workflows are enabled by default. Disable individual workflows with
 
 ```
 continuous/
+├── .claude-plugin/
+│   └── plugin.json   # Plugin manifest
+├── skills/           # CI skills (distributed via plugin)
 ├── action.yaml       # Composite action (the interface)
-├── skills/           # Generic CI skills for Claude
 ├── scripts/          # Helper scripts (survey, run listing)
 ├── generator/        # Python package (uvx continuous)
 └── docs/

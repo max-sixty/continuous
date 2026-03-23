@@ -1,6 +1,6 @@
 name: Continuous
 description: >-
-  Claude-powered CI for GitHub repos. Installs generic CI skills,
+  Claude-powered CI for GitHub repos. Resolves bot identity,
   runs Claude Code, and uploads session logs.
 
 inputs:
@@ -56,18 +56,6 @@ runs:
         echo "Security preflight passed: default branch '${DEFAULT_BRANCH}' is protected"
       env:
         GH_TOKEN: ${{ inputs.github_token }}
-
-    - name: Install CI skills
-      shell: bash
-      run: |
-        cd_dir="${GITHUB_ACTION_PATH}"
-        mkdir -p .claude/skills
-        for skill_dir in "$cd_dir"/skills/*/; do
-          skill_name=$(basename "$skill_dir")
-          if [ ! -d ".claude/skills/$skill_name" ]; then
-            cp -r "$skill_dir" ".claude/skills/$skill_name"
-          fi
-        done
 
     - name: Install CI scripts
       shell: bash

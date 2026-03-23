@@ -2,17 +2,21 @@
 
 ## What this is
 
-A GitHub composite action + generator that adds Claude-powered CI to any repo.
-Handles PR review, issue triage, @bot mentions, CI fixes, nightly sweeps, and
-dependency updates.
+A Claude Code plugin, GitHub composite action, and generator that adds
+Claude-powered CI to any repo. Handles PR review, issue triage, @bot mentions,
+CI fixes, nightly sweeps, and dependency updates.
 
 ## Architecture
 
-Three pieces:
+Four pieces:
 
-1. **Composite action** (`max-sixty/continuous@v1`) — the stable interface.
-   Installs generic skills into `.claude/skills/`, resolves the bot's numeric
-   ID at runtime, invokes `claude-code-action`, uploads session logs. Inputs:
+1. **Plugin** (`continuous`) — Claude Code plugin providing CI skills. Adopters
+   install the plugin (`claude plugin add max-sixty/continuous`), which makes
+   the skills available to Claude Code in all environments including CI.
+
+2. **Composite action** (`max-sixty/continuous@v1`) — the stable interface.
+   Resolves the bot's numeric ID at runtime, invokes `claude-code-action`,
+   uploads session logs. Inputs:
 
    ```yaml
    inputs:
@@ -35,14 +39,14 @@ Three pieces:
 
    The action doesn't know or care about triggers, checkout, or project setup.
 
-2. **Generator** (`uvx continuous init`) — stamps out workflow files into the
+3. **Generator** (`uvx continuous init`) — stamps out workflow files into the
    adopter's `.github/workflows/`. These contain the trigger events, `if:`
    conditions, engagement verification, concurrency groups, checkout, project
    setup steps, and the call to the composite action. The adopter commits the
    generated files. Generation is idempotent — running `init` again overwrites
    all files from the current config.
 
-3. **Config** (`.config/continuous.toml`) — stores the inputs to the generator.
+4. **Config** (`.config/continuous.toml`) — stores the inputs to the generator.
    Only overrides from defaults need to be specified. All six workflows are
    enabled by default.
 
@@ -123,7 +127,7 @@ jobs:
 | Project setup (build tools, cache) | Adopter | `[setup]` in `.config/continuous.toml` |
 | Composite action call | Generator | generated workflow |
 | Bot identity, auth config | Adopter | `.config/continuous.toml` |
-| Skills (generic) | Continuous | installed at runtime by action |
+| Skills (generic) | Continuous | `continuous` plugin (marketplace) |
 | Skills (project-specific) | Adopter | `.claude/skills/` in their repo |
 
 ## Auth
@@ -268,8 +272,9 @@ us with code execution, not just token minting.
 
 ```
 continuous/
-├── action.yaml             # Composite action (the interface)
-├── skills/                 # Generic CI skills
+├── .claude-plugin/
+│   └── plugin.json         # Plugin manifest
+├── skills/                 # CI skills (distributed via plugin)
 │   ├── continuous-running-in-ci/
 │   ├── continuous-review/
 │   ├── continuous-triage/
@@ -277,6 +282,7 @@ continuous/
 │   ├── continuous-nightly/
 │   ├── continuous-renovate/
 │   └── continuous-review-reviewers/
+├── action.yaml             # Composite action (the interface)
 ├── scripts/                # Helper scripts installed by the action
 ├── generator/              # Python package (uvx continuous init)
 │   ├── pyproject.toml
@@ -286,5 +292,6 @@ continuous/
 └── README.md
 ```
 
-No reusable workflows. The skills and composite action are the product; the
-generator is the distribution mechanism.
+The repo serves two roles: a Claude Code plugin (skills) and a GitHub composite
+action (runtime). The plugin is installed by adopters from the marketplace; the
+action is referenced in generated workflows.

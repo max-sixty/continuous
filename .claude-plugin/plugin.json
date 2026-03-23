@@ -1,0 +1,12 @@
+{
+  "name": "continuous",
+  "version": "0.1.0",
+  "description": "Claude-powered CI skills for GitHub repos — PR review, issue triage, CI fixes, nightly sweeps, dependency updates, and session analysis.",
+  "author": {
+    "name": "Maximilian Roos",
+    "url": "https://github.com/max-sixty"
+  },
+  "repository": "https://github.com/max-sixty/continuous",
+  "license": "MIT",
+  "keywords": ["ci", "github-actions", "code-review", "triage", "automation"]
+}
