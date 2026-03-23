@@ -14,7 +14,7 @@ Triage a newly opened GitHub issue.
 
 ## Step 1: Setup
 
-Load `/tend-running-in-ci` first (CI environment rules, security).
+Load `/tend:tend-running-in-ci` first (CI environment rules, security).
 
 Follow the AD FONTES principle throughout: reproduce before fixing, evidence
 before speculation, test before committing.
@@ -140,7 +140,7 @@ missing code. Before adding guidance to a skill:
    ---
    Closes #<issue-number> — automated triage"
    ```
-5. Monitor CI using the approach from /tend-running-in-ci.
+5. Monitor CI using the approach from /tend:tend-running-in-ci.
 
 ### If reproduction test works but fix is not confident
 
@@ -172,7 +172,7 @@ automation alone.
 characterize something as "known" unless you find prior issues or documentation
 about it. Don't speculate beyond the code you read.
 
-Use the heredoc pattern from `/tend-running-in-ci` for `--body` arguments to avoid
+Use the heredoc pattern from `/tend:tend-running-in-ci` for `--body` arguments to avoid
 shell quoting issues.
 
 Choose the appropriate template:

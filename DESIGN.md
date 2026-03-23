@@ -26,7 +26,7 @@ Four pieces:
      prompt: { required: true }
      model: { default: "opus" }
      allowed_tools: { default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill" }
-     system_prompt_append: { default: "...Use /tend-running-in-ci..." }
+     system_prompt_append: { default: "...Use /tend:tend-running-in-ci..." }
      allowed_bots: { default: "*" }
      allowed_non_write_users: { default: "*" }
      show_full_output: { default: "true" }
@@ -111,7 +111,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           bot_name: worktrunk-bot
           prompt: >-
-            ${{ format('/tend-review {0}', github.event.pull_request.number) }}
+            ${{ format('/tend:tend-review {0}', github.event.pull_request.number) }}
 ```
 
 ## What the generator owns vs what the adopter owns
