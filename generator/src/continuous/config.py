@@ -82,11 +82,18 @@ class Config:
             if name not in KNOWN_WORKFLOWS:
                 click.echo(f"Warning: unknown workflow '{name}' in config (known: {', '.join(sorted(KNOWN_WORKFLOWS))})", err=True)
             if isinstance(wf_raw, dict):
+                watched = wf_raw.get("watched_workflows")
+                if watched is not None and len(watched) == 0 and name == "ci-fix":
+                    raise click.ClickException(
+                        "watched_workflows = [] is invalid for ci-fix — "
+                        "workflow_run requires at least one workflow name. "
+                        "Disable ci-fix with enabled = false instead."
+                    )
                 workflows[name] = WorkflowConfig(
                     enabled=wf_raw.get("enabled", True),
                     prompt=wf_raw.get("prompt", ""),
                     cron=wf_raw.get("cron", ""),
-                    watched_workflows=wf_raw.get("watched_workflows"),
+                    watched_workflows=watched,
                 )
             else:
                 workflows[name] = WorkflowConfig(enabled=bool(wf_raw))

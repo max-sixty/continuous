@@ -63,11 +63,27 @@ class GeneratedWorkflow:
 # Review
 # ---------------------------------------------------------------------------
 
+def _escape_braces(prompt: str, placeholder: str) -> tuple[str, bool]:
+    """Escape literal braces in a prompt, preserving only {placeholder}.
+
+    Returns (escaped_prompt, needs_format). In the escaped prompt, {placeholder}
+    is replaced with {0} for use with GitHub Actions format(), and all other
+    braces are doubled to prevent format() from interpreting them.
+    """
+    sentinel = "\x00PLACEHOLDER\x00"
+    text = prompt.replace(f"{{{placeholder}}}", sentinel)
+    # Double all remaining braces so format() treats them as literals
+    text = text.replace("{", "{{").replace("}", "}}")
+    has_placeholder = sentinel in text
+    text = text.replace(sentinel, "{0}")
+    return text, has_placeholder
+
+
 def generate_review(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("review", WorkflowConfig())
     raw_prompt = wf.prompt or "/continuous-review {pr_number}"
-    escaped = _escape(raw_prompt.replace("{pr_number}", "{0}"))
-    needs_format = "{0}" in escaped
+    format_body, needs_format = _escape_braces(raw_prompt, "pr_number")
+    escaped = _escape(format_body)
     if needs_format:
         prompt_expr = f"format('{escaped}', github.event.pull_request.number)"
     else:

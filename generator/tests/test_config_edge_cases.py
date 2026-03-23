@@ -190,12 +190,7 @@ def test_bot_name_with_hyphens_valid(tmp_path: Path) -> None:
 
 
 def test_prompt_with_zero_placeholder(tmp_path: Path) -> None:
-    """A prompt containing {0} collides with GitHub's format() function.
-
-    The review workflow replaces {pr_number} with {0} and then uses
-    format('{escaped}', github.event.pull_request.number). If the user's
-    prompt already contains {0}, it will be treated as a format placeholder.
-    """
+    """A prompt containing {0} — escaped so it doesn't collide with format()."""
     path = _write_config(tmp_path, dedent("""\
         bot_name = "my-bot"
         [workflows.review]
@@ -204,15 +199,13 @@ def test_prompt_with_zero_placeholder(tmp_path: Path) -> None:
     cfg = Config.load(path)
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     review = workflows["continuous-review.yaml"]
-    # The {pr_number} -> {0} substitution happens, and the user's {0} also
-    # becomes a format placeholder. This means {0} appears twice in the
-    # format() call, both consuming the same argument.
-    # Check what actually ends up in the YAML:
-    assert "Fix {0}" in review.content or "format(" in review.content
+    # User's {0} is escaped to {{0}}, while {pr_number} becomes {0}
+    assert "format(" in review.content
+    assert "Fix {{0}} in {0}" in review.content
 
 
 def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
-    """Prompt with {1}, {2} etc. -- these would be invalid format() args."""
+    """Prompt with {1}, {2} — escaped to prevent format() runtime errors."""
     path = _write_config(tmp_path, dedent("""\
         bot_name = "my-bot"
         [workflows.review]
@@ -221,10 +214,10 @@ def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
     cfg = Config.load(path)
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     review = workflows["continuous-review.yaml"]
-    # format('Fix issue {1} and {2}', github.event.pull_request.number) would
-    # fail at runtime because {1} and {2} have no corresponding args
+    # {1} and {2} are escaped to {{1}} and {{2}} — literals in format()
     assert "format(" in review.content
-    assert "{1}" in review.content  # raw {1} passed through -- runtime error
+    assert "{{1}}" in review.content
+    assert "{{2}}" in review.content
 
 
 # ---------------------------------------------------------------------------
@@ -328,19 +321,15 @@ def test_duplicate_setup_steps_accepted(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_watched_workflows_empty_list_respected(tmp_path: Path) -> None:
-    """watched_workflows = [] is an explicit empty list — no fallback."""
+def test_watched_workflows_empty_list_rejected(tmp_path: Path) -> None:
+    """watched_workflows = [] is rejected — workflow_run needs at least one."""
     path = _write_config(tmp_path, dedent("""\
         bot_name = "my-bot"
         [workflows.ci-fix]
         watched_workflows = []
     """))
-    cfg = Config.load(path)
-    assert cfg.workflows["ci-fix"].watched_workflows == []
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    ci_fix = workflows["continuous-ci-fix.yaml"]
-    # Explicit empty list means no workflows watched — generates `workflows: []`
-    assert "workflows: []" in ci_fix.content
+    with pytest.raises(ClickException, match="watched_workflows.*invalid"):
+        Config.load(path)
 
 
 def test_watched_workflows_explicit_value(tmp_path: Path) -> None:
