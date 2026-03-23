@@ -9,11 +9,11 @@ CI fixes, nightly sweeps, dependency updates.
 
 Three pieces:
 
-1. **Composite action** (`max-sixty/continuous@v1`) — installs generic skills,
+1. **Composite action** (`max-sixty/tend@v1`) — installs generic skills,
    resolves bot ID at runtime, runs Claude Code, uploads session logs. The
    stable interface.
 
-2. **Generator** (`uvx continuous init`) — stamps out workflow files into
+2. **Generator** (`uvx tend init`) — stamps out workflow files into
    `.github/workflows/`. Handles triggers, conditions, engagement verification,
    checkout. Idempotent — always overwrites from config.
 
@@ -72,8 +72,8 @@ claude_token = "MY_CLAUDE_TOKEN"
 ### 5. Generate and commit
 
 ```bash
-uvx continuous init
-uvx continuous check          # verify branch protection, secrets, bot access
+uvx tend init
+uvx tend check          # verify branch protection, secrets, bot access
 git add .github/workflows/continuous-*.yaml .config/continuous.toml
 git commit -m "Add continuous workflows"
 git push
@@ -141,7 +141,7 @@ continuous/
 ├── action.yaml       # Composite action (the interface)
 ├── skills/           # Generic CI skills for Claude
 ├── scripts/          # Helper scripts (survey, run listing)
-├── generator/        # Python package (uvx continuous)
+├── generator/        # Python package (uvx tend)
 └── docs/
     └── security-model.md
 ```
