@@ -38,9 +38,9 @@ classic PAT with scopes: `repo` (or fine-grained with `contents:write`,
 ### 3. Protect the default branch
 
 The bot must not be able to merge PRs — this is the primary security boundary.
-Create a **ruleset** on the repo: "Restrict updates" on the default branch,
-with only the repo admin as a bypass actor. The bot has `write` access but
-cannot merge.
+Use a **ruleset** ("Restrict updates" on the default branch, only admins
+bypass) or **branch protection** (require reviews, don't exempt the bot).
+See [docs/security-model.md](docs/security-model.md) for details.
 
 ### 4. Add config
 
