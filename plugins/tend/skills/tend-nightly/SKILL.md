@@ -74,23 +74,28 @@ For each file, look for: bugs, stale documentation, dead code, simplification
 opportunities, missing tests, CLAUDE.md/skill drift. Spend roughly equal time
 per file.
 
-## Step 5: Report findings
+## Step 5: Fix findings
 
-Before creating issues, check for duplicates:
+Before acting on findings, check for duplicates and existing work:
 
 ```bash
 gh issue list --state open --json number,title
+gh pr list --state open --json number,title,headRefName
 ```
 
-For each finding (from both recent-commit review and rolling survey):
+The default action is a PR, not an issue. If there's a plausible fix, make
+it — explain uncertainty in the PR description.
 
-1. **Create a GitHub issue** — clear actionable title, include file location
-   and suggested fix
-2. **For confident fixes** (clear bugs, stale docs, obvious missing tests):
-   branch, fix, run full test suite, commit, push, create PR, poll CI.
-   **Every bug fix must include a regression test that would have failed before
-   the fix.** If a test is not feasible (e.g., pure documentation changes),
-   note why in the PR description.
+For each finding:
+
+1. **Create a PR** — branch, fix, run full test suite, commit, push, create
+   PR, poll CI. **Every bug fix must include a regression test that would have
+   failed before the fix.** If a test is not feasible (e.g., pure
+   documentation changes), note why in the PR description. When uncertain about
+   the approach, explain the trade-offs in the description.
+2. **Create an issue only when there's no obvious fix** — design questions,
+   problems needing maintainer input, or findings requiring investigation
+   beyond what the survey can provide.
 
 ## Step 6: Summary
 
