@@ -199,6 +199,7 @@ on:
     types: [edited]
   issue_comment:
     types: [created, edited]
+  # Works for same-repo PRs only; secrets unavailable on fork PRs (no _target variant exists)
   pull_request_review_comment:
     types: [created, edited]
 
