@@ -10,9 +10,14 @@
   },
   "plugins": [
     {
+      "name": "install-tend",
+      "description": "Set up tend (Claude-powered CI) on a GitHub repo.",
+      "source": "./plugins/install-tend"
+    },
+    {
       "name": "tend",
-      "description": "CI skills for GitHub repos — PR review, issue triage, CI fixes, nightly sweeps, dependency updates, and session analysis.",
-      "source": "./"
+      "description": "CI skills — PR review, issue triage, CI fixes, nightly sweeps, dependency updates, and session analysis.",
+      "source": "./plugins/tend"
     }
   ]
 }

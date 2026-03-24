@@ -2,7 +2,7 @@
 
 ## What this is
 
-A Claude Code plugin, GitHub composite action, and generator that adds
+Two Claude Code plugins, a GitHub composite action, and a generator that add
 Claude-powered CI to any repo. Handles PR review, issue triage, @bot mentions,
 CI fixes, nightly sweeps, and dependency updates.
 
@@ -10,9 +10,10 @@ CI fixes, nightly sweeps, and dependency updates.
 
 Four pieces:
 
-1. **Plugin** (`tend`) — Claude Code plugin providing CI skills. Adopters
-   install the plugin (`claude plugin add max-sixty/tend`), which makes
-   the skills available to Claude Code in all environments including CI.
+1. **Plugins** — two Claude Code plugins from the same marketplace.
+   `install-tend` is user-facing (sets up tend on a new repo).
+   `tend` provides CI skills, loaded by the composite action via
+   `--plugin-dir`.
 
 2. **Composite action** (`max-sixty/tend@v1`) — the stable interface.
    Resolves the bot's numeric ID at runtime, invokes `claude-code-action`,
@@ -273,18 +274,27 @@ us with code execution, not just token minting.
 ```
 tend/
 ├── .claude-plugin/
-│   └── plugin.json         # Plugin manifest
-├── skills/                 # CI skills (distributed via plugin)
-│   ├── tend-running-in-ci/
-│   ├── tend-review/
-│   ├── tend-triage/
-│   ├── tend-ci-fix/
-│   ├── tend-nightly/
-│   ├── tend-renovate/
-│   └── tend-review-reviewers/
-├── action.yaml             # Composite action (the interface)
-├── scripts/                # Helper scripts installed by the action
-├── generator/              # Python package (uvx tend init)
+│   └── marketplace.json        # Lists both plugins
+├── plugins/
+│   ├── install-tend/           # User-facing plugin (setup skill)
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   └── skills/
+│   │       └── install-tend/
+│   └── tend/                   # CI plugin (all CI skills)
+│       ├── .claude-plugin/
+│       │   └── plugin.json
+│       └── skills/
+│           ├── tend-running-in-ci/
+│           ├── tend-review/
+│           ├── tend-triage/
+│           ├── tend-ci-fix/
+│           ├── tend-nightly/
+│           ├── tend-renovate/
+│           └── tend-review-reviewers/
+├── action.yaml                 # Composite action (the interface)
+├── scripts/                    # Helper scripts installed by the action
+├── generator/                  # Python package (uvx tend init)
 │   ├── pyproject.toml
 │   └── src/tend/
 ├── docs/
@@ -292,6 +302,7 @@ tend/
 └── README.md
 ```
 
-The repo serves two roles: a Claude Code plugin (skills) and a GitHub composite
-action (runtime). The plugin is installed by adopters from the marketplace; the
-action is referenced in generated workflows.
+The repo hosts two Claude Code plugins and a GitHub composite action. The
+`install-tend` plugin is for users setting up tend on a new repo. The `tend`
+plugin provides CI skills loaded by the composite action via `--plugin-dir`.
+Users install from the marketplace and choose which plugin they need.
