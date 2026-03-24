@@ -12,8 +12,8 @@ Four pieces:
 
 1. **Plugins** — two Claude Code plugins from the same marketplace.
    `install-tend` is user-facing (sets up tend on a new repo).
-   `tend` provides CI skills, loaded by the composite action via
-   `--plugin-dir`.
+   `tend-ci-runner` provides CI skills, installed by the composite action
+   from the marketplace.
 
 2. **Composite action** (`max-sixty/tend@v1`) — the stable interface.
    Resolves the bot's numeric ID at runtime, invokes `claude-code-action`,
@@ -27,7 +27,7 @@ Four pieces:
      prompt: { required: true }
      model: { default: "opus" }
      allowed_tools: { default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill" }
-     system_prompt_append: { default: "...Use /tend:tend-running-in-ci..." }
+     system_prompt_append: { default: "...Use /tend-ci-runner:running-in-ci..." }
      allowed_bots: { default: "*" }
      allowed_non_write_users: { default: "*" }
      show_full_output: { default: "true" }
@@ -112,7 +112,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           bot_name: worktrunk-bot
           prompt: >-
-            ${{ format('/tend:tend-review {0}', github.event.pull_request.number) }}
+            ${{ format('/tend-ci-runner:review {0}', github.event.pull_request.number) }}
 ```
 
 ## What the generator owns vs what the adopter owns
@@ -303,6 +303,6 @@ tend/
 ```
 
 The repo hosts two Claude Code plugins and a GitHub composite action. The
-`install-tend` plugin is for users setting up tend on a new repo. The `tend`
-plugin provides CI skills loaded by the composite action via `--plugin-dir`.
-Users install from the marketplace and choose which plugin they need.
+`install-tend` plugin is for users setting up tend on a new repo. The
+`tend-ci-runner` plugin provides CI skills installed by the composite action
+from the marketplace. Users should only install `install-tend` manually.
