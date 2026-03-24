@@ -442,12 +442,12 @@ def test_setup_steps_empty_list(tmp_path: Path) -> None:
 
 
 def test_setup_steps_entry_missing_key(tmp_path: Path) -> None:
-    """setup entry without uses or run is rejected."""
+    """setup entry without uses, run, or raw is rejected."""
     path = _write_config(tmp_path, dedent("""\
         bot_name = "my-bot"
         setup = [{name = "oops"}]
     """))
-    with pytest.raises(ClickException, match="setup\\[0\\] must have 'uses' or 'run'"):
+    with pytest.raises(ClickException, match="setup\\[0\\] must have exactly one"):
         Config.load(path)
 
 
@@ -457,7 +457,7 @@ def test_setup_steps_entry_both_keys(tmp_path: Path) -> None:
         bot_name = "my-bot"
         setup = [{uses = "action", run = "cmd"}]
     """))
-    with pytest.raises(ClickException, match="setup\\[0\\] must have 'uses' or 'run', not both"):
+    with pytest.raises(ClickException, match="setup\\[0\\] must have exactly one"):
         Config.load(path)
 
 
