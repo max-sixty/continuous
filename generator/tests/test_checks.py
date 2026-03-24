@@ -58,7 +58,13 @@ def test_detect_repo_no_gh() -> None:
 
 
 def test_branch_protected() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed("true\n")):
+    def fake_gh(*args, **kwargs):
+        cmd = " ".join(args)
+        if "rulesets" in cmd:
+            return _make_completed("1\n")
+        return _make_completed("true\n")
+
+    with patch("tend.checks._gh", side_effect=fake_gh):
         result = check_branch_protection("owner/repo", "main")
     assert result.passed is True
     assert "protected" in result.message
@@ -168,7 +174,7 @@ def test_secrets_bad_json() -> None:
 
 def test_run_all_checks_no_gh() -> None:
     with patch("shutil.which", return_value=None):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "T1", "T2", [], "", {}))
     assert len(results) == 1
     assert results[0].passed is None
     assert "gh CLI" in results[0].message
@@ -177,15 +183,19 @@ def test_run_all_checks_no_gh() -> None:
 def test_run_all_checks_no_repo() -> None:
     with patch("shutil.which", return_value="/usr/bin/gh"), \
          patch("tend.checks.detect_repo", return_value=None):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "T1", "T2", [], "", {}))
     assert len(results) == 1
     assert "detect" in results[0].message
 
 
 def test_run_all_checks_with_explicit_repo() -> None:
     """Explicit --repo skips auto-detection."""
-    def fake_gh(*args: str) -> subprocess.CompletedProcess[str]:
-        cmd = args[1] if len(args) > 1 else ""
+    def fake_gh(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        cmd = " ".join(args)
+        if args[1] == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
+            return _make_completed("main\n")
+        if "rulesets" in cmd:
+            return _make_completed("1\n")
         if "branches" in cmd:
             return _make_completed("true\n")
         if "collaborators" in cmd:
@@ -196,7 +206,7 @@ def test_run_all_checks_with_explicit_repo() -> None:
 
     with patch("shutil.which", return_value="/usr/bin/gh"), \
          patch("tend.checks._gh", side_effect=fake_gh):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo")
+        results = run_all_checks(Config("bot", "T1", "T2", [], "", {}), repo="owner/repo")
     assert len(results) == 3
     assert all(r.passed is True for r in results)
 

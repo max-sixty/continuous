@@ -47,6 +47,15 @@ def detect_repo() -> str | None:
     return None
 
 
+def _detect_default_branch(repo: str) -> str | None:
+    """Detect the default branch for a repo via the GitHub API."""
+    result = _gh("api", f"repos/{repo}", "--jq", ".default_branch")
+    if result and result.returncode == 0:
+        branch = result.stdout.strip()
+        return branch or None
+    return None
+
+
 def check_branch_protection(repo: str, branch: str) -> CheckResult:
     """Check if the default branch is protected against bot merges.
 
@@ -83,6 +92,9 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
     try:
         data = json.loads(prot.stdout)
     except json.JSONDecodeError:
+        return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected")
+
+    if not isinstance(data, dict):
         return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected")
 
     reviews = data.get("required_pull_request_reviews")
@@ -246,8 +258,12 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
             "Could not detect repository. Run from a git repo with a GitHub remote, or pass --repo.",
         )]
 
+    default_branch = _detect_default_branch(repo)
+    if default_branch is None:
+        return [CheckResult("prerequisites", None, f"Could not detect default branch for {repo}")]
+
     return [
-        check_branch_protection(repo, cfg.default_branch),
+        check_branch_protection(repo, default_branch),
         check_bot_permission(repo, cfg.bot_name),
         check_secrets(repo, [cfg.bot_token_secret, cfg.claude_token_secret]),
     ]
