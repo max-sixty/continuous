@@ -1,0 +1,12 @@
+{
+  "name": "install-tend",
+  "version": "0.1.0",
+  "description": "Set up tend (Claude-powered CI) on a GitHub repo.",
+  "author": {
+    "name": "Maximilian Roos",
+    "url": "https://github.com/max-sixty"
+  },
+  "repository": "https://github.com/max-sixty/tend",
+  "license": "MIT",
+  "keywords": ["ci", "github-actions", "setup", "automation"]
+}
