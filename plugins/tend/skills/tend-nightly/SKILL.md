@@ -40,7 +40,7 @@ Skip if no PRs have conflicts.
 git log --since='24 hours ago' --oneline main
 ```
 
-If no commits in the past 24 hours, skip to Step 3.
+If no commits in the past 24 hours, skip this step.
 
 Get the aggregate diff:
 
