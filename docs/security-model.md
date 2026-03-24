@@ -122,17 +122,28 @@ secrets.
 GitHub treats PRs as a superset of issues. Comments on a PR arrive via
 different event types depending on where they're posted:
 
-- **Conversation tab** → `issue_comment` event. The PR is at
+- **Conversation tab** → `issue_comment` event. Runs in base repo context —
+  secrets available even for fork PRs. The PR is at
   `github.event.issue.pull_request`. The PR number is
   `github.event.issue.number`.
-- **Files changed (inline)** → `pull_request_review_comment` event. The PR is
-  at `github.event.pull_request`. There is no `github.event.issue`.
-- **Review submission** → `pull_request_review` event (type: `submitted`). The
-  review is at `github.event.review`. The PR is at
-  `github.event.pull_request`.
+- **Files changed (inline)** → `pull_request_review_comment` event. Runs in
+  fork context — no secret access for fork PRs (same restriction as
+  `pull_request`). The PR is at `github.event.pull_request`. There is no
+  `github.event.issue`.
+- **Review submission** → `pull_request_review` event (type: `submitted`). Same
+  fork restriction as `pull_request_review_comment`. The review is at
+  `github.event.review`. The PR is at `github.event.pull_request`.
 
 Individual inline comments from a review also fire as separate
 `pull_request_review_comment` events.
+
+GitHub provides `pull_request_target` as a secrets-safe equivalent of
+`pull_request`, but no such variant exists for `pull_request_review_comment` or
+`pull_request_review` ([community discussion][gh-55940]). This means
+`tend-mention` cannot respond to inline review comments on fork PRs.
+Conversation-tab comments (`issue_comment`) are unaffected.
+
+[gh-55940]: https://github.com/orgs/community/discussions/55940
 
 ## Rules for modifying workflows
 
