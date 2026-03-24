@@ -113,7 +113,9 @@ echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO"
 
 ## 5. Bot PAT and secret
 
-The bot needs a classic PAT with `repo` scope. Use Chrome:
+The bot needs a classic PAT with `repo` scope. Fine-grained PATs also work
+(`contents:write`, `pull-requests:write`, `issues:write`) — create one manually
+and skip to step 6. Use Chrome for classic PATs:
 
 1. Verify the browser is logged in as `<bot-name>` (click avatar, check
    username). If not, tell the user to log in as the bot first.
@@ -227,7 +229,7 @@ After completing all steps, present this checklist:
 - [ ] Workflows: generated in `.github/workflows/`
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Claude token: `CLAUDE_CODE_OAUTH_TOKEN` secret set
-- [ ] Bot PAT: `BOT_TOKEN` secret set (classic PAT, `repo` scope)
+- [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo` or fine-grained)
 - [ ] Ruleset: merge restriction on default branch, admin bypass
 - [ ] Bot access: write collaborator, invitation accepted
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)

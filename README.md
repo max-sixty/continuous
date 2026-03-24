@@ -66,7 +66,7 @@ Two repo secrets are required:
 
 | Secret | Value |
 |--------|-------|
-| `BOT_TOKEN` | Bot account's classic PAT (`repo` scope) |
+| `BOT_TOKEN` | Bot account's PAT — classic with `repo` scope, or fine-grained with `contents:write`, `pull-requests:write`, `issues:write` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (via OAuth PKCE flow, not an API key) |
 
 Override secret names if yours differ:
