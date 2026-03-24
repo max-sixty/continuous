@@ -36,7 +36,15 @@ classic PAT with scopes: `repo` (or fine-grained with `contents:write`,
 | Secret | Value |
 |--------|-------|
 | `BOT_TOKEN` | The bot account's PAT |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token from [console.anthropic.com](https://console.anthropic.com) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (obtained via OAuth PKCE flow, not an API key) |
+
+If the repo already has a bot PAT under a different secret name, override it in
+config rather than creating a duplicate:
+
+```toml
+[secrets]
+bot_token = "YOUR_SECRET_NAME"
+```
 
 ### 3. Protect the default branch
 
@@ -77,7 +85,8 @@ claude_token = "MY_CLAUDE_TOKEN"
 Install the `tend` Claude Code plugin so the CI skills are available:
 
 ```bash
-claude plugin add max-sixty/tend
+claude plugin marketplace add max-sixty/tend   # one-time: register the repo as a marketplace
+claude plugin install tend
 ```
 
 ### 6. Generate and commit
@@ -92,10 +101,15 @@ git push
 
 ### 7. Add project context (recommended)
 
-Without project-specific guidance, Claude uses only the generic CI skills. For
-better results, add a `.claude/CLAUDE.md` with build commands, test commands,
-and project conventions. For detailed per-workflow guidance, add a skill overlay
-(see [Customization](#customization)).
+Tend reads `CLAUDE.md` like any other Claude session. Put build/test/lint
+commands and project conventions there — this is the primary source of project
+context.
+
+For tend-specific guidance that doesn't belong in CLAUDE.md, add a skill overlay
+at `.claude/skills/running-tend/SKILL.md`. This is for things only relevant to
+CI: PR title conventions, which CI workflow names tend-ci-fix watches, automerge
+rules, dependency management preferences. Don't duplicate CLAUDE.md content in
+the overlay.
 
 ## Customization
 
@@ -108,6 +122,32 @@ workflow. Define them in config:
 [setup]
 uses = ["./.github/actions/my-setup"]
 run = ["echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"]
+```
+
+`uses` and `run` entries are bare strings — there's no way to pass `with:`
+parameters to an action directly. For actions that need inputs (e.g.,
+`cargo-install`, `rust-cache`, `setup-node`), wrap them in a local composite
+action:
+
+```yaml
+# .github/actions/tend-setup/action.yaml
+name: tend-setup
+runs:
+  using: composite
+  steps:
+    - uses: cargo-bins/cargo-binstall@main
+    - run: cargo binstall cargo-insta --no-confirm
+      shell: bash
+    - uses: Swatinem/rust-cache@v2
+      with:
+        save-if: false
+```
+
+Then reference it as a single `uses` entry:
+
+```toml
+[setup]
+uses = ["./.github/actions/tend-setup"]
 ```
 
 ### Workflow overrides
@@ -126,10 +166,10 @@ enabled = false                       # disable a workflow entirely
 
 ### Project-specific skills
 
-The generic `tend-*` skills handle CI patterns. Project-specific behavior
-(test commands, review criteria, labels) goes in a skill overlay in the
-adopter's repo — e.g., `.claude/skills/running-tend/SKILL.md`. This skill
-can reference the generic skills and add project conventions.
+The generic `tend-*` skills handle CI patterns. Tend-specific project behavior
+(PR conventions, review criteria, label rules) goes in a skill overlay at
+`.claude/skills/running-tend/SKILL.md`. Build commands, test commands, and
+code style belong in CLAUDE.md — see [step 7](#7-add-project-context-recommended).
 
 ## What's generated
 
@@ -143,7 +183,21 @@ All six workflows are enabled by default. Disable individual workflows with
 | `tend-triage` | Issue opened |
 | `tend-ci-fix` | CI fails on default branch |
 | `tend-nightly` | Daily schedule, manual dispatch |
-| `tend-renovate` | Weekly schedule, manual dispatch |
+| `tend-renovate` | Weekly schedule, manual dispatch — handles Dependabot, Renovate, and labeled dependency PRs |
+
+## Migrating from claude-code-action
+
+Repos already using `anthropics/claude-code-action` (typically
+`.github/workflows/claude.yaml`) should delete that workflow — tend replaces it.
+The key differences:
+
+- Tend uses a dedicated bot account instead of `@claude`. Update team members to
+  @-mention the bot account (e.g., `@my-project-bot`) instead of `@claude`.
+- Tend generates separate workflow files per concern (`tend-review`,
+  `tend-mention`, etc.) rather than one monolithic workflow.
+
+After installing tend, delete the old workflow and verify no other workflows
+reference `anthropics/claude-code-action`.
 
 ## Architecture
 
