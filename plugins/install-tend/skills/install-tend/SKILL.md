@@ -1,14 +1,13 @@
 ---
 name: install-tend
 description: Sets up tend (Claude-powered CI) on a GitHub repo. Creates config, generates workflows, configures secrets and branch protection via API, creates bot account and PAT via Chrome. Use when setting up tend on a new repo or when asked to install/configure tend.
-argument-hint: "[bot-name]"
 ---
 
 # Install Tend
 
-Set up tend on the current repo.
+@README.md for config options and available settings.
 
-**Bot name:** $ARGUMENTS (or ask the user if not provided)
+Set up tend on the current repo. Ask the user for the bot name if not provided.
 
 Follow each step in order. Skip steps that are already done — check each
 prerequisite before acting. Derive `REPO` once at the start:
@@ -36,7 +35,8 @@ before proceeding.
 
 ## 1. Create config
 
-Create `.config/tend.toml`:
+Create `.config/tend.toml` with at minimum `bot_name`. See README.md for all
+available config sections (`[secrets]`, `[setup]`, `[workflows.*]`).
 
 ```toml
 bot_name = "<bot-name>"
@@ -56,12 +56,8 @@ overriding the default name rather than creating a duplicate:
 bot_token = "GH_BOT_TOKEN"
 ```
 
-Ask the user about other overrides. Only add what differs from defaults:
-
-- **Setup steps** — build tools, caches (`[setup]` section)
-- **Workflow overrides** — disable workflows, custom cron, watched workflows
-  for ci-fix (default watches `"ci"`)
-- **Default branch** — only needed if not `main`
+Ask the user about other overrides (setup steps, workflow overrides, default
+branch).
 
 ## 2. Generate workflows
 
@@ -128,7 +124,8 @@ The bot needs a classic PAT with `repo` scope. Use Chrome:
    "No expiration" via the dropdown.
 4. Click "Generate token" (scroll to bottom of page).
 5. Read the token from the resulting page using `get_page_text`.
-6. Set as repo secret:
+6. Set as repo secret (use the configured secret name from config, default
+   `BOT_TOKEN`):
 
 ```bash
 echo "<pat-value>" | gh secret set BOT_TOKEN --repo "$REPO"

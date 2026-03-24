@@ -26,62 +26,19 @@ Four pieces:
 
 ## Quick start
 
-### 1. Create a bot account
+The fastest way to set up tend is with the `install-tend` skill, which handles
+config, workflows, bot account, secrets, branch protection, and collaborator
+setup interactively:
 
-Create a GitHub user account for the bot (e.g., `my-project-bot`). Generate a
-classic PAT with scopes: `repo` (or fine-grained with `contents:write`,
-`pull-requests:write`, `issues:write`).
-
-### 2. Add repo secrets
-
-| Secret | Value |
-|--------|-------|
-| `BOT_TOKEN` | The bot account's PAT |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (obtained via OAuth PKCE flow, not an API key) |
-
-If the repo already has a bot PAT under a different secret name, override it in
-config rather than creating a duplicate:
-
-```toml
-[secrets]
-bot_token = "YOUR_SECRET_NAME"
+```
+/install-tend my-project-bot
 ```
 
-### 3. Protect the default branch
+See the [install-tend skill](plugins/install-tend/skills/install-tend/SKILL.md)
+for the full step-by-step procedure. The rest of this README covers config
+options and what gets generated.
 
-The bot must not be able to merge PRs — this is the primary security boundary.
-Use a **ruleset** ("Restrict updates" on the default branch, only admins
-bypass) or **branch protection** (require reviews, don't exempt the bot).
-See [docs/security-model.md](docs/security-model.md) for details.
-
-### 4. Add config
-
-Create `.config/tend.toml`:
-
-```toml
-bot_name = "my-project-bot"
-```
-
-This generates all six workflows using default secret names (`BOT_TOKEN`,
-`CLAUDE_CODE_OAUTH_TOKEN`). If the repo's default branch isn't `main`, set
-`default_branch`:
-
-```toml
-bot_name = "my-project-bot"
-default_branch = "master"
-```
-
-Override secret names if yours differ:
-
-```toml
-bot_name = "my-project-bot"
-
-[secrets]
-bot_token = "MY_BOT_PAT"
-claude_token = "MY_CLAUDE_TOKEN"
-```
-
-### 5. Install the plugin
+### Plugin install
 
 Install the `install-tend` plugin for interactive setup:
 
@@ -93,34 +50,43 @@ claude plugin install install-tend
 The CI skills (`tend` plugin) are loaded automatically by the composite action —
 you don't need to install them locally.
 
-### 6. Generate and commit
+## Config
 
-```bash
-uvx tend init
-uvx tend check          # verify branch protection, secrets, bot access
-git add .github/workflows/tend-*.yaml .config/tend.toml
-git commit -m "Add tend workflows"
-git push
+Create `.config/tend.toml`:
+
+```toml
+bot_name = "my-project-bot"
 ```
 
-### 7. Add project context (recommended)
+Only overrides from defaults are needed. If the repo's default branch isn't
+`main`:
 
-Tend reads `CLAUDE.md` like any other Claude session. Put build/test/lint
-commands and project conventions there — this is the primary source of project
-context.
+```toml
+bot_name = "my-project-bot"
+default_branch = "master"
+```
 
-For tend-specific guidance that doesn't belong in CLAUDE.md, add a skill overlay
-at `.claude/skills/running-tend/SKILL.md`. This is for things only relevant to
-CI: PR title conventions, which CI workflow names tend-ci-fix watches, automerge
-rules, dependency management preferences. Don't duplicate CLAUDE.md content in
-the overlay.
+### Secrets
 
-## Customization
+Two repo secrets are required:
 
-### Project setup steps
+| Secret | Value |
+|--------|-------|
+| `BOT_TOKEN` | Bot account's classic PAT (`repo` scope) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (via OAuth PKCE flow, not an API key) |
+
+Override secret names if yours differ:
+
+```toml
+[secrets]
+bot_token = "MY_BOT_PAT"
+claude_token = "MY_CLAUDE_TOKEN"
+```
+
+### Setup steps
 
 Build tools, caches, and environment variables run before Claude in every
-workflow. Define them in config:
+workflow:
 
 ```toml
 [setup]
@@ -161,13 +127,6 @@ prompt = "/my-custom-nightly"         # override the default prompt
 enabled = false                       # disable a workflow entirely
 ```
 
-### Project-specific skills
-
-The generic `tend-*` skills handle CI patterns. Tend-specific project behavior
-(PR conventions, review criteria, label rules) goes in a skill overlay at
-`.claude/skills/running-tend/SKILL.md`. Build commands, test commands, and
-code style belong in CLAUDE.md — see [step 7](#7-add-project-context-recommended).
-
 ## What's generated
 
 All six workflows are enabled by default. Disable individual workflows with
@@ -182,19 +141,21 @@ All six workflows are enabled by default. Disable individual workflows with
 | `tend-nightly` | Daily schedule, manual dispatch |
 | `tend-renovate` | Weekly schedule, manual dispatch — handles Dependabot, Renovate, and labeled dependency PRs |
 
+## Project context
+
+Tend reads `CLAUDE.md` like any other Claude session. Put build/test/lint
+commands and project conventions there.
+
+For tend-specific guidance that doesn't belong in CLAUDE.md, add a skill overlay
+at `.claude/skills/running-tend/SKILL.md`. This is for things only relevant to
+CI: PR title conventions, which CI workflow names tend-ci-fix watches, automerge
+rules, dependency management preferences. Don't duplicate CLAUDE.md content.
+
 ## Migrating from claude-code-action
 
-Repos already using `anthropics/claude-code-action` (typically
-`.github/workflows/claude.yaml`) should delete that workflow — tend replaces it.
-The key differences:
-
-- Tend uses a dedicated bot account instead of `@claude`. Update team members to
-  @-mention the bot account (e.g., `@my-project-bot`) instead of `@claude`.
-- Tend generates separate workflow files per concern (`tend-review`,
-  `tend-mention`, etc.) rather than one monolithic workflow.
-
-After installing tend, delete the old workflow and verify no other workflows
-reference `anthropics/claude-code-action`.
+Repos using `anthropics/claude-code-action` should delete that workflow — tend
+replaces it. Update team members to @-mention the bot account instead of
+`@claude`. Verify no other workflows reference `anthropics/claude-code-action`.
 
 ## Architecture
 
