@@ -1,5 +1,5 @@
 ---
-name: tend-review
+name: review
 description: Reviews a pull request for code quality and correctness. Use when asked to review a PR or when running as an automated PR reviewer.
 argument-hint: "[PR number]"
 metadata:
@@ -272,7 +272,7 @@ array indices to object keys, which GitHub rejects.
 ### 6. Monitor CI
 
 After approving or staying silent, monitor CI using the polling approach from
-/tend:tend-running-in-ci. **NEVER use `--watch` flags** — they hang forever.
+/tend-ci-runner:running-in-ci. **NEVER use `--watch` flags** — they hang forever.
 
 - **All required checks passed** -> done.
 - **A check failed** and it's related to the PR -> post a follow-up COMMENT
