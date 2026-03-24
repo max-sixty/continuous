@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -18,6 +19,15 @@ def _claude_token(cfg: Config) -> str:
     return f"${{{{ secrets.{cfg.claude_token_secret} }}}}"
 
 
+def _reindent(text: str, indent: int) -> str:
+    """Dedent raw YAML and re-indent to `indent` spaces."""
+    stripped = textwrap.dedent(text).strip("\n")
+    if not stripped:
+        return ""
+    pad = " " * indent
+    return "\n".join(pad + line if line.strip() else line for line in stripped.splitlines())
+
+
 def _setup_yaml(cfg: Config, indent: int = 6) -> str:
     """Render setup steps as YAML, indented to `indent` spaces.
 
@@ -31,6 +41,8 @@ def _setup_yaml(cfg: Config, indent: int = 6) -> str:
             lines.append(f"{pad}- uses: {step.uses}")
         elif step.run:
             lines.append(f"{pad}- run: {step.run}")
+    if cfg.setup_raw:
+        lines.append(_reindent(cfg.setup_raw, indent))
     if not lines:
         return ""
     return "\n" + "\n".join(lines) + "\n"

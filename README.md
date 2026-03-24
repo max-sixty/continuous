@@ -124,31 +124,24 @@ uses = ["./.github/actions/my-setup"]
 run = ["echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"]
 ```
 
-`uses` and `run` entries are bare strings — there's no way to pass `with:`
-parameters to an action directly. For actions that need inputs (e.g.,
-`cargo-install`, `rust-cache`, `setup-node`), wrap them in a local composite
-action:
-
-```yaml
-# .github/actions/tend-setup/action.yaml
-name: tend-setup
-runs:
-  using: composite
-  steps:
-    - uses: cargo-bins/cargo-binstall@main
-    - run: cargo binstall cargo-insta --no-confirm
-      shell: bash
-    - uses: Swatinem/rust-cache@v2
-      with:
-        save-if: false
-```
-
-Then reference it as a single `uses` entry:
+For actions that need `with:` parameters, use `raw` — a multiline string of
+GitHub Actions YAML injected verbatim into the workflow steps:
 
 ```toml
 [setup]
-uses = ["./.github/actions/tend-setup"]
+uses = ["cargo-bins/cargo-binstall@main"]
+run = ["cargo binstall cargo-insta --no-confirm"]
+raw = """
+- uses: Swatinem/rust-cache@v2
+  with:
+    save-if: false
+"""
 ```
+
+`uses` and `run` entries are bare strings (no `with:` support). `raw` handles
+everything else. For very complex setups, a local composite action
+(`.github/actions/tend-setup/action.yaml`) referenced via `uses` is an
+alternative.
 
 ### Workflow overrides
 

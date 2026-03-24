@@ -157,6 +157,45 @@ def test_setup_after_pr_checkout_in_review(tmp_path: Path) -> None:
     assert setup_idx > checkout_idx, "Setup must come after PR checkout"
 
 
+def test_setup_raw_yaml_injected(tmp_path: Path) -> None:
+    extra = dedent("""\
+        [setup]
+        raw = \"\"\"
+        - uses: Swatinem/rust-cache@v2
+          with:
+            save-if: false
+        - run: cargo binstall cargo-insta --no-confirm
+          shell: bash
+        \"\"\"
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    for wf in generate_all(cfg):
+        data = yaml.safe_load(wf.content)
+        assert isinstance(data, dict), f"{wf.filename} did not parse as valid YAML"
+        assert "Swatinem/rust-cache@v2" in wf.content, f"{wf.filename} missing raw uses step"
+        assert "save-if: false" in wf.content, f"{wf.filename} missing with parameter"
+        assert "cargo binstall" in wf.content, f"{wf.filename} missing raw run step"
+
+
+def test_setup_raw_combined_with_uses_and_run(tmp_path: Path) -> None:
+    extra = dedent("""\
+        [setup]
+        uses = ["./.github/actions/my-setup"]
+        run = ["echo FOO=bar >> $GITHUB_ENV"]
+        raw = \"\"\"
+        - uses: Swatinem/rust-cache@v2
+          with:
+            save-if: false
+        \"\"\"
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    for wf in generate_all(cfg):
+        assert "./.github/actions/my-setup" in wf.content
+        assert "echo FOO=bar" in wf.content
+        assert "Swatinem/rust-cache@v2" in wf.content
+        assert "save-if: false" in wf.content
+
+
 def test_setup_after_pr_checkout_in_mention(tmp_path: Path) -> None:
     """Setup steps must run after PR checkout, not before."""
     extra = dedent("""\
