@@ -192,20 +192,6 @@ The key differences:
 After installing tend, delete the old workflow and verify no other workflows
 reference `anthropics/claude-code-action`.
 
-## Architecture
-
-```
-tend/
-├── .claude-plugin/
-│   └── plugin.json   # Plugin manifest
-├── skills/           # CI skills (distributed via plugin)
-├── action.yaml       # Composite action (the interface)
-├── scripts/          # Helper scripts (survey, run listing)
-├── generator/        # Python package (uvx tend)
-└── docs/
-    └── security-model.md
-```
-
 ## Security
 
 See [docs/security-model.md](docs/security-model.md).
