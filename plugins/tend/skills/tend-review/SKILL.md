@@ -51,7 +51,7 @@ gh api "repos/$REPO/compare/$LAST_REVIEW_SHA...$HEAD_SHA" \
 ```
 
 If the incremental changes are trivial, skip the full review **and do not
-submit a new approval** — the existing review stands. Go directly to step 7 to
+submit a new approval** — the existing review stands. Go directly to step 6 to
 resolve any bot threads addressed by the new changes, then exit. Do NOT proceed
 to steps 2, 3, or 4. Rough heuristic: changes under ~20 added+deleted lines
 that don't introduce new functions, types, or control flow are typically
@@ -178,8 +178,7 @@ review as a COMMENT.
 (steps 2-3) — self-review catches real issues (lint failures, edge cases) and is
 intentionally valuable. Do NOT attempt
 `gh pr review --approve` — GitHub rejects self-approvals. Submit as COMMENT
-when there are concerns, or stay silent and skip to step 6. Always post CI
-failure analysis as a COMMENT, even on self-authored PRs.
+when there are concerns, or stay silent and skip to step 6.
 
 **Not confident enough to approve** (unfamiliar module, subtle logic): Add a
 `+1` reaction instead — no review needed unless there are specific observations.
@@ -269,31 +268,12 @@ array indices to object keys, which GitHub rejects.
      GitHub's suggestion parser may consume it as a delimiter, corrupting the
      result. Either shrink the range to avoid the fence or push a commit.
 
-### 6. Monitor CI
+**Do not monitor CI after reviewing.** The tend-review workflow is itself a PR
+check — polling `gh pr checks` creates a deadlock (the job waits for itself).
+Branch protection handles merge gating; CI failures on PR branches are visible
+to the author and re-trigger a review run when fixed.
 
-After approving or staying silent, monitor CI using the polling approach from
-/tend:tend-running-in-ci. **NEVER use `--watch` flags** — they hang forever.
-
-- **All required checks passed** -> done.
-- **A check failed** and it's related to the PR -> post a follow-up COMMENT
-  review with analysis and inline suggestions, then dismiss the bot's approval:
-  ```bash
-  # Use PUT, not POST — the dismiss endpoint requires it
-  gh api "repos/$REPO/pulls/<number>/reviews/$REVIEW_ID/dismissals" \
-    -X PUT -f message="CI failed — <reason>"
-  ```
-  Skip if already dismissed. **Do not push fixes on human-authored PRs** — post
-  the analysis and offer to fix, then wait for the author to accept.
-- **A check failed** and it's a transient flake (unrelated to the PR changes) ->
-  1. **Re-run the failed jobs:**
-     ```bash
-     gh run rerun <run-id> --failed
-     ```
-  2. **Report the flake.** Search for an open issue about the specific flaky
-     test. If found, append to an existing bot comment rather than posting a new
-     one.
-
-### 7. Resolve handled suggestions
+### 6. Resolve handled suggestions
 
 After submitting the review, check if any unresolved bot threads have been
 addressed by the new changes. Resolve threads where the suggestion was applied.
@@ -361,7 +341,7 @@ gh api graphql -F query=@/tmp/resolve-thread.graphql -f threadId="THREAD_ID"
 Outdated comments (null line) are best-effort — skip if the original context
 can't be located.
 
-### 8. Push mechanical fixes
+### 7. Push mechanical fixes
 
 **Bot PRs** (Dependabot, renovate, etc.): If the review found concrete, fixable
 issues and there's no human author to act on feedback, commit and push the fix

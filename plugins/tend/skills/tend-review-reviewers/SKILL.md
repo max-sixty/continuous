@@ -218,8 +218,6 @@ Check for subsequent commits that undid something the bot approved (gap in
 review), and human review comments flagging issues the bot missed. Pull in the
 full PR context — not just changes from the past hour.
 
-CI polling time is expected and acceptable — do not flag it.
-
 ## Step 4: Deduplicate
 
 Before creating issues or PRs, check exhaustively for existing ones:

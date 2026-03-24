@@ -29,7 +29,7 @@ security boundary.
 | Create PRs | Yes | Yes | — | Yes | Yes | Yes |
 | Post PR reviews | — | — | Yes | — | — | — |
 | Resolve review threads | — | — | Yes | — | — | — |
-| Monitor CI | Yes | Yes | Yes | Yes | Yes | Yes |
+| Monitor CI | Yes | Yes | — | Yes | Yes | Yes |
 | **Pushes must trigger CI** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 
 The last row matters: `GITHUB_TOKEN` pushes don't trigger downstream workflows
