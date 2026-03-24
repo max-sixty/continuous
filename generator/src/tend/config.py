@@ -37,6 +37,7 @@ class Config:
     bot_token_secret: str
     claude_token_secret: str
     setup: list[SetupStep]
+    setup_raw: str
     workflows: dict[str, WorkflowConfig]
 
     @classmethod
@@ -71,10 +72,10 @@ class Config:
         secrets = raw.get("secrets", {})
 
         setup: list[SetupStep] = []
-        setup_raw = raw.get("setup", {})
-        for action in setup_raw.get("uses", []):
+        setup_section = raw.get("setup", {})
+        for action in setup_section.get("uses", []):
             setup.append(SetupStep(uses=action))
-        for cmd in setup_raw.get("run", []):
+        for cmd in setup_section.get("run", []):
             setup.append(SetupStep(run=cmd))
 
         workflows: dict[str, WorkflowConfig] = {}
@@ -104,5 +105,6 @@ class Config:
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
             claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
             setup=setup,
+            setup_raw=setup_section.get("raw", ""),
             workflows=workflows,
         )
