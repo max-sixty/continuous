@@ -56,6 +56,23 @@ overriding the default name rather than creating a duplicate:
 bot_token = "GH_BOT_TOKEN"
 ```
 
+Discover existing CI workflows so tend-ci-fix can watch them:
+
+```bash
+grep -l 'push:\|pull_request' .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null
+```
+
+For each match, extract the workflow `name:` field. These are the workflows
+that run tests, linting, or builds — tend-ci-fix should watch them. Configure:
+
+```toml
+[workflows.ci-fix]
+watched_workflows = ["ci", "lint"]  # names of workflows to watch
+```
+
+If no CI workflows exist, either skip ci-fix (`enabled = false`) or help the
+user create one first.
+
 Ask the user about other overrides (setup steps, workflow overrides).
 
 ## 2. Generate workflows

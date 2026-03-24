@@ -1,1 +1,4 @@
 bot_name = "tend-agent"
+
+[workflows.ci-fix]
+watched_workflows = ["ci"]
