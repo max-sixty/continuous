@@ -1,5 +1,5 @@
 ---
-name: tend-nightly
+name: nightly
 description: Nightly code quality sweep — resolves bot PR conflicts, reviews recent commits, surveys existing code, and closes resolved issues.
 metadata:
   internal: true
@@ -24,7 +24,7 @@ For each conflicted PR, dispatch a subagent to:
 2. Merge the default branch: `git merge origin/main`
 3. Resolve conflicts (read files, understand both sides), `git add`,
    `git commit --no-edit`
-4. Push and poll CI using the approach from `/tend:tend-running-in-ci`
+4. Push and poll CI using the approach from `/tend-ci-runner:running-in-ci`
 5. If conflicts are too complex, `git merge --abort` and comment explaining
    manual resolution is needed
 

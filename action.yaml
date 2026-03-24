@@ -23,7 +23,7 @@ inputs:
     default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill"
     description: Comma-separated list of allowed tools
   system_prompt_append:
-    default: "You are operating in a GitHub Actions CI environment. Use /tend:tend-running-in-ci before starting work."
+    default: "You are operating in a GitHub Actions CI environment. Use /tend-ci-runner:running-in-ci before starting work."
     description: Text appended to the system prompt
   allowed_bots:
     default: "*"
@@ -78,6 +78,13 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
 
+    - name: Install tend CI plugin
+      shell: bash
+      run: |
+        npm install -g @anthropic-ai/claude-code
+        claude plugin marketplace add https://github.com/max-sixty/tend.git
+        claude plugin install tend-ci-runner@tend
+
     - name: Run Claude Code
       id: claude
       uses: anthropics/claude-code-action@v1
@@ -97,7 +104,6 @@ runs:
           --model ${{ inputs.model }}
           --allowedTools ${{ inputs.allowed_tools }}
           --append-system-prompt "${{ inputs.system_prompt_append }}"
-          --plugin-dir ${{ github.action_path }}/plugins/tend
 
     - name: Compute artifact name
       if: always()
