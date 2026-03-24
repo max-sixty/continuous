@@ -29,7 +29,7 @@ jobs:
         with:
           github_token: ${{ secrets.BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          bot_name: continuous-bot
+          bot_name: tend-agent
           prompt: |
             /tend:tend-ci-fix ${{ github.event.workflow_run.id }}
             - Run URL: ${{ github.event.workflow_run.html_url }}

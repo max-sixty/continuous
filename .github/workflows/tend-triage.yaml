@@ -13,7 +13,7 @@ jobs:
   triage:
     if: >-
       github.event.issue.user.type != 'Bot' &&
-      github.event.issue.user.login != 'continuous-bot'
+      github.event.issue.user.login != 'tend-agent'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -34,6 +34,6 @@ jobs:
         with:
           github_token: ${{ secrets.BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          bot_name: continuous-bot
+          bot_name: tend-agent
           prompt: |
             /tend:tend-triage ${{ github.event.issue.number }}

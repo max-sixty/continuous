@@ -13,8 +13,8 @@ jobs:
       (github.event_name == 'pull_request_target' &&
         github.event.pull_request.draft == false) ||
       (github.event_name == 'pull_request_review' &&
-        github.event.pull_request.user.login == 'continuous-bot' &&
-        github.event.review.user.login != 'continuous-bot' &&
+        github.event.pull_request.user.login == 'tend-agent' &&
+        github.event.review.user.login != 'tend-agent' &&
         (github.event.review.state != 'approved' || github.event.review.body))
     concurrency:
       group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}
@@ -56,7 +56,7 @@ jobs:
         with:
           github_token: ${{ secrets.BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          bot_name: continuous-bot
+          bot_name: tend-agent
           use_sticky_comment: ${{ github.event_name == 'pull_request_target' }}
           prompt: >-
             ${{ github.event_name == 'pull_request_target'

@@ -13,12 +13,12 @@ jobs:
   verify:
     if: |
       (github.event_name == 'issues' &&
-        contains(github.event.issue.body, '@continuous-bot') &&
-        github.event.issue.user.login != 'continuous-bot') ||
+        contains(github.event.issue.body, '@tend-agent') &&
+        github.event.issue.user.login != 'tend-agent') ||
       (github.event_name == 'issue_comment' &&
-        github.event.comment.user.login != 'continuous-bot') ||
+        github.event.comment.user.login != 'tend-agent') ||
       (github.event_name == 'pull_request_review_comment' &&
-        github.event.comment.user.login != 'continuous-bot')
+        github.event.comment.user.login != 'tend-agent')
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: true
@@ -35,7 +35,7 @@ jobs:
             exit 0
           fi
 
-          if [ -n "$COMMENT_BODY" ] && printf '%s\n' "$COMMENT_BODY" | grep -qF '@continuous-bot'; then
+          if [ -n "$COMMENT_BODY" ] && printf '%s\n' "$COMMENT_BODY" | grep -qF '@tend-agent'; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -45,14 +45,14 @@ jobs:
             ISSUE_NUMBER="$ISSUE_OR_PR_NUMBER"
 
             if [ -z "$PR_URL" ]; then
-              if [ "$ISSUE_AUTHOR" = "continuous-bot" ]; then
+              if [ "$ISSUE_AUTHOR" = "tend-agent" ]; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
-              if printf '%s\n' "$ISSUE_BODY" | grep -qF '@continuous-bot'; then
+              if printf '%s\n' "$ISSUE_BODY" | grep -qF '@tend-agent'; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
               BOT_COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-                --jq '[.[] | select(.user.login == "continuous-bot")] | length')
+                --jq '[.[] | select(.user.login == "tend-agent")] | length')
               if [ "$BOT_COMMENTS" -gt "0" ]; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
@@ -65,18 +65,18 @@ jobs:
           fi
 
           PR_AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')
-          if [ "$PR_AUTHOR" = "continuous-bot" ]; then
+          if [ "$PR_AUTHOR" = "tend-agent" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           BOT_REVIEWS=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
-            --jq '[.[] | select(.user.login == "continuous-bot")] | length')
+            --jq '[.[] | select(.user.login == "tend-agent")] | length')
           if [ "$BOT_REVIEWS" -gt "0" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           BOT_COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            --jq '[.[] | select(.user.login == "continuous-bot")] | length')
+            --jq '[.[] | select(.user.login == "tend-agent")] | length')
           if [ "$BOT_COMMENTS" -gt "0" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -96,7 +96,7 @@ jobs:
         if: |
           steps.check.outputs.should_run == 'true'
           && github.event.comment
-          && contains(github.event.comment.body, '@continuous-bot')
+          && contains(github.event.comment.body, '@tend-agent')
         run: |
           gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes 2>/dev/null || \
           gh api "repos/$REPO/pulls/comments/$COMMENT_ID/reactions" -f content=eyes 2>/dev/null || true
@@ -142,15 +142,15 @@ jobs:
         with:
           github_token: ${{ secrets.BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          bot_name: continuous-bot
+          bot_name: tend-agent
           prompt: >-
             ${{ github.event_name == 'issues'
               && format('An issue was updated with a mention of you ({0}). Read it and respond.', github.event.issue.html_url)
-              || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@continuous-bot')
+              || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@tend-agent')
                 && format('You were mentioned in an inline review comment on PR #{0} ({1}, review comment ID {2}). Read the full PR context (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push. Reply in the review thread using `gh api repos/{3}/pulls/{0}/comments/{2}/replies -f body="..."` — do not create a new top-level comment.', (github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number), github.event.comment.html_url, github.event.comment.id, github.repository))
               || (github.event_name == 'pull_request_review_comment'
                 && format('A user left an inline review comment on a PR where you previously participated (PR #{0}, {1}, review comment ID {2}). Read the full context. Only respond if the comment is directed at you or requests changes. Reply in the review thread using `gh api repos/{3}/pulls/{0}/comments/{2}/replies -f body="..."`.', (github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number), github.event.comment.html_url, github.event.comment.id, github.repository))
-              || (contains(github.event.comment.body, '@continuous-bot')
+              || (contains(github.event.comment.body, '@tend-agent')
                 && format('You were mentioned in a comment ({0}). Read the full issue or PR (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({0}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between humans, exit silently.', github.event.comment.html_url)
             }}

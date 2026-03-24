@@ -1,5 +1,1 @@
-bot_name = "continuous-bot"
-
-# TODO: Generate PAT for continuous-bot (classic, repo scope) and set as BOT_TOKEN secret
-# TODO: Accept collaborator invitation as continuous-bot
-# TODO: Verify oauth-token.sh token exchange end-to-end (rate limited during initial testing)
+bot_name = "tend-agent"
