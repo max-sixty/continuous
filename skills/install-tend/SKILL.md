@@ -42,9 +42,22 @@ Create `.config/tend.toml`:
 bot_name = "<bot-name>"
 ```
 
-Ask the user about overrides. Only add what differs from defaults:
+Check whether the repo already has a bot PAT secret under a non-default name:
 
-- **Secret names** — default: `BOT_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`
+```bash
+gh secret list --repo "$REPO" --json name --jq '.[].name'
+```
+
+If a PAT-like secret exists (e.g., `GH_BOT_TOKEN`, `ROBOT_PAT`), suggest
+overriding the default name rather than creating a duplicate:
+
+```toml
+[secrets]
+bot_token = "GH_BOT_TOKEN"
+```
+
+Ask the user about other overrides. Only add what differs from defaults:
+
 - **Setup steps** — build tools, caches (`[setup]` section)
 - **Workflow overrides** — disable workflows, custom cron, watched workflows
   for ci-fix (default watches `"ci"`)
@@ -56,7 +69,19 @@ Ask the user about overrides. Only add what differs from defaults:
 uvx tend init
 ```
 
-Verify workflow files appear in `.github/workflows/tend-*.yaml`.
+Verify workflow files appear in `.github/workflows/tend-*.yaml`. Run
+`uvx tend check` to validate branch protection, secrets, and bot access.
+
+## 2b. Remove existing claude-code-action workflows
+
+Check for workflows using `anthropics/claude-code-action`:
+
+```bash
+grep -rl 'anthropics/claude-code-action' .github/workflows/ 2>/dev/null
+```
+
+If found, delete them — tend replaces claude-code-action entirely. Remind the
+user that team members should @-mention the bot account instead of `@claude`.
 
 ## 3. Bot account
 
@@ -210,4 +235,4 @@ After completing all steps, present this checklist:
 - [ ] Ruleset: merge restriction on default branch, admin bypass
 - [ ] Bot access: write collaborator, invitation accepted
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
-- [ ] Committed and pushed
+- [ ] Committed (push requires explicit permission)
