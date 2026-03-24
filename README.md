@@ -89,24 +89,24 @@ setup = [
 ]
 ```
 
-For actions that need `with:` parameters, use `setup_raw` — a multiline string of
-GitHub Actions YAML injected verbatim into the workflow steps:
+For actions that need `with:` parameters, use `{raw = "..."}` — a multiline
+string of GitHub Actions YAML injected verbatim:
 
 ```toml
 setup = [
   {uses = "cargo-bins/cargo-binstall@main"},
   {run = "cargo binstall cargo-insta --no-confirm"},
-]
-setup_raw = """
+  {raw = """
 - uses: Swatinem/rust-cache@v2
   with:
     save-if: false
-"""
+"""},
+]
 ```
 
-`setup` entries are `{uses = "..."}` or `{run = "..."}` (no `with:` support).
-`setup_raw` handles everything else. For very complex setups, a local composite
-action (`.github/actions/tend-setup/action.yaml`) referenced via `uses` is an
+Each entry is `{uses = "..."}`, `{run = "..."}`, or `{raw = "..."}`. For very
+complex setups, a local composite action
+(`.github/actions/tend-setup/action.yaml`) referenced via `uses` is an
 alternative.
 
 ### Workflow overrides
