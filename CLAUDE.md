@@ -20,7 +20,7 @@ tend/
 │   └── marketplace.json  # Lists both plugins
 ├── plugins/
 │   ├── install-tend/     # User-facing plugin (setup skill)
-│   └── tend/             # CI plugin (review, triage, ci-fix, etc.)
+│   └── tend-ci-runner/   # CI plugin (review, triage, ci-fix, etc.)
 ├── action.yaml           # Composite action — the stable interface
 ├── scripts/              # Helper scripts (survey, run listing)
 ├── generator/            # Python package (uvx tend), hatchling build

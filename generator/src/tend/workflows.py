@@ -93,7 +93,7 @@ def _escape_braces(prompt: str, placeholder: str) -> tuple[str, bool]:
 
 def generate_review(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("review", WorkflowConfig())
-    raw_prompt = wf.prompt or "/tend:tend-review {pr_number}"
+    raw_prompt = wf.prompt or "/tend-ci-runner:review {pr_number}"
     format_body, needs_format = _escape_braces(raw_prompt, "pr_number")
     escaped = _escape(format_body)
     if needs_format:
@@ -351,7 +351,7 @@ jobs:
 
 def generate_triage(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("triage", WorkflowConfig())
-    prompt = (wf.prompt or "/tend:tend-triage {issue_number}").replace(
+    prompt = (wf.prompt or "/tend-ci-runner:triage {issue_number}").replace(
         "{issue_number}", "${{ github.event.issue.number }}"
     )
     bt = _bot_token(cfg)
@@ -406,7 +406,7 @@ jobs:
 def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("ci-fix", WorkflowConfig())
     watched = wf.watched_workflows if wf.watched_workflows is not None else ["ci"]
-    prompt = (wf.prompt or "/tend:tend-ci-fix {run_id}").replace(
+    prompt = (wf.prompt or "/tend-ci-runner:ci-fix {run_id}").replace(
         "{run_id}", "${{ github.event.workflow_run.id }}"
     )
     bt = _bot_token(cfg)
@@ -505,11 +505,11 @@ jobs:
 
 
 def generate_nightly(cfg: Config) -> GeneratedWorkflow:
-    return _generate_scheduled(cfg, "nightly", "17 6 * * *", "/tend:tend-nightly")
+    return _generate_scheduled(cfg, "nightly", "17 6 * * *", "/tend-ci-runner:nightly")
 
 
 def generate_renovate(cfg: Config) -> GeneratedWorkflow:
-    return _generate_scheduled(cfg, "renovate", "17 9 * * 0", "/tend:tend-renovate")
+    return _generate_scheduled(cfg, "renovate", "17 9 * * 0", "/tend-ci-runner:renovate")
 
 
 # ---------------------------------------------------------------------------

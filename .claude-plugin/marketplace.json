@@ -15,9 +15,9 @@
       "source": "./plugins/install-tend"
     },
     {
-      "name": "tend",
-      "description": "CI skills — PR review, issue triage, CI fixes, nightly sweeps, dependency updates, and session analysis.",
-      "source": "./plugins/tend"
+      "name": "tend-ci-runner",
+      "description": "Internal CI skills loaded by tend's GitHub Action. Not for manual installation.",
+      "source": "./plugins/tend-ci-runner"
     }
   ]
 }
