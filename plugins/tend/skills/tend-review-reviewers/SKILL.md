@@ -129,6 +129,11 @@ gates.
 
 ### Recording below-threshold findings
 
+**Only update the tracking issue when you have new below-threshold findings to
+record.** If a run has no new findings (no sessions to analyze, or all sessions
+were clean), skip the tracking comment entirely — do not append "no new findings"
+entries, as these add noise without evidence value.
+
 After analysis, find **the bot's existing comment** on the tracking issue and
 **append** new findings to it. If no bot comment exists yet, create one. This
 avoids notification spam from hourly runs.
