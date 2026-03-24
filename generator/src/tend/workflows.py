@@ -345,7 +345,6 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    db = cfg.default_branch
 
     setup = _setup_yaml(cfg)
     perms = _permissions()
@@ -373,7 +372,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: {db}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
@@ -402,7 +400,6 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    db = cfg.default_branch
 
     setup = _setup_yaml(cfg)
     perms = _permissions(issues=False)
@@ -415,11 +412,12 @@ on:
   workflow_run:
     workflows: [{watched_yaml}]
     types: [completed]
-    branches: [{db}]
 
 jobs:
   fix-ci:
-    if: github.event.workflow_run.conclusion == 'failure'
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -427,7 +425,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: {db}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
@@ -457,7 +454,6 @@ def _generate_scheduled(cfg: Config, name: str, default_cron: str, default_promp
     bt = _bot_token(cfg)
     ct = _claude_token(cfg)
     bn = cfg.bot_name
-    db = cfg.default_branch
 
     setup = _setup_yaml(cfg)
     perms = _permissions()
@@ -482,7 +478,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: {db}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}

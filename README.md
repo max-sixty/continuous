@@ -54,15 +54,7 @@ bot_name = "my-project-bot"
 ```
 
 This generates all six workflows using default secret names (`BOT_TOKEN`,
-`CLAUDE_CODE_OAUTH_TOKEN`). If the repo's default branch isn't `main`, set
-`default_branch`:
-
-```toml
-bot_name = "my-project-bot"
-default_branch = "master"
-```
-
-Override secret names if yours differ:
+`CLAUDE_CODE_OAUTH_TOKEN`). Override secret names if yours differ:
 
 ```toml
 bot_name = "my-project-bot"
@@ -105,9 +97,10 @@ Build tools, caches, and environment variables run before Claude in every
 workflow. Define them in config:
 
 ```toml
-[setup]
-uses = ["./.github/actions/my-setup"]
-run = ["echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"]
+setup = [
+  {uses = "./.github/actions/my-setup"},
+  {run = "echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"},
+]
 ```
 
 ### Workflow overrides
