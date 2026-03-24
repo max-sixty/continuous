@@ -482,7 +482,7 @@ def _generate_scheduled(cfg: Config, name: str, default_cron: str, default_promp
 name: tend-{name}
 on:
   schedule:
-    - cron: '{cron}'
+    - cron: "{cron}"
   workflow_dispatch:
 
 jobs:
