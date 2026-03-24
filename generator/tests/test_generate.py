@@ -194,6 +194,12 @@ def test_setup_raw_combined_with_uses_and_run(tmp_path: Path) -> None:
         assert "echo FOO=bar" in wf.content
         assert "Swatinem/rust-cache@v2" in wf.content
         assert "save-if: false" in wf.content
+        # raw steps must come after uses and run steps
+        uses_idx = wf.content.index("./.github/actions/my-setup")
+        run_idx = wf.content.index("echo FOO=bar")
+        raw_idx = wf.content.index("Swatinem/rust-cache@v2")
+        assert uses_idx < raw_idx, f"{wf.filename}: raw before uses"
+        assert run_idx < raw_idx, f"{wf.filename}: raw before run"
 
 
 def test_setup_after_pr_checkout_in_mention(tmp_path: Path) -> None:
