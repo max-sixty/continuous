@@ -1,5 +1,5 @@
 ---
-name: tend-review-reviewers
+name: review-reviewers
 description: Hourly analysis of Claude CI session logs — identifies behavioral problems, skill gaps, and workflow issues.
 argument-hint: "<owner/repo>"
 metadata:

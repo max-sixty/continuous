@@ -1,7 +1,7 @@
 {
-  "name": "tend",
+  "name": "tend-ci-runner",
   "version": "0.1.0",
-  "description": "Claude-powered CI skills for GitHub repos — PR review, issue triage, CI fixes, nightly sweeps, dependency updates, and session analysis.",
+  "description": "Internal CI skills loaded by tend's GitHub Action. Not for manual installation.",
   "author": {
     "name": "Maximilian Roos",
     "url": "https://github.com/max-sixty"
