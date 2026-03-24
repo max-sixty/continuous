@@ -28,8 +28,8 @@ Four pieces:
 ### 1. Create a bot account
 
 Create a GitHub user account for the bot (e.g., `my-project-bot`). Generate a
-classic PAT with scopes: `repo` (or fine-grained with `contents:write`,
-`pull-requests:write`, `issues:write`).
+classic PAT with `repo` scope. Fine-grained PATs also work — grant
+`contents:write`, `pull-requests:write`, and `issues:write`.
 
 ### 2. Add repo secrets
 
