@@ -152,10 +152,11 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
     missing = [s for s in expected if s not in secret_names]
 
     # Try org secrets for anything not found at repo level.
+    org_forbidden = False
     if missing:
         org = repo.split("/")[0] if "/" in repo else None
         if org:
-            org_secrets = _list_org_secrets(org)
+            org_secrets, org_forbidden = _list_org_secrets(org)
             if org_secrets is not None:
                 still_missing = [s for s in missing if s not in org_secrets]
                 found_at_org = [s for s in missing if s in org_secrets]
@@ -168,24 +169,32 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
                     missing = still_missing
 
     if missing:
-        return CheckResult(
-            "secrets",
-            False,
+        msg = (
             f"Missing secrets: {', '.join(missing)}. "
-            "Add them in repo Settings > Secrets and variables > Actions.",
+            "Add them in repo Settings > Secrets and variables > Actions."
         )
+        if org_forbidden:
+            msg += (
+                "\nNote: Could not check org-level secrets (HTTP 403). "
+                "If these secrets are set at the org level, grant the "
+                "admin:org scope: gh auth refresh -h github.com -s admin:org"
+            )
+        return CheckResult("secrets", False, msg)
     return CheckResult("secrets", True, f"Required secrets present: {', '.join(expected)}")
 
 
-def _list_org_secrets(org: str) -> set[str] | None:
-    """List org-level secret names. Returns None if inaccessible."""
+def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:
+    """List org-level secret names. Returns (secrets, permission_denied)."""
     result = _gh("api", f"orgs/{org}/actions/secrets", "--jq", "[.secrets[].name]")
-    if result is None or result.returncode != 0:
-        return None
+    if result is None:
+        return None, False
+    if result.returncode != 0:
+        forbidden = "HTTP 403" in result.stderr
+        return None, forbidden
     try:
-        return set(json.loads(result.stdout))
+        return set(json.loads(result.stdout)), False
     except (json.JSONDecodeError, TypeError):
-        return None
+        return None, False
 
 
 RESTRICT_UPDATES_RULESET = json.dumps({

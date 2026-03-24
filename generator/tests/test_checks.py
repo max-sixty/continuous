@@ -135,6 +135,18 @@ def test_secrets_missing() -> None:
         result = check_secrets("owner/repo", ["BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"])
     assert result.passed is False
     assert "CLAUDE_CODE_OAUTH_TOKEN" in result.message
+    assert "admin:org" not in result.message
+
+
+def test_secrets_missing_with_org_403_hint() -> None:
+    """When org secrets return 403 and secrets are missing, include the hint."""
+    with patch("tend.checks._gh", return_value=_make_completed('["BOT_TOKEN"]\n')), \
+         patch("tend.checks._list_org_secrets", return_value=(None, True)):
+        result = check_secrets("owner/repo", ["BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"])
+    assert result.passed is False
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in result.message
+    assert "admin:org" in result.message
+    assert "gh auth refresh" in result.message
 
 
 def test_secrets_api_error() -> None:
