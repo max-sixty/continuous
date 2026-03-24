@@ -189,6 +189,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
 
     setup = _setup_yaml(cfg)
     perms = _permissions()
+    pr = "(github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number)"
 
     content = f"""\
 {HEADER}
@@ -198,6 +199,9 @@ on:
     types: [edited]
   issue_comment:
     types: [created, edited]
+  # Works for same-repo PRs only; secrets unavailable on fork PRs (no _target variant exists)
+  pull_request_review_comment:
+    types: [created, edited]
 
 jobs:
   verify:
@@ -206,9 +210,11 @@ jobs:
         contains(github.event.issue.body, '@{bn}') &&
         github.event.issue.user.login != '{bn}') ||
       (github.event_name == 'issue_comment' &&
+        github.event.comment.user.login != '{bn}') ||
+      (github.event_name == 'pull_request_review_comment' &&
         github.event.comment.user.login != '{bn}')
     concurrency:
-      group: ${{{{ github.workflow }}}}-${{{{ github.event.issue.number }}}}
+      group: ${{{{ github.workflow }}}}-${{{{ github.event.issue.number || github.event.pull_request.number }}}}
       cancel-in-progress: true
     runs-on: ubuntu-24.04
     outputs:
@@ -229,22 +235,29 @@ jobs:
           fi
 
           # Non-mention: check bot engagement
-          if [ -z "$PR_URL" ]; then
-            if [ "$ISSUE_AUTHOR" = "{bn}" ]; then
-              echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            ISSUE_NUMBER="$ISSUE_OR_PR_NUMBER"
+
+            if [ -z "$PR_URL" ]; then
+              if [ "$ISSUE_AUTHOR" = "{bn}" ]; then
+                echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              if printf '%s\\n' "$ISSUE_BODY" | grep -qF '@{bn}'; then
+                echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              BOT_COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \\
+                --jq '[.[] | select(.user.login == "{bn}")] | length')
+              if [ "$BOT_COMMENTS" -gt "0" ]; then
+                echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
-            if printf '%s\\n' "$ISSUE_BODY" | grep -qF '@{bn}'; then
-              echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
-            fi
-            BOT_COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_OR_PR_NUMBER/comments" \\
-              --jq '[.[] | select(.user.login == "{bn}")] | length')
-            if [ "$BOT_COMMENTS" -gt "0" ]; then
-              echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
-            fi
-            echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
+
+            PR_NUMBER="$ISSUE_NUMBER"
+          else
+            PR_NUMBER="$EVENT_PR_NUMBER"
           fi
 
-          PR_NUMBER="$ISSUE_OR_PR_NUMBER"
           PR_AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')
           if [ "$PR_AUTHOR" = "{bn}" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
@@ -271,6 +284,7 @@ jobs:
           ISSUE_OR_PR_NUMBER: ${{{{ github.event.issue.number }}}}
           ISSUE_AUTHOR: ${{{{ github.event.issue.user.login }}}}
           PR_URL: ${{{{ github.event.issue.pull_request.url }}}}
+          EVENT_PR_NUMBER: ${{{{ github.event.pull_request.number }}}}
 
       - name: React to mention
         if: |
@@ -278,7 +292,8 @@ jobs:
           && github.event.comment
           && contains(github.event.comment.body, '@{bn}')
         run: |
-          gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes 2>/dev/null || true
+          gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes 2>/dev/null || \\
+          gh api "repos/$REPO/pulls/comments/$COMMENT_ID/reactions" -f content=eyes 2>/dev/null || true
         env:
           REPO: ${{{{ github.repository }}}}
           COMMENT_ID: ${{{{ github.event.comment.id }}}}
@@ -299,7 +314,9 @@ jobs:
           token: {bt}
 
       - name: Check out PR branch
-        if: github.event_name == 'issue_comment' && github.event.issue.pull_request.url != ''
+        if: |
+          (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
+          github.event_name == 'pull_request_review_comment'
         run: |
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
           if [ "$PR_STATE" = "OPEN" ]; then
@@ -309,7 +326,7 @@ jobs:
           fi
         env:
           GH_TOKEN: {bt}
-          PR_NUMBER: ${{{{ github.event.issue.number }}}}
+          PR_NUMBER: ${{{{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}}}
 {setup}
       - uses: max-sixty/tend@v1
         with:
@@ -319,6 +336,10 @@ jobs:
           prompt: >-
             ${{{{ github.event_name == 'issues'
               && format('An issue was updated with a mention of you ({{0}}). Read it and respond.', github.event.issue.html_url)
+              || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@{bn}')
+                && format('You were mentioned in an inline review comment on PR #{{0}} ({{1}}, review comment ID {{2}}). Read the full PR context (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push. Reply in the review thread using `gh api repos/{{3}}/pulls/{{0}}/comments/{{2}}/replies -f body="..."` — do not create a new top-level comment.', {pr}, github.event.comment.html_url, github.event.comment.id, github.repository))
+              || (github.event_name == 'pull_request_review_comment'
+                && format('A user left an inline review comment on a PR where you previously participated (PR #{{0}}, {{1}}, review comment ID {{2}}). Read the full context. Only respond if the comment is directed at you or requests changes. Reply in the review thread using `gh api repos/{{3}}/pulls/{{0}}/comments/{{2}}/replies -f body="..."`.', {pr}, github.event.comment.html_url, github.event.comment.id, github.repository))
               || (contains(github.event.comment.body, '@{bn}')
                 && format('You were mentioned in a comment ({{0}}). Read the full issue or PR (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. A comment that responds to concerns you raised in a review is directed at you — briefly acknowledge that the concerns are resolved (or explain why they are not). If the conversation is between humans, exit silently.', github.event.comment.html_url)

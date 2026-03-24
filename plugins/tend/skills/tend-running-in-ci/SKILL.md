@@ -252,8 +252,9 @@ gh api repos/{owner}/{repo}/actions/runs/<run-id>/artifacts \
   --jq '.artifacts[] | {name, size_in_bytes}'
 ```
 
-Review-response runs triggered by `pull_request_review` events sometimes
-produce no artifact when the session is very short.
+Review-response runs triggered by `pull_request_review` or
+`pull_request_review_comment` events sometimes produce no artifact when the
+session is very short.
 
 ## Grounded Analysis
 
