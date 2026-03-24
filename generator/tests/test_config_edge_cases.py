@@ -42,7 +42,6 @@ def test_bot_name_only(tmp_path: Path) -> None:
     path = _write_config(tmp_path, 'bot_name = "my-bot"')
     cfg = Config.load(path)
     assert cfg.bot_name == "my-bot"
-    assert cfg.default_branch == "main"
     assert cfg.bot_token_secret == "BOT_TOKEN"
     assert cfg.claude_token_secret == "CLAUDE_CODE_OAUTH_TOKEN"
     assert cfg.setup == []
@@ -115,16 +114,6 @@ def test_empty_bot_name_rejected(tmp_path: Path) -> None:
     """bot_name = '' must be rejected."""
     path = _write_config(tmp_path, 'bot_name = ""')
     with pytest.raises(ClickException, match="bot_name must not be empty"):
-        Config.load(path)
-
-
-def test_empty_default_branch_rejected(tmp_path: Path) -> None:
-    """default_branch = '' must be rejected."""
-    path = _write_config(tmp_path, dedent("""\
-        bot_name = "my-bot"
-        default_branch = ""
-    """))
-    with pytest.raises(ClickException, match="default_branch must not be empty"):
         Config.load(path)
 
 
@@ -302,8 +291,10 @@ def test_duplicate_setup_steps_accepted(tmp_path: Path) -> None:
     """Duplicate uses entries are accepted without warning or dedup."""
     path = _write_config(tmp_path, dedent("""\
         bot_name = "my-bot"
-        [setup]
-        uses = ["./.github/actions/setup", "./.github/actions/setup"]
+        setup = [
+          {uses = "./.github/actions/setup"},
+          {uses = "./.github/actions/setup"},
+        ]
     """))
     cfg = Config.load(path)
     assert len(cfg.setup) == 2
@@ -388,6 +379,66 @@ def test_bot_name_yaml_injection_rejected(tmp_path: Path) -> None:
     path = _write_config(tmp_path, 'bot_name = "bot: name"')
     with pytest.raises(ClickException, match="not a valid GitHub username"):
         Config.load(path)
+
+
+# ---------------------------------------------------------------------------
+# setup.steps — ordered inline-table format
+# ---------------------------------------------------------------------------
+
+
+def test_setup_steps_preserves_order(tmp_path: Path) -> None:
+    """setup = [{...}, ...] preserves interleaved uses/run order."""
+    path = _write_config(tmp_path, dedent("""\
+        bot_name = "my-bot"
+        setup = [
+          {uses = "./.github/actions/setup-node"},
+          {run = "echo middle"},
+          {uses = "./.github/actions/setup-cache"},
+        ]
+    """))
+    cfg = Config.load(path)
+    assert len(cfg.setup) == 3
+    assert cfg.setup[0].uses == "./.github/actions/setup-node"
+    assert cfg.setup[1].run == "echo middle"
+    assert cfg.setup[2].uses == "./.github/actions/setup-cache"
+    # Verify order in generated YAML
+    workflows = generate_all(cfg)
+    for wf in workflows:
+        node_pos = wf.content.index("setup-node")
+        middle_pos = wf.content.index("echo middle")
+        cache_pos = wf.content.index("setup-cache")
+        assert node_pos < middle_pos < cache_pos, f"Order wrong in {wf.filename}"
+
+
+def test_setup_steps_empty_list(tmp_path: Path) -> None:
+    """setup = [] produces no setup steps."""
+    path = _write_config(tmp_path, dedent("""\
+        bot_name = "my-bot"
+        setup = []
+    """))
+    cfg = Config.load(path)
+    assert cfg.setup == []
+
+
+def test_setup_steps_entry_missing_key(tmp_path: Path) -> None:
+    """setup entry without uses or run is rejected."""
+    path = _write_config(tmp_path, dedent("""\
+        bot_name = "my-bot"
+        setup = [{name = "oops"}]
+    """))
+    with pytest.raises(ClickException, match="setup\\[0\\] must have 'uses' or 'run'"):
+        Config.load(path)
+
+
+def test_setup_steps_entry_both_keys(tmp_path: Path) -> None:
+    """setup entry with both uses and run is rejected."""
+    path = _write_config(tmp_path, dedent("""\
+        bot_name = "my-bot"
+        setup = [{uses = "action", run = "cmd"}]
+    """))
+    with pytest.raises(ClickException, match="setup\\[0\\] must have 'uses' or 'run', not both"):
+        Config.load(path)
+
 
 
 def test_workflow_disabled_boolean_shorthand_not_generated(tmp_path: Path) -> None:

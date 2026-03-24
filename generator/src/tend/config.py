@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 
 KNOWN_WORKFLOWS = {"review", "mention", "triage", "ci-fix", "nightly", "renovate"}
-KNOWN_TOP_LEVEL = {"bot_name", "default_branch", "secrets", "setup", "workflows"}
+KNOWN_TOP_LEVEL = {"bot_name", "secrets", "setup", "setup_raw", "workflows"}
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 
 
@@ -33,7 +33,6 @@ class WorkflowConfig:
 @dataclass
 class Config:
     bot_name: str
-    default_branch: str
     bot_token_secret: str
     claude_token_secret: str
     setup: list[SetupStep]
@@ -61,10 +60,6 @@ class Config:
                 "(only letters, digits, and hyphens)"
             )
 
-        default_branch = raw.get("default_branch", "main")
-        if not default_branch:
-            raise click.ClickException("default_branch must not be empty")
-
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
             click.echo(f"Warning: unknown config key '{key}'", err=True)
@@ -72,11 +67,23 @@ class Config:
         secrets = raw.get("secrets", {})
 
         setup: list[SetupStep] = []
-        setup_section = raw.get("setup", {})
-        for action in setup_section.get("uses", []):
-            setup.append(SetupStep(uses=action))
-        for cmd in setup_section.get("run", []):
-            setup.append(SetupStep(run=cmd))
+        for i, entry in enumerate(raw.get("setup", [])):
+            if not isinstance(entry, dict):
+                raise click.ClickException(
+                    f"setup[{i}] must be a table with 'uses' or 'run'"
+                )
+            if "uses" in entry and "run" in entry:
+                raise click.ClickException(
+                    f"setup[{i}] must have 'uses' or 'run', not both"
+                )
+            if "uses" in entry:
+                setup.append(SetupStep(uses=entry["uses"]))
+            elif "run" in entry:
+                setup.append(SetupStep(run=entry["run"]))
+            else:
+                raise click.ClickException(
+                    f"setup[{i}] must have 'uses' or 'run'"
+                )
 
         workflows: dict[str, WorkflowConfig] = {}
         for name, wf_raw in raw.get("workflows", {}).items():
@@ -101,10 +108,9 @@ class Config:
 
         return cls(
             bot_name=bot_name,
-            default_branch=default_branch,
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
             claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
             setup=setup,
-            setup_raw=setup_section.get("raw", ""),
+            setup_raw=raw.get("setup_raw", ""),
             workflows=workflows,
         )

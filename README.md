@@ -58,13 +58,7 @@ Create `.config/tend.toml`:
 bot_name = "my-project-bot"
 ```
 
-Only overrides from defaults are needed. If the repo's default branch isn't
-`main`:
-
-```toml
-bot_name = "my-project-bot"
-default_branch = "master"
-```
+Only overrides from defaults are needed.
 
 ### Secrets
 
@@ -89,28 +83,30 @@ Build tools, caches, and environment variables run before Claude in every
 workflow:
 
 ```toml
-[setup]
-uses = ["./.github/actions/my-setup"]
-run = ["echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"]
+setup = [
+  {uses = "./.github/actions/my-setup"},
+  {run = "echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"},
+]
 ```
 
-For actions that need `with:` parameters, use `raw` — a multiline string of
+For actions that need `with:` parameters, use `setup_raw` — a multiline string of
 GitHub Actions YAML injected verbatim into the workflow steps:
 
 ```toml
-[setup]
-uses = ["cargo-bins/cargo-binstall@main"]
-run = ["cargo binstall cargo-insta --no-confirm"]
-raw = """
+setup = [
+  {uses = "cargo-bins/cargo-binstall@main"},
+  {run = "cargo binstall cargo-insta --no-confirm"},
+]
+setup_raw = """
 - uses: Swatinem/rust-cache@v2
   with:
     save-if: false
 """
 ```
 
-`uses` and `run` entries are bare strings (no `with:` support). `raw` handles
-everything else. For very complex setups, a local composite action
-(`.github/actions/tend-setup/action.yaml`) referenced via `uses` is an
+`setup` entries are `{uses = "..."}` or `{run = "..."}` (no `with:` support).
+`setup_raw` handles everything else. For very complex setups, a local composite
+action (`.github/actions/tend-setup/action.yaml`) referenced via `uses` is an
 alternative.
 
 ### Workflow overrides

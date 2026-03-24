@@ -56,8 +56,7 @@ overriding the default name rather than creating a duplicate:
 bot_token = "GH_BOT_TOKEN"
 ```
 
-Ask the user about other overrides (setup steps, workflow overrides, default
-branch).
+Ask the user about other overrides (setup steps, workflow overrides).
 
 ## 2. Generate workflows
 
