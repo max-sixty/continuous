@@ -7,7 +7,18 @@ metadata:
 
 # Running in CI
 
-## First Steps — Read Context
+## First Steps — Load Repo-Specific Guidance
+
+Most repos have a project-specific overlay skill (typically `running-tend`)
+with conventions the generic tend skills don't know — test commands, labels,
+branch naming, survey scripts, codecov requirements. Check for one and load it
+before doing anything else:
+
+```bash
+ls .claude/skills/
+```
+
+## Read Context
 
 When triggered by a comment or issue, read the full context before responding.
 The prompt provides a URL — extract the PR/issue number from it.
