@@ -58,10 +58,9 @@ bot_token = "GH_BOT_TOKEN"
 
 Ask the user about other overrides. Only add what differs from defaults:
 
-- **Setup steps** — build tools, caches (`[setup]` section)
+- **Setup steps** — build tools, caches (`setup = [...]`)
 - **Workflow overrides** — disable workflows, custom cron, watched workflows
   for ci-fix (default watches `"ci"`)
-- **Default branch** — only needed if not `main`
 
 ## 2. Generate workflows
 
