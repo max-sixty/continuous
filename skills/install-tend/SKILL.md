@@ -168,13 +168,33 @@ gh api "repos/$REPO/collaborators" --jq '.[].login'
 
 Skip if the bot is already a member of the org that owns the repo.
 
-## 8. Commit and push
+## 8. Create skill overlay (recommended)
+
+Create `.claude/skills/running-tend/SKILL.md` with tend-specific project
+guidance. This skill is loaded by tend workflows alongside the generic
+`tend-*` skills.
+
+**Do NOT duplicate CLAUDE.md.** The overlay should only contain information
+that tend workflows need beyond what CLAUDE.md already provides:
+
+- PR title conventions (prefix format, scope rules)
+- CI workflow names (which workflow tend-ci-fix watches)
+- Automerge behavior (which bot PRs get auto-merged)
+- Dependency management (Dependabot vs Renovate, tend-renovate enabled/disabled)
+
+Build commands, test commands, error conventions, code style, and project
+structure belong in CLAUDE.md — tend reads CLAUDE.md like any other Claude
+session.
+
+## 9. Commit and push
 
 Stage only the generated files:
 
 ```bash
-git add .config/tend.toml .github/workflows/tend-*.yaml
+git add .config/tend.toml .github/workflows/tend-*.yaml .claude/skills/running-tend/
 ```
+
+Also stage any setup actions created for tend (e.g., `.github/actions/tend-setup/`).
 
 Commit with co-author attribution. Do NOT push without explicit permission.
 
@@ -189,4 +209,5 @@ After completing all steps, present this checklist:
 - [ ] Bot PAT: `BOT_TOKEN` secret set (classic PAT, `repo` scope)
 - [ ] Ruleset: merge restriction on default branch, admin bypass
 - [ ] Bot access: write collaborator, invitation accepted
+- [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
 - [ ] Committed and pushed
