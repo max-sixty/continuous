@@ -11,7 +11,7 @@ CI fixes, nightly sweeps, and dependency updates.
 Four pieces:
 
 1. **Plugin** (`tend`) — Claude Code plugin providing CI skills. Adopters
-   install the plugin (`claude plugin add max-sixty/tend`), which makes
+   install the plugin (via `claude plugin marketplace add` and `claude plugin install`), which makes
    the skills available to Claude Code in all environments including CI.
 
 2. **Composite action** (`max-sixty/tend@v1`) — the stable interface.
