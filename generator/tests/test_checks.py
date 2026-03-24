@@ -168,7 +168,7 @@ def test_secrets_bad_json() -> None:
 
 def test_run_all_checks_no_gh() -> None:
     with patch("shutil.which", return_value=None):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "main", "T1", "T2", [], "", {}))
     assert len(results) == 1
     assert results[0].passed is None
     assert "gh CLI" in results[0].message
@@ -177,7 +177,7 @@ def test_run_all_checks_no_gh() -> None:
 def test_run_all_checks_no_repo() -> None:
     with patch("shutil.which", return_value="/usr/bin/gh"), \
          patch("tend.checks.detect_repo", return_value=None):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "main", "T1", "T2", [], "", {}))
     assert len(results) == 1
     assert "detect" in results[0].message
 
@@ -196,7 +196,7 @@ def test_run_all_checks_with_explicit_repo() -> None:
 
     with patch("shutil.which", return_value="/usr/bin/gh"), \
          patch("tend.checks._gh", side_effect=fake_gh):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo")
+        results = run_all_checks(Config("bot", "main", "T1", "T2", [], "", {}), repo="owner/repo")
     assert len(results) == 3
     assert all(r.passed is True for r in results)
 

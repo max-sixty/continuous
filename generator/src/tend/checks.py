@@ -85,6 +85,9 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
     except json.JSONDecodeError:
         return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected")
 
+    if not isinstance(data, dict):
+        return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected")
+
     reviews = data.get("required_pull_request_reviews")
     if reviews and reviews.get("required_approving_review_count", 0) > 0:
         return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected (requires reviews)")
