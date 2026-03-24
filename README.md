@@ -9,9 +9,10 @@ CI fixes, nightly sweeps, dependency updates.
 
 Four pieces:
 
-1. **Plugin** (`tend`) — Claude Code plugin providing CI skills (review,
-   triage, ci-fix, nightly, renovate, etc.). Install from the marketplace or
-   directly from the repo.
+1. **Plugins** — two Claude Code plugins distributed from the same
+   marketplace. `install-tend` is user-facing (sets up tend on a new repo).
+   `tend` provides CI skills (review, triage, ci-fix, nightly, renovate, etc.)
+   loaded by the composite action.
 
 2. **Composite action** (`max-sixty/tend@v1`) — resolves bot ID at
    runtime, runs Claude Code, uploads session logs. The stable interface.
@@ -82,12 +83,15 @@ claude_token = "MY_CLAUDE_TOKEN"
 
 ### 5. Install the plugin
 
-Install the `tend` Claude Code plugin so the CI skills are available:
+Install the `install-tend` plugin for interactive setup:
 
 ```bash
 claude plugin marketplace add max-sixty/tend   # one-time: register the repo as a marketplace
-claude plugin install tend
+claude plugin install install-tend
 ```
+
+The CI skills (`tend` plugin) are loaded automatically by the composite action —
+you don't need to install them locally.
 
 ### 6. Generate and commit
 
@@ -197,11 +201,13 @@ reference `anthropics/claude-code-action`.
 ```
 tend/
 ├── .claude-plugin/
-│   └── plugin.json   # Plugin manifest
-├── skills/           # CI skills (distributed via plugin)
-├── action.yaml       # Composite action (the interface)
-├── scripts/          # Helper scripts (survey, run listing)
-├── generator/        # Python package (uvx tend)
+│   └── marketplace.json   # Lists both plugins
+├── plugins/
+│   ├── install-tend/      # User-facing plugin (setup skill)
+│   └── tend/              # CI plugin (review, triage, ci-fix, etc.)
+├── action.yaml            # Composite action (the interface)
+├── scripts/               # Helper scripts (survey, run listing)
+├── generator/             # Python package (uvx tend)
 └── docs/
     └── security-model.md
 ```

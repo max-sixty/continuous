@@ -97,7 +97,7 @@ runs:
           --model ${{ inputs.model }}
           --allowedTools ${{ inputs.allowed_tools }}
           --append-system-prompt "${{ inputs.system_prompt_append }}"
-          --plugin-dir ${{ github.action_path }}
+          --plugin-dir ${{ github.action_path }}/plugins/tend
 
     - name: Compute artifact name
       if: always()
