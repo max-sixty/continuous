@@ -41,8 +41,8 @@ def _setup_yaml(cfg: Config, indent: int = 6) -> str:
             lines.append(f"{pad}- uses: {step.uses}")
         elif step.run:
             lines.append(f"{pad}- run: {step.run}")
-    if cfg.setup_raw:
-        lines.append(_reindent(cfg.setup_raw, indent))
+        elif step.raw:
+            lines.append(_reindent(step.raw, indent))
     if not lines:
         return ""
     return "\n" + "\n".join(lines) + "\n"
@@ -406,6 +406,7 @@ jobs:
 def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("ci-fix", WorkflowConfig())
     watched = wf.watched_workflows if wf.watched_workflows is not None else ["ci"]
+    branches = wf.branches if wf.branches is not None else [cfg.default_branch]
     prompt = (wf.prompt or "/tend:tend-ci-fix {run_id}").replace(
         "{run_id}", "${{ github.event.workflow_run.id }}"
     )
@@ -416,6 +417,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     setup = _setup_yaml(cfg)
     perms = _permissions(issues=False)
     watched_yaml = ", ".join(f'"{w}"' for w in watched)
+    branches_yaml = ", ".join(f'"{b}"' for b in branches)
 
     content = f"""\
 {HEADER}
@@ -424,12 +426,11 @@ on:
   workflow_run:
     workflows: [{watched_yaml}]
     types: [completed]
+    branches: [{branches_yaml}]
 
 jobs:
   fix-ci:
-    if: >-
-      github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    if: github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

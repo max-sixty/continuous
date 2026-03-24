@@ -10,16 +10,17 @@ from pathlib import Path
 import click
 
 KNOWN_WORKFLOWS = {"review", "mention", "triage", "ci-fix", "nightly", "renovate"}
-KNOWN_TOP_LEVEL = {"bot_name", "secrets", "setup", "setup_raw", "workflows"}
+KNOWN_TOP_LEVEL = {"bot_name", "secrets", "setup", "workflows"}
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 
 
 @dataclass
 class SetupStep:
-    """A single project setup step — either a `uses:` action or a `run:` command."""
+    """A single project setup step — `uses:`, `run:`, or `raw:` YAML."""
 
     uses: str = ""
     run: str = ""
+    raw: str = ""
 
 
 @dataclass
@@ -28,15 +29,16 @@ class WorkflowConfig:
     prompt: str = ""
     cron: str = ""
     watched_workflows: list[str] | None = None
+    branches: list[str] | None = None
 
 
 @dataclass
 class Config:
     bot_name: str
+    default_branch: str
     bot_token_secret: str
     claude_token_secret: str
     setup: list[SetupStep]
-    setup_raw: str
     workflows: dict[str, WorkflowConfig]
 
     @classmethod
@@ -70,20 +72,15 @@ class Config:
         for i, entry in enumerate(raw.get("setup", [])):
             if not isinstance(entry, dict):
                 raise click.ClickException(
-                    f"setup[{i}] must be a table with 'uses' or 'run'"
+                    f"setup[{i}] must be a table with 'uses', 'run', or 'raw'"
                 )
-            if "uses" in entry and "run" in entry:
+            keys = {"uses", "run", "raw"} & entry.keys()
+            if len(keys) != 1:
                 raise click.ClickException(
-                    f"setup[{i}] must have 'uses' or 'run', not both"
+                    f"setup[{i}] must have exactly one of 'uses', 'run', or 'raw'"
                 )
-            if "uses" in entry:
-                setup.append(SetupStep(uses=entry["uses"]))
-            elif "run" in entry:
-                setup.append(SetupStep(run=entry["run"]))
-            else:
-                raise click.ClickException(
-                    f"setup[{i}] must have 'uses' or 'run'"
-                )
+            key = keys.pop()
+            setup.append(SetupStep(**{key: entry[key]}))
 
         workflows: dict[str, WorkflowConfig] = {}
         for name, wf_raw in raw.get("workflows", {}).items():
@@ -102,15 +99,16 @@ class Config:
                     prompt=wf_raw.get("prompt", ""),
                     cron=wf_raw.get("cron", ""),
                     watched_workflows=watched,
+                    branches=wf_raw.get("branches"),
                 )
             else:
                 workflows[name] = WorkflowConfig(enabled=bool(wf_raw))
 
         return cls(
             bot_name=bot_name,
+            default_branch="main",
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
             claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
             setup=setup,
-            setup_raw=raw.get("setup_raw", ""),
             workflows=workflows,
         )

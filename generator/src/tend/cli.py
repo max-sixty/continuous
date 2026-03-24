@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import click
@@ -9,6 +10,23 @@ import click
 from tend.checks import CheckResult, detect_repo, fix_branch_protection, run_all_checks
 from tend.config import Config
 from tend.workflows import generate_all
+
+
+def _detect_default_branch() -> str:
+    """Detect the default branch from git remote."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            # Returns "origin/main" or "origin/master" — strip the remote prefix
+            ref = result.stdout.strip()
+            if "/" in ref:
+                return ref.split("/", 1)[1]
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return "main"
 
 
 def _print_check_results(results: list[CheckResult]) -> None:
@@ -34,6 +52,7 @@ def main() -> None:
 def init(config_path: Path | None, dry_run: bool) -> None:
     """Generate workflow files from config. Idempotent — always overwrites."""
     cfg = Config.load(config_path)
+    cfg.default_branch = _detect_default_branch()
     outdir = Path(".github/workflows")
 
     workflows = generate_all(cfg)
