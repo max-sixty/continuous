@@ -175,7 +175,8 @@ change *not* handle?" If the design involves a judgment call, flag it for human
 review as a COMMENT.
 
 **Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN`): Still perform the full review
-(steps 2-3) — self-review catches real issues. Do NOT attempt
+(steps 2-3) — self-review catches real issues (lint failures, edge cases) and is
+intentionally valuable. Do NOT attempt
 `gh pr review --approve` — GitHub rejects self-approvals. Submit as COMMENT
 when there are concerns, or stay silent and skip to step 6. Always post CI
 failure analysis as a COMMENT, even on self-authored PRs.
@@ -299,11 +300,14 @@ addressed by the new changes. Resolve threads where the suggestion was applied.
 
 **Only resolve if the substance was addressed.** Read both the suggestion and the
 new code — if the author took a different approach, verify its technical accuracy
-before resolving. When in doubt, leave the thread open for a human reviewer.
+before resolving. "Different wording" is not "addressed" when the new wording is
+less accurate than the suggestion. When in doubt, leave the thread open for a
+human reviewer.
 
 **Self-authored PRs are especially risky.** When the bot is both author and
 reviewer, there is a bias toward accepting the code's own claims. Treat
-self-authored thread resolution with extra skepticism.
+self-authored thread resolution with extra skepticism — read the code and verify
+the claim independently rather than trusting the doc comment or commit message.
 
 ```bash
 cat > /tmp/review-threads.graphql << 'GRAPHQL'
