@@ -302,6 +302,9 @@ jobs:
   handle:
     needs: verify
     if: needs.verify.outputs.should_run == 'true'
+    concurrency:
+      group: ${{{{ github.workflow }}}}-handle-${{{{ github.event.issue.number || github.event.pull_request.number }}}}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

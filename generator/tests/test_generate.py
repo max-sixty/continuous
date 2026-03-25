@@ -202,6 +202,17 @@ def test_setup_raw_interleaved_with_steps(tmp_path: Path) -> None:
         assert uses_idx < raw_idx < run_idx, f"{wf.filename}: wrong order"
 
 
+def test_mention_handle_job_has_concurrency(tmp_path: Path) -> None:
+    """The handle job must have concurrency control to prevent double-posts."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
+    handle = data["jobs"]["handle"]
+    assert "concurrency" in handle, "handle job must have concurrency to prevent duplicate runs"
+    assert handle["concurrency"]["cancel-in-progress"] is True
+
+
 def test_setup_after_pr_checkout_in_mention(tmp_path: Path) -> None:
     """Setup steps must run after PR checkout, not before."""
     extra = 'setup = [{uses = "./.github/actions/my-setup"}]'
