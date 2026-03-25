@@ -108,6 +108,31 @@ code — it's exfiltrating other secrets:
 This is why release secrets must be in a protected environment, not repo-level
 secrets.
 
+## Runtime rate limits
+
+The composite action aborts if recent bot activity exceeds any limit,
+before starting Claude. This catches runaway loops (e.g., triage creating a
+fix PR whose CI failure triggers ci-fix, which creates another PR) and
+prompt injection that tricks the bot into creating PRs or issues in bulk.
+
+Two layers of detection:
+
+- **Burst** — caps creation rate over a short window (20 minutes). Catches
+  tight loops that produce many artifacts quickly.
+- **Spike** — compares today's total against the daily average of the previous
+  6 days. The formula `10 + 2 × daily_avg` adapts to each repo's normal
+  activity level: a repo that averages 0 posts/day trips at 11, while one
+  averaging 15/day trips at 41.
+
+| Check | Limit | Layer |
+|-------|-------|-------|
+| PRs created in last 20 min | 10 | Burst |
+| Issues created in last 20 min | 10 | Burst |
+| Items created today | 10 + 2× daily avg (past 6 days) | Spike |
+
+These are hardcoded in `action.yaml`. Because the check runs outside Claude's
+session, a prompt injection attack cannot instruct the bot to skip it.
+
 ## Future hardening
 
 - Migrate from PAT to GitHub App for ephemeral tokens (~1 hour vs indefinite)
