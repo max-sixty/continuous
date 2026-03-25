@@ -130,15 +130,19 @@ echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO"
 
 ## 5. Bot PAT and secret
 
-The bot needs a classic PAT with `repo` scope. Fine-grained PATs also work
-(`contents:write`, `pull-requests:write`, `issues:write`) — create one manually
+The bot needs a classic PAT with `repo`, `workflow`, `notifications`, and
+`write:discussion` scopes. `workflow` is required to push commits that modify
+`.github/workflows/` files. `notifications` lets the bot read/dismiss its own
+notifications. `write:discussion` allows commenting on GitHub Discussions.
+Fine-grained PATs also work (`contents:write`, `pull-requests:write`,
+`issues:write`, `workflows:write`, `discussions:write`) — create one manually
 and skip to step 6. Use Chrome for classic PATs:
 
 1. Verify the browser is logged in as `<bot-name>` (click avatar, check
    username). If not, tell the user to log in as the bot first.
 2. Navigate to
-   `https://github.com/settings/tokens/new?scopes=repo&description=tend-ci`
-3. The URL pre-fills the note and `repo` scope. Set expiration to
+   `https://github.com/settings/tokens/new?scopes=repo,workflow,notifications,write:discussion&description=tend-ci`
+3. The URL pre-fills the note and scopes. Set expiration to
    "No expiration" via the dropdown.
 4. Click "Generate token" (scroll to bottom of page).
 5. Read the token from the resulting page using `get_page_text`.
@@ -246,7 +250,7 @@ After completing all steps, present this checklist:
 - [ ] Workflows: generated in `.github/workflows/`
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Claude token: `CLAUDE_CODE_OAUTH_TOKEN` secret set
-- [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo` or fine-grained)
+- [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo`+`workflow`+`notifications`+`write:discussion` or fine-grained)
 - [ ] Ruleset: merge restriction on default branch, admin bypass
 - [ ] Bot access: write collaborator, invitation accepted
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)

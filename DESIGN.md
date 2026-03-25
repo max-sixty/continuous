@@ -134,8 +134,9 @@ jobs:
 ## Auth
 
 Each adopter creates a GitHub bot account and a classic PAT (`public_repo`
-for public repos, `repo` for private). The PAT and a Claude OAuth token are
-stored as repo secrets.
+for public repos, `repo` for private) plus `workflow`, `notifications`, and
+`write:discussion` scopes. The PAT and a Claude OAuth token are stored as repo
+secrets.
 
 Classic PATs are all-or-nothing — `public_repo` grants full write to every
 public repo the user can access. Fine-grained PATs allow per-category
