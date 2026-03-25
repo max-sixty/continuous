@@ -52,7 +52,10 @@ gh run view "$RUN_ID" -R "$REPO" --log-failed
 
 ## Parse session logs
 
-Each JSONL line has a `type` field: `user`, `assistant`, or `system`.
+Each JSONL line has a `type` field. The main message types are `user` and
+`assistant` (with `.message.content`). Other types (`system`, `progress`,
+`queue-operation`, `last-prompt`) carry metadata — ignore them for most
+debugging.
 
 ### Overview — what happened
 
@@ -104,10 +107,10 @@ jq -r 'select(.type == "assistant") | .message.content[]? |
   select(.type == "tool_use" and (.name == "Write" or .name == "Edit")) |
   "\(.name): \(.input.file_path)"' "$FILE"
 
-# GitHub API calls (gh commands)
+# GitHub API calls (gh commands, including inside variable assignments)
 jq -r 'select(.type == "assistant") | .message.content[]? |
   select(.type == "tool_use" and .name == "Bash") |
-  .input.command | select(startswith("gh ") or contains("| gh "))' "$FILE"
+  .input.command | select(test("\\bgh\\b"))' "$FILE"
 ```
 
 ### Searching for specific behavior
