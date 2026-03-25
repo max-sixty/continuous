@@ -1,11 +1,11 @@
-name: Update action tag
+name: Update action branch
 
 on:
   push:
     branches: [main]
 
 jobs:
-  update-tag:
+  update-branch:
     runs-on: ubuntu-latest
     if: github.repository == 'max-sixty/tend'
     permissions:
@@ -13,7 +13,5 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Move v1 tag to HEAD
-        run: |
-          git tag -f v1
-          git push -f origin v1
+      - name: Update v1 branch to match main
+        run: git push origin HEAD:refs/heads/v1
