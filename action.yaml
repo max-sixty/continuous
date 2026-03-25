@@ -83,6 +83,7 @@ runs:
       run: |
         npm install -g @anthropic-ai/claude-code
         claude plugin marketplace add https://github.com/max-sixty/tend.git
+        claude plugin install install-tend@tend
         claude plugin install tend-ci-runner@tend
 
     - name: Run Claude Code

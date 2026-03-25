@@ -215,45 +215,9 @@ could be reverted without affecting the other, they belong in separate PRs.
 
 ## Investigating Other CI Runs
 
-The primary evidence for diagnosing bot behavior is the session log artifact —
-not console output (`show_full_output` defaults to `false`).
-
-```bash
-gh run download <run-id> --pattern 'claude-session-logs*' -D /tmp/session-logs-<run-id>
-```
-
-The artifact contains JSONL files. Each line has a `type` field (`user`,
-`assistant`, `system`).
-
-```bash
-# Skills loaded
-jq -r 'select(.type == "assistant") | .message.content[]? |
-  select(.type == "tool_use" and .name == "Skill") | .input.skill' <FILE>.jsonl
-
-# Tool calls
-jq -r 'select(.type == "assistant") | .message.content[]? |
-  select(.type == "tool_use") |
-  "\(.name): \(.input | tostring | .[0:100])"' <FILE>.jsonl
-
-# Assistant reasoning
-jq -r 'select(.type == "assistant") | .message.content[]? |
-  select(.type == "text") | .text' <FILE>.jsonl
-```
-
-Find the right run among multiple workflows:
-
-```bash
-gh api 'repos/{owner}/{repo}/actions/runs?per_page=30' \
-  --jq '.workflow_runs[] | select(.name | startswith("tend-")) |
-    {id, name, event, head_branch, created_at, conclusion}'
-```
-
-Check for artifacts before downloading:
-
-```bash
-gh api repos/{owner}/{repo}/actions/runs/<run-id>/artifacts \
-  --jq '.artifacts[] | {name, size_in_bytes}'
-```
+Load `/install-tend:debug-ci-session` for session log download, JSONL parsing
+queries, and diagnostic workflow. The primary evidence for diagnosing bot
+behavior is the session log artifact — not console output.
 
 Review-response runs triggered by `pull_request_review` or
 `pull_request_review_comment` events sometimes produce no artifact when the

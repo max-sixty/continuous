@@ -186,24 +186,11 @@ If empty, report "no runs to review" and exit.
 
 ## Step 2: Download and analyze session logs
 
-```bash
-gh -R $ARGUMENTS run download <run-id> --pattern 'claude-session-logs*' --dir /tmp/logs/<run-id>/
-```
+Load `/install-tend:debug-ci-session` for download commands and JSONL parsing
+queries. Use `-R $ARGUMENTS` for all `gh` commands targeting the adopter repo.
 
-Skip runs without artifacts. Find JSONL files under `/tmp/logs/` and extract:
-
-```bash
-# Tool calls
-jq -c 'select(.type == "assistant") | .message.content[]? |
-  select(.type == "tool_use") | {tool: .name, input: .input}' < file.jsonl
-
-# Assistant reasoning
-jq -r 'select(.type == "assistant") | .message.content[]? |
-  select(.type == "text") | .text' < file.jsonl
-```
-
-Trace decision chains: what did Claude decide, what evidence did it use, what
-was the outcome?
+Skip runs without artifacts. Trace decision chains: what did Claude decide,
+what evidence did it use, what was the outcome?
 
 ## Step 3: Cross-check review sessions
 
