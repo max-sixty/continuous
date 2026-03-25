@@ -114,7 +114,7 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
 def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool:
     """Check if any active ruleset restricts updates to the branch."""
     result = _gh("api", f"repos/{repo}/rulesets", "--jq",
-                 '[.[] | select(.enforcement == "active" and .target == "branch")] | length')
+                 '[.[] | select(.enforcement == "active" and .target == "branch" and (.rules[]? | .type == "update"))] | length')
     if result is None or result.returncode != 0:
         return False
     try:

@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from tend.checks import (
     CheckResult,
+    _has_restrict_updates_ruleset,
     check_bot_permission,
     check_branch_protection,
     check_secrets,
@@ -88,6 +89,25 @@ def test_branch_protection_no_gh() -> None:
     with patch("tend.checks._gh", return_value=None):
         result = check_branch_protection("owner/repo", "main")
     assert result.passed is None
+
+
+# ---------------------------------------------------------------------------
+# _has_restrict_updates_ruleset
+# ---------------------------------------------------------------------------
+
+
+def test_non_update_ruleset_is_not_detected() -> None:
+    """A ruleset with only required_status_checks should not count as restrict-updates."""
+    # The jq filter runs client-side, so we simulate what gh returns AFTER jq:
+    # a non-update ruleset should yield "0".
+    with patch("tend.checks._gh", return_value=_make_completed("0\n")):
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is False
+
+
+def test_update_ruleset_is_detected() -> None:
+    """A ruleset containing a type:update rule should be detected."""
+    with patch("tend.checks._gh", return_value=_make_completed("1\n")):
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is True
 
 
 # ---------------------------------------------------------------------------
