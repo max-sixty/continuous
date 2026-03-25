@@ -136,6 +136,35 @@ Reply in context rather than creating new top-level comments:
 - **Conversation comments** (`#issuecomment-`): Post a regular comment (GitHub
   doesn't support threading).
 
+## Recheck Before Posting
+
+Long-running tasks (triage, review, CI diagnosis) can take minutes. By the time
+you're ready to comment, new discussion may have arrived that changes the
+context — a human may have already answered, the author may have pushed a fix,
+or new information may make your response redundant or wrong.
+
+**Before posting any comment or review**, re-fetch the current conversation
+state:
+
+```bash
+# For issues
+gh issue view <number> --json comments --jq '.comments | length'
+
+# For PRs (comments + reviews)
+gh pr view <number> --json comments,reviews \
+  --jq '{comments: (.comments | length), reviews: (.reviews | length)}'
+```
+
+Compare with the count you saw when you first read the context. If new comments
+or reviews appeared:
+
+1. **Read the new comments** to understand what changed.
+2. **Adjust or skip your response.** If someone already answered, don't repeat
+   them. If the author resolved the issue, acknowledge that instead of posting
+   a stale analysis. If new information contradicts your findings, update your
+   response before posting.
+3. **If your response is now entirely redundant, don't post it.**
+
 ## Comment Formatting
 
 Keep comments concise. Put supporting detail inside `<details>` tags — the
