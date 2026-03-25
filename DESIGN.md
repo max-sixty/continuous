@@ -133,28 +133,99 @@ jobs:
 
 ## Auth
 
-Each adopter creates a GitHub bot account and generates a PAT with
-`contents:write`, `pull-requests:write`, `issues:write`. The PAT and a Claude
-OAuth token are stored as repo secrets. We never see either token.
+Each adopter creates a GitHub bot account and a classic PAT (`public_repo`
+for public repos, `repo` for private). The PAT and a Claude OAuth token are
+stored as repo secrets.
 
-*Token leak risk:* The PAT is long-lived and available to every workflow run.
-A prompt injection that exfiltrates it gets permanent write access to
-everything the bot account can reach (not just the current repo, unless the
-bot account is scoped to one repo). Mitigations: merge restriction (ruleset)
-caps what the token can do, environment protection keeps release secrets
-safe, periodic rotation limits exposure window.
+Classic PATs are all-or-nothing — `public_repo` grants full write to every
+public repo the user can access. Fine-grained PATs allow per-category
+scoping (`contents: read` + `pull_requests: write`) but don't support
+outside collaborators (planned on [GitHub's roadmap][gh-601] but not
+shipped). GitHub Apps provide real per-category permissions but require
+either per-adopter App registration or tend-hosted infrastructure (see
+Alternative models below).
 
-*Anthropic token:* The adopter stores their own `CLAUDE_CODE_OAUTH_TOKEN`
-as a repo secret. It's passed directly from the workflow to
-`claude-code-action`. Each adopter uses their own Anthropic billing. If
-leaked, the attacker can run Claude sessions on the adopter's account but
-can't access GitHub.
+With a classic PAT, the only way to restrict what the token can do on a
+specific repo is the **collaborator level**. A `public_repo` PAT for a user
+with triage access can comment and review but cannot push code — GitHub
+enforces this server-side regardless of the PAT's scope.
+
+[gh-601]: https://github.com/github/roadmap/issues/601
+
+### Privilege models
+
+The `mode` field in `.config/tend.toml` selects between two privilege
+models (not yet implemented — currently only write + branch protection
+exists):
+
+| | **Triage + fork** | **Write + branch protection** |
+|---|---|---|
+| | *recommended default* | *upgrade for approvals / direct push* |
+| Bot collaborator level | Triage | Write |
+| Bot pushes code to | Own fork | Target repo branches |
+| Creates PRs | From fork | Same-repo |
+| Posts reviews / comments | Yes | Yes |
+| Approvals count for required reviews | No | Yes |
+| Can merge | No | No (ruleset must block) |
+| Can modify target workflows | No | Yes |
+| Branch protection required | **No** | **Yes** — primary security boundary |
+| Leaked PAT blast radius | Comments/reviews on target; write to fork only | Full write to target repo |
+| Setup complexity | Low | Medium (must configure branch protection correctly) |
+
+Both models store two secrets: `BOT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`.
+
+### Triage + fork (default)
+
+The bot account has **triage** access on the target repo and owns a fork.
+The collaborator level is the security boundary — triage cannot push, merge,
+or modify workflows, regardless of the PAT's scope. No branch protection or
+rulesets are required.
+
+When the bot needs to propose code changes (ci-fix, triage fix, review
+response on its own PRs), it pushes to its fork and creates a cross-fork PR.
+The workflow configures the fork as a separate git remote:
+
+```bash
+git remote add fork https://x-access-token:${BOT_TOKEN}@github.com/${BOT_NAME}/${REPO}.git
+git push fork fix/ci-123
+gh pr create --repo ${TARGET_REPO} --head ${BOT_NAME}:fix/ci-123
+```
+
+Limitations: the bot's reviews are informational (triage-level approvals
+don't satisfy required review policies). Triage access prevents pushing to
+human PR branches — the bot posts review suggestions instead.
+
+### Write + branch protection
+
+The bot account has **write** access. A merge restriction (ruleset or branch
+protection) is the primary security boundary — without it the bot can merge
+its own PRs. `tend check` verifies this is configured correctly.
+
+This model adds approvals that count for required reviews, direct push to
+target repo branches, and push access to human PR branches (requires the
+PR author to enable "allow edits from maintainers").
+
+*Token leak risk:* The PAT is long-lived and available to every workflow
+run. A prompt injection that exfiltrates it gets permanent write access to
+everything the bot account can reach. Mitigations: merge restriction caps
+what the token can do, environment protection keeps release secrets safe,
+periodic rotation. On the GitHub Team plan, push rulesets can block
+modifications to `.github/workflows/`, preventing the
+most dangerous escalation (pushing a workflow that exfiltrates repo-level
+secrets).
+
+### Anthropic token
+
+The adopter stores their own `CLAUDE_CODE_OAUTH_TOKEN` as a repo secret.
+It's passed directly from the workflow to `claude-code-action`. Each adopter
+uses their own Anthropic billing. If leaked, the attacker can run Claude
+sessions on the adopter's account but can't access GitHub.
 
 ### Alternative models
 
-The design above (composite action + generator + PAT) optimizes for
-simplicity and zero trust — we never touch the adopter's repo. Below are
-two progressively more managed alternatives.
+Both privilege models above use a classic PAT — the adopter manages the bot
+account, and we never touch their repo. Below are two progressively more
+managed alternatives that replace the PAT with a GitHub App.
 
 **Workflow verbosity across models:**
 
