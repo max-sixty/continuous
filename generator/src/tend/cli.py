@@ -18,8 +18,8 @@ from tend.config import Config
 from tend.workflows import generate_all
 
 
-def _detect_default_branch() -> str:
-    """Detect the default branch from git remote."""
+def _detect_default_branch_local() -> str:
+    """Detect the default branch from the local git remote."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"],
@@ -66,7 +66,7 @@ def main() -> None:
 def init(config_path: Path | None, dry_run: bool) -> None:
     """Generate workflow files from config. Idempotent — always overwrites."""
     cfg = Config.load(config_path)
-    cfg.default_branch = _detect_default_branch()
+    cfg.default_branch = _detect_default_branch_local()
     outdir = Path(".github/workflows")
 
     workflows = generate_all(cfg)
