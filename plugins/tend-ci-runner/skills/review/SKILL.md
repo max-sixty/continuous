@@ -147,10 +147,17 @@ Flag duplicates — reuse is almost always better than a parallel implementation
 
 ### 5. Submit
 
-**If there are no issues, approve with an empty body — silence means correct.**
+**If there are no issues, approve with a one-sentence summary of what you
+checked.** Don't list every file — just state the nature of the change and
+your key verification (e.g., "Config parsing change with good edge-case
+coverage; tests pass."). This tells the author and future readers that a real
+review happened, not just an auto-approval.
 
 ```bash
-gh pr review <number> --approve -b ""
+cat > /tmp/approve-body.md << 'EOF'
+<one-sentence summary>
+EOF
+gh pr review <number> --approve -F /tmp/approve-body.md
 ```
 
 If there are actionable findings, submit as a review with inline suggestions
@@ -207,8 +214,7 @@ ALREADY_POSTED=$(gh api "repos/$REPO/pulls/<number>/reviews" \
 
 Post exactly one review per run. Always give a verdict: **approve** or
 **comment** (never "request changes"). Use `gh pr review` for reviews, not
-`gh pr comment`. Note: `--comment` requires a non-empty body — if there's
-nothing to say, use the approve-with-empty-body pattern.
+`gh pr comment`.
 
 **Inline suggestions are mandatory for concrete fixes.** Whenever there's a
 concrete fix (typos, doc updates, naming, missing imports, minor refactors),
