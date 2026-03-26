@@ -217,7 +217,9 @@ def test_mention_handle_job_has_concurrency(tmp_path: Path) -> None:
     mention = workflows["tend-mention.yaml"]
     data = yaml.safe_load(mention.content)
     handle = data["jobs"]["handle"]
-    assert "concurrency" in handle, "handle job must have concurrency to prevent duplicate runs"
+    assert "concurrency" in handle, (
+        "handle job must have concurrency to prevent duplicate runs"
+    )
     assert handle["concurrency"]["cancel-in-progress"] is True
 
 

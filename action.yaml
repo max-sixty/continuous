@@ -112,6 +112,11 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
 
+    # claude-code-action restores these from the base branch on all PRs
+    # (RCE vectors — hooks, env vars, MCP servers):
+    #   .claude/  .mcp.json  .claude.json  .gitmodules  .ripgreprc
+    # It does NOT restore CLAUDE.md (prompt-injection, not RCE), so we
+    # pin it ourselves for fork PRs.
     - name: Pin CLAUDE.md to base branch (fork PRs)
       shell: bash
       run: |

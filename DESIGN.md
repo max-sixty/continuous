@@ -412,3 +412,8 @@ The repo hosts two Claude Code plugins and a GitHub composite action. The
 `install-tend` plugin is for users setting up tend on a new repo. The
 `tend-ci-runner` plugin provides CI skills installed by the composite action
 from the marketplace. Users should only install `install-tend` manually.
+
+## Security
+
+See [`docs/security-model.md`](docs/security-model.md) for the full threat
+model, current mitigations, remaining risks, and deferred hardening options.
