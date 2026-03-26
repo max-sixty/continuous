@@ -126,6 +126,25 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
 
+    - name: Pin CLAUDE.md to base branch (fork PRs)
+      shell: bash
+      run: |
+        if [ "$GITHUB_EVENT_NAME" != "pull_request_target" ]; then
+          exit 0
+        fi
+        IS_FORK=$(jq -r '.pull_request.head.repo.fork // false' "$GITHUB_EVENT_PATH")
+        if [ "$IS_FORK" != "true" ]; then
+          exit 0
+        fi
+        DEFAULT_BRANCH=$(jq -r '.repository.default_branch' "$GITHUB_EVENT_PATH")
+        if git show "origin/${DEFAULT_BRANCH}:CLAUDE.md" > /tmp/base-claude.md 2>/dev/null; then
+          cp /tmp/base-claude.md CLAUDE.md
+          echo "Pinned CLAUDE.md to ${DEFAULT_BRANCH}"
+        else
+          rm -f CLAUDE.md
+          echo "No CLAUDE.md on ${DEFAULT_BRANCH} — removed fork version"
+        fi
+
     - name: Run Claude Code
       id: claude
       uses: anthropics/claude-code-action@v1
