@@ -272,9 +272,10 @@ array indices to object keys, which GitHub rejects.
 ### 6. Monitor CI
 
 After approving or staying silent, monitor CI using the polling approach from
-/tend-ci-runner:running-in-ci. **Exclude the `tend-review` check** (your own
-workflow) from the poll — it will always show as pending while you're running.
-**NEVER use `--watch` flags** — they hang forever.
+/tend-ci-runner:running-in-ci. **Use `run_in_background: true`** for the polling
+loop — foreground polling blocks the session for 10–30 minutes. **Exclude the
+`tend-review` check** (your own workflow) from the poll — it will always show as
+pending while you're running. **NEVER use `--watch` flags** — they hang forever.
 
 - **All required checks passed** -> done.
 - **A check failed** and it's related to the PR -> post a follow-up COMMENT
