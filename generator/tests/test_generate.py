@@ -46,7 +46,9 @@ def test_generated_yaml_is_valid(tmp_path: Path) -> None:
 
 
 def test_disabled_workflow_not_generated(tmp_path: Path) -> None:
-    cfg = Config.load(_minimal_config(tmp_path, "[workflows.renovate]\nenabled = false"))
+    cfg = Config.load(
+        _minimal_config(tmp_path, "[workflows.renovate]\nenabled = false")
+    )
     workflows = generate_all(cfg)
     names = {wf.filename for wf in workflows}
     assert "tend-renovate.yaml" not in names
@@ -62,8 +64,12 @@ def test_setup_steps_rendered(tmp_path: Path) -> None:
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     for wf in generate_all(cfg):
-        assert "./.github/actions/my-setup" in wf.content, f"{wf.filename} missing uses step"
-        assert 'echo FOO=bar >> $GITHUB_ENV' in wf.content, f"{wf.filename} missing run step"
+        assert "./.github/actions/my-setup" in wf.content, (
+            f"{wf.filename} missing uses step"
+        )
+        assert "echo FOO=bar >> $GITHUB_ENV" in wf.content, (
+            f"{wf.filename} missing run step"
+        )
 
 
 def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
@@ -172,7 +178,9 @@ def test_setup_raw_yaml_injected(tmp_path: Path) -> None:
     for wf in generate_all(cfg):
         data = yaml.safe_load(wf.content)
         assert isinstance(data, dict), f"{wf.filename} did not parse as valid YAML"
-        assert "Swatinem/rust-cache@v2" in wf.content, f"{wf.filename} missing raw uses step"
+        assert "Swatinem/rust-cache@v2" in wf.content, (
+            f"{wf.filename} missing raw uses step"
+        )
         assert "save-if: false" in wf.content, f"{wf.filename} missing with parameter"
         assert "cargo binstall" in wf.content, f"{wf.filename} missing raw run step"
 

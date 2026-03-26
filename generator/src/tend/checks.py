@@ -25,14 +25,20 @@ class CheckResult:
     message: str
 
 
-def _gh(*args: str, input: str | None = None) -> subprocess.CompletedProcess[str] | None:
+def _gh(
+    *args: str, input: str | None = None
+) -> subprocess.CompletedProcess[str] | None:
     """Run a gh CLI command. Returns None if gh is not installed."""
     gh = shutil.which("gh")
     if not gh:
         return None
     try:
         return subprocess.run(
-            [gh, *args], capture_output=True, text=True, timeout=30, input=input,
+            [gh, *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            input=input,
         )
     except subprocess.TimeoutExpired:
         return None
@@ -67,7 +73,9 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
     if result is None:
         return CheckResult("branch-protection", None, "gh CLI not found")
     if result.returncode != 0:
-        return CheckResult("branch-protection", None, f"API error: {result.stderr.strip()}")
+        return CheckResult(
+            "branch-protection", None, f"API error: {result.stderr.strip()}"
+        )
 
     if result.stdout.strip() != "true":
         return CheckResult(
@@ -81,25 +89,39 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
     # Branch is protected — now check if the bot can still merge.
     # A restrict-updates ruleset is sufficient (and preferred).
     if _has_restrict_updates_ruleset(repo, branch):
-        return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected (restrict-updates ruleset)")
+        return CheckResult(
+            "branch-protection",
+            True,
+            f"Default branch '{branch}' is protected (restrict-updates ruleset)",
+        )
 
     # Fall back to checking branch protection rules for required reviews.
     prot = _gh("api", f"repos/{repo}/branches/{branch}/protection")
     if prot is None or prot.returncode != 0:
         # Can't read details — branch is protected, assume OK.
-        return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected")
+        return CheckResult(
+            "branch-protection", True, f"Default branch '{branch}' is protected"
+        )
 
     try:
         data = json.loads(prot.stdout)
     except json.JSONDecodeError:
-        return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected")
+        return CheckResult(
+            "branch-protection", True, f"Default branch '{branch}' is protected"
+        )
 
     if not isinstance(data, dict):
-        return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected")
+        return CheckResult(
+            "branch-protection", True, f"Default branch '{branch}' is protected"
+        )
 
     reviews = data.get("required_pull_request_reviews")
     if reviews and reviews.get("required_approving_review_count", 0) > 0:
-        return CheckResult("branch-protection", True, f"Default branch '{branch}' is protected (requires reviews)")
+        return CheckResult(
+            "branch-protection",
+            True,
+            f"Default branch '{branch}' is protected (requires reviews)",
+        )
 
     return CheckResult(
         "branch-protection",
@@ -113,8 +135,12 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
 
 def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool:
     """Check if any active ruleset restricts updates to the branch."""
-    result = _gh("api", f"repos/{repo}/rulesets", "--jq",
-                 '[.[] | select(.enforcement == "active" and .target == "branch" and (.rules[]? | .type == "update"))] | length')
+    result = _gh(
+        "api",
+        f"repos/{repo}/rulesets",
+        "--jq",
+        '[.[] | select(.enforcement == "active" and .target == "branch" and (.rules[]? | .type == "update"))] | length',
+    )
     if result is None or result.returncode != 0:
         return False
     try:
@@ -125,17 +151,25 @@ def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool:
 
 def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
     """Check the bot's permission level (should be write, not admin)."""
-    result = _gh("api", f"repos/{repo}/collaborators/{bot_name}/permission", "--jq", ".permission")
+    result = _gh(
+        "api",
+        f"repos/{repo}/collaborators/{bot_name}/permission",
+        "--jq",
+        ".permission",
+    )
     if result is None:
         return CheckResult("bot-permission", None, "gh CLI not found")
     if result.returncode != 0:
         stderr = result.stderr.strip()
         if "Not Found" in stderr or "404" in stderr:
             return CheckResult(
-                "bot-permission", None,
+                "bot-permission",
+                None,
                 f"Bot '{bot_name}' not found as a collaborator — check the bot_name in config",
             )
-        return CheckResult("bot-permission", None, "Could not check (may require admin access to read)")
+        return CheckResult(
+            "bot-permission", None, "Could not check (may require admin access to read)"
+        )
 
     perm = result.stdout.strip()
     if perm == "admin":
@@ -145,7 +179,9 @@ def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
             f"Bot '{bot_name}' has admin permission — it can bypass branch protection. "
             "Downgrade to write access.",
         )
-    return CheckResult("bot-permission", True, f"Bot '{bot_name}' has '{perm}' permission")
+    return CheckResult(
+        "bot-permission", True, f"Bot '{bot_name}' has '{perm}' permission"
+    )
 
 
 def check_secrets(repo: str, expected: list[str]) -> CheckResult:
@@ -154,7 +190,9 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
     if result is None:
         return CheckResult("secrets", None, "gh CLI not found")
     if result.returncode != 0:
-        return CheckResult("secrets", None, "Could not list secrets (may require admin access)")
+        return CheckResult(
+            "secrets", None, "Could not list secrets (may require admin access)"
+        )
 
     try:
         secret_names = set(json.loads(result.stdout))
@@ -174,7 +212,8 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
                 found_at_org = [s for s in missing if s in org_secrets]
                 if found_at_org and not still_missing:
                     return CheckResult(
-                        "secrets", True,
+                        "secrets",
+                        True,
                         f"Required secrets present (org-level: {', '.join(found_at_org)})",
                     )
                 if found_at_org:
@@ -192,7 +231,9 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
                 "admin:org scope: gh auth refresh -h github.com -s admin:org"
             )
         return CheckResult("secrets", False, msg)
-    return CheckResult("secrets", True, f"Required secrets present: {', '.join(expected)}")
+    return CheckResult(
+        "secrets", True, f"Required secrets present: {', '.join(expected)}"
+    )
 
 
 def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:
@@ -209,25 +250,27 @@ def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:
         return None, False
 
 
-RESTRICT_UPDATES_RULESET = json.dumps({
-    "name": "Merge access",
-    "target": "branch",
-    "enforcement": "active",
-    "conditions": {
-        "ref_name": {
-            "include": ["~DEFAULT_BRANCH"],
-            "exclude": [],
-        }
-    },
-    "rules": [{"type": "update"}],
-    "bypass_actors": [
-        {
-            "actor_id": 5,
-            "actor_type": "RepositoryRole",
-            "bypass_mode": "exempt",
-        }
-    ],
-})
+RESTRICT_UPDATES_RULESET = json.dumps(
+    {
+        "name": "Merge access",
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {
+            "ref_name": {
+                "include": ["~DEFAULT_BRANCH"],
+                "exclude": [],
+            }
+        },
+        "rules": [{"type": "update"}],
+        "bypass_actors": [
+            {
+                "actor_id": 5,
+                "actor_type": "RepositoryRole",
+                "bypass_mode": "exempt",
+            }
+        ],
+    }
+)
 
 
 def fix_branch_protection(repo: str) -> CheckResult:
@@ -235,32 +278,59 @@ def fix_branch_protection(repo: str) -> CheckResult:
 
     Only admins (actor_id 5) can bypass. The bot (write role) cannot merge.
     """
-    result = _gh("api", f"repos/{repo}/rulesets", "--method", "POST",
-                 "--input", "-", input=RESTRICT_UPDATES_RULESET)
+    result = _gh(
+        "api",
+        f"repos/{repo}/rulesets",
+        "--method",
+        "POST",
+        "--input",
+        "-",
+        input=RESTRICT_UPDATES_RULESET,
+    )
     if result is None:
         return CheckResult("branch-protection", None, "gh CLI not found")
     if result.returncode != 0:
-        return CheckResult("branch-protection", False, f"Failed to create ruleset: {result.stderr.strip()}")
-    return CheckResult("branch-protection", True, "Created 'Merge access' ruleset — only admins can merge")
+        return CheckResult(
+            "branch-protection",
+            False,
+            f"Failed to create ruleset: {result.stderr.strip()}",
+        )
+    return CheckResult(
+        "branch-protection",
+        True,
+        "Created 'Merge access' ruleset — only admins can merge",
+    )
 
 
 def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     """Run all security checks. Auto-detects repo if not provided."""
     if shutil.which("gh") is None:
-        return [CheckResult("prerequisites", None, "gh CLI not found — install it to run security checks")]
+        return [
+            CheckResult(
+                "prerequisites",
+                None,
+                "gh CLI not found — install it to run security checks",
+            )
+        ]
 
     if repo is None:
         repo = detect_repo()
     if repo is None:
-        return [CheckResult(
-            "prerequisites",
-            None,
-            "Could not detect repository. Run from a git repo with a GitHub remote, or pass --repo.",
-        )]
+        return [
+            CheckResult(
+                "prerequisites",
+                None,
+                "Could not detect repository. Run from a git repo with a GitHub remote, or pass --repo.",
+            )
+        ]
 
     default_branch = _detect_default_branch(repo)
     if default_branch is None:
-        return [CheckResult("prerequisites", None, f"Could not detect default branch for {repo}")]
+        return [
+            CheckResult(
+                "prerequisites", None, f"Could not detect default branch for {repo}"
+            )
+        ]
 
     return [
         check_branch_protection(repo, default_branch),

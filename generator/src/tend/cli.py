@@ -17,7 +17,9 @@ def _detect_default_branch() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             # Returns "origin/main" or "origin/master" — strip the remote prefix
@@ -47,7 +49,13 @@ def main() -> None:
 
 
 @main.command()
-@click.option("--config", "-c", "config_path", type=click.Path(exists=True, path_type=Path), default=None)
+@click.option(
+    "--config",
+    "-c",
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+)
 @click.option("--dry-run", is_flag=True, help="Print generated files without writing")
 def init(config_path: Path | None, dry_run: bool) -> None:
     """Generate workflow files from config. Idempotent — always overwrites."""
@@ -79,8 +87,16 @@ def init(config_path: Path | None, dry_run: bool) -> None:
 
 
 @main.command()
-@click.option("--config", "-c", "config_path", type=click.Path(exists=True, path_type=Path), default=None)
-@click.option("--repo", "-r", help="GitHub repo (owner/name). Auto-detected if omitted.")
+@click.option(
+    "--config",
+    "-c",
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+)
+@click.option(
+    "--repo", "-r", help="GitHub repo (owner/name). Auto-detected if omitted."
+)
 @click.option("--fix", is_flag=True, help="Fix failing checks (creates rulesets, etc.)")
 def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
     """Verify security prerequisites (branch protection, bot access, secrets)."""
@@ -108,7 +124,9 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
     for r in failures:
         if r.name == "branch-protection" and "bot can still merge" in r.message:
             click.echo()
-            click.echo("Creating 'Merge access' ruleset — only admins can merge to default branch...")
+            click.echo(
+                "Creating 'Merge access' ruleset — only admins can merge to default branch..."
+            )
             fix_result = fix_branch_protection(repo)
             _print_check_results([fix_result])
             if fix_result.passed:

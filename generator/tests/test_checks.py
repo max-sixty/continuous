@@ -22,8 +22,12 @@ from tend.cli import main
 from tend.config import Config
 
 
-def _make_completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+def _make_completed(
+    stdout: str = "", stderr: str = "", returncode: int = 0
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout=stdout, stderr=stderr
+    )
 
 
 def _write_config(tmp_path: Path, content: str = 'bot_name = "test-bot"') -> Path:
@@ -79,7 +83,10 @@ def test_branch_not_protected() -> None:
 
 
 def test_branch_protection_api_error() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed(returncode=1, stderr="Not Found")):
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(returncode=1, stderr="Not Found"),
+    ):
         result = check_branch_protection("owner/repo", "main")
     assert result.passed is None
     assert "API error" in result.message
@@ -131,14 +138,19 @@ def test_bot_admin_permission() -> None:
 
 
 def test_bot_permission_403() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed(returncode=1, stderr="HTTP 403")):
+    with patch(
+        "tend.checks._gh", return_value=_make_completed(returncode=1, stderr="HTTP 403")
+    ):
         result = check_bot_permission("owner/repo", "my-bot")
     assert result.passed is None
     assert "admin access" in result.message
 
 
 def test_bot_permission_404_wrong_username() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed(returncode=1, stderr="HTTP 404 Not Found")):
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(returncode=1, stderr="HTTP 404 Not Found"),
+    ):
         result = check_bot_permission("owner/repo", "typo-bot")
     assert result.passed is None
     assert "not found" in result.message.lower()
@@ -151,7 +163,10 @@ def test_bot_permission_404_wrong_username() -> None:
 
 
 def test_secrets_present() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed('["BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')):
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed('["BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n'),
+    ):
         result = check_secrets("owner/repo", ["BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"])
     assert result.passed is True
 
@@ -166,8 +181,10 @@ def test_secrets_missing() -> None:
 
 def test_secrets_missing_with_org_403_hint() -> None:
     """When org secrets return 403 and secrets are missing, include the hint."""
-    with patch("tend.checks._gh", return_value=_make_completed('["BOT_TOKEN"]\n')), \
-         patch("tend.checks._list_org_secrets", return_value=(None, True)):
+    with (
+        patch("tend.checks._gh", return_value=_make_completed('["BOT_TOKEN"]\n')),
+        patch("tend.checks._list_org_secrets", return_value=(None, True)),
+    ):
         result = check_secrets("owner/repo", ["BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"])
     assert result.passed is False
     assert "CLAUDE_CODE_OAUTH_TOKEN" in result.message
@@ -176,7 +193,9 @@ def test_secrets_missing_with_org_403_hint() -> None:
 
 
 def test_secrets_api_error() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed(returncode=1, stderr="HTTP 403")):
+    with patch(
+        "tend.checks._gh", return_value=_make_completed(returncode=1, stderr="HTTP 403")
+    ):
         result = check_secrets("owner/repo", ["BOT_TOKEN"])
     assert result.passed is None
 
@@ -201,8 +220,10 @@ def test_run_all_checks_no_gh() -> None:
 
 
 def test_run_all_checks_no_repo() -> None:
-    with patch("shutil.which", return_value="/usr/bin/gh"), \
-         patch("tend.checks.detect_repo", return_value=None):
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks.detect_repo", return_value=None),
+    ):
         results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}))
     assert len(results) == 1
     assert "detect" in results[0].message
@@ -210,9 +231,14 @@ def test_run_all_checks_no_repo() -> None:
 
 def test_run_all_checks_with_explicit_repo() -> None:
     """Explicit --repo skips auto-detection."""
+
     def fake_gh(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         cmd = " ".join(args)
-        if args[1] == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
+        if (
+            args[1] == "repos/owner/repo"
+            and "--jq" in args
+            and ".default_branch" in args
+        ):
             return _make_completed("main\n")
         if "rulesets" in cmd:
             return _make_completed("1\n")
@@ -224,9 +250,13 @@ def test_run_all_checks_with_explicit_repo() -> None:
             return _make_completed('["T1","T2"]\n')
         return _make_completed(returncode=1)
 
-    with patch("shutil.which", return_value="/usr/bin/gh"), \
-         patch("tend.checks._gh", side_effect=fake_gh):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo")
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=fake_gh),
+    ):
+        results = run_all_checks(
+            Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo"
+        )
     assert len(results) == 3
     assert all(r.passed is True for r in results)
 
@@ -251,7 +281,9 @@ def test_cli_check_all_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert "PASS" in result.output
 
 
-def test_cli_check_failure_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_check_failure_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _write_config(tmp_path)
     monkeypatch.chdir(tmp_path)
 
@@ -264,7 +296,9 @@ def test_cli_check_failure_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "FAIL" in result.output
 
 
-def test_cli_check_skips_exit_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_check_skips_exit_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """All skipped checks should not be treated as failures."""
     _write_config(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -281,7 +315,9 @@ def test_cli_check_skips_exit_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 # ---------------------------------------------------------------------------
 
 
-def test_init_prints_check_reminder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_init_prints_check_reminder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _write_config(tmp_path)
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(main, ["init"])

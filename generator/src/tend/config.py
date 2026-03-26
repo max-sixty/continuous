@@ -85,7 +85,10 @@ class Config:
         workflows: dict[str, WorkflowConfig] = {}
         for name, wf_raw in raw.get("workflows", {}).items():
             if name not in KNOWN_WORKFLOWS:
-                click.echo(f"Warning: unknown workflow '{name}' in config (known: {', '.join(sorted(KNOWN_WORKFLOWS))})", err=True)
+                click.echo(
+                    f"Warning: unknown workflow '{name}' in config (known: {', '.join(sorted(KNOWN_WORKFLOWS))})",
+                    err=True,
+                )
             if isinstance(wf_raw, dict):
                 watched = wf_raw.get("watched_workflows")
                 if watched is not None and len(watched) == 0 and name == "ci-fix":
