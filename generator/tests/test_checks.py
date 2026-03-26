@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from click.testing import CliRunner
 from tend.checks import (
     CheckResult,
     _has_restrict_updates_ruleset,
+    _restrict_updates_ruleset,
     check_bot_permission,
     check_branch_protection,
     check_secrets,
@@ -98,6 +100,15 @@ def test_branch_protection_no_gh() -> None:
     assert result.passed is None
 
 
+def test_branch_protection_result_name_includes_branch() -> None:
+    """Each branch gets a distinct check name for identification."""
+    with patch("tend.checks._gh", return_value=_make_completed("false\n")):
+        main_result = check_branch_protection("owner/repo", "main")
+        v1_result = check_branch_protection("owner/repo", "v1")
+    assert main_result.name == "branch-protection:main"
+    assert v1_result.name == "branch-protection:v1"
+
+
 # ---------------------------------------------------------------------------
 # _has_restrict_updates_ruleset
 # ---------------------------------------------------------------------------
@@ -115,6 +126,27 @@ def test_update_ruleset_is_detected() -> None:
     """A ruleset containing a type:update rule should be detected."""
     with patch("tend.checks._gh", return_value=_make_completed("1\n")):
         assert _has_restrict_updates_ruleset("owner/repo", "main") is True
+
+
+# ---------------------------------------------------------------------------
+# _restrict_updates_ruleset
+# ---------------------------------------------------------------------------
+
+
+def test_ruleset_default_branch_only() -> None:
+    """No extra branches — ruleset targets only ~DEFAULT_BRANCH."""
+    body = json.loads(_restrict_updates_ruleset([]))
+    assert body["conditions"]["ref_name"]["include"] == ["~DEFAULT_BRANCH"]
+
+
+def test_ruleset_with_extra_branches() -> None:
+    """Extra branches are added as refs/heads/<name> patterns."""
+    body = json.loads(_restrict_updates_ruleset(["v1", "v2"]))
+    assert body["conditions"]["ref_name"]["include"] == [
+        "~DEFAULT_BRANCH",
+        "refs/heads/v1",
+        "refs/heads/v2",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +245,7 @@ def test_secrets_bad_json() -> None:
 
 def test_run_all_checks_no_gh() -> None:
     with patch("shutil.which", return_value=None):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "main", [], "T1", "T2", [], {}))
     assert len(results) == 1
     assert results[0].passed is None
     assert "gh CLI" in results[0].message
@@ -224,41 +256,80 @@ def test_run_all_checks_no_repo() -> None:
         patch("shutil.which", return_value="/usr/bin/gh"),
         patch("tend.checks.detect_repo", return_value=None),
     ):
-        results = run_all_checks(Config("bot", "main", "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "main", [], "T1", "T2", [], {}))
     assert len(results) == 1
     assert "detect" in results[0].message
 
 
+def _fake_gh_all_pass(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+    """Simulate a gh CLI where all checks pass for owner/repo."""
+    cmd = " ".join(args)
+    if args[1] == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
+        return _make_completed("main\n")
+    if "rulesets" in cmd:
+        return _make_completed("1\n")
+    if "branches" in cmd:
+        return _make_completed("true\n")
+    if "collaborators" in cmd:
+        return _make_completed("write\n")
+    if "secrets" in cmd:
+        return _make_completed('["T1","T2"]\n')
+    return _make_completed(returncode=1)
+
+
 def test_run_all_checks_with_explicit_repo() -> None:
     """Explicit --repo skips auto-detection."""
-
-    def fake_gh(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        cmd = " ".join(args)
-        if (
-            args[1] == "repos/owner/repo"
-            and "--jq" in args
-            and ".default_branch" in args
-        ):
-            return _make_completed("main\n")
-        if "rulesets" in cmd:
-            return _make_completed("1\n")
-        if "branches" in cmd:
-            return _make_completed("true\n")
-        if "collaborators" in cmd:
-            return _make_completed("write\n")
-        if "secrets" in cmd:
-            return _make_completed('["T1","T2"]\n')
-        return _make_completed(returncode=1)
-
     with (
         patch("shutil.which", return_value="/usr/bin/gh"),
-        patch("tend.checks._gh", side_effect=fake_gh),
+        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
     ):
         results = run_all_checks(
-            Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo"
+            Config("bot", "main", [], "T1", "T2", [], {}), repo="owner/repo"
         )
     assert len(results) == 3
     assert all(r.passed is True for r in results)
+
+
+def test_run_all_checks_with_protected_branches() -> None:
+    """Protected branches produce additional branch-protection checks."""
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
+    ):
+        results = run_all_checks(
+            Config("bot", "main", ["v1", "v2"], "T1", "T2", [], {}),
+            repo="owner/repo",
+        )
+    # default + v1 + v2 + bot-permission + secrets = 5
+    assert len(results) == 5
+    bp_results = [r for r in results if r.name.startswith("branch-protection:")]
+    assert len(bp_results) == 3
+    assert {r.name for r in bp_results} == {
+        "branch-protection:main",
+        "branch-protection:v1",
+        "branch-protection:v2",
+    }
+    assert all(r.passed is True for r in results)
+
+
+def test_run_all_checks_deduplicates_default_branch() -> None:
+    """If protected_branches includes the default branch, it's not checked twice."""
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
+    ):
+        results = run_all_checks(
+            Config("bot", "main", ["main", "v1"], "T1", "T2", [], {}),
+            repo="owner/repo",
+        )
+    # main (deduped) + v1 + bot-permission + secrets = 4
+    assert len(results) == 4
+    bp_results = [r for r in results if r.name.startswith("branch-protection:")]
+    assert len(bp_results) == 2
+    assert {r.name for r in bp_results} == {
+        "branch-protection:main",
+        "branch-protection:v1",
+    }
 
 
 # ---------------------------------------------------------------------------

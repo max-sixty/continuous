@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 
 KNOWN_WORKFLOWS = {"review", "mention", "triage", "ci-fix", "nightly", "renovate"}
-KNOWN_TOP_LEVEL = {"bot_name", "secrets", "setup", "workflows"}
+KNOWN_TOP_LEVEL = {"bot_name", "protected_branches", "secrets", "setup", "workflows"}
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 
 
@@ -36,6 +36,7 @@ class WorkflowConfig:
 class Config:
     bot_name: str
     default_branch: str
+    protected_branches: list[str]
     bot_token_secret: str
     claude_token_secret: str
     setup: list[SetupStep]
@@ -65,6 +66,14 @@ class Config:
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
             click.echo(f"Warning: unknown config key '{key}'", err=True)
+
+        protected_branches = raw.get("protected_branches", [])
+        if not isinstance(protected_branches, list) or not all(
+            isinstance(b, str) and b for b in protected_branches
+        ):
+            raise click.ClickException(
+                "protected_branches must be a list of non-empty strings"
+            )
 
         secrets = raw.get("secrets", {})
 
@@ -110,6 +119,7 @@ class Config:
         return cls(
             bot_name=bot_name,
             default_branch="main",
+            protected_branches=protected_branches,
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
             claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
             setup=setup,

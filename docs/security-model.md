@@ -8,9 +8,10 @@ the principles; each adopting repo should document its specific configuration
 
 Two layers protect a repository, in order of importance:
 
-1. **Merge restriction** — only designated admins can merge to the default
-   branch, enforced by a ruleset or branch protection. The bot has write access
-   (not admin) and cannot merge regardless of review status.
+1. **Merge restriction** — only designated admins can merge to protected
+   branches (default branch plus any in `protected_branches`), enforced by a
+   ruleset or branch protection. The bot has write access (not admin) and
+   cannot merge regardless of review status.
 2. **Environment protection** — release secrets (registry tokens, signing keys)
    are in a protected GitHub Environment requiring deployment approval,
    preventing exfiltration via modified workflows.

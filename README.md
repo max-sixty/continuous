@@ -82,6 +82,19 @@ bot_name = "my-project-bot"
 
 Only overrides from defaults are needed.
 
+### Protected branches
+
+The default branch is always protected. To protect additional branches (e.g.,
+release branches), list them explicitly:
+
+```toml
+protected_branches = ["v1", "v2"]
+```
+
+`tend check` verifies branch protection on all listed branches. `tend check
+--fix` creates a single ruleset covering the default branch and all extra
+branches.
+
 ### Secrets
 
 Two repo secrets are required:

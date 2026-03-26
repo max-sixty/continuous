@@ -42,10 +42,64 @@ def test_bot_name_only(tmp_path: Path) -> None:
     path = _write_config(tmp_path, 'bot_name = "my-bot"')
     cfg = Config.load(path)
     assert cfg.bot_name == "my-bot"
+    assert cfg.protected_branches == []
     assert cfg.bot_token_secret == "BOT_TOKEN"
     assert cfg.claude_token_secret == "CLAUDE_CODE_OAUTH_TOKEN"
     assert cfg.setup == []
     assert cfg.workflows == {}
+
+
+# ---------------------------------------------------------------------------
+# 2b. protected_branches
+# ---------------------------------------------------------------------------
+
+
+def test_protected_branches_parsed(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name = "my-bot"
+        protected_branches = ["v1", "v2"]
+    """),
+    )
+    cfg = Config.load(path)
+    assert cfg.protected_branches == ["v1", "v2"]
+
+
+def test_protected_branches_empty_list(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name = "my-bot"
+        protected_branches = []
+    """),
+    )
+    cfg = Config.load(path)
+    assert cfg.protected_branches == []
+
+
+def test_protected_branches_non_list_rejected(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name = "my-bot"
+        protected_branches = "v1"
+    """),
+    )
+    with pytest.raises(ClickException, match="protected_branches must be a list"):
+        Config.load(path)
+
+
+def test_protected_branches_empty_string_rejected(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name = "my-bot"
+        protected_branches = ["v1", ""]
+    """),
+    )
+    with pytest.raises(ClickException, match="non-empty strings"):
+        Config.load(path)
 
 
 # ---------------------------------------------------------------------------
