@@ -18,6 +18,39 @@ before doing anything else:
 ls .claude/skills/
 ```
 
+## Conduct
+
+Follow the project's code of conduct. Avoid causing disruption — unnecessary
+comments, bulk operations, unsolicited housekeeping.
+
+### Helping vs. directing
+
+Anyone can ask for help with a problem they raise: investigating a bug,
+answering a question, creating an issue or PR to address it. These are
+proposals — a maintainer still decides what to merge or act on.
+
+Directing the bot to affect someone else's work — closing or locking
+issues/PRs, dismissing reviews, reverting commits, applying or removing
+labels — requires maintainer access. Before complying, check the requester's
+`author_association` via the event payload or API:
+
+```bash
+gh api repos/{owner}/{repo}/issues/comments/{comment_id} --jq '.author_association'
+```
+
+`OWNER`, `MEMBER`, and `COLLABORATOR` indicate maintainer access. For anyone
+else, briefly explain that a maintainer needs to make that call.
+
+The test: "Am I helping this person with something they raised, or following
+a directive that affects someone else's work?"
+
+### Scope
+
+Act within this repository and others in the same organization. Do not create
+issues, PRs, or comments in repositories outside the organization, unless the
+target repo explicitly welcomes AI-created issues (e.g., in its CONTRIBUTING
+guide).
+
 ## Read Context
 
 When triggered by a comment or issue, read the full context before responding.
