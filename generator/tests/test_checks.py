@@ -14,6 +14,7 @@ from tend.checks import (
     _has_restrict_updates_ruleset,
     check_bot_permission,
     check_branch_protection,
+    check_repo_secret_allowlist,
     check_secrets,
     detect_repo,
     run_all_checks,
@@ -207,6 +208,164 @@ def test_secrets_bad_json() -> None:
 
 
 # ---------------------------------------------------------------------------
+# check_repo_secret_allowlist
+# ---------------------------------------------------------------------------
+
+
+def test_repo_secret_allowlist_pass() -> None:
+    """Only allowed secrets at repo level, no org secrets — passes."""
+    with (
+        patch(
+            "tend.checks._gh",
+            return_value=_make_completed('["BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n'),
+        ),
+        patch("tend.checks._list_org_secrets", return_value=(set(), False)),
+    ):
+        result = check_repo_secret_allowlist(
+            "owner/repo", {"BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+        )
+    assert result.passed is True
+    assert "in allowlist" in result.message
+
+
+def test_repo_secret_allowlist_unexpected_repo() -> None:
+    """Unexpected secret at repo level — fails with repo-level annotation."""
+    with (
+        patch(
+            "tend.checks._gh",
+            return_value=_make_completed(
+                '["BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","PYPI_TOKEN"]\n'
+            ),
+        ),
+        patch("tend.checks._list_org_secrets", return_value=(set(), False)),
+    ):
+        result = check_repo_secret_allowlist(
+            "owner/repo", {"BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+        )
+    assert result.passed is False
+    assert "PYPI_TOKEN" in result.message
+    assert "repo-level" in result.message
+
+
+def test_repo_secret_allowlist_unexpected_org() -> None:
+    """Unexpected secret at org level — fails with org-level annotation."""
+    with (
+        patch(
+            "tend.checks._gh",
+            return_value=_make_completed('["BOT_TOKEN"]\n'),
+        ),
+        patch(
+            "tend.checks._list_org_secrets",
+            return_value=({"BOT_TOKEN", "NPM_TOKEN"}, False),
+        ),
+    ):
+        result = check_repo_secret_allowlist("owner/repo", {"BOT_TOKEN"})
+    assert result.passed is False
+    assert "NPM_TOKEN" in result.message
+    assert "org-level" in result.message
+
+
+def test_repo_secret_allowlist_unexpected_both() -> None:
+    """Unexpected secrets at both levels — message includes both annotations."""
+    with (
+        patch(
+            "tend.checks._gh",
+            return_value=_make_completed('["BOT_TOKEN","PYPI_TOKEN"]\n'),
+        ),
+        patch(
+            "tend.checks._list_org_secrets",
+            return_value=({"NPM_TOKEN"}, False),
+        ),
+    ):
+        result = check_repo_secret_allowlist("owner/repo", {"BOT_TOKEN"})
+    assert result.passed is False
+    assert "repo-level" in result.message
+    assert "org-level" in result.message
+    assert "PYPI_TOKEN" in result.message
+    assert "NPM_TOKEN" in result.message
+
+
+def test_repo_secret_allowlist_org_allowed() -> None:
+    """Org-level secret in the allowlist — passes."""
+    with (
+        patch(
+            "tend.checks._gh",
+            return_value=_make_completed('["BOT_TOKEN"]\n'),
+        ),
+        patch(
+            "tend.checks._list_org_secrets",
+            return_value=({"CODECOV_TOKEN"}, False),
+        ),
+    ):
+        result = check_repo_secret_allowlist(
+            "owner/repo", {"BOT_TOKEN", "CODECOV_TOKEN"}
+        )
+    assert result.passed is True
+
+
+def test_repo_secret_allowlist_org_forbidden() -> None:
+    """Org secrets return 403 — passes but notes the gap."""
+    with (
+        patch(
+            "tend.checks._gh",
+            return_value=_make_completed('["BOT_TOKEN"]\n'),
+        ),
+        patch("tend.checks._list_org_secrets", return_value=(None, True)),
+    ):
+        result = check_repo_secret_allowlist("owner/repo", {"BOT_TOKEN"})
+    assert result.passed is True
+    assert "admin:org" in result.message
+
+
+def test_repo_secret_allowlist_with_extra_allowed() -> None:
+    """Additional allowed secret (e.g. CODECOV_TOKEN) — passes."""
+    with (
+        patch(
+            "tend.checks._gh",
+            return_value=_make_completed(
+                '["BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","CODECOV_TOKEN"]\n'
+            ),
+        ),
+        patch("tend.checks._list_org_secrets", return_value=(set(), False)),
+    ):
+        result = check_repo_secret_allowlist(
+            "owner/repo", {"BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CODECOV_TOKEN"}
+        )
+    assert result.passed is True
+
+
+def test_repo_secret_allowlist_empty_repo() -> None:
+    """No secrets at all — passes."""
+    with (
+        patch("tend.checks._gh", return_value=_make_completed("[]\n")),
+        patch("tend.checks._list_org_secrets", return_value=(set(), False)),
+    ):
+        result = check_repo_secret_allowlist("owner/repo", {"BOT_TOKEN"})
+    assert result.passed is True
+
+
+def test_repo_secret_allowlist_api_error() -> None:
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(returncode=1, stderr="HTTP 403"),
+    ):
+        result = check_repo_secret_allowlist("owner/repo", {"BOT_TOKEN"})
+    assert result.passed is None
+
+
+def test_repo_secret_allowlist_no_gh() -> None:
+    with patch("tend.checks._gh", return_value=None):
+        result = check_repo_secret_allowlist("owner/repo", {"BOT_TOKEN"})
+    assert result.passed is None
+
+
+def test_repo_secret_allowlist_bad_json() -> None:
+    with patch("tend.checks._gh", return_value=_make_completed("not json")):
+        result = check_repo_secret_allowlist("owner/repo", {"BOT_TOKEN"})
+    assert result.passed is None
+
+
+# ---------------------------------------------------------------------------
 # run_all_checks
 # ---------------------------------------------------------------------------
 
@@ -229,10 +388,53 @@ def test_run_all_checks_no_repo() -> None:
     assert "detect" in results[0].message
 
 
+def _fake_gh_all_pass(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+    """Dispatcher that makes all run_all_checks sub-calls succeed."""
+    cmd = " ".join(args)
+    if args[1] == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
+        return _make_completed("main\n")
+    if "rulesets" in cmd:
+        return _make_completed("1\n")
+    if "branches" in cmd:
+        return _make_completed("true\n")
+    if "collaborators" in cmd:
+        return _make_completed("write\n")
+    if "secrets" in cmd:
+        return _make_completed('["T1","T2"]\n')
+    return _make_completed(returncode=1)
+
+
 def test_run_all_checks_with_explicit_repo() -> None:
     """Explicit --repo skips auto-detection."""
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
+    ):
+        results = run_all_checks(
+            Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo"
+        )
+    assert len(results) == 4
+    assert all(r.passed is True for r in results)
 
-    def fake_gh(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+
+def test_run_all_checks_allowlist_includes_bot_secrets() -> None:
+    """Allowlist automatically includes bot_token and claude_token secrets."""
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
+    ):
+        results = run_all_checks(
+            Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo"
+        )
+    allowlist_check = [r for r in results if r.name == "repo-secret-allowlist"]
+    assert len(allowlist_check) == 1
+    assert allowlist_check[0].passed is True
+
+
+def test_run_all_checks_allowlist_catches_unexpected() -> None:
+    """Unexpected repo-level secret is flagged."""
+
+    def fake_gh_with_extra_secret(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         cmd = " ".join(args)
         if (
             args[1] == "repos/owner/repo"
@@ -247,18 +449,20 @@ def test_run_all_checks_with_explicit_repo() -> None:
         if "collaborators" in cmd:
             return _make_completed("write\n")
         if "secrets" in cmd:
-            return _make_completed('["T1","T2"]\n')
+            return _make_completed('["T1","T2","PYPI_TOKEN"]\n')
         return _make_completed(returncode=1)
 
     with (
         patch("shutil.which", return_value="/usr/bin/gh"),
-        patch("tend.checks._gh", side_effect=fake_gh),
+        patch("tend.checks._gh", side_effect=fake_gh_with_extra_secret),
     ):
         results = run_all_checks(
             Config("bot", "main", "T1", "T2", [], {}), repo="owner/repo"
         )
-    assert len(results) == 3
-    assert all(r.passed is True for r in results)
+    allowlist_check = [r for r in results if r.name == "repo-secret-allowlist"]
+    assert len(allowlist_check) == 1
+    assert allowlist_check[0].passed is False
+    assert "PYPI_TOKEN" in allowlist_check[0].message
 
 
 # ---------------------------------------------------------------------------

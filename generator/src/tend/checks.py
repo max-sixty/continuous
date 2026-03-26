@@ -250,6 +250,65 @@ def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:
         return None, False
 
 
+def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
+    """Check that secrets available to workflows are in the allowlist.
+
+    Checks repo-level secrets (always) and org-level secrets (best-effort).
+    Any secret not in the allowlist is flagged — this catches release secrets
+    (registry tokens, signing keys) that should be in a protected GitHub
+    Environment instead.
+    """
+    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
+    if result is None:
+        return CheckResult("repo-secret-allowlist", None, "gh CLI not found")
+    if result.returncode != 0:
+        return CheckResult(
+            "repo-secret-allowlist",
+            None,
+            "Could not list secrets (may require admin access)",
+        )
+
+    try:
+        repo_secrets = set(json.loads(result.stdout))
+    except json.JSONDecodeError:
+        return CheckResult(
+            "repo-secret-allowlist", None, "Could not parse secrets response"
+        )
+
+    # Best-effort: include org-level secrets (also available to workflows).
+    org = repo.split("/")[0] if "/" in repo else None
+    org_secrets: set[str] = set()
+    org_forbidden = False
+    if org:
+        fetched, org_forbidden = _list_org_secrets(org)
+        if fetched is not None:
+            org_secrets = fetched
+
+    unexpected_repo = sorted(repo_secrets - allowed)
+    unexpected_org = sorted(org_secrets - allowed - repo_secrets)
+
+    if unexpected_repo or unexpected_org:
+        parts = []
+        if unexpected_repo:
+            parts.append(f"repo-level: {', '.join(unexpected_repo)}")
+        if unexpected_org:
+            parts.append(f"org-level: {', '.join(unexpected_org)}")
+        return CheckResult(
+            "repo-secret-allowlist",
+            False,
+            f"Unexpected secrets ({'; '.join(parts)}). "
+            "These are available to all workflows, including those triggered "
+            "by PRs. Move release secrets to a protected environment. "
+            "If intentionally available, add to secrets.allowed "
+            "in .config/tend.toml. See docs/security-model.md.",
+        )
+
+    msg = "All secrets available to workflows are in allowlist"
+    if org_forbidden:
+        msg += " (could not check org-level — grant admin:org scope to verify)"
+    return CheckResult("repo-secret-allowlist", True, msg)
+
+
 RESTRICT_UPDATES_RULESET = json.dumps(
     {
         "name": "Merge access",
@@ -332,8 +391,13 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
             )
         ]
 
+    allowed = {cfg.bot_token_secret, cfg.claude_token_secret} | set(
+        cfg.allowed_repo_secrets
+    )
+
     return [
         check_branch_protection(repo, default_branch),
         check_bot_permission(repo, cfg.bot_name),
         check_secrets(repo, [cfg.bot_token_secret, cfg.claude_token_secret]),
+        check_repo_secret_allowlist(repo, allowed),
     ]
