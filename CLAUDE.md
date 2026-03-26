@@ -43,4 +43,4 @@ directly.
 The generator is a Python package under `generator/` — uses hatchling, requires
 Python 3.11+, only runtime dependency is click. Dev dependencies: pytest, pyyaml.
 
-No pre-commit or linter configured.
+Linting: `pre-commit run --all-files` (ruff, typos, actionlint, uv-lock).
