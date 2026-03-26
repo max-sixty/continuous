@@ -89,7 +89,7 @@ All workflows should pass the bot token to both paths.
 
 | Workflow | Injection surface | Attacker control | Mitigations |
 |----------|-------------------|-------------------|-------------|
-| **review** | PR diff content, review body on bot PRs | Full (any PR) / Medium (reviewers) | Fixed prompt, merge restriction |
+| **review** | PR diff content, review body on bot PRs | Full (any PR) / Medium (reviewers) | Fixed prompt, merge restriction, CLAUDE.md pinning (fork PRs) |
 | **triage** | Issue body | Partial (structured skill) | Fixed prompt, merge restriction, environment protection |
 | **mention** | Comment body on any issue/PR | Full | Fixed prompt, merge restriction, engagement verification |
 | **ci-fix** | Failed CI logs | Minimal (must break CI on default branch) | Fixed prompt, automatic trigger |
@@ -132,6 +132,18 @@ Two layers of detection:
 
 These are hardcoded in `action.yaml`. Because the check runs outside Claude's
 session, a prompt injection attack cannot instruct the bot to skip it.
+
+## CLAUDE.md pinning on fork PRs
+
+Claude Code loads `CLAUDE.md` into the system prompt. On `pull_request_target`,
+the checkout includes fork changes, so a fork PR that modifies `CLAUDE.md`
+injects instructions at system-prompt level — the same authority as the
+`system_prompt_append` conduct rules.
+
+The composite action detects fork PRs (via `GITHUB_EVENT_PATH`) and overwrites
+`CLAUDE.md` with the base branch version before running Claude. Same-repo PRs
+are unaffected — the branch's `CLAUDE.md` is used as-is, so changes to it can
+be reviewed normally.
 
 ## Future hardening
 
