@@ -21,8 +21,8 @@ tend/
 ├── plugins/
 │   ├── install-tend/     # User-facing plugin (setup skill)
 │   └── tend-ci-runner/   # CI plugin (review, triage, ci-fix, etc.)
+│       └── scripts/      # Helper scripts (survey, run listing)
 ├── action.yaml           # Composite action — the stable interface
-├── scripts/              # Helper scripts (survey, run listing)
 ├── generator/            # Python package (uvx tend), hatchling build
 │   ├── src/tend/
 │   │   ├── config.py     # Reads .config/tend.toml

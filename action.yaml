@@ -105,20 +105,6 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
 
-    - name: Install CI scripts
-      shell: bash
-      run: |
-        cd_dir="${GITHUB_ACTION_PATH}"
-        mkdir -p .github/scripts
-        for script in "$cd_dir"/scripts/*.sh; do
-          [ -f "$script" ] || continue
-          script_name=$(basename "$script")
-          if [ ! -f ".github/scripts/$script_name" ]; then
-            cp "$script" ".github/scripts/$script_name"
-            chmod +x ".github/scripts/$script_name"
-          fi
-        done
-
     - name: Resolve bot ID
       id: bot
       shell: bash

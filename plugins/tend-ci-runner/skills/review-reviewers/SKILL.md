@@ -175,7 +175,7 @@ trace incidents to session logs.
 List recently completed Claude CI runs on the target repo:
 
 ```bash
-TARGET_REPO=$ARGUMENTS .github/scripts/list-recent-runs.sh
+TARGET_REPO=$ARGUMENTS ${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh
 ```
 
 The script discovers `tend-*` workflows by default. Pass additional prefixes

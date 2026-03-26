@@ -7,22 +7,44 @@ CI fixes, nightly sweeps, dependency updates.
 
 ## How it works
 
-Four pieces:
+Three sources of behavior:
 
-1. **Plugins** — two Claude Code plugins distributed from the same
-   marketplace. `install-tend` is user-facing (sets up tend on a new repo).
-   `tend` provides CI skills (review, triage, ci-fix, nightly, renovate, etc.)
-   loaded by the composite action.
+### `tend init` — workflow files
 
-2. **Composite action** (`max-sixty/tend@v1`) — resolves bot ID at
-   runtime, runs Claude Code, uploads session logs. The stable interface.
+`uvx tend init` reads `.config/tend.toml` and writes `tend-*.yaml` into
+`.github/workflows/`. Each workflow handles everything GitHub needs before
+Claude runs: triggers, conditions (skip drafts, prevent bot self-loops),
+engagement verification, concurrency, permissions, checkout strategy, setup
+steps, and event-specific prompts. All six are enabled by default.
 
-3. **Generator** (`uvx tend init`) — stamps out workflow files into
-   `.github/workflows/`. Handles triggers, conditions, engagement verification,
-   checkout. Idempotent — always overwrites from config.
+| Workflow | Trigger | Skill |
+|---|---|---|
+| `tend-review` | PR opened/updated, review submitted | `review` |
+| `tend-mention` | @bot mentions, engaged conversations | — (prompt-driven) |
+| `tend-triage` | Issue opened | `triage` |
+| `tend-ci-fix` | CI fails on default branch | `ci-fix` |
+| `tend-nightly` | Daily schedule, manual dispatch | `nightly` |
+| `tend-renovate` | Weekly schedule, manual dispatch | `renovate` |
 
-4. **Config** (`.config/tend.toml`) — bot identity, secret names, project
-   setup steps. Only overrides from defaults are needed.
+Each workflow ends with `uses: max-sixty/tend@v1`, handing off to the action.
+
+### Action (`max-sixty/tend@v1`)
+
+The composite action runs the same steps regardless of which workflow
+triggered it: security preflight (branch protection), rate limit preflight
+(burst and daily spike detection), bot identity resolution, then invokes
+`claude-code-action` with plugins, model, and allowed tools. Uploads session
+logs as build artifacts afterward.
+
+### Skills (`tend-ci-runner` plugin)
+
+Skills define what Claude does once running. The action loads the
+`tend-ci-runner` plugin automatically; each workflow's prompt invokes the
+corresponding skill (see table above). `running-in-ci` loads first in every
+session — CI environment rules, security boundaries, comment formatting.
+
+A separate `install-tend` plugin provides user-facing skills: `install-tend`
+(interactive repo setup) and `debug-ci-session` (session log analysis).
 
 ## Quick start
 
@@ -36,7 +58,7 @@ setup interactively:
 
 See the [install-tend skill](plugins/install-tend/skills/install-tend/SKILL.md)
 for the full step-by-step procedure. The rest of this README covers config
-options and what gets generated.
+options.
 
 ### Plugin install
 
@@ -122,20 +144,6 @@ prompt = "/my-custom-nightly"         # override the default prompt
 [workflows.renovate]
 enabled = false                       # disable a workflow entirely
 ```
-
-## What's generated
-
-All six workflows are enabled by default. Disable individual workflows with
-`enabled = false` in config.
-
-| Workflow | Trigger |
-|---|---|
-| `tend-review` | PR opened/updated, review submitted |
-| `tend-mention` | @bot mentions, engaged conversations |
-| `tend-triage` | Issue opened |
-| `tend-ci-fix` | CI fails on default branch |
-| `tend-nightly` | Daily schedule, manual dispatch |
-| `tend-renovate` | Weekly schedule, manual dispatch — handles Dependabot, Renovate, and labeled dependency PRs |
 
 ## Project context
 

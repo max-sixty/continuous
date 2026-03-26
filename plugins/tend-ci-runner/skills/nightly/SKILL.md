@@ -68,7 +68,11 @@ state already resolve it. If resolved, comment briefly and close with
 ## Step 4: Rolling survey
 
 Run the survey script to get today's file list (~10 files, rotating through
-the full repo over 28 days).
+the full repo over 28 days):
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/todays-survey-files.sh
+```
 
 For each file, look for: bugs, stale documentation, dead code, simplification
 opportunities, missing tests, CLAUDE.md/skill drift. Spend roughly equal time
