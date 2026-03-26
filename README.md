@@ -112,6 +112,19 @@ bot_token = "MY_BOT_PAT"
 claude_token = "MY_CLAUDE_TOKEN"
 ```
 
+`tend check` flags any repo-level secret not in an explicit allowlist (the bot
+tokens above are always allowed). Repos with additional legitimate repo-level
+secrets — coverage tokens, linter keys — must list them:
+
+```toml
+[secrets]
+allowed = ["CODECOV_TOKEN"]
+```
+
+Release secrets (registry tokens, signing keys) should never be repo-level.
+Store them in a protected GitHub Environment instead — see
+`docs/security-model.md`.
+
 ### Setup steps
 
 Build tools, caches, and environment variables run before Claude in every

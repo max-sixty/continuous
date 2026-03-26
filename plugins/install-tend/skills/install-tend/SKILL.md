@@ -56,6 +56,16 @@ overriding the default name rather than creating a duplicate:
 bot_token = "GH_BOT_TOKEN"
 ```
 
+If the secret list shows non-bot repo-level secrets (e.g., `CODECOV_TOKEN`,
+`SENTRY_DSN`), add them to `secrets.allowed` so `tend check` doesn't flag them.
+Any secret not in the allowlist triggers a warning — release secrets (registry
+tokens, signing keys) should be in a protected environment, not listed here:
+
+```toml
+[secrets]
+allowed = ["CODECOV_TOKEN"]
+```
+
 Discover existing CI workflows so tend-ci-fix can watch them:
 
 ```bash
