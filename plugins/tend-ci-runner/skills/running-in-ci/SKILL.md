@@ -103,6 +103,31 @@ If pushing fails (fork PR with edits disabled), fall back to posting code
 snippets in a comment. Don't reference commit SHAs from temporary branches —
 post code inline.
 
+## Merging Upstream into PR Branches
+
+When asked to merge the default branch into a PR branch:
+
+1. **Never use `--allow-unrelated-histories`.** If `git merge` fails because
+   git can't find a merge base, the checkout is broken — investigate rather than
+   forcing the merge. `--allow-unrelated-histories` treats both sides as
+   disconnected, creating add/add conflicts in every file.
+
+2. **Handle untracked file conflicts properly.** If `git merge origin/main`
+   fails because untracked files would be overwritten by tracked files, stash
+   them first — don't delete them:
+   ```bash
+   git stash --include-untracked
+   git merge origin/main
+   git stash pop
+   ```
+
+3. **Verify merge base exists** before merging:
+   ```bash
+   git merge-base origin/main HEAD
+   ```
+   If this fails, the branch history is disconnected. Re-checkout the PR with
+   full history (`fetch-depth: 0`) before retrying.
+
 ## CI Monitoring
 
 After pushing, wait for CI before reporting completion.
