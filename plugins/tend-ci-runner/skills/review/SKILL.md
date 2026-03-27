@@ -16,6 +16,12 @@ Review a pull request.
 
 Follow these steps in order.
 
+### 0. Load environment skills
+
+Load `/tend-ci-runner:running-in-ci` first — it contains CI security rules,
+polling conventions, and comment formatting guidance. It will also prompt you to
+load any repo-specific skills (e.g., `running-tend`).
+
 ### 1. Pre-flight checks
 
 Before reading the diff, run cheap checks to avoid redundant work. Shell state
