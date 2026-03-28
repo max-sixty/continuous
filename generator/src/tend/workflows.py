@@ -216,7 +216,9 @@ jobs:
       (github.event_name == 'issue_comment' &&
         github.event.comment.user.login != '{bn}') ||
       (github.event_name == 'pull_request_review_comment' &&
-        github.event.comment.user.login != '{bn}')
+        github.event.comment.user.login != '{bn}' &&
+        (contains(github.event.comment.body, '@{bn}') ||
+         github.event.pull_request.user.login != '{bn}'))
     concurrency:
       group: ${{{{ github.workflow }}}}-${{{{ github.event.issue.number || github.event.pull_request.number }}}}
       cancel-in-progress: true

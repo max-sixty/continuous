@@ -223,6 +223,29 @@ def test_mention_handle_job_has_concurrency(tmp_path: Path) -> None:
     assert handle["concurrency"]["cancel-in-progress"] is True
 
 
+def test_mention_skips_review_comment_on_bot_pr_unless_mentioned(
+    tmp_path: Path,
+) -> None:
+    """On bot-authored PRs, tend-review handles review comments.
+
+    tend-mention should skip pull_request_review_comment events on bot PRs
+    (unless the comment @mentions the bot) to avoid duplicate replies — #91.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
+    verify_if = data["jobs"]["verify"]["if"]
+
+    # The condition for pull_request_review_comment must exclude non-mention
+    # comments on bot-authored PRs. It should require either an @mention of
+    # the bot OR that the PR is not bot-authored.
+    assert "pull_request.user.login" in verify_if, (
+        "verify job if-condition must check PR author to avoid "
+        "racing with tend-review on bot-authored PRs"
+    )
+
+
 def test_setup_after_pr_checkout_in_mention(tmp_path: Path) -> None:
     """Setup steps must run after PR checkout, not before."""
     extra = 'setup = [{uses = "./.github/actions/my-setup"}]'
