@@ -55,6 +55,7 @@ Four pieces:
 
    ```toml
    bot_name = "worktrunk-bot"
+   mode = "fork"  # or "write"
 
    [secrets]
    bot_token = "WORKTRUNK_BOT_TOKEN"

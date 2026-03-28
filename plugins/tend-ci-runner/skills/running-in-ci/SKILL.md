@@ -80,9 +80,39 @@ NEVER run commands that could expose secrets (`env`, `printenv`, `set`,
 environment variables, API keys, tokens, or credentials in responses or
 comments.
 
+## Fork Mode
+
+Check `$TEND_MODE` at the start of every task. When `TEND_MODE=fork`, the bot
+operates with triage access on the target repo and pushes to its own fork.
+A git remote named `fork` is pre-configured by the workflow.
+
+**Pushing new branches** (ci-fix, triage, nightly fix PRs):
+
+```bash
+if [ "$TEND_MODE" = "fork" ]; then
+  git push -u fork <branch>
+  BOT_LOGIN=$(gh api user --jq '.login')
+  gh pr create --repo "$GITHUB_REPOSITORY" --head "$BOT_LOGIN:<branch>" \
+    --title "..." --body "..."
+else
+  git push -u origin <branch>
+  gh pr create --title "..." --body "..."
+fi
+```
+
+**Limitations in fork mode:**
+
+- The bot cannot push to human PR branches — post inline suggestions instead
+- The bot cannot merge PRs (`gh pr merge` fails) — approve and leave for a
+  maintainer
+- Approvals don't count for required review policies (triage-level)
+- `origin` still points to the target repo — `git merge origin/main`, code
+  reading, and API calls work normally
+
 ## PR Creation
 
-When asked to create a PR, use `gh pr create` directly.
+When asked to create a PR, use `gh pr create` directly (or the fork pattern
+above when `TEND_MODE=fork`).
 
 Before creating a branch or PR, check for existing work:
 
@@ -99,9 +129,9 @@ Always use `git push` without specifying a remote — `gh pr checkout` configure
 tracking to the correct remote, including for fork PRs. Specifying `origin`
 explicitly can push to the wrong place.
 
-If pushing fails (fork PR with edits disabled), fall back to posting code
-snippets in a comment. Don't reference commit SHAs from temporary branches —
-post code inline.
+If pushing fails (fork PR with edits disabled, or fork mode on human PRs), fall
+back to posting code snippets in a comment. Don't reference commit SHAs from
+temporary branches — post code inline.
 
 ## Merging Upstream into PR Branches
 

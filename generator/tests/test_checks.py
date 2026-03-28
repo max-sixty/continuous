@@ -34,7 +34,9 @@ def _make_completed(
     )
 
 
-def _write_config(tmp_path: Path, content: str = 'bot_name = "test-bot"') -> Path:
+def _write_config(
+    tmp_path: Path, content: str = 'bot_name = "test-bot"\nmode = "write"'
+) -> Path:
     cfg = tmp_path / ".config" / "tend.toml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(content)
@@ -491,7 +493,7 @@ def test_repo_secret_allowlist_bad_json() -> None:
 
 def test_run_all_checks_no_gh() -> None:
     with patch("shutil.which", return_value=None):
-        results = run_all_checks(Config("bot", "main", [], "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "write", "main", [], "T1", "T2", [], {}))
     assert len(results) == 1
     assert results[0].passed is None
     assert "gh CLI" in results[0].message
@@ -502,7 +504,7 @@ def test_run_all_checks_no_repo() -> None:
         patch("shutil.which", return_value="/usr/bin/gh"),
         patch("tend.checks.detect_repo", return_value=None),
     ):
-        results = run_all_checks(Config("bot", "main", [], "T1", "T2", [], {}))
+        results = run_all_checks(Config("bot", "write", "main", [], "T1", "T2", [], {}))
     assert len(results) == 1
     assert "detect" in results[0].message
 
@@ -533,7 +535,7 @@ def test_run_all_checks_with_explicit_repo() -> None:
         patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
     ):
         results = run_all_checks(
-            Config("bot", "main", [], "T1", "T2", [], {}), repo="owner/repo"
+            Config("bot", "write", "main", [], "T1", "T2", [], {}), repo="owner/repo"
         )
     assert all(r.passed is True for r in results)
 
@@ -545,7 +547,7 @@ def test_run_all_checks_allowlist_includes_bot_secrets() -> None:
         patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
     ):
         results = run_all_checks(
-            Config("bot", "main", [], "T1", "T2", [], {}), repo="owner/repo"
+            Config("bot", "write", "main", [], "T1", "T2", [], {}), repo="owner/repo"
         )
     allowlist_check = [r for r in results if r.name == "repo-secret-allowlist"]
     assert len(allowlist_check) == 1
@@ -578,7 +580,7 @@ def test_run_all_checks_allowlist_catches_unexpected() -> None:
         patch("tend.checks._gh", side_effect=fake_gh_with_extra_secret),
     ):
         results = run_all_checks(
-            Config("bot", "main", [], "T1", "T2", [], {}), repo="owner/repo"
+            Config("bot", "write", "main", [], "T1", "T2", [], {}), repo="owner/repo"
         )
     allowlist_check = [r for r in results if r.name == "repo-secret-allowlist"]
     assert len(allowlist_check) == 1
@@ -593,7 +595,7 @@ def test_run_all_checks_with_protected_branches() -> None:
         patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
     ):
         results = run_all_checks(
-            Config("bot", "main", ["v1", "v2"], "T1", "T2", [], {}),
+            Config("bot", "write", "main", ["v1", "v2"], "T1", "T2", [], {}),
             repo="owner/repo",
         )
     # default + v1 + v2 + bot-permission + secrets + allowlist = 6
@@ -615,7 +617,7 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
         patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
     ):
         results = run_all_checks(
-            Config("bot", "main", ["main", "v1"], "T1", "T2", [], {}),
+            Config("bot", "write", "main", ["main", "v1"], "T1", "T2", [], {}),
             repo="owner/repo",
         )
     # main (deduped) + v1 + bot-permission + secrets + allowlist = 5
@@ -626,6 +628,55 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
         "branch-protection:main",
         "branch-protection:v1",
     }
+
+
+# ---------------------------------------------------------------------------
+# Fork mode checks
+# ---------------------------------------------------------------------------
+
+
+def test_bot_write_permission_fails_in_fork_mode() -> None:
+    """In fork mode, write permission is too much — should fail."""
+    with patch("tend.checks._gh", return_value=_make_completed("write\n")):
+        result = check_bot_permission("owner/repo", "my-bot", mode="fork")
+    assert result.passed is False
+    assert "triage" in result.message
+
+
+def test_bot_triage_permission_passes_in_fork_mode() -> None:
+    with patch("tend.checks._gh", return_value=_make_completed("triage\n")):
+        result = check_bot_permission("owner/repo", "my-bot", mode="fork")
+    assert result.passed is True
+
+
+def test_fork_mode_skips_branch_protection() -> None:
+    """run_all_checks in fork mode skips branch protection check."""
+
+    def fake_gh(*args, **kwargs):
+        cmd = " ".join(args)
+        if args[1].startswith("repos/owner/repo") and ".default_branch" in " ".join(
+            args
+        ):
+            return _make_completed("main\n")
+        if "collaborators" in cmd:
+            return _make_completed("triage\n")
+        if "secrets" in cmd:
+            return _make_completed('["T1","T2"]\n')
+        return _make_completed(returncode=1)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=fake_gh),
+    ):
+        results = run_all_checks(
+            Config("bot", "fork", "main", [], "T1", "T2", [], {}),
+            repo="owner/repo",
+        )
+    assert len(results) == 4
+    bp = results[0]
+    assert bp.name == "branch-protection"
+    assert bp.passed is True
+    assert "Fork mode" in bp.message
 
 
 # ---------------------------------------------------------------------------

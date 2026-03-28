@@ -10,7 +10,15 @@ from pathlib import Path
 import click
 
 KNOWN_WORKFLOWS = {"review", "mention", "triage", "ci-fix", "nightly", "renovate"}
-KNOWN_TOP_LEVEL = {"bot_name", "protected_branches", "secrets", "setup", "workflows"}
+KNOWN_TOP_LEVEL = {
+    "bot_name",
+    "mode",
+    "protected_branches",
+    "secrets",
+    "setup",
+    "workflows",
+}
+VALID_MODES = ("fork", "write")
 KNOWN_SECRETS_KEYS = {"bot_token", "claude_token", "allowed"}
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 
@@ -36,6 +44,7 @@ class WorkflowConfig:
 @dataclass
 class Config:
     bot_name: str
+    mode: str
     default_branch: str
     protected_branches: list[str]
     bot_token_secret: str
@@ -64,6 +73,14 @@ class Config:
                 f"bot_name '{bot_name}' is not a valid GitHub username "
                 "(only letters, digits, and hyphens)"
             )
+
+        if "mode" not in raw:
+            raise click.ClickException(
+                "Missing required field: mode (must be 'fork' or 'write')"
+            )
+        mode = raw["mode"]
+        if mode not in VALID_MODES:
+            raise click.ClickException(f"mode must be 'fork' or 'write', got '{mode}'")
 
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
@@ -132,6 +149,7 @@ class Config:
 
         return cls(
             bot_name=bot_name,
+            mode=mode,
             default_branch="main",
             protected_branches=protected_branches,
             bot_token_secret=secrets.get("bot_token", "BOT_TOKEN"),
