@@ -20,6 +20,7 @@ jobs:
         repo:
           - max-sixty/worktrunk
           - max-sixty/tend
+          - PRQL/prql
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
