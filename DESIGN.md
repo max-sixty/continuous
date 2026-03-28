@@ -32,6 +32,7 @@ Four pieces:
      allowed_non_write_users: { default: "*" }
      show_full_output: { default: "true" }
      use_sticky_comment: { default: "false" }
+     mode: { default: "write" }
      additional_permissions: { default: "actions: read" }
    ```
 
@@ -157,8 +158,7 @@ enforces this server-side regardless of the PAT's scope.
 ### Privilege models
 
 The `mode` field in `.config/tend.toml` selects between two privilege
-models (not yet implemented — currently only write + branch protection
-exists):
+models:
 
 | | **Triage + fork** | **Write + branch protection** |
 |---|---|---|

@@ -223,8 +223,22 @@ def check_bot_permission(repo: str, bot_name: str, mode: str = "write") -> Check
                 f"Bot '{bot_name}' has '{perm}' permission — fork mode only needs triage. "
                 "Downgrade to triage to reduce blast radius.",
             )
+        if perm == "read":
+            return CheckResult(
+                "bot-permission",
+                False,
+                f"Bot '{bot_name}' has read permission — fork mode needs triage "
+                "(read cannot post comments or reviews). Upgrade to triage.",
+            )
         return CheckResult(
             "bot-permission", True, f"Bot '{bot_name}' has '{perm}' permission"
+        )
+    if perm in ("read", "triage"):
+        return CheckResult(
+            "bot-permission",
+            False,
+            f"Bot '{bot_name}' has '{perm}' permission — write mode needs write "
+            "(the bot must be able to push to branches). Upgrade to write.",
         )
     return CheckResult(
         "bot-permission", True, f"Bot '{bot_name}' has '{perm}' permission"

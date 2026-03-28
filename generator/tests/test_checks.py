@@ -635,6 +635,14 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_bot_admin_permission_fails_in_fork_mode() -> None:
+    """In fork mode, admin error message recommends triage (not write)."""
+    with patch("tend.checks._gh", return_value=_make_completed("admin\n")):
+        result = check_bot_permission("owner/repo", "my-bot", mode="fork")
+    assert result.passed is False
+    assert "triage" in result.message
+
+
 def test_bot_write_permission_fails_in_fork_mode() -> None:
     """In fork mode, write permission is too much — should fail."""
     with patch("tend.checks._gh", return_value=_make_completed("write\n")):
@@ -647,6 +655,38 @@ def test_bot_triage_permission_passes_in_fork_mode() -> None:
     with patch("tend.checks._gh", return_value=_make_completed("triage\n")):
         result = check_bot_permission("owner/repo", "my-bot", mode="fork")
     assert result.passed is True
+
+
+def test_bot_maintain_permission_fails_in_fork_mode() -> None:
+    """In fork mode, maintain permission is too much — should fail."""
+    with patch("tend.checks._gh", return_value=_make_completed("maintain\n")):
+        result = check_bot_permission("owner/repo", "my-bot", mode="fork")
+    assert result.passed is False
+    assert "triage" in result.message
+
+
+def test_bot_read_permission_fails_in_fork_mode() -> None:
+    """In fork mode, read permission is insufficient — needs triage."""
+    with patch("tend.checks._gh", return_value=_make_completed("read\n")):
+        result = check_bot_permission("owner/repo", "my-bot", mode="fork")
+    assert result.passed is False
+    assert "triage" in result.message
+
+
+def test_bot_read_permission_fails_in_write_mode() -> None:
+    """In write mode, read permission is insufficient — needs write."""
+    with patch("tend.checks._gh", return_value=_make_completed("read\n")):
+        result = check_bot_permission("owner/repo", "my-bot", mode="write")
+    assert result.passed is False
+    assert "write" in result.message
+
+
+def test_bot_triage_permission_fails_in_write_mode() -> None:
+    """In write mode, triage permission is insufficient — needs write."""
+    with patch("tend.checks._gh", return_value=_make_completed("triage\n")):
+        result = check_bot_permission("owner/repo", "my-bot", mode="write")
+    assert result.passed is False
+    assert "write" in result.message
 
 
 def test_fork_mode_skips_branch_protection() -> None:
