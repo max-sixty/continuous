@@ -210,8 +210,22 @@ def test_setup_raw_interleaved_with_steps(tmp_path: Path) -> None:
         assert uses_idx < raw_idx < run_idx, f"{wf.filename}: wrong order"
 
 
-def test_mention_handle_job_has_concurrency(tmp_path: Path) -> None:
-    """The handle job must have concurrency control to prevent double-posts."""
+def test_mention_verify_no_concurrency(tmp_path: Path) -> None:
+    """verify job must not have concurrency — a non-mention comment can cancel
+    an explicit @bot mention if both arrive on the same PR within seconds (#93)."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
+    verify = data["jobs"]["verify"]
+    assert "concurrency" not in verify, (
+        "verify job must not have concurrency — rapid comments on the same PR "
+        "can cancel an explicit @bot mention (#93)"
+    )
+
+
+def test_mention_handle_job_queues_not_cancels(tmp_path: Path) -> None:
+    """The handle job must queue (not cancel) to avoid dropping mentions (#93)."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
@@ -220,7 +234,9 @@ def test_mention_handle_job_has_concurrency(tmp_path: Path) -> None:
     assert "concurrency" in handle, (
         "handle job must have concurrency to prevent duplicate runs"
     )
-    assert handle["concurrency"]["cancel-in-progress"] is True
+    assert handle["concurrency"]["cancel-in-progress"] is False, (
+        "handle must queue (cancel-in-progress: false) so mentions aren't dropped"
+    )
 
 
 def test_setup_after_pr_checkout_in_mention(tmp_path: Path) -> None:

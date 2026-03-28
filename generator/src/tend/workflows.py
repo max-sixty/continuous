@@ -217,9 +217,6 @@ jobs:
         github.event.comment.user.login != '{bn}') ||
       (github.event_name == 'pull_request_review_comment' &&
         github.event.comment.user.login != '{bn}')
-    concurrency:
-      group: ${{{{ github.workflow }}}}-${{{{ github.event.issue.number || github.event.pull_request.number }}}}
-      cancel-in-progress: true
     runs-on: ubuntu-24.04
     outputs:
       should_run: ${{{{ steps.check.outputs.should_run }}}}
@@ -308,7 +305,7 @@ jobs:
     if: needs.verify.outputs.should_run == 'true'
     concurrency:
       group: ${{{{ github.workflow }}}}-handle-${{{{ github.event.issue.number || github.event.pull_request.number }}}}
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
