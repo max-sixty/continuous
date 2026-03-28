@@ -148,8 +148,6 @@ Flag duplicates — reuse is almost always better than a parallel implementation
 ### 5. Submit
 
 **If there are no issues, approve with an empty body — silence means correct.**
-In fork mode (`TEND_MODE=fork`), approvals don't count for required review
-policies — they're informational. Still submit them; they signal intent.
 
 ```bash
 gh pr review <number> --approve -b ""
@@ -366,10 +364,6 @@ Outdated comments (null line) are best-effort — skip if the original context
 can't be located.
 
 ### 8. Push mechanical fixes
-
-**Fork mode** (`TEND_MODE=fork`): The bot cannot push to human PR branches.
-Post inline suggestions only. For bot PRs (Dependabot, renovate), `gh pr
-checkout` configures tracking to the correct remote — bare `git push` works.
 
 **Bot PRs** (Dependabot, renovate, etc.): If the review found concrete, fixable
 issues and there's no human author to act on feedback, commit and push the fix

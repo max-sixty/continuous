@@ -16,9 +16,6 @@ from tend.workflows import generate_all
 def _write_config(tmp_path: Path, content: str) -> Path:
     cfg = tmp_path / ".config" / "tend.toml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    # Add mode after bot_name if not present (must be top-level, before sections)
-    if "mode" not in content and "bot_name" in content:
-        content = content.replace("bot_name", 'mode = "write"\nbot_name', 1)
     cfg.write_text(content)
     return cfg
 
@@ -40,12 +37,11 @@ def test_empty_toml_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_minimal_config_defaults(tmp_path: Path) -> None:
-    """Minimal config (bot_name + mode) should produce valid defaults."""
-    path = _write_config(tmp_path, 'bot_name = "my-bot"\nmode = "write"')
+def test_bot_name_only(tmp_path: Path) -> None:
+    """Minimal config with just bot_name should produce valid defaults."""
+    path = _write_config(tmp_path, 'bot_name = "my-bot"')
     cfg = Config.load(path)
     assert cfg.bot_name == "my-bot"
-    assert cfg.mode == "write"
     assert cfg.protected_branches == []
     assert cfg.bot_token_secret == "BOT_TOKEN"
     assert cfg.claude_token_secret == "CLAUDE_CODE_OAUTH_TOKEN"
@@ -586,56 +582,6 @@ def test_setup_steps_entry_both_keys(tmp_path: Path) -> None:
     """),
     )
     with pytest.raises(ClickException, match="setup\\[0\\] must have exactly one"):
-        Config.load(path)
-
-
-# ---------------------------------------------------------------------------
-# 12. Mode validation
-# ---------------------------------------------------------------------------
-
-
-def test_mode_missing_rejected(tmp_path: Path) -> None:
-    """mode is required — missing raises a clear error."""
-    cfg = tmp_path / ".config" / "tend.toml"
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text('bot_name = "my-bot"')
-    with pytest.raises(ClickException, match="Missing required field: mode"):
-        Config.load(cfg)
-
-
-def test_mode_fork(tmp_path: Path) -> None:
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name = "my-bot"
-        mode = "fork"
-    """),
-    )
-    cfg = Config.load(path)
-    assert cfg.mode == "fork"
-
-
-def test_mode_write(tmp_path: Path) -> None:
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name = "my-bot"
-        mode = "write"
-    """),
-    )
-    cfg = Config.load(path)
-    assert cfg.mode == "write"
-
-
-def test_mode_invalid_rejected(tmp_path: Path) -> None:
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name = "my-bot"
-        mode = "triage"
-    """),
-    )
-    with pytest.raises(ClickException, match="mode must be 'fork' or 'write'"):
         Config.load(path)
 
 

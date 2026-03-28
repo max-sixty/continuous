@@ -52,10 +52,9 @@ def _setup_yaml(cfg: Config, indent: int = 6) -> str:
     return "\n" + "\n".join(lines) + "\n"
 
 
-def _permissions(mode: str = "write", issues: bool = True) -> str:
-    contents = "read" if mode == "fork" else "write"
+def _permissions(issues: bool = True) -> str:
     lines = [
-        f"      contents: {contents}",
+        "      contents: write",
         "      pull-requests: write",
         "      id-token: write",
         "      actions: read",
@@ -63,19 +62,6 @@ def _permissions(mode: str = "write", issues: bool = True) -> str:
     if issues:
         lines.append("      issues: write")
     return "\n".join(lines)
-
-
-def _fork_remote_step(bot_name: str, bot_token: str, indent: int = 6) -> str:
-    """Generate a step that adds the bot's fork as a git remote."""
-    pad = " " * indent
-    return f"""\
-{pad}- name: Configure fork remote
-{pad}  run: |
-{pad}    REPO_NAME="${{GITHUB_REPOSITORY#*/}}"
-{pad}    git remote add fork "https://x-access-token:${{BOT_TOKEN}}@github.com/${{BOT_NAME}}/${{REPO_NAME}}.git"
-{pad}  env:
-{pad}    BOT_NAME: {bot_name}
-{pad}    BOT_TOKEN: {bot_token}"""
 
 
 def _escape(s: str) -> str:
@@ -125,8 +111,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     bn = cfg.bot_name
 
     setup = _setup_yaml(cfg)
-    perms = _permissions(cfg.mode)
-    fork_step = f"\n\n{_fork_remote_step(bn, bt)}\n" if cfg.mode == "fork" else ""
+    perms = _permissions()
 
     content = f"""\
 {HEADER}
@@ -177,13 +162,12 @@ jobs:
         env:
           GH_TOKEN: {bt}
           PR_NUMBER: ${{{{ github.event.pull_request.number }}}}
-{fork_step}{setup}
+{setup}
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
-          mode: {cfg.mode}
           use_sticky_comment: ${{{{ github.event_name == 'pull_request_target' }}}}
           prompt: >-
             ${{{{ github.event_name == 'pull_request_target'
@@ -208,8 +192,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     bn = cfg.bot_name
 
     setup = _setup_yaml(cfg)
-    perms = _permissions(cfg.mode)
-    fork_step = f"\n\n{_fork_remote_step(bn, bt)}\n" if cfg.mode == "fork" else ""
+    perms = _permissions()
     pr = "(github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number)"
 
     content = f"""\
@@ -351,13 +334,12 @@ jobs:
         env:
           GH_TOKEN: {bt}
           PR_NUMBER: ${{{{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}}}
-{fork_step}{setup}
+{setup}
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
-          mode: {cfg.mode}
           prompt: >-
             ${{{{ github.event_name == 'issues'
               && format('An issue was updated with a mention of you ({{0}}). Read it and respond.', github.event.issue.html_url)
@@ -388,8 +370,7 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
     bn = cfg.bot_name
 
     setup = _setup_yaml(cfg)
-    perms = _permissions(cfg.mode)
-    fork_step = f"\n\n{_fork_remote_step(bn, bt)}\n" if cfg.mode == "fork" else ""
+    perms = _permissions()
 
     content = f"""\
 {HEADER}
@@ -417,13 +398,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
-{fork_step}{setup}
+{setup}
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
-          mode: {cfg.mode}
           prompt: |
             {prompt}
 """
@@ -453,8 +433,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
     bn = cfg.bot_name
 
     setup = _setup_yaml(cfg)
-    perms = _permissions(cfg.mode, issues=False)
-    fork_step = f"\n\n{_fork_remote_step(bn, bt)}\n" if cfg.mode == "fork" else ""
+    perms = _permissions(issues=False)
     watched_yaml = ", ".join(f'"{w}"' for w in watched)
     branches_yaml = ", ".join(f'"{b}"' for b in branches)
 
@@ -480,13 +459,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
-{fork_step}{setup}
+{setup}
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
-          mode: {cfg.mode}
           prompt: |
             {prompt}
             - Run URL: ${{{{ github.event.workflow_run.html_url }}}}
@@ -512,8 +490,7 @@ def _generate_scheduled(
     bn = cfg.bot_name
 
     setup = _setup_yaml(cfg)
-    perms = _permissions(cfg.mode)
-    fork_step = f"\n\n{_fork_remote_step(bn, bt)}\n" if cfg.mode == "fork" else ""
+    perms = _permissions()
 
     prompt_lines = "\n".join(f"            {line}" for line in prompt.split("\n"))
     prompt_yaml = f"prompt: |\n{prompt_lines}"
@@ -538,13 +515,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
-{fork_step}{setup}
+{setup}
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
-          mode: {cfg.mode}
           {prompt_yaml}
 """
     return GeneratedWorkflow(filename=f"tend-{name}.yaml", content=content)

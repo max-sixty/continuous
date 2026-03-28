@@ -92,10 +92,9 @@ it — explain uncertainty in the PR description.
 
 For each finding:
 
-1. **Create a PR** — branch, fix, run full test suite, commit, push and create
-   PR using the fork-aware pattern from `/tend-ci-runner:running-in-ci` (check
-   `$TEND_MODE`), poll CI. **Every bug fix must include a regression test that
-   would have failed before the fix.** If a test is not feasible (e.g., pure
+1. **Create a PR** — branch, fix, run full test suite, commit, push, create
+   PR, poll CI. **Every bug fix must include a regression test that would have
+   failed before the fix.** If a test is not feasible (e.g., pure
    documentation changes), note why in the PR description. When uncertain about
    the approach, explain the trade-offs in the description.
 2. **Create an issue only when there's no obvious fix** — design questions,

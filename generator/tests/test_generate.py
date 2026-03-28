@@ -17,9 +17,7 @@ from tend.workflows import generate_all
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     cfg = tmp_path / ".config" / "tend.toml"
     cfg.parent.mkdir(parents=True)
-    # Default to write mode unless extra overrides it
-    mode_line = "" if "mode" in extra else 'mode = "write"\n'
-    cfg.write_text(f'bot_name = "test-bot"\n{mode_line}{extra}')
+    cfg.write_text(f'bot_name = "test-bot"\n{extra}')
     return cfg
 
 
@@ -235,80 +233,3 @@ def test_setup_after_pr_checkout_in_mention(tmp_path: Path) -> None:
     checkout_idx = mention.content.index("Check out PR branch")
     setup_idx = mention.content.index("./.github/actions/my-setup")
     assert setup_idx > checkout_idx, "Setup must come after PR checkout"
-
-
-# ---------------------------------------------------------------------------
-# Fork mode
-# ---------------------------------------------------------------------------
-
-
-def test_fork_mode_adds_fork_remote_step(tmp_path: Path) -> None:
-    """Fork mode workflows include a step to configure the fork remote."""
-    cfg = Config.load(_minimal_config(tmp_path, 'mode = "fork"'))
-    for wf in generate_all(cfg):
-        assert "Configure fork remote" in wf.content, (
-            f"{wf.filename} missing fork remote step"
-        )
-        assert "git remote add fork" in wf.content, (
-            f"{wf.filename} missing git remote add"
-        )
-
-
-def test_write_mode_no_fork_remote_step(tmp_path: Path) -> None:
-    """Write mode workflows do not include fork remote step."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    for wf in generate_all(cfg):
-        assert "Configure fork remote" not in wf.content, (
-            f"{wf.filename} has unexpected fork step"
-        )
-
-
-def test_fork_mode_contents_read(tmp_path: Path) -> None:
-    """Fork mode sets contents: read instead of contents: write."""
-    cfg = Config.load(_minimal_config(tmp_path, 'mode = "fork"'))
-    for wf in generate_all(cfg):
-        assert "contents: read" in wf.content, f"{wf.filename} missing contents: read"
-        assert "contents: write" not in wf.content, (
-            f"{wf.filename} has contents: write in fork mode"
-        )
-
-
-def test_fork_mode_passes_mode_to_action(tmp_path: Path) -> None:
-    """Fork mode passes mode: fork to the tend action."""
-    cfg = Config.load(_minimal_config(tmp_path, 'mode = "fork"'))
-    for wf in generate_all(cfg):
-        assert "mode: fork" in wf.content, f"{wf.filename} missing mode: fork"
-
-
-def test_write_mode_passes_mode_to_action(tmp_path: Path) -> None:
-    """Write mode passes mode: write to the tend action."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    for wf in generate_all(cfg):
-        assert "mode: write" in wf.content, f"{wf.filename} missing mode: write"
-
-
-def test_fork_mode_valid_yaml(tmp_path: Path) -> None:
-    """Fork mode workflows produce valid YAML."""
-    cfg = Config.load(_minimal_config(tmp_path, 'mode = "fork"'))
-    for wf in generate_all(cfg):
-        data = yaml.safe_load(wf.content)
-        assert isinstance(data, dict), f"{wf.filename} did not parse as dict"
-
-
-def test_fork_mode_with_setup_steps(tmp_path: Path) -> None:
-    """Fork remote step appears before setup steps."""
-    extra = dedent("""\
-        mode = "fork"
-        setup = [{uses = "./.github/actions/my-setup"}]
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in generate_all(cfg):
-        if (
-            "Configure fork remote" in wf.content
-            and "./.github/actions/my-setup" in wf.content
-        ):
-            fork_idx = wf.content.index("Configure fork remote")
-            setup_idx = wf.content.index("./.github/actions/my-setup")
-            assert fork_idx < setup_idx, (
-                f"{wf.filename}: fork remote must come before setup"
-            )

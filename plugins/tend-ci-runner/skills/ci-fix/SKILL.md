@@ -42,10 +42,10 @@ git add <files>
 git commit -m "fix: <description>
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
+git push -u origin fix/ci-<run-id>
 ```
 
-Push and create the PR using the fork-aware pattern from
-`/tend-ci-runner:running-in-ci` (check `$TEND_MODE`). PR body format:
+Create the PR with `gh pr create`. PR body format:
 
 ```
 ## Problem

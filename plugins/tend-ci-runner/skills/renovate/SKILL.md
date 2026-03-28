@@ -27,11 +27,7 @@ If no dependency PRs are open, report "No dependency PRs to process" and exit.
 3. If the update is safe (patch/minor with green CI), approve and merge:
    ```bash
    gh pr review <number> --approve --body "Automated dependency update — CI passing, no breaking changes."
-   # In fork mode (TEND_MODE=fork), skip the merge — the bot lacks merge
-   # permission. Leave it for a maintainer.
-   if [ "$TEND_MODE" != "fork" ]; then
-     gh pr merge <number> --squash
-   fi
+   gh pr merge <number> --squash
    ```
 4. If CI is failing, comment with the failure summary and skip
 5. If a major version bump, comment noting it needs manual review and skip

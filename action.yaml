@@ -37,9 +37,6 @@ inputs:
   use_sticky_comment:
     default: "false"
     description: Use a sticky (updated) comment instead of new comments
-  mode:
-    default: "write"
-    description: "Privilege model: fork (triage + fork) or write (write + branch protection)"
   additional_permissions:
     default: "actions: read"
     description: Additional permissions for claude-code-action
@@ -50,10 +47,6 @@ runs:
     - name: Security preflight
       shell: bash
       run: |
-        if [ "$MODE" = "fork" ]; then
-          echo "Fork mode — branch protection not required (triage collaborator level is the security boundary)"
-          exit 0
-        fi
         DEFAULT_BRANCH=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')
         PROTECTED=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${DEFAULT_BRANCH}" --jq '.protected')
         if [ "$PROTECTED" != "true" ]; then
@@ -63,7 +56,6 @@ runs:
         echo "Security preflight passed: default branch '${DEFAULT_BRANCH}' is protected"
       env:
         GH_TOKEN: ${{ inputs.github_token }}
-        MODE: ${{ inputs.mode }}
 
     - name: Rate limit preflight
       shell: bash
@@ -147,8 +139,6 @@ runs:
     - name: Run Claude Code
       id: claude
       uses: anthropics/claude-code-action@v1
-      env:
-        TEND_MODE: ${{ inputs.mode }}
       with:
         show_full_output: ${{ inputs.show_full_output }}
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}

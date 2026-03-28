@@ -118,8 +118,7 @@ missing code. Before adding guidance to a skill:
 1. Fix the root cause (not just the symptom)
 2. Confirm the test now passes
 3. Run the full test suite and lints (use project test commands from CLAUDE.md)
-4. Create branch, commit, and push using the fork-aware pattern from
-   `/tend-ci-runner:running-in-ci` (check `$TEND_MODE`):
+4. Create branch, commit, push, and create PR:
    ```bash
    git checkout -b fix/issue-$ARGUMENTS
    git add -A
@@ -128,11 +127,8 @@ missing code. Before adding guidance to a skill:
    Closes #$ARGUMENTS
 
    Co-Authored-By: Claude <noreply@anthropic.com>"
-   # Push and create PR — see running-in-ci "Fork Mode" section
-   ```
-   PR body format:
-   ```
-   ## Problem
+   git push -u origin fix/issue-$ARGUMENTS
+   gh pr create --title "fix: <description>" --body "## Problem
    [What the issue reported and the root cause]
 
    ## Solution
@@ -142,7 +138,7 @@ missing code. Before adding guidance to a skill:
    [How the fix was verified — mention the reproduction test]
 
    ---
-   Closes #<issue-number> — automated triage
+   Closes #<issue-number> — automated triage"
    ```
 5. Monitor CI using the approach from /tend-ci-runner:running-in-ci.
 
@@ -156,7 +152,12 @@ git add -A
 git commit -m "test: add reproduction for #$ARGUMENTS
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
-# Push and create PR — see running-in-ci "Fork Mode" section
+git push -u origin repro/issue-$ARGUMENTS
+gh pr create --title "test: reproduction for #$ARGUMENTS" --body "## Context
+Adds a failing test that reproduces #$ARGUMENTS. The fix is not yet included — this PR captures the reproduction so a maintainer can investigate.
+
+---
+Automated triage for #<issue-number>"
 ```
 
 Note the PR number for the comment.
