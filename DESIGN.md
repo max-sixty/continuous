@@ -352,16 +352,16 @@ GitHub Actions evaluates these before the job starts. A false condition means
 the job is **skipped** — it never runs, never enters a concurrency group, and
 consumes no resources.
 
-| Workflow | Condition | Filters out |
-|----------|-----------|-------------|
-| **review** | `event == pull_request_target && !draft` | Draft PRs |
-| **review** | `event == pull_request_review && pr.user == bot && reviewer != bot && (state != approved \|\| body)` | Reviews on non-bot PRs; bot self-reviews; bare approvals with no body |
-| **mention (verify)** | `event == issues && body contains @bot && author != bot` | Issue edits by the bot itself, edits without a mention |
-| **mention (verify)** | `event == issue_comment && comment.author != bot` | Bot's own comments |
-| **mention (verify)** | `event == pull_request_review_comment && comment.author != bot` | Bot's own inline comments |
-| **mention (handle)** | `needs.verify.outputs.should_run == 'true'` | Events where verify determined no engagement (see Layer 2) |
-| **triage** | `issue.user.login != bot` | Issues opened by the bot itself (avoids self-triage loop) |
-| **ci-fix** | `workflow_run.conclusion == 'failure'` | Successful CI runs |
+| Workflow | Event | Runs when | Skips |
+|----------|-------|-----------|-------|
+| **review** | `pull_request_target` | PR is not a draft | Draft PRs |
+| **review** | `pull_request_review` | PR was authored by bot, reviewer is not bot, and review is either non-approval or has a body | Reviews on non-bot PRs; bot self-reviews; bare approve-clicks with no text |
+| **mention** (verify) | `issues` (edited) | Issue body contains `@bot` and editor is not bot | Bot's own edits; edits that don't mention bot |
+| **mention** (verify) | `issue_comment` | Comment author is not bot | Bot's own comments (prevents loops) |
+| **mention** (verify) | `pull_request_review_comment` | Comment author is not bot | Bot's own inline comments |
+| **mention** (handle) | — | Verify job output `should_run == true` | Events where verify determined no engagement (Layer 2) |
+| **triage** | `issues` (opened) | Issue author is not bot | Bot-opened issues (prevents self-triage loop) |
+| **ci-fix** | `workflow_run` | Triggering workflow concluded with failure | Successful CI runs |
 
 ### Layer 2: Custom `should_run` logic (mention only)
 
