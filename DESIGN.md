@@ -434,13 +434,24 @@ This requires three genuine `should_run=true` mentions on the same PR/issue
 within the ~60-second window of handle job startup — uncommon but possible when
 multiple people are active on a PR.
 
-**Mitigation paths** (not yet implemented):
+**Mitigation — conversation-aware loading** (not yet implemented):
 
-- Have the handle job scan recent conversation for any unprocessed `@$bot_name`
-  mentions (not just its own triggering comment) before responding. This would
-  make the bot self-healing: even if job B is displaced, job C would pick up
-  B's mention when it scans the conversation.
-- Use a workflow-level queue or external coordinator (adds complexity).
+The skill should review conversation state when it loads, not just its own
+triggering comment. Specifically it should be aware of two things:
+
+1. **Other jobs may have already responded** to its triggering comment. If the
+   job was queued behind another run, that earlier run might have already handled
+   the mention. The skill should check before duplicating work.
+2. **Other unprocessed mentions may exist.** If a prior job was displaced from
+   the queue, its `@$bot_name` mention was never handled. The skill should scan
+   recent conversation for any unprocessed mentions and handle them — making the
+   system self-healing.
+
+To help the skill judge how likely these scenarios are, the workflow could inject
+the **queue-to-run time delta** (time between job queued and job started) as an
+environment variable. A large delta signals the job was queued behind other runs,
+increasing the likelihood that the conversation state has changed since the
+triggering event.
 
 ## What lives in the tend repo
 
