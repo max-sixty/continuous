@@ -17,17 +17,16 @@ Load `/tend-ci-runner:running-in-ci` first (CI environment rules, security).
 ## Step 2: Fetch unread notifications
 
 ```bash
-# List unread notifications for this repo only
+# List unread notifications
 gh api notifications --jq '
-  [.[] | select(.repository.full_name == env.GITHUB_REPOSITORY)]
-  | sort_by(.updated_at)
+  sort_by(.updated_at)
   | .[]
   | {id, reason, subject_type: .subject.type, subject_title: .subject.title,
-     subject_url: .subject.url, updated_at}
+     subject_url: .subject.url, repo: .repository.full_name, updated_at}
 '
 ```
 
-If there are no unread notifications for this repo, exit — nothing to do.
+If there are no unread notifications, exit — nothing to do.
 
 ## Step 3: Security classification
 
@@ -42,11 +41,10 @@ Before acting on ANY notification:
 
 1. **Identify the source.** Extract the issue/PR number from the notification's
    `subject.url` (it's an API URL like `https://api.github.com/repos/OWNER/REPO/issues/123`).
-2. **Check scope.** Only process notifications from this repository
-   (`$GITHUB_REPOSITORY`). Mark cross-repo notifications as read without acting:
-   ```bash
-   gh api notifications/threads/{id} -X PATCH
-   ```
+2. **Check scope.** For cross-repo notifications (outside
+   `$GITHUB_REPOSITORY`), read and understand the context but be cautious
+   about acting — do not create issues, PRs, comments, or push code to
+   repos outside this organization. Prefer marking as read after reading.
 3. **Check author association** for the comment/event that triggered the
    notification:
    ```bash
