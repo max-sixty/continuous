@@ -418,11 +418,10 @@ With `cancel-in-progress: false`, when a third job arrives while one is running
 and one is pending, the **pending job is replaced** (cancelled) by the new
 arrival. The running job is unaffected.
 
-**Can a displaced job's mention be lost?** Yes. Each handle job receives only
-its own triggering comment's URL in the prompt — it does not scan the
-conversation for unprocessed mentions. So if mention B is displaced from the
-queue by mention C, mention B's request is dropped. Mention C processes only
-its own comment.
+**Can a displaced job's mention be lost?** The prompt preamble instructs the
+skill to scan recent conversation and pick up unaddressed comments, so mention
+C should self-heal mention B's dropped request. This is a soft mitigation — it
+depends on the skill following the instruction, not a hard guarantee.
 
 Example with three `@$bot_name` mentions arriving within seconds on the same PR:
 
@@ -435,24 +434,19 @@ This requires three genuine `should_run=true` mentions on the same PR/issue
 within the ~60-second window of handle job startup — uncommon but possible when
 multiple people are active on a PR.
 
-**Mitigation — conversation-aware loading** (not yet implemented):
+**Mitigation — conversation-aware loading:**
 
-The skill should review conversation state when it loads, not just its own
-triggering comment. Specifically it should be aware of two things:
+The prompt preamble instructs the skill to check recent conversation before
+acting. Specifically:
 
-1. **Other jobs may have already responded** to its triggering comment. If the
-   job was queued behind another run, that earlier run might have already handled
-   the mention. The skill should check before duplicating work.
-2. **Other unprocessed mentions may exist.** If a prior job was displaced from
-   the queue, its `@$bot_name` mention was never handled. The skill should scan
-   recent conversation for any unprocessed mentions and handle them — making the
-   system self-healing.
+1. **Dedup**: If the bot already responded to the triggering comment (a prior
+   queued run handled it), exit silently.
+2. **Self-heal**: If other comments warrant a response but have no bot reply
+   (a prior job was displaced from the queue), handle those too — oldest first.
 
-To help the skill judge how likely these scenarios are, the workflow could inject
-the **queue-to-run time delta** (time between job queued and job started) as an
-environment variable. A large delta signals the job was queued behind other runs,
-increasing the likelihood that the conversation state has changed since the
-triggering event.
+The workflow injects the **queue-to-run time delta** (seconds between event
+timestamp and job start) into the prompt. Over ~40s indicates the job was
+queued behind another run, making conversation drift more likely.
 
 ## What lives in the tend repo
 

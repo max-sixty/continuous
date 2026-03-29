@@ -284,3 +284,21 @@ def test_setup_after_pr_checkout_in_mention(tmp_path: Path) -> None:
     checkout_idx = mention.content.index("Check out PR branch")
     setup_idx = mention.content.index("./.github/actions/my-setup")
     assert setup_idx > checkout_idx, "Setup must come after PR checkout"
+
+
+def test_mention_handle_has_queue_delay(tmp_path: Path) -> None:
+    """Handle job computes queue delay so the prompt can detect stale triggers."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
+    handle_steps = data["jobs"]["handle"]["steps"]
+    delay_steps = [s for s in handle_steps if s.get("id") == "delay"]
+    assert len(delay_steps) == 1, "handle job must have a queue delay step"
+    assert "steps.delay.outputs.seconds" in mention.content, (
+        "prompt must reference queue delay"
+    )
+    # Delay step must come before the tend action (output must be available)
+    delay_idx = mention.content.index("Compute queue delay")
+    tend_idx = mention.content.index("max-sixty/tend@v1")
+    assert delay_idx < tend_idx, "delay step must precede tend action"
