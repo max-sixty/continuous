@@ -5,7 +5,7 @@ on:
   workflow_run:
     workflows: ["ci"]
     types: [completed]
-    branches: [main]
+    branches: ["main"]
 
 jobs:
   fix-ci:
