@@ -310,6 +310,10 @@ jobs:
       - name: Compute queue delay
         id: delay
         run: |
+          if [ -z "$EVENT_TS" ]; then
+            echo "seconds=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           event_epoch=$(date -d "$EVENT_TS" +%s)
           echo "seconds=$(( $(date +%s) - event_epoch ))" >> "$GITHUB_OUTPUT"
         env:
@@ -321,8 +325,9 @@ jobs:
           claude_code_oauth_token: {ct}
           bot_name: {bn}
           prompt: >-
-            This job started ${{{{ steps.delay.outputs.seconds }}}}s after the
-            triggering event (over ~40s means it was queued). Before acting,
+            ${{{{ steps.delay.outputs.seconds
+            && format('This job started {{0}}s after the triggering event (over ~40s means it was queued). ',
+            steps.delay.outputs.seconds) || '' }}}}Before acting,
             check recent comments: exit silently if the bot already responded
             to the trigger; handle any other unaddressed comments too.
 

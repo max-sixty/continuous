@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from tend.cli import main
 from tend.config import Config
-from tend.workflows import generate_all
+from tend.workflows import generate_all, generate_mention
 
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
@@ -302,3 +302,38 @@ def test_mention_handle_has_queue_delay(tmp_path: Path) -> None:
     delay_idx = mention.content.index("Compute queue delay")
     tend_idx = mention.content.index("max-sixty/tend@v1")
     assert delay_idx < tend_idx, "delay step must precede tend action"
+
+
+def test_mention_queue_delay_guards_empty_event_ts(tmp_path: Path) -> None:
+    """date -d "" silently returns now on GNU; guard against empty EVENT_TS."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    wf = generate_mention(cfg)
+    data = yaml.safe_load(wf.content)
+    delay_step = next(
+        s for s in data["jobs"]["handle"]["steps"] if s.get("id") == "delay"
+    )
+    script = delay_step["run"]
+    # Must bail before date -d when EVENT_TS is empty
+    assert 'if [ -z "$EVENT_TS" ]' in script
+    # date -d must only run after the guard
+    guard_pos = script.index('-z "$EVENT_TS"')
+    date_pos = script.index("date -d")
+    assert guard_pos < date_pos, "empty guard must precede date -d call"
+
+
+def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
+    """Prompt preamble must not hardcode delay text — it should be conditional
+    so an empty seconds output doesn't produce broken prose like 's after'."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    wf = generate_mention(cfg)
+    data = yaml.safe_load(wf.content)
+    tend_step = next(
+        s
+        for s in data["jobs"]["handle"]["steps"]
+        if s.get("uses", "").startswith("max-sixty/tend@")
+    )
+    prompt = tend_step["with"]["prompt"]
+    # The delay text must be inside a format() conditional, not hardcoded
+    assert "format(" in prompt, "delay preamble must use conditional format()"
+    # "Before acting" must always appear (it's the unconditional part)
+    assert "Before acting" in prompt
