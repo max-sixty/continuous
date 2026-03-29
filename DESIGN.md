@@ -354,6 +354,7 @@ consumes no resources.
 | **mention** (verify) | `issues` (edited) | Issue body contains `@$bot_name` and editor is not bot | Bot's own edits; edits that don't mention bot |
 | **mention** (verify) | `issue_comment` | Comment author is not bot | Bot's own comments (prevents loops) |
 | **mention** (verify) | `pull_request_review_comment` | Comment author is not bot | Bot's own inline comments |
+| **mention** (verify) | `pull_request_review` (submitted) | Reviewer is not bot | Bot's own reviews |
 | **mention** (handle) | — | Verify job output `should_run == true` | Events where verify determined no engagement (Layer 2) |
 | **triage** | `issues` (opened) | Issue author is not bot | Bot-opened issues (prevents self-triage loop) |
 | **ci-fix** | `workflow_run` | Triggering workflow concluded with failure | Successful CI runs |
@@ -367,7 +368,7 @@ order):
 
 1. **Issue edits** (`issues` event): always `true` (the GHA condition already
    confirmed `@$bot_name` is in the body).
-2. **Direct mention**: comment body contains `@$bot_name` → `true`.
+2. **Direct mention**: comment or review body contains `@$bot_name` → `true`.
 3. **Non-mention on an issue** (not a PR): bot authored the issue, or `@$bot_name`
    appears in the issue body, or bot has previously commented → `true`.
    Otherwise → `false`.

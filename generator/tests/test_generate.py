@@ -210,6 +210,41 @@ def test_setup_raw_interleaved_with_steps(tmp_path: Path) -> None:
         assert uses_idx < raw_idx < run_idx, f"{wf.filename}: wrong order"
 
 
+def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
+    """pull_request_review (submitted) must be covered by tend-mention so the bot
+    responds when a reviewer submits a formal review on an engaged PR."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
+
+    # Event trigger present
+    assert "pull_request_review" in data[True], (
+        "tend-mention must listen for pull_request_review events"
+    )
+    assert data[True]["pull_request_review"] == {"types": ["submitted"]}
+
+    # Verify job filters on reviewer identity
+    verify_if = data["jobs"]["verify"]["if"]
+    assert "pull_request_review" in verify_if
+    assert "github.event.review.user.login" in verify_if
+
+    # Handle job checks out PR branch for this event
+    handle_steps = data["jobs"]["handle"]["steps"]
+    checkout_step = next(
+        s for s in handle_steps if s.get("name") == "Check out PR branch"
+    )
+    assert "pull_request_review" in checkout_step["if"]
+
+    # Prompt includes review-specific branches
+    tend_step = next(
+        s for s in handle_steps if s.get("uses", "").startswith("max-sixty/tend@")
+    )
+    prompt = tend_step["with"]["prompt"]
+    assert "github.event.review.html_url" in prompt
+    assert "github.event.review.body" in prompt
+
+
 def test_mention_verify_no_concurrency(tmp_path: Path) -> None:
     """verify job must not have concurrency — a non-mention comment can cancel
     an explicit @bot mention if both arrive on the same PR within seconds (#93)."""
