@@ -360,7 +360,7 @@ consumes no resources.
 | **mention (verify)** | `event == issue_comment && comment.author != bot` | Bot's own comments |
 | **mention (verify)** | `event == pull_request_review_comment && comment.author != bot` | Bot's own inline comments |
 | **mention (handle)** | `needs.verify.outputs.should_run == 'true'` | Events where verify determined no engagement (see Layer 2) |
-| **triage** | `issue.user.type != 'Bot' && issue.user.login != bot` | Issues opened by bots |
+| **triage** | `issue.user.login != bot` | Issues opened by the bot itself (avoids self-triage loop) |
 | **ci-fix** | `workflow_run.conclusion == 'failure'` | Successful CI runs |
 
 ### Layer 2: Custom `should_run` logic (mention only)

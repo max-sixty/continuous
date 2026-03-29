@@ -383,7 +383,6 @@ concurrency:
 jobs:
   triage:
     if: >-
-      github.event.issue.user.type != 'Bot' &&
       github.event.issue.user.login != '{bn}'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
