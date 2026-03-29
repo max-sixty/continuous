@@ -3,7 +3,7 @@
 name: tend-renovate
 on:
   schedule:
-    - cron: '17 9 * * 0'
+    - cron: "17 9 * * 0"
   workflow_dispatch:
 
 jobs:
@@ -19,10 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.BOT_TOKEN }}
+
+      - uses: astral-sh/setup-uv@v6
 
       - uses: max-sixty/tend@v1
         with:

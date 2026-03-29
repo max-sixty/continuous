@@ -241,6 +241,9 @@ Always use markdown links for files, issues, PRs, and docs. Prefer permalinks
 (commit SHA URLs) over branch-based links for line references — line numbers
 shift and `blob/main/...#L42` links go stale.
 
+Derive the repository owner/name from `$GITHUB_REPOSITORY` (e.g.,
+`owner/repo`) — never guess or hardcode the organization in URLs.
+
 - **Files**: link to GitHub (`blob/main/...` for file-level,
   `blob/<sha>/...#L42` for lines)
 - **Issues/PRs**: `#123` shorthand

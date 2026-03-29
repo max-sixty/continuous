@@ -6,6 +6,7 @@ on:
     types: [edited]
   issue_comment:
     types: [created, edited]
+  # Works for same-repo PRs only; secrets unavailable on fork PRs (no _target variant exists)
   pull_request_review_comment:
     types: [created, edited]
 
@@ -137,6 +138,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.BOT_TOKEN }}
           PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}
+
+      - uses: astral-sh/setup-uv@v6
 
       - uses: max-sixty/tend@v1
         with:

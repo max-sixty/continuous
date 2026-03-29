@@ -5,7 +5,7 @@ on:
   workflow_run:
     workflows: ["ci"]
     types: [completed]
-    branches: [main]
+    branches: ["main"]
 
 jobs:
   fix-ci:
@@ -20,10 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.BOT_TOKEN }}
+
+      - uses: astral-sh/setup-uv@v6
 
       - uses: max-sixty/tend@v1
         with:

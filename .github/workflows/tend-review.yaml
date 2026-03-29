@@ -52,6 +52,8 @@ jobs:
           GH_TOKEN: ${{ secrets.BOT_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
 
+      - uses: astral-sh/setup-uv@v6
+
       - uses: max-sixty/tend@v1
         with:
           github_token: ${{ secrets.BOT_TOKEN }}
