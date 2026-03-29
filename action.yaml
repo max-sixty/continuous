@@ -173,7 +173,7 @@ runs:
 
         # Build a one-line reference to the triggering context
         REF=""
-        if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review" ]; then
+        if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
           PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
           REF="#${PR_NUM}"
         elif [ "$GITHUB_EVENT_NAME" = "issues" ] || [ "$GITHUB_EVENT_NAME" = "issue_comment" ]; then
