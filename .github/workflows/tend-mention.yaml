@@ -152,7 +152,7 @@ jobs:
           event_epoch=$(date -d "$EVENT_TS" +%s)
           echo "seconds=$(( $(date +%s) - event_epoch ))" >> "$GITHUB_OUTPUT"
         env:
-          EVENT_TS: ${{ github.event.comment.created_at || github.event.issue.updated_at }}
+          EVENT_TS: ${{ github.event.comment.created_at || github.event.review.submitted_at || github.event.issue.updated_at }}
 
       - uses: max-sixty/tend@v1
         with:
