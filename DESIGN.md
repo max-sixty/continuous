@@ -410,6 +410,38 @@ workflow failure, which is rare enough that overlapping runs are unlikely.
 Nightly and renovate use `schedule` + `workflow_dispatch` — GitHub serializes
 cron-triggered runs, and manual dispatches are infrequent.
 
+### Known limitation: GHA queue depth of 1
+
+GitHub Actions concurrency groups have a pending-queue depth of exactly **one**.
+With `cancel-in-progress: false`, when a third job arrives while one is running
+and one is pending, the **pending job is replaced** (cancelled) by the new
+arrival. The running job is unaffected.
+
+**Can a displaced job's mention be lost?** Yes. Each handle job receives only
+its own triggering comment's URL in the prompt — it does not scan the
+conversation for unprocessed mentions. So if mention B is displaced from the
+queue by mention C, mention B's request is dropped. Mention C processes only
+its own comment.
+
+Example with three `@$bot_name` mentions arriving within seconds on the same PR:
+
+1. Mention A → handle starts running
+2. Mention B → handle queues (pending slot)
+3. Mention C → handle arrives, **displaces B** from pending slot
+4. Result: A processes ✓, B dropped ✗, C processes ✓
+
+This requires three genuine `should_run=true` mentions on the same PR/issue
+within the ~60-second window of handle job startup — uncommon but possible when
+multiple people are active on a PR.
+
+**Mitigation paths** (not yet implemented):
+
+- Have the handle job scan recent conversation for any unprocessed `@$bot_name`
+  mentions (not just its own triggering comment) before responding. This would
+  make the bot self-healing: even if job B is displaced, job C would pick up
+  B's mention when it scans the conversation.
+- Use a workflow-level queue or external coordinator (adds complexity).
+
 ## What lives in the tend repo
 
 ```
