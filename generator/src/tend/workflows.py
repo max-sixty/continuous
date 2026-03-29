@@ -302,12 +302,25 @@ jobs:
           GH_TOKEN: {bt}
           PR_NUMBER: ${{{{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}}}
 {setup}
+      - name: Compute queue delay
+        id: delay
+        run: |
+          event_epoch=$(date -d "$EVENT_TS" +%s)
+          echo "seconds=$(( $(date +%s) - event_epoch ))" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT_TS: ${{{{ github.event.comment.created_at || github.event.issue.updated_at }}}}
+
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
           prompt: >-
+            This job started ${{{{ steps.delay.outputs.seconds }}}}s after the
+            triggering event (over ~40s means it was queued). Before acting,
+            check recent comments: exit silently if the bot already responded
+            to the trigger; handle any other unaddressed comments too.
+
             ${{{{ github.event_name == 'issues'
               && format('An issue was updated with a mention of you ({{0}}). Read it and respond.', github.event.issue.html_url)
               || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@{bn}')
