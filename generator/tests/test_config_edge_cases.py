@@ -284,7 +284,7 @@ def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
     cfg = Config.load(path)
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     review = workflows["tend-review.yaml"]
-    # {1} and {2} are escaped to {{1}} and {{2}} — safe as literals
+    # {1} and {2} are escaped to {{1}} and {{2}} — literals in GHA expressions
     assert "{{1}}" in review.content
     assert "{{2}}" in review.content
 

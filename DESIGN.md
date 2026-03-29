@@ -80,15 +80,11 @@ name: tend-review
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
-  pull_request_review:
-    types: [submitted]
 
 jobs:
   review:
-    if: |
-      (github.event_name == 'pull_request_target' &&
-        github.event.pull_request.draft == false) ||
-      (github.event_name == 'pull_request_review' && ...)
+    if: >-
+      github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

@@ -122,7 +122,8 @@ on:
 
 jobs:
   review:
-    if: github.event.pull_request.draft == false
+    if: >-
+      github.event.pull_request.draft == false
     concurrency:
       group: ${{{{ github.workflow }}}}-${{{{ github.event.pull_request.number }}}}
       cancel-in-progress: true

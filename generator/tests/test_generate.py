@@ -150,14 +150,13 @@ def test_cli_init_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert len(list(wf_dir.glob("tend-*.yaml"))) == 5
 
 
-def test_setup_after_pr_checkout_in_review(tmp_path: Path) -> None:
-    """Setup steps must run after PR checkout, not before."""
+def test_setup_after_checkout_in_review(tmp_path: Path) -> None:
+    """Setup steps must run after checkout, not before."""
     extra = 'setup = [{uses = "./.github/actions/my-setup"}]'
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     review = workflows["tend-review.yaml"]
-    # Setup should come after checkout
-    checkout_idx = review.content.index("actions/checkout@")
+    checkout_idx = review.content.index("actions/checkout@v6")
     setup_idx = review.content.index("./.github/actions/my-setup")
     assert setup_idx > checkout_idx, "Setup must come after checkout"
 
