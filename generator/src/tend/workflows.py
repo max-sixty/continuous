@@ -536,6 +536,12 @@ def generate_renovate(cfg: Config) -> GeneratedWorkflow:
     )
 
 
+def generate_notifications(cfg: Config) -> GeneratedWorkflow:
+    return _generate_scheduled(
+        cfg, "notifications", "*/15 * * * *", "/tend-ci-runner:notifications"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -547,6 +553,7 @@ GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
     "ci-fix": generate_ci_fix,
     "nightly": generate_nightly,
     "renovate": generate_renovate,
+    "notifications": generate_notifications,
 }
 
 

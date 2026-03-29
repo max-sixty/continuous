@@ -9,7 +9,15 @@ from pathlib import Path
 
 import click
 
-KNOWN_WORKFLOWS = {"review", "mention", "triage", "ci-fix", "nightly", "renovate"}
+KNOWN_WORKFLOWS = {
+    "review",
+    "mention",
+    "triage",
+    "ci-fix",
+    "nightly",
+    "renovate",
+    "notifications",
+}
 KNOWN_TOP_LEVEL = {"bot_name", "protected_branches", "secrets", "setup", "workflows"}
 KNOWN_SECRETS_KEYS = {"bot_token", "claude_token", "allowed"}
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
