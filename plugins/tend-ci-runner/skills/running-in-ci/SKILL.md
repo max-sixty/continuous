@@ -354,6 +354,31 @@ confirmed hooks use `{{ target }}` syntax → posted correct example.
 </good>
 </example>
 
+For **behavioral claims** — "X happens when you run Y", "command Z works in
+scenario W" — reading code is not sufficient. Code has conditional branches,
+early returns, and error paths that are easy to miss when tracing mentally.
+Before asserting what a command does in a specific scenario, either find a test
+that exercises that exact scenario or run the command yourself. If neither is
+feasible, hedge: "Based on code reading, I believe X, but I haven't verified
+this end-to-end."
+
+<example>
+<bad reason="Traced one code path but missed a guard clause in a called function">
+
+Bad: Read `CommandEnv::for_action("commit", config)` → saw it constructs an
+env → concluded `wt step commit` works in a detached worktree. Missed that
+`for_action()` calls `require_current_branch()`, which errors on detached HEAD.
+
+</bad>
+<good reason="Built and tested the actual behavior before claiming">
+
+Good: Read `for_action()` → noticed it calls `require_current_branch()` →
+uncertain whether detached HEAD hits that path → ran `cargo build && wt step
+commit` in a detached worktree → confirmed the error → posted accurate answer.
+
+</good>
+</example>
+
 When a project has user-facing documentation (a docs site, `--help` pages, a
 wiki), link to it. A link to the relevant docs page is more useful than a
 paraphrased explanation — and finding the link forces verifying the claim.
