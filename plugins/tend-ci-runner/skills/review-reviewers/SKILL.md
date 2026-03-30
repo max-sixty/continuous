@@ -58,12 +58,34 @@ Rate the proposed change:
 needs less justification than a new paragraph. Prefer small, targeted fixes over
 broad rewrites.
 
+### Structural vs. stochastic failures
+
+Before applying the gates, classify each failure:
+
+- **Structural**: the failure has a deterministic cause that guidance can
+  prevent — e.g., "the checkout differs between `pull_request_target` and
+  `issue_comment` events, so grepping always finds stale content." These
+  failures will recur every time the same conditions arise. One clear
+  occurrence is sufficient evidence for a targeted fix.
+
+- **Stochastic**: the failure is a probabilistic model behavior — e.g., "the
+  model was too agreeable when challenged" or "the model forgot to check X."
+  The same model might handle the next identical situation correctly without
+  any guidance change. These need significantly more evidence (5+ occurrences)
+  because adding guidance for a one-off stochastic lapse adds noise that can
+  degrade performance on other tasks.
+
+The test: "If I replayed this exact scenario 10 times, would the failure
+occur every time (structural) or only sometimes (stochastic)?" When in doubt,
+classify as stochastic and wait for more evidence.
+
 ### Applying the gates
 
 For each finding, state:
 1. The evidence level and occurrence count (current hour + historical)
-2. The proposed change type
-3. Whether it passes both gates
+2. Whether the failure is structural or stochastic
+3. The proposed change type
+4. Whether it passes both gates
 
 Only proceed to Step 5 for findings that pass both gates.
 
