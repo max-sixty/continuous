@@ -108,6 +108,28 @@ def test_branch_protection_no_gh() -> None:
     assert result.passed is None
 
 
+def test_branch_protected_ruleset_inconclusive_skips() -> None:
+    """Branch is protected, no reviews, ruleset check inconclusive → SKIP not FAIL."""
+    protection_data = json.dumps(
+        {"required_pull_request_reviews": {"required_approving_review_count": 0}}
+    )
+
+    def fake_gh(*args, **kwargs):
+        url = args[1]
+        if url == "repos/owner/repo/branches/main" and ".protected" in args:
+            return _make_completed("true\n")
+        if "rules/branches" in url:
+            return _make_completed(returncode=1, stderr="HTTP 403")
+        if "branches/main/protection" in url:
+            return _make_completed(protection_data)
+        return _make_completed(returncode=1)
+
+    with patch("tend.checks._gh", side_effect=fake_gh):
+        result = check_branch_protection("owner/repo", "main")
+    assert result.passed is None
+    assert "could not verify rulesets" in result.message
+
+
 def test_branch_protection_result_name_includes_branch() -> None:
     """Each branch gets a distinct check name for identification."""
     with patch("tend.checks._gh", return_value=_make_completed("false\n")):
@@ -150,27 +172,27 @@ def test_update_rule_among_others() -> None:
 
 
 def test_branch_rules_api_error() -> None:
-    """API error → False (graceful degradation)."""
+    """API error → None (inconclusive)."""
     with patch(
         "tend.checks._gh",
         return_value=_make_completed(returncode=1, stderr="Not Found"),
     ):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is False
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
 
 
 def test_branch_rules_no_gh() -> None:
-    """gh CLI not found → False."""
+    """gh CLI not found → None (can't check either endpoint)."""
     with patch("tend.checks._gh", return_value=None):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is False
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
 
 
 def test_branch_rules_non_list_response() -> None:
-    """API returns a JSON object instead of an array → False."""
+    """API returns a JSON object instead of an array → None."""
     with patch(
         "tend.checks._gh",
         return_value=_make_completed('{"message": "Not Found"}'),
     ):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is False
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
 
 
 # ---------------------------------------------------------------------------

@@ -87,7 +87,8 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
 
     # Branch is protected — now check if the bot can still merge.
     # A restrict-updates ruleset is sufficient (and preferred).
-    if _has_restrict_updates_ruleset(repo, branch):
+    ruleset = _has_restrict_updates_ruleset(repo, branch)
+    if ruleset is True:
         return CheckResult(
             name,
             True,
@@ -116,6 +117,16 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
             f"Branch '{branch}' is protected (requires reviews)",
         )
 
+    # Neither required reviews nor a confirmed restrict-updates ruleset.
+    if ruleset is None:
+        # Ruleset check was inconclusive — don't false-positive.
+        return CheckResult(
+            name,
+            None,
+            f"Branch '{branch}' is protected but could not verify rulesets "
+            "(insufficient API permissions). Check rulesets manually.",
+        )
+
     return CheckResult(
         name,
         False,
@@ -126,23 +137,23 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
     )
 
 
-def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool:
+def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool | None:
     """Check if any active ruleset restricts updates to the branch.
 
-    Uses the branch rules endpoint, which returns the effective rules
-    for a branch with all pattern matching resolved by GitHub.  The list
-    endpoint (``/repos/{repo}/rulesets``) omits ``rules`` and ``conditions``,
-    so we query the per-branch endpoint instead.
+    Returns True if found, False if confirmed absent, None if unable to check.
+
+    Uses the per-branch rules endpoint which resolves patterns like
+    ~DEFAULT_BRANCH.
     """
     result = _gh("api", f"repos/{repo}/rules/branches/{branch}")
     if result is None or result.returncode != 0:
-        return False
+        return None
     try:
         rules = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError):
-        return False
+        return None
     if not isinstance(rules, list):
-        return False
+        return None
     return any(r.get("type") == "update" for r in rules)
 
 
