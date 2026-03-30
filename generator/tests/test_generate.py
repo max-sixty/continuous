@@ -208,39 +208,18 @@ def test_setup_raw_interleaved_with_steps(tmp_path: Path) -> None:
         assert uses_idx < raw_idx < run_idx, f"{wf.filename}: wrong order"
 
 
-def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
-    """pull_request_review (submitted) must be covered by tend-mention so the bot
-    responds when a reviewer submits a formal review on an engaged PR."""
+def test_mention_no_pull_request_review_trigger(tmp_path: Path) -> None:
+    """tend-mention must NOT listen for pull_request_review events — reviews on
+    bot PRs are handled by tend-review, and duplicating the trigger causes
+    duplicate replies (#91)."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
     data = yaml.safe_load(mention.content)
 
-    # Event trigger present
-    assert "pull_request_review" in data[True], (
-        "tend-mention must listen for pull_request_review events"
+    assert "pull_request_review" not in data[True], (
+        "tend-mention must not listen for pull_request_review events"
     )
-    assert data[True]["pull_request_review"] == {"types": ["submitted"]}
-
-    # Verify job filters on reviewer identity
-    verify_if = data["jobs"]["verify"]["if"]
-    assert "pull_request_review" in verify_if
-    assert "github.event.review.user.login" in verify_if
-
-    # Handle job checks out PR branch for this event
-    handle_steps = data["jobs"]["handle"]["steps"]
-    checkout_step = next(
-        s for s in handle_steps if s.get("name") == "Check out PR branch"
-    )
-    assert "pull_request_review" in checkout_step["if"]
-
-    # Prompt includes review-specific branches
-    tend_step = next(
-        s for s in handle_steps if s.get("uses", "").startswith("max-sixty/tend@")
-    )
-    prompt = tend_step["with"]["prompt"]
-    assert "github.event.review.html_url" in prompt
-    assert "github.event.review.body" in prompt
 
 
 def test_mention_verify_no_concurrency(tmp_path: Path) -> None:
@@ -272,26 +251,15 @@ def test_mention_handle_job_queues_not_cancels(tmp_path: Path) -> None:
     )
 
 
-def test_mention_skips_review_comment_on_bot_pr_unless_mentioned(
-    tmp_path: Path,
-) -> None:
-    """On bot-authored PRs, tend-review handles review comments.
-
-    tend-mention should skip pull_request_review_comment events on bot PRs
-    (unless the comment @mentions the bot) to avoid duplicate replies — #91.
-    """
+def test_mention_review_comment_trigger_present(tmp_path: Path) -> None:
+    """pull_request_review_comment must still be a trigger on tend-mention."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
     data = yaml.safe_load(mention.content)
-    verify_if = data["jobs"]["verify"]["if"]
 
-    # The condition for pull_request_review_comment must exclude non-mention
-    # comments on bot-authored PRs. It should require either an @mention of
-    # the bot OR that the PR is not bot-authored.
-    assert "pull_request.user.login" in verify_if, (
-        "verify job if-condition must check PR author to avoid "
-        "racing with tend-review on bot-authored PRs"
+    assert "pull_request_review_comment" in data[True], (
+        "tend-mention must listen for pull_request_review_comment events"
     )
 
 

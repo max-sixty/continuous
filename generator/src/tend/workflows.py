@@ -174,8 +174,6 @@ on:
   issue_comment:
     types: [created, edited]
   # Works for same-repo PRs only; secrets unavailable on fork PRs (no _target variant exists)
-  pull_request_review:
-    types: [submitted]
   pull_request_review_comment:
     types: [created, edited]
 
@@ -188,11 +186,7 @@ jobs:
       (github.event_name == 'issue_comment' &&
         github.event.comment.user.login != '{bn}') ||
       (github.event_name == 'pull_request_review_comment' &&
-        github.event.comment.user.login != '{bn}' &&
-        (contains(github.event.comment.body, '@{bn}') ||
-         github.event.pull_request.user.login != '{bn}')) ||
-      (github.event_name == 'pull_request_review' &&
-        github.event.review.user.login != '{bn}')
+        github.event.comment.user.login != '{bn}')
     runs-on: ubuntu-24.04
     outputs:
       should_run: ${{{{ steps.check.outputs.should_run }}}}
@@ -256,7 +250,7 @@ jobs:
         env:
           GH_TOKEN: {bt}
           EVENT_NAME: ${{{{ github.event_name }}}}
-          COMMENT_BODY: ${{{{ github.event.comment.body || github.event.review.body }}}}
+          COMMENT_BODY: ${{{{ github.event.comment.body }}}}
           ISSUE_BODY: ${{{{ github.event.issue.body }}}}
           ISSUE_OR_PR_NUMBER: ${{{{ github.event.issue.number }}}}
           ISSUE_AUTHOR: ${{{{ github.event.issue.user.login }}}}
@@ -296,8 +290,7 @@ jobs:
       - name: Check out PR branch
         if: |
           (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
-          github.event_name == 'pull_request_review_comment' ||
-          github.event_name == 'pull_request_review'
+          github.event_name == 'pull_request_review_comment'
         run: |
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
           if [ "$PR_STATE" = "OPEN" ]; then
@@ -319,7 +312,7 @@ jobs:
           event_epoch=$(date -d "$EVENT_TS" +%s)
           echo "seconds=$(( $(date +%s) - event_epoch ))" >> "$GITHUB_OUTPUT"
         env:
-          EVENT_TS: ${{{{ github.event.comment.created_at || github.event.review.submitted_at || github.event.issue.updated_at }}}}
+          EVENT_TS: ${{{{ github.event.comment.created_at || github.event.issue.updated_at }}}}
 
       - uses: max-sixty/tend@v1
         with:
@@ -339,10 +332,6 @@ jobs:
                 && format('You were mentioned in an inline review comment on PR #{{0}} ({{1}}, review comment ID {{2}}). Read the full PR context (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push. Reply in the review thread using `gh api repos/{{3}}/pulls/{{0}}/comments/{{2}}/replies -f body="..."` — do not create a new top-level comment.', {pr}, github.event.comment.html_url, github.event.comment.id, github.repository))
               || (github.event_name == 'pull_request_review_comment'
                 && format('A user left an inline review comment on a PR where you previously participated (PR #{{0}}, {{1}}, review comment ID {{2}}). Read the full context. Only respond if the comment is directed at you or requests changes. Reply in the review thread using `gh api repos/{{3}}/pulls/{{0}}/comments/{{2}}/replies -f body="..."`.', {pr}, github.event.comment.html_url, github.event.comment.id, github.repository))
-              || (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@{bn}')
-                && format('A review was submitted on PR #{{0}} that mentions you ({{1}}). Read the review and full PR context (description, diff, comments, CI status), then respond. If changes were requested, make them, commit, and push.', github.event.pull_request.number, github.event.review.html_url))
-              || (github.event_name == 'pull_request_review'
-                && format('A review was submitted on a PR where you previously participated (PR #{{0}}, {{1}}). Read the review and full PR context. If the review requests changes or asks questions, respond appropriately. If the review approves or is between humans, exit silently.', github.event.pull_request.number, github.event.review.html_url))
               || (contains(github.event.comment.body, '@{bn}')
                 && format('You were mentioned in a comment ({{0}}). Read the full issue or PR (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. A comment that responds to concerns you raised in a review is directed at you — briefly acknowledge that the concerns are resolved (or explain why they are not). If the conversation is between humans, exit silently.', github.event.comment.html_url)
