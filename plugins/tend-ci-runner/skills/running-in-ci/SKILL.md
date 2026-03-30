@@ -362,20 +362,6 @@ If you can't find source evidence for a specific detail, say so ("I'm not sure
 of the exact syntax") rather than guessing. An honest gap is fixable; a
 confident hallucination gets copy-pasted.
 
-### Re-verify before conceding
-
-When a user challenges a claim you made in a prior review or comment, do not
-accept the correction at face value. Re-examine the original evidence before
-changing your position — re-read the file, re-run the command, re-check the
-API. If your current checkout differs from the one where you made the original
-claim (e.g., you reviewed on the base branch via `pull_request_target` but are
-now on the PR branch via `issue_comment`), verify against the same source you
-originally used, not the local checkout.
-
-A correct finding abandoned under social pressure wastes more time than holding
-the position: the maintainer still has to file a follow-up fix for the issue
-you already found.
-
 ## Tone
 
 Raise observations, don't assign work. Never create checklists or task lists
