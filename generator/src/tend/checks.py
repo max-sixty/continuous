@@ -10,7 +10,6 @@ gh is unavailable or the token lacks permission.
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import shutil
 import subprocess
@@ -63,15 +62,12 @@ def detect_default_branch(repo: str) -> str | None:
     return None
 
 
-def check_branch_protection(
-    repo: str, branch: str, *, default_branch: str | None = None
-) -> CheckResult:
+def check_branch_protection(repo: str, branch: str) -> CheckResult:
     """Check if a branch is protected against bot merges.
 
     Checks both that the branch is protected and that the protection actually
     prevents the bot from merging (via required reviews or a restrict-updates
-    ruleset). Pass ``default_branch`` so ``~DEFAULT_BRANCH`` ruleset patterns
-    can be resolved.
+    ruleset).
     """
     name = f"branch-protection:{branch}"
     result = _gh("api", f"repos/{repo}/branches/{branch}", "--jq", ".protected")
@@ -91,7 +87,7 @@ def check_branch_protection(
 
     # Branch is protected — now check if the bot can still merge.
     # A restrict-updates ruleset is sufficient (and preferred).
-    if _has_restrict_updates_ruleset(repo, branch, default_branch=default_branch):
+    if _has_restrict_updates_ruleset(repo, branch):
         return CheckResult(
             name,
             True,
@@ -130,55 +126,24 @@ def check_branch_protection(
     )
 
 
-def _has_restrict_updates_ruleset(
-    repo: str, branch: str, *, default_branch: str | None = None
-) -> bool:
+def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool:
     """Check if any active ruleset restricts updates to the branch.
 
-    Fetches rulesets and checks whether their ``conditions.ref_name.include``
-    patterns actually cover ``branch``. Supports ``~DEFAULT_BRANCH``, ``~ALL``,
-    exact refs, and fnmatch glob patterns.
+    Uses the branch rules endpoint, which returns the effective rules
+    for a branch with all pattern matching resolved by GitHub.  The list
+    endpoint (``/repos/{repo}/rulesets``) omits ``rules`` and ``conditions``,
+    so we query the per-branch endpoint instead.
     """
-    result = _gh(
-        "api",
-        f"repos/{repo}/rulesets",
-        "--jq",
-        '[.[] | select(.enforcement == "active" and .target == "branch" and (.rules[]? | .type == "update"))]',
-    )
+    result = _gh("api", f"repos/{repo}/rules/branches/{branch}")
     if result is None or result.returncode != 0:
         return False
     try:
-        rulesets = json.loads(result.stdout)
+        rules = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError):
         return False
-
-    ref = f"refs/heads/{branch}"
-    for ruleset in rulesets:
-        conditions = ruleset.get("conditions") or {}
-        ref_name = conditions.get("ref_name") or {}
-        include = ref_name.get("include") or []
-        exclude = ref_name.get("exclude") or []
-        if _ref_matches_patterns(
-            ref, include, default_branch
-        ) and not _ref_matches_patterns(ref, exclude, default_branch):
-            return True
-    return False
-
-
-def _ref_matches_patterns(
-    ref: str, patterns: list[str], default_branch: str | None
-) -> bool:
-    """Check if a ref matches any GitHub ruleset pattern."""
-    for pattern in patterns:
-        if pattern == "~ALL":
-            return True
-        if pattern == "~DEFAULT_BRANCH":
-            if default_branch and ref == f"refs/heads/{default_branch}":
-                return True
-            continue
-        if fnmatch.fnmatch(ref, pattern):
-            return True
-    return False
+    if not isinstance(rules, list):
+        return False
+    return any(r.get("type") == "update" for r in rules)
 
 
 def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
@@ -443,14 +408,10 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
         cfg.allowed_repo_secrets
     )
 
-    results = [
-        check_branch_protection(repo, default_branch, default_branch=default_branch)
-    ]
+    results = [check_branch_protection(repo, default_branch)]
     for branch in cfg.protected_branches:
         if branch != default_branch:
-            results.append(
-                check_branch_protection(repo, branch, default_branch=default_branch)
-            )
+            results.append(check_branch_protection(repo, branch))
     results.append(check_bot_permission(repo, cfg.bot_name))
     results.append(check_secrets(repo, [cfg.bot_token_secret, cfg.claude_token_secret]))
     results.append(check_repo_secret_allowlist(repo, allowed))
