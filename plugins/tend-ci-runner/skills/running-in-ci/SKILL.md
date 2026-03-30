@@ -187,12 +187,9 @@ Reply in context rather than creating new top-level comments:
 
 ## Recheck Before Posting
 
-Long-running tasks (triage, review, CI diagnosis) can take minutes. By the time you're ready to
-comment, new discussion may have arrived that changes the context — a human may have already
-answered, the author may have pushed a fix, or new information may make your response redundant or
-wrong.
-
-**Before posting any comment or review**, re-fetch the current conversation state:
+**Before posting any comment or review**, re-fetch the current conversation state. Other
+participants may comment while you work — even in short sessions, context can change between when
+you read a thread and when you reply:
 
 ```bash
 # For issues
