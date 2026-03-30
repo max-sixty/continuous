@@ -73,7 +73,25 @@ For each unread notification (oldest first):
 
 ### 4a. Determine if already handled
 
-Check whether the bot has already responded since the notification was
+**Check for concurrent `tend-mention` runs.** For notifications about
+issue/PR comments in `$GITHUB_REPOSITORY`, the `issue_comment` event also
+triggers `tend-mention`. If a `tend-mention` run started after the
+notification's `updated_at`, that workflow is already handling it — mark as
+read and skip to avoid duplicate responses and conflicting pushes.
+
+```bash
+# Check for tend-mention runs triggered after the notification
+RECENT_MENTION=$(gh run list --workflow tend-mention --limit 5 \
+  --json databaseId,status,createdAt \
+  --jq "[.[] | select(.createdAt > \"$NOTIF_UPDATED_AT\")] | length")
+if [ "$RECENT_MENTION" -gt 0 ]; then
+  # tend-mention is handling this — skip
+  gh api notifications/threads/{thread_id} -X PATCH
+  continue
+fi
+```
+
+**Check whether the bot has already responded** since the notification was
 generated:
 
 ```bash
