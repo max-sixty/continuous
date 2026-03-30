@@ -228,17 +228,25 @@ Create `.claude/skills/running-tend/SKILL.md` with tend-specific project
 guidance. This skill is loaded by tend workflows alongside the generic
 `tend-*` skills.
 
-**Do NOT duplicate CLAUDE.md.** The overlay should only contain information
-that tend workflows need beyond what CLAUDE.md already provides:
+**Do NOT duplicate CLAUDE.md** and **do NOT invent project conventions.**
 
-- PR title conventions (prefix format, scope rules)
-- CI workflow names (which workflow tend-ci-fix watches)
-- Automerge behavior (which bot PRs get auto-merged)
-- Dependency management (Dependabot vs Renovate, tend-renovate enabled/disabled)
+Ask the user whether they have tend-specific preferences that differ
+from defaults. Examples of things that vary between projects:
 
-Build commands, test commands, error conventions, code style, and project
-structure belong in CLAUDE.md — tend reads CLAUDE.md like any other Claude
-session.
+- PR title format (e.g., conventional commits, Jira ticket prefix)
+- Labels the bot should apply to its PRs
+- Review request routing (specific teams or people)
+- Target branch if not the default branch
+
+If the user has preferences, add them. Otherwise create a placeholder:
+
+```markdown
+No project-specific tend preferences yet. Add guidance here as
+needed — this file is loaded by tend workflows alongside CLAUDE.md.
+```
+
+Build commands, test commands, code style, and project structure belong
+in CLAUDE.md — tend reads it like any other Claude session.
 
 ## 9. Commit and push
 

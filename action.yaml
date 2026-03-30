@@ -160,6 +160,50 @@ runs:
           --allowedTools ${{ inputs.allowed_tools }}
           --append-system-prompt "${{ inputs.system_prompt_append }}"
 
+    - name: Report failure
+      if: failure() && steps.claude.outcome == 'failure'
+      shell: bash
+      run: |
+        LABEL="tend-outage"
+        TITLE="Bot temporarily unavailable"
+        RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+        # Find existing open tracking issue
+        EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
+
+        # Build a one-line reference to the triggering context
+        REF=""
+        if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
+          PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
+          REF="#${PR_NUM}"
+        elif [ "$GITHUB_EVENT_NAME" = "issues" ] || [ "$GITHUB_EVENT_NAME" = "issue_comment" ]; then
+          ISSUE_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+          REF="#${ISSUE_NUM}"
+        elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+          REF="CI fix for workflow run"
+        fi
+
+        TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        if [ -n "$EXISTING" ]; then
+          # Append to existing tracking issue
+          printf 'Failed run at %s: [workflow run](%s)%s\n' \
+            "$TIMESTAMP" "$RUN_URL" "${REF:+ (triggered by ${REF})}" > /tmp/comment.md
+          gh issue comment "$EXISTING" -F /tmp/comment.md
+        else
+          # Create new tracking issue
+          gh label create "$LABEL" --description "Tracks bot outage incidents" --color "d93f0b" 2>/dev/null || true
+          printf '%s\n\n%s\n%s\n%s\n\n%s\n' \
+            "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
+            "| When | Run | Trigger |" \
+            "|------|-----|---------|" \
+            "| ${TIMESTAMP} | [workflow run](${RUN_URL}) | ${REF:-N/A} |" \
+            "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
+          gh issue create --title "$TITLE" --label "$LABEL" -F /tmp/body.md
+        fi
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+
     - name: Compute artifact name
       if: always()
       id: artifact

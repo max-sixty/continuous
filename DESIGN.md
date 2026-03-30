@@ -80,15 +80,11 @@ name: tend-review
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
-  pull_request_review:
-    types: [submitted]
 
 jobs:
   review:
-    if: |
-      (github.event_name == 'pull_request_target' &&
-        github.event.pull_request.draft == false) ||
-      (github.event_name == 'pull_request_review' && ...)
+    if: >-
+      github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -341,39 +337,100 @@ us with code execution, not just token minting.
   under adopter control but adds latency (webhook → our service →
   workflow_dispatch → runner) and complexity.
 
-## Concurrency strategy
+## Concurrency and filtering
 
-Every event-driven workflow uses `cancel-in-progress: true` — when a new event
-arrives for the same PR/issue while a previous run is still going, the old run
-is cancelled and only the latest event is processed.
+Events pass through up to three filtering layers before the bot does work.
+Each layer can drop an event; this section documents where and why.
 
-| Workflow | Group key | Scope |
-|----------|-----------|-------|
-| review | `workflow-event_name-PR#` | per PR, split by event type |
-| mention (verify) | none | stateless, completes in seconds |
-| mention (handle) | `workflow-handle-issue#` | per issue/PR |
-| triage | `workflow-issue#` | per issue |
-| ci-fix | none | only fires on failure, rare overlap |
-| nightly / renovate | none | scheduled, single instance |
+### Layer 1: GHA job `if:` conditions
 
-**Why cancel-in-progress:** The cancelled run was processing a stale event. A
-new push invalidates the old review, a new comment supersedes the old mention,
-a re-opened issue supersedes the old triage. The alternative —
-`cancel-in-progress: false` — queues the old run to complete, but it produces
-a response based on outdated context.
+GitHub Actions evaluates these before the job starts. A false condition means
+the job is **skipped** — it never runs, never enters a concurrency group, and
+consumes no resources.
 
-**Tradeoff — wasted work:** A handle job that has been running for 20 minutes
-gets killed when a new event arrives. The work is lost. This is acceptable
-because the response it was composing was based on an older state. For mention,
-where each comment is arguably independent, queueing (`cancel-in-progress:
-false`) could preserve work but risks posting stale or duplicate responses —
-the exact problem that motivated adding concurrency control (#61).
+| Workflow | Event | Runs when | Skips |
+|----------|-------|-----------|-------|
+| **review** | `pull_request_target` | PR is not a draft | Draft PRs |
+| **mention** (verify) | `issues` (edited) | Issue body contains `@$bot_name` and editor is not bot | Bot's own edits; edits that don't mention bot |
+| **mention** (verify) | `issue_comment` | Comment author is not bot | Bot's own comments (prevents loops) |
+| **mention** (verify) | `pull_request_review_comment` | Comment author is not bot | Bot's own inline comments |
+| **mention** (verify) | `pull_request_review` (submitted) | Reviewer is not bot | Bot's own reviews |
+| **mention** (handle) | — | Verify job output `should_run == true` | Events where verify determined no engagement (Layer 2) |
+| **triage** | `issues` (opened) | Issue author is not bot | Bot-opened issues (prevents self-triage loop) |
+| **ci-fix** | `workflow_run` | Triggering workflow concluded with failure | Successful CI runs |
 
-**Workflows without concurrency groups:** ci-fix, nightly, and renovate don't
-need them. ci-fix triggers on workflow failure, which is rare enough that
-overlapping runs are unlikely. Nightly and renovate are scheduled with
-`workflow_dispatch` — GitHub already serializes cron-triggered runs, and manual
-dispatches are infrequent.
+### Layer 2: Custom `should_run` logic (mention only)
+
+The mention workflow has a lightweight **verify** job that checks whether the
+bot should engage, before the expensive **handle** job runs. The verify job
+outputs `should_run=true` or `should_run=false` based on these checks (in
+order):
+
+1. **Issue edits** (`issues` event): always `true` (the GHA condition already
+   confirmed `@$bot_name` is in the body).
+2. **Direct mention**: comment or review body contains `@$bot_name` → `true`.
+3. **Non-mention on an issue** (not a PR): bot authored the issue, or `@$bot_name`
+   appears in the issue body, or bot has previously commented → `true`.
+   Otherwise → `false`.
+4. **Non-mention on a PR**: bot authored the PR, or bot left reviews, or bot
+   commented → `true`. Otherwise → `false`.
+
+The handle job's `if: needs.verify.outputs.should_run == 'true'` is a GHA
+condition (Layer 1), but the _decision_ is made by our custom script. A
+skipped handle job never enters the concurrency group — this is critical for
+the rapid-comment scenario (see below).
+
+### Layer 3: Concurrency groups
+
+| Workflow | Job | Group key | Cancel | Behavior |
+|----------|-----|-----------|--------|----------|
+| **review** | review | `workflow-PR#` | yes | New push cancels in-flight review (stale context) |
+| **mention** | verify | none | — | Stateless, fast; parallel runs are harmless |
+| **mention** | handle | `workflow-handle-issue#\|PR#` | **no** | Queues — each mention runs to completion (#93) |
+| **triage** | triage | `workflow-issue#` | yes | Re-opened/rapid edits: latest wins |
+| **ci-fix** | — | none | — | Rare overlap (failure-triggered) |
+| **nightly** | — | none | — | Scheduled; GitHub serializes cron |
+| **weekly** | — | none | — | Scheduled; GitHub serializes cron |
+
+### Design rationale
+
+**Cancel-in-progress: true** (review, triage): the cancelled run was
+processing stale context. A new push invalidates a review, a new comment
+supersedes triage — no work is lost.
+
+**Cancel-in-progress: false** (mention handle): each `@$bot_name` mention is an
+independent request. Cancelling a 20-minute handle run because a second mention
+arrived loses work. Queuing ensures every mention is processed. The key insight
+is that a `should_run=false` handle is **skipped entirely** (Layer 1) and never
+enters the queue, so non-mention comments can't displace real mentions. Only
+genuine `should_run=true` handles queue against each other — the correct
+behavior (#93).
+
+**No concurrency group** (ci-fix, nightly, weekly): ci-fix triggers on
+workflow failure, which is rare enough that overlapping runs are unlikely.
+Nightly and weekly use `schedule` + `workflow_dispatch` — GitHub serializes
+cron-triggered runs, and manual dispatches are infrequent.
+
+### Known limitation: GHA queue depth of 1
+
+GitHub Actions concurrency groups have a pending-queue depth of exactly **one**.
+With `cancel-in-progress: false`, when a third job arrives while one is running
+and one is pending, the **pending job is replaced** (cancelled) by the new
+arrival. The running job is unaffected.
+
+**Mitigation — conversation-aware loading:**
+
+The prompt preamble instructs the skill to check recent conversation before
+acting:
+
+1. **Dedup**: If the bot already responded to the triggering comment, exit
+   silently.
+2. **Self-heal**: If other comments warrant a response but have no bot reply,
+   handle those too — oldest first.
+
+The workflow injects the **queue-to-run time delta** (seconds between event
+timestamp and job start) into the prompt. Over ~40s indicates the job was
+queued behind another run, making conversation drift more likely.
 
 ## What lives in the tend repo
 
@@ -382,24 +439,26 @@ tend/
 ├── .claude-plugin/
 │   └── marketplace.json        # Lists both plugins
 ├── plugins/
-│   ├── install-tend/           # User-facing plugin (setup skill)
+│   ├── install-tend/           # User-facing plugin (setup + debug skills)
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json
 │   │   └── skills/
+│   │       ├── debug-ci-session/
 │   │       └── install-tend/
-│   └── tend/                   # CI plugin (all CI skills)
+│   └── tend-ci-runner/         # CI plugin (all CI skills)
 │       ├── .claude-plugin/
 │       │   └── plugin.json
+│       ├── scripts/            # Helper scripts (survey, run listing)
 │       └── skills/
-│           ├── tend-running-in-ci/
-│           ├── tend-review/
-│           ├── tend-triage/
-│           ├── tend-ci-fix/
-│           ├── tend-nightly/
-│           ├── tend-renovate/
-│           └── tend-review-reviewers/
+│           ├── ci-fix/
+│           ├── nightly/
+│           ├── notifications/
+│           ├── review/
+│           ├── review-reviewers/
+│           ├── running-in-ci/
+│           ├── triage/
+│           └── weekly/
 ├── action.yaml                 # Composite action (the interface)
-├── scripts/                    # Helper scripts installed by the action
 ├── generator/                  # Python package (uvx tend init)
 │   ├── pyproject.toml
 │   └── src/tend/

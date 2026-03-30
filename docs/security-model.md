@@ -32,7 +32,7 @@ Three things an attacker wants, roughly in order of severity:
 
 The attack surface varies by workflow. `tend-review` is the most exposed —
 the attacker controls the entire PR diff, which Claude reads and reasons
-about. `tend-renovate` is the least exposed — triggered on a cron with no
+about. `tend-weekly` is the least exposed — triggered on a cron with no
 user-controlled input.
 
 | Workflow | Injection surface | Attacker control | Mitigations |
@@ -41,7 +41,7 @@ user-controlled input.
 | **triage** | Issue body | Partial (structured skill) | Fixed prompt, merge restriction, environment protection |
 | **mention** | Comment body on any issue/PR | Full | Fixed prompt, merge restriction, engagement verification |
 | **ci-fix** | Failed CI logs | Minimal (must break CI on default branch) | Fixed prompt, automatic trigger |
-| **renovate** | None | None | Fixed prompt, scheduled trigger |
+| **weekly** | None | None | Fixed prompt, scheduled trigger |
 
 ## What we do
 

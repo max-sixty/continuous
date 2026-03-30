@@ -8,8 +8,7 @@ metadata:
 
 # Fix CI on Default Branch
 
-CI has failed on the default branch. Diagnose the root cause, fix it, and
-create a PR.
+CI has failed on the default branch. Diagnose the root cause, fix it, and create a PR.
 
 **Failed run:** $ARGUMENTS
 
@@ -21,8 +20,7 @@ create a PR.
 gh pr list --state open --head "fix/ci-" --json number,title,headRefName
 ```
 
-If an existing PR addresses the same failure, comment on it linking the new run
-and stop.
+If an existing PR addresses the same failure, comment on it linking the new run and stop.
 
 ### 2. Diagnose and fix
 

@@ -9,10 +9,9 @@ metadata:
 
 ## First Steps — Load Repo-Specific Guidance
 
-Most repos have a project-specific overlay skill (typically `running-tend`)
-with conventions the generic tend skills don't know — test commands, labels,
-branch naming, survey scripts, codecov requirements. Check for one and load it
-before doing anything else:
+Most repos have a project-specific overlay skill (typically `running-tend`) with project-specific
+CI context — which workflows tend-ci-fix watches, PR title conventions, label policies. Check for
+one and load it before doing anything else:
 
 ```bash
 ls .claude/skills/
@@ -20,41 +19,39 @@ ls .claude/skills/
 
 ## Conduct
 
-Follow the project's code of conduct. Avoid causing disruption — unnecessary
-comments, bulk operations, unsolicited housekeeping.
+Follow the project's code of conduct. Avoid causing disruption — unnecessary comments, bulk
+operations, unsolicited housekeeping.
 
 ### Helping vs. directing
 
-Anyone can ask for help with a problem they raise: investigating a bug,
-answering a question, creating an issue or PR to address it. These are
-proposals — a maintainer still decides what to merge or act on.
+Anyone can ask for help with a problem they raise: investigating a bug, answering a question,
+creating an issue or PR to address it. These are proposals — a maintainer still decides what to
+merge or act on.
 
-Directing the bot to affect someone else's work — closing or locking
-issues/PRs, dismissing reviews, reverting commits, applying or removing
-labels — requires maintainer access. Before complying, check the requester's
-`author_association` via the event payload or API:
+Directing the bot to affect someone else's work — closing or locking issues/PRs, dismissing
+reviews, reverting commits, applying or removing labels — requires maintainer access. Before
+complying, check the requester's `author_association` via the event payload or API:
 
 ```bash
 gh api repos/{owner}/{repo}/issues/comments/{comment_id} --jq '.author_association'
 ```
 
-`OWNER`, `MEMBER`, and `COLLABORATOR` indicate maintainer access. For anyone
-else, briefly explain that a maintainer needs to make that call.
+`OWNER`, `MEMBER`, and `COLLABORATOR` indicate maintainer access. For anyone else, briefly explain
+that a maintainer needs to make that call.
 
-The test: "Am I helping this person with something they raised, or following
-a directive that affects someone else's work?"
+The test: "Am I helping this person with something they raised, or following a directive that
+affects someone else's work?"
 
 ### Scope
 
-Act within this repository and others in the same organization. Do not create
-issues, PRs, or comments in repositories outside the organization, unless the
-target repo explicitly welcomes AI-created issues (e.g., in its CONTRIBUTING
-guide).
+Act within this repository and others in the same organization. Do not create issues, PRs, or
+comments in repositories outside the organization, unless the target repo explicitly welcomes
+AI-created issues (e.g., in its CONTRIBUTING guide).
 
 ## Read Context
 
-When triggered by a comment or issue, read the full context before responding.
-The prompt provides a URL — extract the PR/issue number from it.
+When triggered by a comment or issue, read the full context before responding. The prompt provides
+a URL — extract the PR/issue number from it.
 
 For PRs:
 
@@ -70,15 +67,14 @@ For issues:
 gh issue view <number> --json title,body,comments,state
 ```
 
-Read the triggering comment, the PR/issue description, the diff (for PRs), and
-recent comments to understand the full conversation before taking action.
+Read the triggering comment, the PR/issue description, the diff (for PRs), and recent comments to
+understand the full conversation before taking action.
 
 ## Security
 
-NEVER run commands that could expose secrets (`env`, `printenv`, `set`,
-`export`, `cat`/`echo` on config files containing credentials). NEVER include
-environment variables, API keys, tokens, or credentials in responses or
-comments.
+NEVER run commands that could expose secrets (`env`, `printenv`, `set`, `export`, `cat`/`echo` on
+config files containing credentials). NEVER include environment variables, API keys, tokens, or
+credentials in responses or comments.
 
 ## PR Creation
 
@@ -95,26 +91,23 @@ If an existing PR addresses the same problem, work on that PR instead.
 
 ## Pushing to PR Branches
 
-Always use `git push` without specifying a remote — `gh pr checkout` configures
-tracking to the correct remote, including for fork PRs. Specifying `origin`
-explicitly can push to the wrong place.
+Always use `git push` without specifying a remote — `gh pr checkout` configures tracking to the
+correct remote, including for fork PRs. Specifying `origin` explicitly can push to the wrong place.
 
-If pushing fails (fork PR with edits disabled), fall back to posting code
-snippets in a comment. Don't reference commit SHAs from temporary branches —
-post code inline.
+If pushing fails (fork PR with edits disabled), fall back to posting code snippets in a comment.
+Don't reference commit SHAs from temporary branches — post code inline.
 
 ## Merging Upstream into PR Branches
 
 When asked to merge the default branch into a PR branch:
 
-1. **Never use `--allow-unrelated-histories`.** If `git merge` fails because
-   git can't find a merge base, the checkout is broken — investigate rather than
-   forcing the merge. `--allow-unrelated-histories` treats both sides as
-   disconnected, creating add/add conflicts in every file.
+1. **Never use `--allow-unrelated-histories`.** If `git merge` fails because git can't find a
+   merge base, the checkout is broken — investigate rather than forcing the merge.
+   `--allow-unrelated-histories` treats both sides as disconnected, creating add/add conflicts in
+   every file.
 
-2. **Handle untracked file conflicts properly.** If `git merge origin/main`
-   fails because untracked files would be overwritten by tracked files, stash
-   them first — don't delete them:
+2. **Handle untracked file conflicts properly.** If `git merge origin/main` fails because
+   untracked files would be overwritten by tracked files, stash them first — don't delete them:
    ```bash
    git stash --include-untracked
    git merge origin/main
@@ -125,17 +118,16 @@ When asked to merge the default branch into a PR branch:
    ```bash
    git merge-base origin/main HEAD
    ```
-   If this fails, the branch history is disconnected. Re-checkout the PR with
-   full history (`fetch-depth: 0`) before retrying.
+   If this fails, the branch history is disconnected. Re-checkout the PR with full history
+   (`fetch-depth: 0`) before retrying.
 
 ## CI Monitoring
 
 After pushing, wait for CI before reporting completion.
 
-**Use `run_in_background: true`** for the polling loop so it does not block the
-session. When the background task completes you will be notified — check the
-result and take any follow-up action (dismiss approval, post analysis) at that
-point.
+**Use `run_in_background: true`** for the polling loop so it does not block the session. When the
+background task completes you will be notified — check the result and take any follow-up action
+(dismiss approval, post analysis) at that point.
 
 ```bash
 # Run with Bash tool's run_in_background: true
@@ -152,16 +144,16 @@ echo "CI still running after 10 minutes"
 exit 1
 ```
 
-1. Poll `gh pr checks <number> --required` every 60 seconds until all required
-   checks complete (up to ~10 minutes). Ignore non-required checks (benchmarks).
-   **Filter out `$GITHUB_WORKFLOW`** — the current workflow's own check is always
-   pending while polling and must be excluded to avoid a deadlock.
-2. If a required check fails, diagnose with `gh run view <run-id> --log-failed`,
-   fix, commit, push, repeat.
+1. Poll `gh pr checks <number> --required` every 60 seconds until all required checks complete
+   (up to ~10 minutes). Ignore non-required checks (benchmarks). **Filter out
+   `$GITHUB_WORKFLOW`** — the current workflow's own check is always pending while polling and must
+   be excluded to avoid a deadlock.
+2. If a required check fails, diagnose with `gh run view <run-id> --log-failed`, fix, commit,
+   push, repeat.
 3. Report completion only after all required checks pass.
 
-**NEVER use `gh run watch` or `gh pr checks --watch`** — both hang indefinitely
-and consume the entire job timeout. Always poll with `gh pr checks` in a loop.
+**NEVER use `gh run watch` or `gh pr checks --watch`** — both hang indefinitely and consume the
+entire job timeout. Always poll with `gh pr checks` in a loop.
 
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
@@ -170,15 +162,14 @@ gh api "repos/{owner}/{repo}/actions/runs?branch=main&status=completed&per_page=
   --jq '.workflow_runs[] | {conclusion, created_at: .created_at}'
 ```
 
-If you cannot verify, say "I haven't confirmed whether these failures are
-pre-existing."
+If you cannot verify, say "I haven't confirmed whether these failures are pre-existing."
 
 ## Replying to Comments
 
 Reply in context rather than creating new top-level comments:
 
-- **Inline review comments** (`#discussion_r`): To read a single review
-  comment, use the comment ID **without** the PR number in the path:
+- **Inline review comments** (`#discussion_r`): To read a single review comment, use the comment
+  ID **without** the PR number in the path:
   ```bash
   gh api repos/{owner}/{repo}/pulls/comments/{comment_id}
   ```
@@ -191,18 +182,17 @@ Reply in context rather than creating new top-level comments:
     -F body=@/tmp/reply.md
   ```
 
-- **Conversation comments** (`#issuecomment-`): Post a regular comment (GitHub
-  doesn't support threading).
+- **Conversation comments** (`#issuecomment-`): Post a regular comment (GitHub doesn't support
+  threading).
 
 ## Recheck Before Posting
 
-Long-running tasks (triage, review, CI diagnosis) can take minutes. By the time
-you're ready to comment, new discussion may have arrived that changes the
-context — a human may have already answered, the author may have pushed a fix,
-or new information may make your response redundant or wrong.
+Long-running tasks (triage, review, CI diagnosis) can take minutes. By the time you're ready to
+comment, new discussion may have arrived that changes the context — a human may have already
+answered, the author may have pushed a fix, or new information may make your response redundant or
+wrong.
 
-**Before posting any comment or review**, re-fetch the current conversation
-state:
+**Before posting any comment or review**, re-fetch the current conversation state:
 
 ```bash
 # For issues
@@ -213,21 +203,24 @@ gh pr view <number> --json comments,reviews \
   --jq '{comments: (.comments | length), reviews: (.reviews | length)}'
 ```
 
-Compare with the count you saw when you first read the context. If new comments
-or reviews appeared:
+Compare with the count you saw when you first read the context. If new comments or reviews
+appeared:
 
 1. **Read the new comments** to understand what changed.
-2. **Adjust or skip your response.** If someone already answered, don't repeat
-   them. If the author resolved the issue, acknowledge that instead of posting
-   a stale analysis. If new information contradicts your findings, update your
-   response before posting.
+2. **Adjust or skip your response.** If someone already answered, don't repeat them. If the author
+   resolved the issue, acknowledge that instead of posting a stale analysis. If new information
+   contradicts your findings, update your response before posting.
 3. **If your response is now entirely redundant, don't post it.**
 
 ## Comment Formatting
 
-Keep comments concise. Put supporting detail inside `<details>` tags — the
-reader should get the gist without expanding. Don't collapse content that *is*
-the answer (e.g., a requested analysis).
+**Line wrapping:** GitHub renders newlines literally in issue bodies, PR descriptions, and
+comments — a line break in the source becomes a `<br>` in the output. Write each paragraph as a
+single long line and let the browser reflow. Hard wraps at 72–80 chars create awkward mid-sentence
+breaks on GitHub. (This applies to GitHub-rendered content only, not to skill files or code.)
+
+Keep comments concise. Put supporting detail inside `<details>` tags — the reader should get the
+gist without expanding. Don't collapse content that *is* the answer (e.g., a requested analysis).
 
 ```
 <details><summary>Detailed findings (6 files)</summary>
@@ -237,12 +230,14 @@ the answer (e.g., a requested analysis).
 </details>
 ```
 
-Always use markdown links for files, issues, PRs, and docs. Prefer permalinks
-(commit SHA URLs) over branch-based links for line references — line numbers
-shift and `blob/main/...#L42` links go stale.
+Always use markdown links for files, issues, PRs, and docs. Prefer permalinks (commit SHA URLs)
+over branch-based links for line references — line numbers shift and `blob/main/...#L42` links go
+stale.
 
-- **Files**: link to GitHub (`blob/main/...` for file-level,
-  `blob/<sha>/...#L42` for lines)
+Derive the repository owner/name from `$GITHUB_REPOSITORY` (e.g., `owner/repo`) — never guess or
+hardcode the organization in URLs.
+
+- **Files**: link to GitHub (`blob/main/...` for file-level, `blob/<sha>/...#L42` for lines)
 - **Issues/PRs**: `#123` shorthand
 - **External**: `[text](url)` format
 
@@ -250,9 +245,8 @@ Don't add job links or footers — `claude-code-action` adds these automatically
 
 ## Shell Quoting
 
-Shell expansion corrupts `$` and `!` in arguments (bash history expansion
-mangles `!` in double-quoted strings). Always use a temp file for comment bodies
-and shell-sensitive arguments:
+Shell expansion corrupts `$` and `!` in arguments (bash history expansion mangles `!` in
+double-quoted strings). Always use a temp file for comment bodies and shell-sensitive arguments:
 
 ```bash
 # Comments — ALWAYS use a file
@@ -281,14 +275,13 @@ EOF
 gh api ... --jq "$(cat /tmp/jq_filter)"
 ```
 
-Use `<< 'EOF'` (single-quoted delimiter) to prevent expansion. For file-based
-bodies: `gh pr comment` uses `-F /tmp/file` (path directly), while `gh api`
-uses `-F body=@/tmp/file` (field assignment with `@` prefix).
+Use `<< 'EOF'` (single-quoted delimiter) to prevent expansion. For file-based bodies:
+`gh pr comment` uses `-F /tmp/file` (path directly), while `gh api` uses `-F body=@/tmp/file`
+(field assignment with `@` prefix).
 
 ## Keeping PR Titles and Descriptions Current
 
-When revising code after review feedback, update the title and description if
-the approach changed:
+When revising code after review feedback, update the title and description if the approach changed:
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/{number} -X PATCH \
@@ -297,79 +290,97 @@ gh api repos/{owner}/{repo}/pulls/{number} -X PATCH \
 
 ## Atomic PRs
 
-Split unrelated changes into separate PRs — one concern per PR. If one change
-could be reverted without affecting the other, they belong in separate PRs.
+Split unrelated changes into separate PRs — one concern per PR. If one change could be reverted
+without affecting the other, they belong in separate PRs.
 
 ## Investigating Other CI Runs
 
-Load `/install-tend:debug-ci-session` for session log download, JSONL parsing
-queries, and diagnostic workflow. The primary evidence for diagnosing bot
-behavior is the session log artifact — not console output.
+Load `/install-tend:debug-ci-session` for session log download, JSONL parsing queries, and
+diagnostic workflow. The primary evidence for diagnosing bot behavior is the session log
+artifact — not console output.
 
-Review-response runs triggered by `pull_request_review` or
-`pull_request_review_comment` events sometimes produce no artifact when the
-session is very short.
+Review-response runs triggered by `pull_request_review` or `pull_request_review_comment` events
+sometimes produce no artifact when the session is very short.
 
 ## Grounded Analysis
 
-CI runs are not interactive — every claim must be grounded in evidence. The user
-can't ask follow-up questions; treat every response as your final answer.
+CI runs are not interactive — every claim must be grounded in evidence. The user can't ask
+follow-up questions; treat every response as your final answer.
 
-Read logs, code, and API data before drawing conclusions. Show evidence: cite
-log lines, file paths, commit SHAs. Trace causation — if two things co-occur,
-find the mechanism rather than saying "this may be related." Never claim a
-failure is "pre-existing" without checking main branch CI history. Distinguish
-what you verified from what you inferred.
+Read logs, code, and API data before drawing conclusions. Show evidence: cite log lines, file
+paths, commit SHAs. Trace causation — if two things co-occur, find the mechanism rather than
+saying "this may be related." Never claim a failure is "pre-existing" without checking main branch
+CI history. Distinguish what you verified from what you inferred.
 
 ### User-facing comments require source evidence
 
-Public comments — on issues, PRs, or in review threads — are permanent and
-visible. A hallucinated detail (wrong syntax, invented API, nonexistent flag)
-misleads users and erodes trust. **It is always better to take longer and
-produce a correct response than to respond quickly with fabricated details.**
+Public comments — on issues, PRs, or in review threads — are permanent and visible. A
+hallucinated detail (wrong syntax, invented API, nonexistent flag) misleads users and erodes
+trust. **It is always better to take longer and produce a correct response than to respond quickly
+with fabricated details.**
 
-Before posting any specific claim — a configuration snippet, command syntax,
-variable name, or API behavior — find the **source text** that confirms it.
-Source text means documentation, help output, test expectations, or the code
-that implements the public interface. Internal implementation code (struct
-fields, variable names in Rust/Python/etc.) shows what exists internally but not
-how it's exposed to users — read the docs or user-facing layer too.
+Before posting any specific claim — a configuration snippet, command syntax, variable name, or API
+behavior — find the **source text** that confirms it. Source text means documentation, help output,
+test expectations, or the code that implements the public interface. Internal implementation code
+(struct fields, variable names in Rust/Python/etc.) shows what exists internally but not how it's
+exposed to users — read the docs or user-facing layer too.
 
 <example>
 <bad reason="Read Rust code showing a 'target' variable and invented $WT_TARGET">
 
-Bad: Saw `extra_vars.push(("target", target_branch))` in Rust source →
-posted a hook example using `$WT_TARGET` (an environment variable that doesn't
-exist — hooks use `{{ target }}` Jinja templates).
+Bad: Saw `extra_vars.push(("target", target_branch))` in Rust source → posted a hook example
+using `$WT_TARGET` (an environment variable that doesn't exist — hooks use `{{ target }}` Jinja
+templates).
 
 </bad>
 <good reason="Verified syntax against user-facing documentation before posting">
 
-Good: Saw `("target", target_branch)` in Rust source → read `docs/hook.md` →
-confirmed hooks use `{{ target }}` syntax → posted correct example.
+Good: Saw `("target", target_branch)` in Rust source → read `docs/hook.md` → confirmed hooks use
+`{{ target }}` syntax → posted correct example.
 
 </good>
 </example>
 
-When a project has user-facing documentation (a docs site, `--help` pages, a
-wiki), link to it. A link to the relevant docs page is more useful than a
-paraphrased explanation — and finding the link forces verifying the claim.
+For **behavioral claims** — "X happens when you run Y", "command Z works in scenario W" — reading
+code is not sufficient. Code has conditional branches, early returns, and error paths that are easy
+to miss when tracing mentally. Before asserting what a command does in a specific scenario, either
+find a test that exercises that exact scenario or run the command yourself. If neither is feasible,
+hedge: "Based on code reading, I believe X, but I haven't verified this end-to-end."
 
-If you can't find source evidence for a specific detail, say so ("I'm not sure
-of the exact syntax") rather than guessing. An honest gap is fixable; a
-confident hallucination gets copy-pasted.
+<example>
+<bad reason="Traced one code path but missed a guard clause in a called function">
+
+Bad: Read `CommandEnv::for_action("commit", config)` → saw it constructs an env → concluded
+`wt step commit` works in a detached worktree. Missed that `for_action()` calls
+`require_current_branch()`, which errors on detached HEAD.
+
+</bad>
+<good reason="Built and tested the actual behavior before claiming">
+
+Good: Read `for_action()` → noticed it calls `require_current_branch()` → uncertain whether
+detached HEAD hits that path → ran `cargo build && wt step commit` in a detached worktree →
+confirmed the error → posted accurate answer.
+
+</good>
+</example>
+
+When a project has user-facing documentation (a docs site, `--help` pages, a wiki), link to it. A
+link to the relevant docs page is more useful than a paraphrased explanation — and finding the link
+forces verifying the claim.
+
+If you can't find source evidence for a specific detail, say so ("I'm not sure of the exact
+syntax") rather than guessing. An honest gap is fixable; a confident hallucination gets
+copy-pasted.
 
 ## Tone
 
-Raise observations, don't assign work. Never create checklists or task lists
-for the PR author.
+Raise observations, don't assign work. Never create checklists or task lists for the PR author.
 
 ## PR Review Comments
 
-For review comments on specific lines (`[Comment on path:line]`), read that file
-and examine the code at that line before answering.
+For review comments on specific lines (`[Comment on path:line]`), read that file and examine the
+code at that line before answering.
 
-When the GitHub API returns a `diff_hunk`, the reviewer's comment targets the
-**last line** of that hunk. Use this to disambiguate when multiple candidates
-exist nearby — match the reviewer's request against the specific anchored line,
-not the surrounding region.
+When the GitHub API returns a `diff_hunk`, the reviewer's comment targets the **last line** of that
+hunk. Use this to disambiguate when multiple candidates exist nearby — match the reviewer's request
+against the specific anchored line, not the surrounding region.

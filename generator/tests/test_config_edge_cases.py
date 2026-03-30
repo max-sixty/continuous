@@ -284,8 +284,7 @@ def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
     cfg = Config.load(path)
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     review = workflows["tend-review.yaml"]
-    # {1} and {2} are escaped to {{1}} and {{2}} — literals in format()
-    assert "format(" in review.content
+    # {1} and {2} are escaped to {{1}} and {{2}} — literals in GHA expressions
     assert "{{1}}" in review.content
     assert "{{2}}" in review.content
 
@@ -465,6 +464,20 @@ def test_watched_workflows_missing_skips_ci_fix(
 # ---------------------------------------------------------------------------
 # Additional edge cases discovered during analysis
 # ---------------------------------------------------------------------------
+
+
+def test_renovate_renamed_to_weekly(tmp_path: Path) -> None:
+    """Old workflows.renovate key must fail with a clear rename error."""
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name = "my-bot"
+        [workflows.renovate]
+        cron = "0 12 * * 0"
+    """),
+    )
+    with pytest.raises(ClickException, match="renamed to workflows.weekly"):
+        Config.load(path)
 
 
 def test_unknown_workflow_warns(

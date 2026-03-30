@@ -119,64 +119,34 @@ name: tend-review
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
-  pull_request_review:
-    types: [submitted]
 
 jobs:
   review:
-    if: |
-      (github.event_name == 'pull_request_target' &&
-        github.event.pull_request.draft == false) ||
-      (github.event_name == 'pull_request_review' &&
-        github.event.pull_request.user.login == '{bn}' &&
-        github.event.review.user.login != '{bn}' &&
-        (github.event.review.state != 'approved' || github.event.review.body))
+    if: >-
+      github.event.pull_request.draft == false
     concurrency:
-      group: ${{{{ github.workflow }}}}-${{{{ github.event_name }}}}-${{{{ github.event.pull_request.number }}}}
+      group: ${{{{ github.workflow }}}}-${{{{ github.event.pull_request.number }}}}
       cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
 {perms}
     steps:
-      - name: Checkout (initial review)
-        if: github.event_name == 'pull_request_target'
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           ref: refs/pull/${{{{ github.event.pull_request.number }}}}/merge
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
-
-      - name: Checkout (review response)
-        if: github.event_name == 'pull_request_review'
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          token: {bt}
-
-      - name: Check out PR branch (review response)
-        if: github.event_name == 'pull_request_review'
-        run: gh pr checkout "$PR_NUMBER"
-        env:
-          GH_TOKEN: {bt}
-          PR_NUMBER: ${{{{ github.event.pull_request.number }}}}
 {setup}
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
-          use_sticky_comment: ${{{{ github.event_name == 'pull_request_target' }}}}
+          use_sticky_comment: true
           prompt: >-
-            ${{{{ github.event_name == 'pull_request_target'
-              && {prompt_expr}
-              || format(
-                'A review was submitted on your PR #{{0}} ({{1}}). Read the review and full PR context (description, diff, comments, CI status), then respond appropriately. If changes were requested, make them, commit, and push. If questions were asked, answer them.',
-                github.event.pull_request.number,
-                github.event.review.html_url
-              ) }}}}
+            ${{{{ {prompt_expr} }}}}
 """
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 
@@ -204,6 +174,8 @@ on:
   issue_comment:
     types: [created, edited]
   # Works for same-repo PRs only; secrets unavailable on fork PRs (no _target variant exists)
+  pull_request_review:
+    types: [submitted]
   pull_request_review_comment:
     types: [created, edited]
 
@@ -216,10 +188,9 @@ jobs:
       (github.event_name == 'issue_comment' &&
         github.event.comment.user.login != '{bn}') ||
       (github.event_name == 'pull_request_review_comment' &&
-        github.event.comment.user.login != '{bn}')
-    concurrency:
-      group: ${{{{ github.workflow }}}}-${{{{ github.event.issue.number || github.event.pull_request.number }}}}
-      cancel-in-progress: true
+        github.event.comment.user.login != '{bn}') ||
+      (github.event_name == 'pull_request_review' &&
+        github.event.review.user.login != '{bn}')
     runs-on: ubuntu-24.04
     outputs:
       should_run: ${{{{ steps.check.outputs.should_run }}}}
@@ -283,7 +254,7 @@ jobs:
         env:
           GH_TOKEN: {bt}
           EVENT_NAME: ${{{{ github.event_name }}}}
-          COMMENT_BODY: ${{{{ github.event.comment.body }}}}
+          COMMENT_BODY: ${{{{ github.event.comment.body || github.event.review.body }}}}
           ISSUE_BODY: ${{{{ github.event.issue.body }}}}
           ISSUE_OR_PR_NUMBER: ${{{{ github.event.issue.number }}}}
           ISSUE_AUTHOR: ${{{{ github.event.issue.user.login }}}}
@@ -308,7 +279,7 @@ jobs:
     if: needs.verify.outputs.should_run == 'true'
     concurrency:
       group: ${{{{ github.workflow }}}}-handle-${{{{ github.event.issue.number || github.event.pull_request.number }}}}
-      cancel-in-progress: true
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -323,7 +294,8 @@ jobs:
       - name: Check out PR branch
         if: |
           (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
-          github.event_name == 'pull_request_review_comment'
+          github.event_name == 'pull_request_review_comment' ||
+          github.event_name == 'pull_request_review'
         run: |
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
           if [ "$PR_STATE" = "OPEN" ]; then
@@ -335,18 +307,40 @@ jobs:
           GH_TOKEN: {bt}
           PR_NUMBER: ${{{{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}}}
 {setup}
+      - name: Compute queue delay
+        id: delay
+        run: |
+          if [ -z "$EVENT_TS" ]; then
+            echo "seconds=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          event_epoch=$(date -d "$EVENT_TS" +%s)
+          echo "seconds=$(( $(date +%s) - event_epoch ))" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT_TS: ${{{{ github.event.comment.created_at || github.event.review.submitted_at || github.event.issue.updated_at }}}}
+
       - uses: max-sixty/tend@v1
         with:
           github_token: {bt}
           claude_code_oauth_token: {ct}
           bot_name: {bn}
           prompt: >-
+            ${{{{ steps.delay.outputs.seconds
+            && format('This job started {{0}}s after the triggering event (over ~40s means it was queued). ',
+            steps.delay.outputs.seconds) || '' }}}}Before acting,
+            check recent comments: exit silently if the bot already responded
+            to the trigger; handle any other unaddressed comments too.
+
             ${{{{ github.event_name == 'issues'
               && format('An issue was updated with a mention of you ({{0}}). Read it and respond.', github.event.issue.html_url)
               || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@{bn}')
                 && format('You were mentioned in an inline review comment on PR #{{0}} ({{1}}, review comment ID {{2}}). Read the full PR context (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push. Reply in the review thread using `gh api repos/{{3}}/pulls/{{0}}/comments/{{2}}/replies -f body="..."` — do not create a new top-level comment.', {pr}, github.event.comment.html_url, github.event.comment.id, github.repository))
               || (github.event_name == 'pull_request_review_comment'
                 && format('A user left an inline review comment on a PR where you previously participated (PR #{{0}}, {{1}}, review comment ID {{2}}). Read the full context. Only respond if the comment is directed at you or requests changes. Reply in the review thread using `gh api repos/{{3}}/pulls/{{0}}/comments/{{2}}/replies -f body="..."`.', {pr}, github.event.comment.html_url, github.event.comment.id, github.repository))
+              || (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@{bn}')
+                && format('A review was submitted on PR #{{0}} that mentions you ({{1}}). Read the review and full PR context (description, diff, comments, CI status), then respond. If changes were requested, make them, commit, and push.', github.event.pull_request.number, github.event.review.html_url))
+              || (github.event_name == 'pull_request_review'
+                && format('A review was submitted on a PR where you previously participated (PR #{{0}}, {{1}}). Read the review and full PR context. If the review requests changes or asks questions, respond appropriately. If the review approves or is between humans, exit silently.', github.event.pull_request.number, github.event.review.html_url))
               || (contains(github.event.comment.body, '@{bn}')
                 && format('You were mentioned in a comment ({{0}}). Read the full issue or PR (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. A comment that responds to concerns you raised in a review is directed at you — briefly acknowledge that the concerns are resolved (or explain why they are not). If the conversation is between humans, exit silently.', github.event.comment.html_url)
@@ -386,7 +380,6 @@ concurrency:
 jobs:
   triage:
     if: >-
-      github.event.issue.user.type != 'Bot' &&
       github.event.issue.user.login != '{bn}'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -477,7 +470,7 @@ jobs:
 
 
 # ---------------------------------------------------------------------------
-# Scheduled (nightly, renovate)
+# Scheduled (nightly, weekly)
 # ---------------------------------------------------------------------------
 
 
@@ -533,9 +526,13 @@ def generate_nightly(cfg: Config) -> GeneratedWorkflow:
     return _generate_scheduled(cfg, "nightly", "17 6 * * *", "/tend-ci-runner:nightly")
 
 
-def generate_renovate(cfg: Config) -> GeneratedWorkflow:
+def generate_weekly(cfg: Config) -> GeneratedWorkflow:
+    return _generate_scheduled(cfg, "weekly", "17 9 * * 0", "/tend-ci-runner:weekly")
+
+
+def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     return _generate_scheduled(
-        cfg, "renovate", "17 9 * * 0", "/tend-ci-runner:renovate"
+        cfg, "notifications", "*/15 * * * *", "/tend-ci-runner:notifications"
     )
 
 
@@ -549,7 +546,8 @@ GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
     "triage": generate_triage,
     "ci-fix": generate_ci_fix,
     "nightly": generate_nightly,
-    "renovate": generate_renovate,
+    "weekly": generate_weekly,
+    "notifications": generate_notifications,
 }
 
 

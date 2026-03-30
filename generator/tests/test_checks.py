@@ -13,7 +13,6 @@ from click.testing import CliRunner
 from tend.checks import (
     CheckResult,
     _has_restrict_updates_ruleset,
-    _ref_matches_patterns,
     _restrict_updates_ruleset,
     check_bot_permission,
     check_branch_protection,
@@ -41,23 +40,9 @@ def _write_config(tmp_path: Path, content: str = 'bot_name = "test-bot"') -> Pat
     return cfg
 
 
-def _make_ruleset(include: list[str], exclude: list[str] | None = None) -> str:
-    """Build a JSON array with one active update ruleset targeting given patterns."""
-    return json.dumps(
-        [
-            {
-                "enforcement": "active",
-                "target": "branch",
-                "rules": [{"type": "update"}],
-                "conditions": {
-                    "ref_name": {
-                        "include": include,
-                        "exclude": exclude or [],
-                    }
-                },
-            }
-        ]
-    )
+def _make_branch_rules(*rule_types: str) -> str:
+    """Build a JSON array of branch rules (as returned by /rules/branches/{branch})."""
+    return json.dumps([{"type": t} for t in rule_types])
 
 
 # ---------------------------------------------------------------------------
@@ -86,16 +71,16 @@ def test_detect_repo_no_gh() -> None:
 
 
 def test_branch_protected() -> None:
-    ruleset = _make_ruleset(["~DEFAULT_BRANCH"])
+    branch_rules = _make_branch_rules("update")
 
     def fake_gh(*args, **kwargs):
-        cmd = " ".join(args)
-        if "rulesets" in cmd:
-            return _make_completed(ruleset)
+        url = args[1]
+        if "rules/branches" in url:
+            return _make_completed(branch_rules)
         return _make_completed("true\n")
 
     with patch("tend.checks._gh", side_effect=fake_gh):
-        result = check_branch_protection("owner/repo", "main", default_branch="main")
+        result = check_branch_protection("owner/repo", "main")
     assert result.passed is True
     assert "protected" in result.message
 
@@ -123,6 +108,28 @@ def test_branch_protection_no_gh() -> None:
     assert result.passed is None
 
 
+def test_branch_protected_ruleset_inconclusive_skips() -> None:
+    """Branch is protected, no reviews, ruleset check inconclusive → SKIP not FAIL."""
+    protection_data = json.dumps(
+        {"required_pull_request_reviews": {"required_approving_review_count": 0}}
+    )
+
+    def fake_gh(*args, **kwargs):
+        url = args[1]
+        if url == "repos/owner/repo/branches/main" and ".protected" in args:
+            return _make_completed("true\n")
+        if "rules/branches" in url:
+            return _make_completed(returncode=1, stderr="HTTP 403")
+        if "branches/main/protection" in url:
+            return _make_completed(protection_data)
+        return _make_completed(returncode=1)
+
+    with patch("tend.checks._gh", side_effect=fake_gh):
+        result = check_branch_protection("owner/repo", "main")
+    assert result.passed is None
+    assert "could not verify rulesets" in result.message
+
+
 def test_branch_protection_result_name_includes_branch() -> None:
     """Each branch gets a distinct check name for identification."""
     with patch("tend.checks._gh", return_value=_make_completed("false\n")):
@@ -133,87 +140,59 @@ def test_branch_protection_result_name_includes_branch() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _ref_matches_patterns
-# ---------------------------------------------------------------------------
-
-
-def test_ref_matches_exact() -> None:
-    assert _ref_matches_patterns("refs/heads/v1", ["refs/heads/v1"], None) is True
-
-
-def test_ref_no_match() -> None:
-    assert _ref_matches_patterns("refs/heads/v1", ["refs/heads/main"], None) is False
-
-
-def test_ref_matches_default_branch_macro() -> None:
-    assert _ref_matches_patterns("refs/heads/main", ["~DEFAULT_BRANCH"], "main") is True
-
-
-def test_ref_default_branch_macro_no_match() -> None:
-    """~DEFAULT_BRANCH should not match non-default branches."""
-    assert _ref_matches_patterns("refs/heads/v1", ["~DEFAULT_BRANCH"], "main") is False
-
-
-def test_ref_matches_all_macro() -> None:
-    assert _ref_matches_patterns("refs/heads/anything", ["~ALL"], None) is True
-
-
-def test_ref_matches_glob() -> None:
-    assert (
-        _ref_matches_patterns("refs/heads/release/v1", ["refs/heads/release/*"], None)
-        is True
-    )
-
-
-# ---------------------------------------------------------------------------
 # _has_restrict_updates_ruleset
 # ---------------------------------------------------------------------------
 
 
-def test_non_update_ruleset_is_not_detected() -> None:
-    """An empty jq result (no matching rulesets) should yield False."""
+def test_no_rules_for_branch() -> None:
+    """No rules at all for this branch → False."""
     with patch("tend.checks._gh", return_value=_make_completed("[]\n")):
         assert _has_restrict_updates_ruleset("owner/repo", "main") is False
 
 
-def test_update_ruleset_covering_default_branch() -> None:
-    """A ruleset targeting ~DEFAULT_BRANCH should match when checking the default branch."""
-    data = _make_ruleset(["~DEFAULT_BRANCH"])
+def test_update_rule_present() -> None:
+    """Branch rules include an update rule → True."""
+    data = _make_branch_rules("update")
     with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert (
-            _has_restrict_updates_ruleset("owner/repo", "main", default_branch="main")
-            is True
-        )
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is True
 
 
-def test_update_ruleset_not_covering_branch() -> None:
-    """A ruleset targeting only ~DEFAULT_BRANCH should NOT match a non-default branch."""
-    data = _make_ruleset(["~DEFAULT_BRANCH"])
+def test_only_non_update_rules() -> None:
+    """Branch has rules but none are update → False."""
+    data = _make_branch_rules("deletion", "required_linear_history")
     with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert (
-            _has_restrict_updates_ruleset("owner/repo", "v1", default_branch="main")
-            is False
-        )
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is False
 
 
-def test_update_ruleset_with_explicit_branch() -> None:
-    """A ruleset targeting refs/heads/v1 should match v1."""
-    data = _make_ruleset(["~DEFAULT_BRANCH", "refs/heads/v1"])
+def test_update_rule_among_others() -> None:
+    """Update rule mixed with other rules → True."""
+    data = _make_branch_rules("deletion", "update", "required_signatures")
     with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert (
-            _has_restrict_updates_ruleset("owner/repo", "v1", default_branch="main")
-            is True
-        )
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is True
 
 
-def test_update_ruleset_excluded_branch() -> None:
-    """A branch in the exclude list should not match, even if include covers it."""
-    data = _make_ruleset(["~ALL"], exclude=["refs/heads/v1"])
-    with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert (
-            _has_restrict_updates_ruleset("owner/repo", "v1", default_branch="main")
-            is False
-        )
+def test_branch_rules_api_error() -> None:
+    """API error → None (inconclusive)."""
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(returncode=1, stderr="Not Found"),
+    ):
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
+
+
+def test_branch_rules_no_gh() -> None:
+    """gh CLI not found → None (can't check either endpoint)."""
+    with patch("tend.checks._gh", return_value=None):
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
+
+
+def test_branch_rules_non_list_response() -> None:
+    """API returns a JSON object instead of an array → None."""
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed('{"message": "Not Found"}'),
+    ):
+        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
 
 
 # ---------------------------------------------------------------------------
@@ -507,21 +486,21 @@ def test_run_all_checks_no_repo() -> None:
     assert "detect" in results[0].message
 
 
-_ALL_PASS_RULESET = _make_ruleset(["~ALL"])
+_BRANCH_HAS_UPDATE_RULE = _make_branch_rules("update")
 
 
 def _fake_gh_all_pass(*args, **kwargs) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
-    cmd = " ".join(args)
-    if args[1] == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
+    url = args[1]
+    if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
         return _make_completed("main\n")
-    if "rulesets" in cmd:
-        return _make_completed(_ALL_PASS_RULESET)
-    if "branches" in cmd:
+    if "rules/branches" in url:
+        return _make_completed(_BRANCH_HAS_UPDATE_RULE)
+    if "branches" in url:
         return _make_completed("true\n")
-    if "collaborators" in cmd:
+    if "collaborators" in url:
         return _make_completed("write\n")
-    if "secrets" in cmd:
+    if "secrets" in url:
         return _make_completed('["T1","T2"]\n')
     return _make_completed(returncode=1)
 
@@ -556,20 +535,16 @@ def test_run_all_checks_allowlist_catches_unexpected() -> None:
     """Unexpected repo-level secret is flagged."""
 
     def fake_gh_with_extra_secret(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        cmd = " ".join(args)
-        if (
-            args[1] == "repos/owner/repo"
-            and "--jq" in args
-            and ".default_branch" in args
-        ):
+        url = args[1]
+        if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
-        if "rulesets" in cmd:
-            return _make_completed(_ALL_PASS_RULESET)
-        if "branches" in cmd:
+        if "rules/branches" in url:
+            return _make_completed(_BRANCH_HAS_UPDATE_RULE)
+        if "branches" in url:
             return _make_completed("true\n")
-        if "collaborators" in cmd:
+        if "collaborators" in url:
             return _make_completed("write\n")
-        if "secrets" in cmd:
+        if "secrets" in url:
             return _make_completed('["T1","T2","PYPI_TOKEN"]\n')
         return _make_completed(returncode=1)
 
