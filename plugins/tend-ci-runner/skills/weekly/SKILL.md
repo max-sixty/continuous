@@ -35,14 +35,13 @@ gh pr list --state open --json number,title,author,labels \
   --jq '.[] | select(.author.login == "dependabot[bot]" or .author.login == "renovate[bot]" or (.labels | any(.name == "dependencies")))'
 ```
 
-If no dependency PRs are open, report "No dependency PRs to process" and skip
-to the summary.
+If no dependency PRs are open, report "No dependency PRs to process" and skip to the summary.
 
 ## Step 3: For each dependency PR
 
 1. Check CI status: `gh pr checks <number>`
-2. If CI is passing, review the diff for breaking changes (major version bumps,
-   API changes, deprecation warnings)
+2. If CI is passing, review the diff for breaking changes (major version bumps, API changes,
+   deprecation warnings)
 3. If the update is safe (patch/minor with green CI), approve and merge:
    ```bash
    gh pr review <number> --approve --body "Automated dependency update — CI passing, no breaking changes."
@@ -53,5 +52,4 @@ to the summary.
 
 ## Step 4: Summary
 
-Report: workflow update status, dependency PRs processed/merged/skipped (with
-reasons).
+Report: workflow update status, dependency PRs processed/merged/skipped (with reasons).
