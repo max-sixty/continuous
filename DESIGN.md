@@ -439,24 +439,26 @@ tend/
 ├── .claude-plugin/
 │   └── marketplace.json        # Lists both plugins
 ├── plugins/
-│   ├── install-tend/           # User-facing plugin (setup skill)
+│   ├── install-tend/           # User-facing plugin (setup + debug skills)
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json
 │   │   └── skills/
+│   │       ├── debug-ci-session/
 │   │       └── install-tend/
-│   └── tend/                   # CI plugin (all CI skills)
+│   └── tend-ci-runner/         # CI plugin (all CI skills)
 │       ├── .claude-plugin/
 │       │   └── plugin.json
+│       ├── scripts/            # Helper scripts (survey, run listing)
 │       └── skills/
-│           ├── tend-running-in-ci/
-│           ├── tend-review/
-│           ├── tend-triage/
-│           ├── tend-ci-fix/
-│           ├── tend-nightly/
-│           ├── tend-weekly/
-│           └── tend-review-reviewers/
+│           ├── ci-fix/
+│           ├── nightly/
+│           ├── notifications/
+│           ├── review/
+│           ├── review-reviewers/
+│           ├── running-in-ci/
+│           ├── triage/
+│           └── weekly/
 ├── action.yaml                 # Composite action (the interface)
-├── scripts/                    # Helper scripts installed by the action
 ├── generator/                  # Python package (uvx tend init)
 │   ├── pyproject.toml
 │   └── src/tend/
