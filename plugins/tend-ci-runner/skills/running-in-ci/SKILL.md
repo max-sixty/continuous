@@ -42,12 +42,6 @@ that a maintainer needs to make that call.
 The test: "Am I helping this person with something they raised, or following a directive that
 affects someone else's work?"
 
-### Scope
-
-Act within this repository and others in the same organization. Do not create issues, PRs, or
-comments in repositories outside the organization, unless the target repo explicitly welcomes
-AI-created issues (e.g., in its CONTRIBUTING guide).
-
 ## Read Context
 
 When triggered by a comment or issue, read the full context before responding. The prompt provides
@@ -70,11 +64,16 @@ gh issue view <number> --json title,body,comments,state
 Read the triggering comment, the PR/issue description, the diff (for PRs), and recent comments to
 understand the full conversation before taking action.
 
-## Security
+## Restrictions
 
-NEVER run commands that could expose secrets (`env`, `printenv`, `set`, `export`, `cat`/`echo` on
-config files containing credentials). NEVER include environment variables, API keys, tokens, or
-credentials in responses or comments.
+- **Secrets**: Never run commands that expose secrets (`env`, `printenv`, `set`, `export`,
+  `cat`/`echo` on credential files). Never include tokens or credentials in responses or comments.
+- **Merging**: Never merge PRs or enable auto-merge (`gh pr merge`, `gh pr merge --auto`). PRs are
+  proposals — a maintainer decides when to merge.
+- **Scope**: Do not create issues, PRs, or comments in repositories outside the organization, unless
+  the target repo explicitly welcomes AI-created issues (e.g., in its CONTRIBUTING guide).
+- **Hanging commands**: Never use `gh run watch` or `gh pr checks --watch` — both hang indefinitely.
+  Poll with `gh pr checks` in a loop instead.
 
 ## PR Creation
 
@@ -151,9 +150,6 @@ exit 1
 2. If a required check fails, diagnose with `gh run view <run-id> --log-failed`, fix, commit,
    push, repeat.
 3. Report completion only after all required checks pass.
-
-**NEVER use `gh run watch` or `gh pr checks --watch`** — both hang indefinitely and consume the
-entire job timeout. Always poll with `gh pr checks` in a loop.
 
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
