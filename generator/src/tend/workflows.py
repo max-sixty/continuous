@@ -388,6 +388,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: {cfg.default_branch}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
@@ -449,6 +450,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: {cfg.default_branch}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
@@ -505,6 +507,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: {cfg.default_branch}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
