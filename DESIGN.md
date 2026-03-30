@@ -4,7 +4,7 @@
 
 Two Claude Code plugins, a GitHub composite action, and a generator that add
 Claude-powered CI to any repo. Handles PR review, issue triage, @bot mentions,
-CI fixes, nightly sweeps, and dependency updates.
+CI fixes, nightly sweeps, and weekly maintenance.
 
 ## Architecture
 

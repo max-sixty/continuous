@@ -15,16 +15,17 @@ Three sources of behavior:
 `.github/workflows/`. Each workflow handles everything GitHub needs before
 Claude runs: triggers, conditions (skip drafts, prevent bot self-loops),
 engagement verification, concurrency, permissions, checkout strategy, setup
-steps, and event-specific prompts. All six are enabled by default.
+steps, and event-specific prompts. All seven are enabled by default.
 
-| Workflow       | Trigger                              | Skill             |
-| -------------- | ------------------------------------ | ----------------- |
-| `tend-review`  | PR opened/updated, review submitted  | `review`          |
-| `tend-mention` | @bot mentions, engaged conversations | — (prompt-driven) |
-| `tend-triage`  | Issue opened                         | `triage`          |
-| `tend-ci-fix`  | CI fails on default branch           | `ci-fix`          |
-| `tend-nightly` | Daily schedule, manual dispatch      | `nightly`         |
-| `tend-weekly`  | Weekly schedule, manual dispatch     | `weekly`          |
+| Workflow              | Trigger                                       | Skill             |
+| --------------------- | --------------------------------------------- | ----------------- |
+| `tend-review`         | PR opened/updated                             | `review`          |
+| `tend-mention`        | @bot mentions, reviews, engaged conversations | — (prompt-driven) |
+| `tend-triage`         | Issue opened                                  | `triage`          |
+| `tend-ci-fix`         | CI fails on default branch                    | `ci-fix`          |
+| `tend-nightly`        | Daily schedule, manual dispatch               | `nightly`         |
+| `tend-weekly`         | Weekly schedule, manual dispatch              | `weekly`          |
+| `tend-notifications`  | Every 15 minutes, manual dispatch             | `notifications`   |
 
 Each workflow ends with `uses: max-sixty/tend@v1`, handing off to the action.
 

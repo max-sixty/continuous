@@ -15,6 +15,8 @@ Triage a newly opened GitHub issue.
 ## Step 1: Setup
 
 Load `/tend-ci-runner:running-in-ci` first (CI environment rules, security).
+It will also prompt you to load any repo-specific skills (e.g.,
+`running-tend`) — do so before proceeding.
 
 Follow the AD FONTES principle throughout: reproduce before fixing, evidence before speculation,
 test before committing.
@@ -160,8 +162,20 @@ Note the PR number for the comment.
 
 ## Step 7: Comment on the issue
 
-Always comment via `gh issue comment`. Keep it brief, polite, and specific. A maintainer will
-always review — never claim the issue is fully resolved by automation alone.
+**Recheck before posting.** Triage can take several minutes. Before posting,
+re-fetch the conversation to check for new comments:
+
+```bash
+gh issue view $ARGUMENTS --json comments --jq '.comments | length'
+```
+
+If new comments appeared since you first read the issue, read them and adjust
+your response — someone may have answered, provided more context, or closed the
+issue. If your comment is now redundant, skip it.
+
+Always comment via `gh issue comment`. Keep it brief, polite, and specific. A
+maintainer will always review — never claim the issue is fully resolved by
+automation alone.
 
 **Stay within what you verified.** State facts you found in the codebase — don't characterize
 something as "known" unless you find prior issues or documentation about it. Don't speculate

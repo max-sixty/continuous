@@ -258,6 +258,24 @@ object keys, which GitHub rejects.
      parser may consume it as a delimiter, corrupting the result. Either shrink the range to avoid
      the fence or push a commit.
 
+#### Recovering from inline comment 422 errors
+
+GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when inline comment line numbers don't map to valid positions in the diff. This happens most often on large or complex diffs. **Do not retry by posting a second review** — the first `POST` to the reviews endpoint already created a review record (with the body but without the failed inline comments), so a second attempt creates a duplicate.
+
+Instead, when a 422 occurs on inline comments:
+
+1. **Move the failed inline comments into the review body** as fenced code blocks with file paths.
+2. **Edit the existing review** rather than creating a new one:
+   ```bash
+   # Find the review that was just created (body posted, inline comments rejected)
+   REVIEW_ID=$(gh api "repos/$REPO/pulls/<number>/reviews" \
+     --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\")] | last | .id")
+   # Update its body to include the failed inline suggestions
+   gh api "repos/$REPO/pulls/<number>/reviews/$REVIEW_ID" \
+     -X PUT -F body=@/tmp/updated-review-body.md
+   ```
+3. If editing fails, **do not post another review** — the body-only review is sufficient.
+
 ### 6. Monitor CI
 
 After approving or staying silent, poll CI in **a single background loop** — do not launch
