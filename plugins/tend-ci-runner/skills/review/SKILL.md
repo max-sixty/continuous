@@ -299,9 +299,10 @@ exit 1
 
 - **All required checks passed** -> done.
 - **A check failed** and it's related to the PR -> post a follow-up COMMENT review with analysis
-  and inline suggestions, then dismiss the bot's approval. **Do not install tools** (coverage
-  runners like `cargo-llvm-cov`, linters, etc.) to reproduce failures locally — analyze the
-  failure from the check output, PR diff, and source code reading:
+  and inline suggestions, then dismiss the bot's approval. If the failure is because the CI job
+  is missing a tool or dependency (e.g., a coverage runner, linter), don't install it ad-hoc —
+  propose a PR to the project adding it consistent with the project's existing conventions.
+  Analyze the failure from the check output, PR diff, and source code reading:
   ```bash
   # Use PUT, not POST — the dismiss endpoint requires it
   gh api "repos/$REPO/pulls/<number>/reviews/$REVIEW_ID/dismissals" \
