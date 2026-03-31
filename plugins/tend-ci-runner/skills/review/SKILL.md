@@ -307,6 +307,10 @@ exit 1
   ```
   Skip if already dismissed. **Do not push fixes on human-authored PRs** — post the analysis and
   offer to fix, then wait for the author to accept.
+- **A coverage check failed** but the uncovered lines are structurally untestable (interactive
+  prompts, platform-specific paths) and the same pattern exists in surrounding code -> **do not
+  dismiss**. Post a COMMENT noting the gap is pre-existing and structural, but keep the approval.
+  Only dismiss when the coverage failure represents a real testing gap the author should address.
 - **A check failed** and it's a transient flake (unrelated to the PR changes) ->
   1. **Re-run the failed jobs:**
      ```bash
