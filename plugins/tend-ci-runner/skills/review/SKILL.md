@@ -56,7 +56,8 @@ gh api "repos/$REPO/compare/$LAST_REVIEW_SHA...$HEAD_SHA" \
 
 If the incremental changes are trivial, skip the full review **and do not submit a new
 approval** — the existing review stands. Go directly to step 7 to resolve any bot threads
-addressed by the new changes, then exit. Do NOT proceed to steps 2, 3, or 4. Rough heuristic:
+addressed by the new changes, then exit. Do NOT proceed to steps 2–6 (no review, no approval, no
+CI polling). Rough heuristic:
 changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow
 are typically trivial.
 
