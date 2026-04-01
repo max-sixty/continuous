@@ -11,7 +11,7 @@ Three sources of behavior:
 
 ### `tend init` — workflow files
 
-`uvx tend init` reads `.config/tend.toml` and writes `tend-*.yaml` into
+`uvx tend@latest init` reads `.config/tend.toml` and writes `tend-*.yaml` into
 `.github/workflows/`. Each workflow handles everything GitHub needs before
 Claude runs: triggers, conditions (skip drafts, prevent bot self-loops),
 engagement verification, concurrency, permissions, checkout strategy, setup
