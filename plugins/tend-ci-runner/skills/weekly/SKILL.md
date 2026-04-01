@@ -12,7 +12,7 @@ metadata:
 Regenerate the tend workflow files and open a PR if anything changed.
 
 ```bash
-uvx tend init
+uvx tend@latest init
 ```
 
 Check for changes:

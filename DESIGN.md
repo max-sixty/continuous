@@ -40,7 +40,7 @@ Four pieces:
 
    The action doesn't know or care about triggers, checkout, or project setup.
 
-3. **Generator** (`uvx tend init`) — stamps out workflow files into the
+3. **Generator** (`uvx tend@latest init`) — stamps out workflow files into the
    adopter's `.github/workflows/`. These contain the trigger events, `if:`
    conditions, engagement verification, concurrency groups, checkout, project
    setup steps, and the call to the composite action. The adopter commits the
@@ -459,7 +459,7 @@ tend/
 │           ├── triage/
 │           └── weekly/
 ├── action.yaml                 # Composite action (the interface)
-├── generator/                  # Python package (uvx tend init)
+├── generator/                  # Python package (uvx tend@latest init)
 │   ├── pyproject.toml
 │   └── src/tend/
 ├── docs/

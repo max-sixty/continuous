@@ -88,11 +88,11 @@ Ask the user about other overrides (setup steps, workflow overrides).
 ## 2. Generate workflows
 
 ```bash
-uvx tend init
+uvx tend@latest init
 ```
 
 Verify workflow files appear in `.github/workflows/tend-*.yaml`. Run
-`uvx tend check` to validate branch protection, secrets, and bot access.
+`uvx tend@latest check` to validate branch protection, secrets, and bot access.
 
 ## 2b. Remove existing claude-code-action workflows
 
