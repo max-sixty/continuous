@@ -9,13 +9,15 @@ metadata:
 
 ## First Steps — Load Repo-Specific Guidance
 
-Most repos have a project-specific overlay skill (typically `running-tend`) with project-specific
-CI context — which workflows tend-ci-fix watches, PR title conventions, label policies. Check for
-one and load it before doing anything else:
+**REQUIRED — do this before any other action.** Most repos have a project-specific overlay skill
+(typically `running-tend`) with project-specific CI context — which workflows tend-ci-fix watches,
+PR title conventions, label policies.
 
-```bash
-ls .claude/skills/
-```
+1. Run `ls .claude/skills/` to discover available skills.
+2. For each skill listed, call the Skill tool to load it.
+3. Only then proceed with the task.
+
+Skipping this step causes downstream problems — wrong PR title format, missed CI conventions, etc.
 
 ## Conduct
 
