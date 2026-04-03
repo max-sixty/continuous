@@ -205,6 +205,21 @@ appeared:
    contradicts your findings, update your response before posting.
 3. **If your response is now entirely redundant, don't post it.**
 
+### Dedup check for inline review comment replies
+
+A single PR review can fire both `pull_request_review` and `pull_request_review_comment` events,
+triggering concurrent workflow runs. Before replying to an inline review comment, check whether
+the bot already replied:
+
+```bash
+BOT_LOGIN=$(gh api user --jq '.login')
+EXISTING=$(gh api "repos/{owner}/{repo}/pulls/{number}/comments?per_page=100" \
+  --jq "[.[] | select(.in_reply_to_id == {comment_id} and .user.login == \"$BOT_LOGIN\")] | length")
+```
+
+If `EXISTING` is greater than 0, **do not post** — another run already handled this comment. Exit
+silently.
+
 ## Comment Formatting
 
 **Line wrapping:** GitHub renders newlines literally in issue bodies, PR descriptions, and
