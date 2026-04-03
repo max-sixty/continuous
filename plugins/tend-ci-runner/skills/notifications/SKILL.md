@@ -1,14 +1,15 @@
 ---
 name: notifications
-description: Polls GitHub notifications, responds to unhandled mentions, and marks handled notifications as done. Runs on a schedule.
+description: Polls GitHub notifications and handles items that dedicated workflows miss — fork PR comments, cross-repo mentions, and stale unanswered items. Runs on a schedule.
 metadata:
   internal: true
 ---
 
 # Check Notifications
 
-Poll the bot's GitHub notifications, respond to unhandled items, and clear those already dealt
-with.
+Poll the bot's GitHub notifications. Dedicated workflows (`tend-triage`, `tend-review`,
+event-triggered runs) handle most same-repo activity. This skill covers the gaps: fork PR inline
+comments, cross-repo mentions, and stale items where a dedicated workflow failed or was skipped.
 
 ## Step 1: Setup
 
@@ -89,37 +90,33 @@ move on:
 gh api notifications/threads/{thread_id} -X PATCH
 ```
 
-### 4b. Determine notification type and respond
+### 4b. Skip notifications handled by dedicated workflows
 
-Based on `reason` and `subject.type`:
+Other workflows (`tend-triage`, `tend-review`, event-triggered runs) already handle most same-repo activity. To avoid duplicate work, **mark as read and skip** these notification types when they come from `$GITHUB_REPOSITORY`:
 
-- **`mention`** — someone @-mentioned the bot. Read the full context (issue/PR body, recent
-  comments, diff for PRs) and respond helpfully. Follow the conduct rules from
-  `/tend-ci-runner:running-in-ci` — help with problems people raise, but directives affecting
-  others' work require maintainer access.
+- **`review_requested`** — handled by the `tend-review` workflow.
+- **`assign`** on issues — handled by `tend-triage`.
+- **`mention`** or **`subscribed`/`comment`** on issues/PRs that already have a recent bot response or a workflow run triggered by the same event — the dedicated workflow got there first. Check with:
+  ```bash
+  # Did a workflow already run for this issue/PR recently?
+  gh api "repos/{owner}/{repo}/actions/runs?event=issues&created=>=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)&per_page=5" \
+    --jq '[.workflow_runs[] | select(.name | test("triage|review"))] | length'
+  ```
 
-- **`review_requested`** — a review was requested. Load `/tend-ci-runner:review` and review the
-  PR.
+### 4c. Respond to notifications only this skill covers
 
-- **`subscribed`** or **`comment`** — the bot is subscribed (usually because it previously
-  participated). Read the latest comment(s) since the notification. Only respond if:
-  - The comment is directed at the bot
-  - The comment asks a question the bot can help with
-  - The comment responds to a concern the bot raised
-  If the conversation is between humans, do not respond.
+The notifications skill is the **sole handler** for these categories — respond to them:
 
-- **`assign`** — the bot was assigned to an issue/PR. Read the context and comment acknowledging
-  the assignment. For issues, attempt triage following the approach from
-  `/tend-ci-runner:triage`. For PRs, review.
+- **Fork PR inline comments** — `pull_request_review_comment` events don't fire for the bot on fork PRs, so no other workflow picks these up. Read the comment, the diff hunk, and respond in context.
 
-- Other reasons (`state_change`, `ci_activity`, etc.) — mark as read without responding.
+- **Cross-repo mentions** — the bot was `@`-mentioned in another repository. Read the context and respond helpfully, but do not push code or create PRs in other repos (per step 3 scope rules).
 
-### 4c. Re-check before responding
+- **Stale unanswered items** — notifications where the `updated_at` timestamp is more than 30 minutes old and no bot response exists. This catches items where a dedicated workflow was expected to run but failed or was skipped. Process these as if they were new:
+  - For issues: attempt triage following `/tend-ci-runner:triage`.
+  - For PRs with review requested: load `/tend-ci-runner:review`.
+  - For mentions/comments: read context and respond helpfully.
 
-Before posting a response — especially after completing a long task (drafting release notes,
-triaging an issue, reviewing a PR) — **re-run the step 4a check** to verify the bot hasn't
-responded via a concurrent workflow (e.g., triage). If a bot comment or PR now exists that wasn't
-there when you started, do not post a duplicate — mark the notification as read and move on.
+- **`subscribed`/`comment`** on threads the bot participates in (same-repo), where the comment is directed at the bot and no dedicated workflow handled it — respond if the comment asks a question, requests changes, or replies to a concern the bot raised. If the conversation is between humans, do not respond.
 
 ### 4d. Mark as read
 
