@@ -208,8 +208,8 @@ appeared:
 ### Dedup check for inline review comment replies
 
 A single PR review can fire both `pull_request_review` and `pull_request_review_comment` events,
-triggering concurrent workflow runs. Before replying to an inline review comment, check whether
-the bot already replied:
+triggering separate workflow runs (serialized by the concurrency group, not truly concurrent).
+Before replying to an inline review comment, check whether the bot already replied:
 
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
