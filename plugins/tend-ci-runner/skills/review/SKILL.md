@@ -33,13 +33,12 @@ BOT_LOGIN=$(gh api user --jq '.login')
 HEAD_SHA=$(gh pr view <number> --json commits --jq '.commits[-1].oid')
 PR_AUTHOR=$(gh pr view <number> --json author --jq '.author.login')
 
-# Find the bot's most recent substantive review (any state).
-# Include reviews with a non-empty body OR approvals (LGTM uses --approve -b "").
-# Uses "| length > 0" instead of "!= \"\"" to avoid bash ! history expansion.
+# Find the bot's most recent review (any state counts — COMMENTED reviews carry
+# inline comments even when the body is empty).
 # IMPORTANT: `gh pr view --json reviews` returns `.commit.oid` (NOT `.commit_id`).
 # The REST API (`gh api .../reviews`) uses `.commit_id` — don't confuse the two.
 LAST_REVIEW_SHA=$(gh pr view <number> --json reviews \
-  --jq "[.reviews[] | select(.author.login == \"$BOT_LOGIN\" and ((.body | length) > 0 or .state == \"APPROVED\"))] | last | .commit.oid // empty")
+  --jq "[.reviews[] | select(.author.login == \"$BOT_LOGIN\")] | last | .commit.oid // empty")
 ```
 
 If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. The only
