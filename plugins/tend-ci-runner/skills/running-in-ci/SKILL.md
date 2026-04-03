@@ -10,12 +10,11 @@ metadata:
 ## First Steps — Load Repo-Specific Guidance
 
 Most repos have a project-specific overlay skill (typically `running-tend`) with project-specific
-CI context — which workflows tend-ci-fix watches, PR title conventions, label policies. Check for
-one and load it before doing anything else:
+CI context — which workflows tend-ci-fix watches, PR title conventions, label policies. If a
+`running-tend` skill is listed in your available skills, load it with the Skill tool before doing
+anything else.
 
-```bash
-ls .claude/skills/
-```
+Repo-local skills must have YAML frontmatter (`name` + `description`) to be auto-discovered.
 
 ## Conduct
 
