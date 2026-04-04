@@ -53,10 +53,11 @@ gh api "repos/$REPO/compare/$LAST_REVIEW_SHA...$HEAD_SHA" \
   --jq '{total: ([.files[] | .additions + .deletions] | add), files: [.files[] | "\(.filename)\t+\(.additions)/-\(.deletions)"]}'
 ```
 
-If the incremental changes are trivial, skip the full review **and do not submit a new
-approval** — the existing review stands. Go directly to step 7 to resolve any bot threads
-addressed by the new changes, then exit. Do NOT proceed to steps 2–6 (no review, no approval, no
-CI polling). Rough heuristic:
+If the incremental changes are trivial, skip the full review — go directly to step 7 to resolve
+any bot threads addressed by the new changes. After resolving threads: if the most recent bot
+review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE
+with an empty body so the PR isn't left in limbo. Otherwise do not submit a new review — the
+existing one stands. Do NOT proceed to steps 2–6. Rough heuristic:
 changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow
 are typically trivial.
 
