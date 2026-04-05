@@ -14,6 +14,10 @@ CI context — which workflows tend-ci-fix watches, PR title conventions, label 
 `running-tend` skill is listed in your available skills, load it with the Skill tool before doing
 anything else.
 
+Repo-local skills are invoked by their unprefixed name — `Skill: running-tend`, not
+`Skill: tend-ci-runner:running-tend` (that prefix is reserved for this plugin's own skills, and
+trying it returns `Unknown skill`).
+
 Repo-local skills must have YAML frontmatter (`name` + `description`) to be auto-discovered.
 
 ## Conduct
