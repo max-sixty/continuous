@@ -44,6 +44,23 @@ LAST_REVIEW_SHA=$(gh pr view <number> --json reviews \
 If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. The only
 exception: an unanswered conversation question directed at the bot (check below).
 
+**Bot-authored commits on third-party PRs:** If the bot already approved (`LAST_REVIEW_STATE` is
+`APPROVED`) and the latest commit was authored by the bot itself, exit silently — the bot pushed a
+fix (from a prior review or notification run) and there's nothing new to review. This prevents
+redundant approvals when each bot push triggers a new review run.
+
+```bash
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+BOT_LOGIN=$(gh api user --jq '.login')
+LAST_REVIEW_STATE=$(gh pr view <number> --json reviews \
+  --jq "[.reviews[] | select(.author.login == \"$BOT_LOGIN\")] | last | .state // empty")
+LATEST_COMMIT_AUTHOR=$(gh api "repos/$REPO/commits/$HEAD_SHA" \
+  --jq '.author.login // .committer.login // empty')
+```
+
+If `LAST_REVIEW_STATE == "APPROVED"` and `LATEST_COMMIT_AUTHOR == BOT_LOGIN` and
+`PR_AUTHOR != BOT_LOGIN`, exit silently.
+
 If the bot reviewed a previous commit (`LAST_REVIEW_SHA` exists but differs from `HEAD_SHA`),
 check the incremental changes:
 
