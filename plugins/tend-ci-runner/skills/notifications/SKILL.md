@@ -71,16 +71,21 @@ For each unread notification (oldest first):
 
 ### 4a. Determine if already handled
 
-Check whether the bot has already responded since the notification was generated:
+Check whether the bot has already responded since the notification was generated. `BOT_LOGIN`
+and `NOTIF_UPDATED_AT` are not pre-populated by the workflow — set them explicitly before the jq
+call (`NOTIF_UPDATED_AT` is the `updated_at` field from the notification fetched in step 1):
 
 ```bash
+BOT_LOGIN=$(gh api user --jq '.login')
+NOTIF_UPDATED_AT=<updated_at from the notification>
+
 # For issues
 gh api repos/{owner}/{repo}/issues/{number}/comments \
-  --jq '[.[] | select(.user.login == env.BOT_LOGIN and .created_at > env.NOTIF_UPDATED_AT)] | length'
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .created_at > \"$NOTIF_UPDATED_AT\")] | length"
 
 # For PRs — also check reviews
 gh api repos/{owner}/{repo}/pulls/{number}/reviews \
-  --jq '[.[] | select(.user.login == env.BOT_LOGIN and .submitted_at > env.NOTIF_UPDATED_AT)] | length'
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .submitted_at > \"$NOTIF_UPDATED_AT\")] | length"
 ```
 
 If the bot already responded after the notification timestamp, mark the notification as read and
