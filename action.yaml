@@ -182,36 +182,24 @@ runs:
 
         TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-        # Random jitter (0-5s) to reduce races when multiple jobs fail simultaneously
-        sleep $((RANDOM % 6))
+        # Prepare issue body before the check so the TOCTOU window is minimal
+        gh label create "$LABEL" --description "Tracks bot outage incidents" --color "d93f0b" 2>/dev/null || true
+        printf '%s\n\n%s\n%s\n%s\n\n%s\n' \
+          "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
+          "| When | Run | Trigger |" \
+          "|------|-----|---------|" \
+          "| ${TIMESTAMP} | [workflow run](${RUN_URL}) | ${REF:-N/A} |" \
+          "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
 
-        # Find existing open tracking issue
+        # Check-then-act with minimal gap
         EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
 
         if [ -n "$EXISTING" ]; then
-          # Append to existing tracking issue
           printf 'Failed run at %s: [workflow run](%s)%s\n' \
             "$TIMESTAMP" "$RUN_URL" "${REF:+ (triggered by ${REF})}" > /tmp/comment.md
           gh issue comment "$EXISTING" -F /tmp/comment.md
         else
-          # Create new tracking issue
-          gh label create "$LABEL" --description "Tracks bot outage incidents" --color "d93f0b" 2>/dev/null || true
-          printf '%s\n\n%s\n%s\n%s\n\n%s\n' \
-            "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
-            "| When | Run | Trigger |" \
-            "|------|-----|---------|" \
-            "| ${TIMESTAMP} | [workflow run](${RUN_URL}) | ${REF:-N/A} |" \
-            "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
           gh issue create --title "$TITLE" --label "$LABEL" -F /tmp/body.md
-
-          # Re-check: if another job raced us and created a duplicate, close ours
-          sleep 2
-          DUPES=$(gh issue list --label "$LABEL" --state open --json number --jq '[.[].number] | sort')
-          FIRST=$(echo "$DUPES" | jq '.[0]')
-          MINE=$(gh issue list --label "$LABEL" --state open --author "@me" --json number --jq '[.[].number] | sort | last')
-          if [ -n "$MINE" ] && [ "$MINE" != "$FIRST" ]; then
-            gh issue close "$MINE" --comment "Duplicate of #${FIRST} (race condition)."
-          fi
         fi
       env:
         GH_TOKEN: ${{ inputs.github_token }}
