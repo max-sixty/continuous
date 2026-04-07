@@ -192,7 +192,8 @@ jobs:
     if: |
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@{bn}')) ||
-      github.event_name == 'issue_comment' ||
+      (github.event_name == 'issue_comment' &&
+        github.event.comment.user.login != '{bn}') ||
       github.event_name == 'pull_request_review_comment' ||
       github.event_name == 'pull_request_review'
     runs-on: ubuntu-24.04
@@ -349,6 +350,8 @@ jobs:
                 && format('You were mentioned in a comment ({{0}}). Read the full issue or PR (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. A comment that responds to concerns you raised in a review is directed at you — briefly acknowledge that the concerns are resolved (or explain why they are not). If the conversation is between humans, exit silently.', github.event.comment.html_url)
             }}}}
+
+            If you are responding to your own prior comment or review (not a human's reply to it), be cautious — only respond if there is a distinct role boundary (e.g., you are the reviewer on your own PR and need to address review feedback). If there is no such role distinction, exit silently to avoid self-conversation loops.
 
             If you are going to propose a code fix for a bug, load /tend-ci-runner:triage first — it contains reproduction and testing gates that apply to all fix attempts, not just initial triage.
 """
