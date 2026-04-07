@@ -298,9 +298,6 @@ echo "CI still running after 10 minutes"
 exit 1
 ```
 
-When the loop exits (pass, fail, or timeout), **do not start another loop.** One round of polling
-is enough — if CI is still running after 10 minutes, report the status and move on.
-
 - **All required checks passed** -> done.
 - **A check failed** and it's related to the PR -> post a follow-up COMMENT review with analysis
   and inline suggestions, then dismiss the bot's approval:
