@@ -353,6 +353,8 @@ jobs:
                 && format('You were mentioned in a comment ({{0}}). Read the full issue or PR (description, diff, recent comments, CI status) and respond. If they are requesting changes, make the changes, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({{0}}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. A comment that responds to concerns you raised in a review is directed at you — briefly acknowledge that the concerns are resolved (or explain why they are not). If the conversation is between humans, exit silently.', github.event.comment.html_url)
             }}}}
+
+            If you are going to propose a code fix for a bug, load /tend-ci-runner:triage first — it contains reproduction and testing gates that apply to all fix attempts, not just initial triage.
 """
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
 
