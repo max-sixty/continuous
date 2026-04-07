@@ -365,6 +365,27 @@ If you can't find source evidence for a specific detail, say so ("I'm not sure o
 syntax") rather than guessing. An honest gap is fixable; a confident hallucination gets
 copy-pasted.
 
+### Rewriting is authoring
+
+Cross-posting, summarizing, or paraphrasing is not copying — any new content you add requires the
+same source verification as a fresh comment. If you expand with a config section header, code
+block, or usage example, verify each addition against the source.
+
+<example>
+<bad reason="Composed new TOML section header without verifying it">
+
+Bad: Cross-posted a hook snippet, added an alias example with `[step]` as the section header
+(inferred from the `wt step` command name). The actual config section is `[aliases]`.
+
+</bad>
+<good reason="Verified new content against docs before posting">
+
+Good: Cross-posted a hook snippet, added an alias example → checked `dev/*.example.toml` to
+confirm the section is `[aliases]` → posted with correct syntax.
+
+</good>
+</example>
+
 ## Tone
 
 Raise observations, don't assign work. Never create checklists or task lists for the PR author.
