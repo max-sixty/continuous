@@ -168,9 +168,6 @@ runs:
         TITLE="Bot temporarily unavailable"
         RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-        # Find existing open tracking issue
-        EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
-
         # Build a one-line reference to the triggering context
         REF=""
         if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
@@ -184,6 +181,12 @@ runs:
         fi
 
         TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        # Random jitter (0-5s) to reduce races when multiple jobs fail simultaneously
+        sleep $((RANDOM % 6))
+
+        # Find existing open tracking issue
+        EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
 
         if [ -n "$EXISTING" ]; then
           # Append to existing tracking issue
@@ -200,6 +203,15 @@ runs:
             "| ${TIMESTAMP} | [workflow run](${RUN_URL}) | ${REF:-N/A} |" \
             "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
           gh issue create --title "$TITLE" --label "$LABEL" -F /tmp/body.md
+
+          # Re-check: if another job raced us and created a duplicate, close ours
+          sleep 2
+          DUPES=$(gh issue list --label "$LABEL" --state open --json number --jq '[.[].number] | sort')
+          FIRST=$(echo "$DUPES" | jq '.[0]')
+          MINE=$(gh issue list --label "$LABEL" --state open --author "@me" --json number --jq '[.[].number] | sort | last')
+          if [ -n "$MINE" ] && [ "$MINE" != "$FIRST" ]; then
+            gh issue close "$MINE" --comment "Duplicate of #${FIRST} (race condition)."
+          fi
         fi
       env:
         GH_TOKEN: ${{ inputs.github_token }}
