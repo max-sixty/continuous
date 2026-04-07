@@ -223,10 +223,12 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
     )
     assert data[True]["pull_request_review"] == {"types": ["submitted"]}
 
-    # Verify job filters on reviewer identity
+    # Verify job passes through pull_request_review events (no bot filter)
+    # but retains bot-author filter for issue_comment (no reviewer/implementer dialog)
     verify_if = data["jobs"]["verify"]["if"]
     assert "pull_request_review" in verify_if
-    assert "github.event.review.user.login" in verify_if
+    assert "issue_comment" in verify_if
+    assert "comment.user.login" in verify_if
 
     # Handle job checks out PR branch for this event
     handle_steps = data["jobs"]["handle"]["steps"]
