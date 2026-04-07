@@ -1,6 +1,6 @@
 ---
 name: nightly
-description: Nightly code quality sweep — resolves bot PR conflicts, reviews recent commits, surveys existing code, and closes resolved issues.
+description: Nightly code quality sweep — resolves bot PR conflicts, reviews recent commits, surveys existing code, and checks resolved issues.
 metadata:
   internal: true
 ---
@@ -52,7 +52,7 @@ Read the project's CLAUDE.md before reviewing. Apply the review checklist below 
 focusing on changes rather than unchanged code. Also check whether CLAUDE.md itself needs updating
 to reflect the new code (e.g., new file paths, changed commands, removed patterns).
 
-## Step 3: Check existing issues and close resolved ones
+## Step 3: Check existing issues
 
 ```bash
 gh issue list --state open --json number,title
@@ -60,7 +60,9 @@ gh pr list --state open --json number,title,headRefName
 ```
 
 For each open issue, check whether recent commits or the current codebase state already resolve
-it. If resolved, comment briefly and close with `gh issue close`. Skip partially unresolved issues.
+it. If resolved, comment with the evidence (commits, CI runs, or code state that resolves the
+issue). Only close the issue with `gh issue close` if the repo's guidance (e.g., `running-tend`
+skill) explicitly authorizes closing issues. Otherwise, leave it open for a maintainer to close.
 
 ## Step 4: Rolling survey
 
