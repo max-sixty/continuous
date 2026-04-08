@@ -172,27 +172,6 @@ For tend-specific guidance, add a skill overlay at
 `.claude/skills/running-tend/SKILL.md`. Common uses: recording which CI
 workflow names `tend-ci-fix` watches, PR title conventions, label policies.
 
-## Limitations
-
-### Inline review comments on fork PRs
-
-GitHub has no event type that provides secret access for inline code review
-comments on fork PRs. `pull_request_review_comment` fires, but
-[secrets are unavailable for fork-triggered workflows][gh-secrets-forks].
-Unlike `pull_request` (which has `pull_request_target`), there is no
-`pull_request_review_comment_target` — GitHub has
-[no plans to add one][gh-discussion-55940].
-
-`tend-mention` cannot respond to inline review comments on fork PRs.
-Conversation-tab comments work — `issue_comment` runs in the base repository
-context with full secret access.
-
-**Workaround:** use the conversation tab, not inline comments, when
-interacting with the bot on fork PRs.
-
-[gh-secrets-forks]: https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions#using-secrets-in-a-workflow
-[gh-discussion-55940]: https://github.com/orgs/community/discussions/55940
-
 ## License
 
 MIT
