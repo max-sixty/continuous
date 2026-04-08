@@ -1,0 +1,135 @@
+# # Configuration
+#
+# Place at `.config/tend.toml`. Regenerate workflows after editing:
+#
+#   uvx tend@latest init
+#
+# Only `bot_name` is required. Everything else has sensible defaults.
+
+bot_name = "my-project-bot"
+
+# ## Protected branches
+#
+# The default branch is always protected. Additional branches (release tracks,
+# major-version branches) can be listed here — the bot cannot merge to any of
+# them without human approval.
+#
+# protected_branches = ["v1", "v2"]
+
+# ## Secrets
+#
+# Two repo secrets are required:
+#
+# | Secret                    | Value                                                       |
+# |---------------------------|-------------------------------------------------------------|
+# | `BOT_TOKEN`               | Bot account PAT (see scopes below)                          |
+# | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (PKCE flow, not an API key)         |
+#
+# Classic PAT scopes: `repo`, `workflow`, `notifications`, `write:discussion`.
+# `workflow` is required to push commits that modify `.github/workflows/` files.
+#
+# Fine-grained PAT permissions: `contents:write`, `pull-requests:write`,
+# `issues:write`, `actions:write`, `workflows:write`, `discussions:write`.
+#
+# Override names if the repo uses different secret names:
+#
+# [secrets]
+# bot_token = "MY_BOT_PAT"
+# claude_token = "MY_CLAUDE_TOKEN"
+#
+# `tend check` flags repo-level secrets not in an explicit allowlist. Repos with
+# additional legitimate secrets must list them:
+#
+# [secrets]
+# allowed = ["CODECOV_TOKEN", "DEPLOY_KEY"]
+
+# ## Setup steps
+#
+# Build tools, caches, and environment variables that run before Claude in every
+# workflow. Three forms:
+#
+# - `uses` — a GitHub Action (local composite or marketplace)
+# - `run`  — a shell command
+# - `raw`  — verbatim YAML (for actions needing `with:` parameters)
+
+# [[setup]]
+# uses = "astral-sh/setup-uv@v6"
+#
+# [[setup]]
+# run = "echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"
+#
+# [[setup]]
+# raw = """
+# - uses: Swatinem/rust-cache@v2
+#   with:
+#     save-if: false
+# """
+#
+# For complex setups, a local composite action
+# (`.github/actions/tend-setup/action.yaml`) referenced via `uses` is cleaner.
+
+# ## Workflows
+#
+# All workflows are enabled by default except ci-fix (requires
+# `watched_workflows`). Every workflow accepts these options:
+#
+# - `enabled` (bool)  — disable with `enabled = false`
+# - `prompt` (string) — override the default skill invocation
+#
+# Scheduled workflows also accept `cron` to override their default schedule.
+#
+# [workflows.notifications]
+# enabled = false
+
+# ### review
+#
+# Triggers on PR open/update. Reviews for correctness, duplication, error paths.
+# Monitors CI. Pushes mechanical fixes to bot-authored PRs.
+#
+# [workflows.review]
+# prompt = "/my-custom-review {pr_number}"    # override default prompt
+
+# ### mention
+#
+# Triggers on @bot mentions and review comments. Responds to requests in PR and
+# issue conversations.
+
+# ### triage
+#
+# Triggers on new issues. Classifies, checks for duplicates, reproduces bugs,
+# attempts conservative fixes.
+
+# ### ci-fix
+#
+# Triggers when a watched CI workflow fails on the default branch. Reads failure
+# logs, identifies root cause, opens a fix PR.
+#
+# [workflows.ci-fix]
+# watched_workflows = ["ci", "build"]         # required — names of CI workflows to monitor
+# branches = ["main", "v1"]                   # optional — defaults to default branch only
+
+# ### nightly
+#
+# Daily (default 06:17 UTC). Resolves conflicts on open PRs, reviews recent
+# commits, surveys ~10 files for bugs and stale docs, closes resolved issues.
+#
+# [workflows.nightly]
+# cron = "0 8 * * *"                          # override schedule
+
+# ### weekly
+#
+# Weekly (default Sunday 09:17 UTC). Regenerates tend workflow files, reviews
+# dependency PRs, auto-merges safe patch and minor updates.
+#
+# [workflows.weekly]
+# cron = "0 10 * * 1"                         # override to Monday
+
+# ### notifications
+#
+# Every 15 minutes. Polls GitHub notifications, responds to unhandled mentions,
+# marks handled threads as read.
+
+# ### review-runs
+#
+# Daily (default 07:47 UTC). Reviews recent workflow runs for flaky tests and
+# recurring failures.

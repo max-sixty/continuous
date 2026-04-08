@@ -88,80 +88,16 @@ Full threat model: [docs/security-model.md](docs/security-model.md).
 bot_name = "my-project-bot"
 ```
 
-### Secrets
-
-Two repo secrets:
+Two repo secrets are required:
 
 | Secret                    | Value                                                                                                                       |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `BOT_TOKEN`               | Bot account PAT — classic with `repo` scope, or fine-grained with `contents:write`, `pull-requests:write`, `issues:write`   |
+| `BOT_TOKEN`               | Bot account PAT — classic with `repo`+`workflow` scopes, or fine-grained (see [example config](docs/tend.example.toml)) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (via PKCE flow, not an API key)                                                                     |
 
-Override names if needed:
-
-```toml
-[secrets]
-bot_token = "MY_BOT_PAT"
-claude_token = "MY_CLAUDE_TOKEN"
-```
-
-`tend check` flags repo-level secrets not in an explicit allowlist. Repos with
-additional legitimate secrets must list them:
-
-```toml
-[secrets]
-allowed = ["CODECOV_TOKEN"]
-```
-
-Release secrets (registry tokens, signing keys) belong in a protected GitHub
-Environment — see [security model](docs/security-model.md).
-
-### Protected branches
-
-The default branch is always protected. Additional branches:
-
-```toml
-protected_branches = ["v1", "v2"]
-```
-
-### Setup steps
-
-Build tools, caches, and environment variables that run before Claude:
-
-```toml
-setup = [
-  {uses = "./.github/actions/my-setup"},
-  {run = "echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"},
-]
-```
-
-For actions needing `with:` parameters, `raw` injects verbatim YAML:
-
-```toml
-setup = [
-  {uses = "cargo-bins/cargo-binstall@main"},
-  {run = "cargo binstall cargo-insta --no-confirm"},
-  {raw = """
-- uses: Swatinem/rust-cache@v2
-  with:
-    save-if: false
-"""},
-]
-```
-
-For complex setups, a local composite action
-(`.github/actions/tend-setup/action.yaml`) referenced via `uses` is cleaner.
-
-### Workflow overrides
-
-```toml
-[workflows.ci-fix]
-watched_workflows = ["ci", "build"]   # required for ci-fix
-
-[workflows.nightly]
-cron = "0 8 * * *"                    # override default schedule
-prompt = "/my-custom-nightly"         # override the default prompt
-```
+All other options — secret name overrides, setup steps, protected branches,
+workflow overrides, schedules — are documented in
+[`docs/tend.example.toml`](docs/tend.example.toml).
 
 ## Project context
 
