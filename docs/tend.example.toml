@@ -131,5 +131,5 @@ bot_name = "my-project-bot"
 
 # ### review-runs
 #
-# Daily (default 07:47 UTC). Reviews recent workflow runs for flaky tests and
-# recurring failures.
+# Daily (default 07:47 UTC). Reviews recent CI runs for behavioral problems
+# and proposes skill/config improvements.

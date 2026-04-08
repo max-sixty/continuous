@@ -29,12 +29,14 @@ documents each step.
 | **mention**       | @bot mention, review        | Responds to requests in PR and issue conversations.                                                                        |
 | **triage**        | Issue opened                | Classifies the issue, checks for duplicates, reproduces bugs, attempts conservative fixes.                                 |
 | **ci-fix**        | CI fails on default branch  | Reads failure logs, identifies root cause, searches for the same pattern elsewhere, opens a fix PR.                        |
-| **nightly**       | Daily / manual dispatch     | Resolves conflicts on open PRs, reviews recent commits, surveys ~10 files for bugs and stale docs, closes resolved issues. |
-| **weekly**        | Weekly / manual dispatch    | Regenerates tend workflow files, reviews dependency PRs, auto-merges safe patch and minor updates.                         |
+| **nightly**       | Daily                       | Resolves conflicts on open PRs, reviews recent commits, surveys ~10 files for bugs and stale docs, closes resolved issues. |
+| **weekly**        | Weekly                      | Regenerates tend workflow files, reviews dependency PRs, auto-merges safe patch and minor updates.                         |
 | **notifications** | Every 15 minutes            | Polls GitHub notifications, responds to unhandled mentions, marks handled threads as read.                                 |
+| **review-runs**   | Daily                       | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                     |
 
-All are enabled by default except **ci-fix**, which requires
-`watched_workflows` to be configured. Any can be disabled:
+Scheduled workflows also support manual dispatch for testing. All are
+enabled by default except **ci-fix**, which requires `watched_workflows`
+to be configured. Any can be disabled:
 
 ```toml
 [workflows.weekly]
