@@ -237,6 +237,7 @@ from defaults. Examples of things that vary between projects:
 - Labels the bot should apply to its PRs
 - Review request routing (specific teams or people)
 - Target branch if not the default branch
+- Optional nightly actions (e.g., changelog maintenance — specify file and branch)
 
 If the user has preferences, add them. Otherwise create a placeholder:
 
