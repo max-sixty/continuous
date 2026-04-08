@@ -10,7 +10,7 @@ merge restriction prevents the bot from merging unreviewed code.
 
 ```sh
 claude plugin marketplace add max-sixty/tend
-claude plugin install install-tend
+claude plugin install install-tend@tend
 /install-tend my-project-bot
 ```
 
