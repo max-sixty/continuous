@@ -40,20 +40,29 @@ def _reindent(text: str, indent: int) -> str:
     )
 
 
-def _setup_yaml(cfg: Config, indent: int = 6) -> str:
+def _setup_yaml(cfg: Config, indent: int = 6, condition: str = "") -> str:
     """Render setup steps as YAML, indented to `indent` spaces.
 
     Returns empty string when no steps, or newline-prefixed block when present,
     so templates can write `{setup}` without extra blank lines.
+
+    When *condition* is set, each step gets an ``if:`` guard.
     """
     pad = " " * indent
+    if_line = f"\n{pad}  if: {condition}" if condition else ""
     lines = []
     for step in cfg.setup:
         if step.uses:
-            lines.append(f"{pad}- uses: {step.uses}")
+            lines.append(f"{pad}- uses: {step.uses}{if_line}")
         elif step.run:
-            lines.append(f"{pad}- run: {step.run}")
+            lines.append(f"{pad}- run: {step.run}{if_line}")
         elif step.raw:
+            if condition:
+                click.echo(
+                    "Warning: raw setup steps cannot be conditionally skipped; "
+                    "notifications pre-check will not gate this step",
+                    err=True,
+                )
             lines.append(_reindent(step.raw, indent))
     if not lines:
         return ""
@@ -543,9 +552,68 @@ def generate_weekly(cfg: Config) -> GeneratedWorkflow:
 
 
 def generate_notifications(cfg: Config) -> GeneratedWorkflow:
-    return _generate_scheduled(
-        cfg, "notifications", "*/15 * * * *", "/tend-ci-runner:notifications"
+    wf = cfg.workflows.get("notifications", WorkflowConfig())
+    cron = wf.cron or "*/15 * * * *"
+    prompt = wf.prompt or "/tend-ci-runner:notifications"
+    bt = _bot_token(cfg)
+    ct = _claude_token(cfg)
+    bn = cfg.bot_name
+
+    skip_condition = (
+        "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'"
     )
+    setup = _setup_yaml(cfg, condition=skip_condition)
+    perms = _permissions()
+
+    prompt_lines = "\n".join(f"            {line}" for line in prompt.split("\n"))
+    prompt_yaml = f"prompt: |\n{prompt_lines}"
+
+    content = f"""\
+{HEADER}
+name: tend-notifications
+on:
+  schedule:
+    - cron: "{cron}"
+  workflow_dispatch:
+
+jobs:
+  notifications:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+{perms}
+    steps:
+      - name: Check for unread notifications
+        id: check
+        run: |
+          COUNT=$(gh api notifications --jq 'length')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" = "0" ]; then
+            echo "No unread notifications — skipping"
+          else
+            echo "$COUNT unread notification(s) — proceeding"
+          fi
+        env:
+          GH_TOKEN: {bt}
+
+      - uses: actions/checkout@v6
+        if: {skip_condition}
+        with:
+          ref: {cfg.default_branch}
+          fetch-depth: 0
+          fetch-tags: true
+          token: {bt}
+{setup}\
+      - uses: max-sixty/tend@v1
+        if: {skip_condition}
+        with:
+          github_token: {bt}
+          claude_code_oauth_token: {ct}
+          bot_name: {bn}
+          model: {cfg.model}
+          {prompt_yaml}
+"""
+    return GeneratedWorkflow(filename="tend-notifications.yaml", content=content)
 
 
 def generate_review_runs(cfg: Config) -> GeneratedWorkflow:

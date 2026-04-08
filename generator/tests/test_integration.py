@@ -380,6 +380,38 @@ def test_init_mention_workflow_has_two_jobs(
 
 
 # ---------------------------------------------------------------------------
+# Notifications pre-check
+# ---------------------------------------------------------------------------
+
+
+def test_init_notifications_has_precheck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notifications workflow checks for unread notifications before
+    invoking Claude, and skips all subsequent steps when count is 0."""
+    _write_config(tmp_path, 'bot_name = "test-bot"')
+    monkeypatch.chdir(tmp_path)
+    _run_init()
+
+    data = yaml.safe_load(
+        (_workflow_dir(tmp_path) / "tend-notifications.yaml").read_text()
+    )
+    steps = data["jobs"]["notifications"]["steps"]
+
+    # First step is the pre-check
+    check_step = steps[0]
+    assert check_step["id"] == "check"
+    assert "gh api notifications" in check_step["run"]
+
+    # All subsequent steps are gated on the check output
+    for step in steps[1:]:
+        assert "if" in step, f"step {step.get('uses', step.get('name'))} missing if guard"
+        assert "steps.check.outputs.count" in step["if"]
+        # workflow_dispatch bypasses the pre-check
+        assert "workflow_dispatch" in step["if"]
+
+
+# ---------------------------------------------------------------------------
 # Bot name flows into workflow content
 # ---------------------------------------------------------------------------
 
