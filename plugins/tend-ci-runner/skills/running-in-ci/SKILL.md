@@ -190,13 +190,13 @@ Reply in context rather than creating new top-level comments:
 
 ## Multi-way Conversations
 
-Before responding, check how many distinct human participants are in the conversation.
+Before responding, check how many distinct other participants are in the conversation.
 
-- **Two-party** (you and one human): respond normally — you are the only other participant.
-- **Multi-way** (other humans are also participating): apply a stricter bar. Only respond if you have concrete new information that no other participant has provided: a code fix, a reproduction, a specific technical detail, or an answer to a direct question.
+- **Two-party** (you and one other participant): respond normally — you are the only other participant.
+- **Multi-way** (other participants are also active): apply a stricter bar. Only respond if you have concrete new information that no other participant has provided: a code fix, a reproduction, a specific technical detail, or an answer to a direct question.
 
 Do not:
-- Restate, agree with, or summarize what a maintainer or other human just said
+- Restate, agree with, or summarize what a maintainer or other participant just said
 - Post "makes sense" or "good point" agreement comments
 - Defer a design decision to a maintainer who already stated their position
 - Summarize a user's own findings back to them with cheerful openers ("Good find!", "That's the smoking gun!")
