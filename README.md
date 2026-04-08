@@ -172,12 +172,6 @@ For tend-specific guidance, add a skill overlay at
 `.claude/skills/running-tend/SKILL.md`. Common uses: recording which CI
 workflow names `tend-ci-fix` watches, PR title conventions, label policies.
 
-## Migrating from claude-code-action
-
-Delete existing `anthropics/claude-code-action` workflows — tend replaces
-them. Verify no other workflows reference `anthropics/claude-code-action`.
-Update team members to @-mention the bot account instead of `@claude`.
-
 ## Limitations
 
 ### Inline review comments on fork PRs
