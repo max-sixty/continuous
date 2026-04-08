@@ -158,6 +158,12 @@ exit 1
    push, repeat.
 3. Report completion only after all required checks pass.
 
+**When your push adds or modifies CI jobs**, also verify those specific jobs pass — don't rely
+solely on `--required`. Newly added jobs are typically not yet required. After the required-checks
+loop completes, run `gh pr checks <number>` (without `--required`) and confirm any job you
+created or changed has passed. If it failed, diagnose and fix before reporting success. Do not
+assume a new job "didn't run" based on path filters — check the actual results.
+
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
 ```bash
