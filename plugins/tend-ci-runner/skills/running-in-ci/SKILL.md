@@ -188,6 +188,20 @@ Reply in context rather than creating new top-level comments:
 - **Conversation comments** (`#issuecomment-`): Post a regular comment (GitHub doesn't support
   threading).
 
+## Multi-way Conversations
+
+Before responding, check how many distinct other participants are in the conversation.
+
+- **Two-party** (you and one other participant): respond normally.
+- **Multi-way** (multiple other participants): apply a stricter bar — only respond with concrete new information no one else provided: a code fix, reproduction, or specific technical detail.
+
+Do not:
+- Restate, agree with, or summarize what another participant just said
+- Post "makes sense" or "good point" agreement comments
+- Echo a user's findings back to them ("Good find!", "That's the smoking gun!")
+
+If a maintainer has already addressed the point, exit silently unless you can add something they missed.
+
 ## Recheck Before Posting
 
 **Before posting any comment or review**, re-fetch the current conversation state. Other
