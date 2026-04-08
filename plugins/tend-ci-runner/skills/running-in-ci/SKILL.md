@@ -272,42 +272,6 @@ hardcode the organization in URLs.
 
 Don't add job links or footers — `claude-code-action` adds these automatically.
 
-## Shell Quoting
-
-Shell expansion corrupts `$` and `!` in arguments (bash history expansion mangles `!` in
-double-quoted strings). Always use a temp file for comment bodies and shell-sensitive arguments:
-
-```bash
-# Comments — ALWAYS use a file
-cat > /tmp/comment.md << 'EOF'
-Fixed — the `format!` macro needed its arguments on separate lines.
-EOF
-gh pr comment 1286 -F /tmp/comment.md
-
-# Review replies — ALWAYS use a file
-cat > /tmp/reply.md << 'EOF'
-Good catch! Updated to use `assert_eq!` instead.
-EOF
-gh api repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies \
-  -F body=@/tmp/reply.md
-
-# GraphQL — write query to a file
-cat > /tmp/query.graphql << 'GRAPHQL'
-query($owner: String!, $repo: String!) { ... }
-GRAPHQL
-gh api graphql -F query=@/tmp/query.graphql -f owner="$OWNER"
-
-# jq with ! — use a file
-cat > /tmp/jq_filter << 'EOF'
-select(.status != "COMPLETED")
-EOF
-gh api ... --jq "$(cat /tmp/jq_filter)"
-```
-
-Use `<< 'EOF'` (single-quoted delimiter) to prevent expansion. For file-based bodies:
-`gh pr comment` uses `-F /tmp/file` (path directly), while `gh api` uses `-F body=@/tmp/file`
-(field assignment with `@` prefix).
-
 ## Keeping PR Titles and Descriptions Current
 
 When revising code after review feedback, update the title and description if the approach changed:
