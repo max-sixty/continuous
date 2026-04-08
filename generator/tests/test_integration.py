@@ -7,6 +7,8 @@ individual functions. These tests run the CLI against a temp directory with a
 
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
@@ -245,6 +247,84 @@ def test_check_passes_repo_flag(
     mock_check.assert_called_once()
     _, repo_arg = mock_check.call_args.args
     assert repo_arg == "owner/repo"
+
+
+def _make_completed(
+    stdout: str = "", stderr: str = "", returncode: int = 0
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[str]:
+    """Simulate a gh CLI where all checks pass for owner/repo."""
+    url = args[1]
+    if url == "repos/owner/repo" and ".default_branch" in args:
+        return _make_completed("main\n")
+    if "rules/branches" in url:
+        return _make_completed(json.dumps([{"type": "update"}]))
+    if "branches" in url:
+        return _make_completed("true\n")
+    if "collaborators" in url:
+        return _make_completed("write\n")
+    if "secrets" in url:
+        return _make_completed('["BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+    return _make_completed(returncode=1)
+
+
+def test_check_full_pipeline_with_mocked_gh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise the full check pipeline: CLI → run_all_checks → individual
+    check functions → mocked _gh. Verifies wiring between cli.py and checks.py."""
+    _write_config(tmp_path, 'bot_name = "test-bot"')
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
+    ):
+        result = CliRunner().invoke(main, ["check", "--repo", "owner/repo"])
+
+    assert result.exit_code == 0
+    assert "FAIL" not in result.output
+    # All four check types should report PASS
+    assert result.output.count("PASS") == 4
+
+
+def test_check_full_pipeline_branch_not_protected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing branch protection check propagates through to CLI exit code 1."""
+    _write_config(tmp_path, 'bot_name = "test-bot"')
+    monkeypatch.chdir(tmp_path)
+
+    def fake_gh_unprotected(
+        *args: str, **kwargs: str
+    ) -> subprocess.CompletedProcess[str]:
+        url = args[1]
+        if url == "repos/owner/repo" and ".default_branch" in args:
+            return _make_completed("main\n")
+        if "rules/branches" in url:
+            return _make_completed(json.dumps([]))
+        if "branches/main" in url and ".protected" in args:
+            return _make_completed("false\n")
+        if "collaborators" in url:
+            return _make_completed("write\n")
+        if "secrets" in url:
+            return _make_completed('["BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+        return _make_completed(returncode=1)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=fake_gh_unprotected),
+    ):
+        result = CliRunner().invoke(main, ["check", "--repo", "owner/repo"])
+
+    assert result.exit_code == 1
+    assert "FAIL" in result.output
+    assert "NOT protected" in result.output
 
 
 # ---------------------------------------------------------------------------
