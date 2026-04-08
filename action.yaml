@@ -182,21 +182,36 @@ runs:
 
         TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+        # Fetch error annotations from the current (in-progress) job
+        ERRORS=""
+        JOB_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+          --jq '[.jobs[] | select(.status == "in_progress")] | first | .id' 2>/dev/null || true)
+        if [ -n "$JOB_ID" ] && [ "$JOB_ID" != "null" ]; then
+          ERRORS=$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${JOB_ID}/annotations" \
+            --jq '[.[] | select(.annotation_level == "failure") | .message] | join("\n")' 2>/dev/null || true)
+        fi
+
+        ERROR_BLOCK=""
+        if [ -n "$ERRORS" ]; then
+          printf -v ERROR_BLOCK '\n<details><summary>Error details</summary>\n\n```\n%s\n```\n\n</details>\n' "$ERRORS"
+        fi
+
         # Prepare issue body before the check so the TOCTOU window is minimal
         gh label create "$LABEL" --description "Tracks bot outage incidents" --color "d93f0b" 2>/dev/null || true
-        printf '%s\n\n%s\n%s\n%s\n\n%s\n' \
+        printf '%s\n\n%s\n%s\n%s\n%s\n%s\n' \
           "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
           "| When | Run | Trigger |" \
           "|------|-----|---------|" \
           "| ${TIMESTAMP} | [workflow run](${RUN_URL}) | ${REF:-N/A} |" \
+          "$ERROR_BLOCK" \
           "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
 
         # Check-then-act with minimal gap
         EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
 
         if [ -n "$EXISTING" ]; then
-          printf 'Failed run at %s: [workflow run](%s)%s\n' \
-            "$TIMESTAMP" "$RUN_URL" "${REF:+ (triggered by ${REF})}" > /tmp/comment.md
+          printf 'Failed run at %s: [workflow run](%s)%s\n%s\n' \
+            "$TIMESTAMP" "$RUN_URL" "${REF:+ (triggered by ${REF})}" "$ERROR_BLOCK" > /tmp/comment.md
           gh issue comment "$EXISTING" -F /tmp/comment.md
         else
           gh issue create --title "$TITLE" --label "$LABEL" -F /tmp/body.md
