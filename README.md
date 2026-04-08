@@ -1,5 +1,11 @@
 <h1><img src="assets/logo-512.png" alt="tend logo" width="50" align="absmiddle">Tend</h1>
 
+[![PyPI](https://img.shields.io/pypi/v/tend?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/tend/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![CI](https://img.shields.io/github/actions/workflow/status/max-sixty/tend/ci.yaml?event=push&branch=main&style=for-the-badge&logo=github)](https://github.com/max-sixty/tend/actions?query=branch%3Amain+workflow%3Aci)
+[![maintained with tend](https://img.shields.io/badge/maintained_with-tend-blue?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTguNSAxNGEuNS41IDAgMCAxLTEgMFY4LjdDNSA4LjMgMyA2IDMgMy41YS41LjUgMCAwIDEgLjUtLjVDNi41IDMgOCA1IDggNy41IDggNSA5LjUgMyAxMi41IDNhLjUuNSAwIDAgMSAuNS41QzEzIDYgMTEgOC4zIDguNSA4LjdaIi8+PC9zdmc+Cg==)](https://github.com/max-sixty/tend)
+<!-- [![Stars](https://img.shields.io/github/stars/max-sixty/tend?style=for-the-badge&logo=github)](https://github.com/max-sixty/tend/stargazers) -->
+
 Tend runs Claude Code as a GitHub Actions bot. It reviews pull requests,
 triages issues, fixes CI failures, and sweeps the repo on a schedule. A
 merge restriction prevents the bot from merging unreviewed code.
@@ -107,6 +113,16 @@ commands, project conventions all go there.
 For tend-specific guidance, add a skill overlay at
 `.claude/skills/running-tend/SKILL.md`. Common uses: recording which CI
 workflow names `tend-ci-fix` watches, PR title conventions, label policies.
+
+## Badge
+
+A badge signals the repo is maintained with tend:
+
+```markdown
+[![maintained with tend](https://img.shields.io/badge/maintained_with-tend-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTguNSAxNGEuNS41IDAgMCAxLTEgMFY4LjdDNSA4LjMgMyA2IDMgMy41YS41LjUgMCAwIDEgLjUtLjVDNi41IDMgOCA1IDggNy41IDggNSA5LjUgMyAxMi41IDNhLjUuNSAwIDAgMSAuNS41QzEzIDYgMTEgOC4zIDguNSA4LjdaIi8+PC9zdmc+Cg==)](https://github.com/max-sixty/tend)
+```
+
+The install-tend skill offers to add this automatically during setup.
 
 ## License
 

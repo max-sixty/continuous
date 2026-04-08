@@ -249,15 +249,36 @@ needed — this file is loaded by tend workflows alongside CLAUDE.md.
 Build commands, test commands, code style, and project structure belong
 in CLAUDE.md — tend reads it like any other Claude session.
 
-## 9. Commit and push
+## 9. Offer to add a badge
 
-Stage only the generated files:
+If the repo has a README (any of `README.md`, `README.rst`, `README`), offer
+to add a "maintained with tend" badge.
 
-```bash
-git add .config/tend.toml .github/workflows/tend-*.yaml .claude/skills/running-tend/
+Base URL (always include the logo):
+
+```
+https://img.shields.io/badge/maintained_with-tend-blue?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTguNSAxNGEuNS41IDAgMCAxLTEgMFY4LjdDNSA4LjMgMyA2IDMgMy41YS41LjUgMCAwIDEgLjUtLjVDNi41IDMgOCA1IDggNy41IDggNSA5LjUgMyAxMi41IDNhLjUuNSAwIDAgMSAuNS41QzEzIDYgMTEgOC4zIDguNSA4LjdaIi8+PC9zdmc+Cg==
 ```
 
-Also stage any setup actions created for tend (e.g., `.github/actions/tend-setup/`).
+Match the `style` parameter used by existing badges in the README. For
+example, if the repo uses `style=for-the-badge`, append
+`&style=for-the-badge` to the URL. If no existing badges or no style
+parameter, use the default (no style parameter needed).
+
+Show the user the rendered badge and ask before inserting. Place it near
+the top of the README — after the title/heading but before the first
+paragraph. If there are already badges on that line, append to the same
+line.
+
+If no README exists, skip this step.
+
+## 10. Commit and push
+
+Stage all changes:
+
+```bash
+git add .
+```
 
 Commit with co-author attribution. Do NOT push without explicit permission.
 
@@ -273,4 +294,5 @@ After completing all steps, present this checklist:
 - [ ] Ruleset: merge restriction on default branch, admin bypass
 - [ ] Bot access: write collaborator, invitation accepted
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
+- [ ] Badge: offered to add to README (optional)
 - [ ] Committed (push requires explicit permission)
