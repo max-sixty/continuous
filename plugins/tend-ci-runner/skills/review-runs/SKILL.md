@@ -40,14 +40,25 @@ done
 
 If no runs found, report "no runs to review" and exit.
 
-## Step 2: Download and analyze session logs
+## Step 2: Token usage report
+
+Run the token report script to get per-run token counts:
+
+```bash
+"${CLAUDE_SKILL_DIR}/../scripts/token-report.sh" 12 > /tmp/token-report.json
+```
+
+Include the totals and per-workflow breakdown in the summary (Step 6). Flag any
+runs with unusually high token usage for closer inspection in Step 3.
+
+## Step 3: Download and analyze session logs
 
 Load `/install-tend:debug-ci-session` for download commands and JSONL parsing queries.
 
 Skip runs without artifacts. Trace decision chains: what did Claude decide, what evidence did it
 use, what was the outcome?
 
-## Step 3: Cross-check outcomes
+## Step 4: Cross-check outcomes
 
 For each analyzed run, compare what the bot did against what happened next:
 
@@ -63,7 +74,7 @@ gh pr list --author "$BOT_LOGIN" --state all --json number,title,state,closedAt 
   --jq '.[] | select(.closedAt > "'$SINCE'")'
 ```
 
-## Step 4: Deduplicate
+## Step 5: Deduplicate
 
 Before creating issues or PRs, check for existing ones:
 
@@ -75,7 +86,7 @@ gh issue list --state closed --json number,title,closedAt --limit 30
 
 Search titles AND bodies for related keywords.
 
-## Step 5: Act on findings
+## Step 6: Act on findings
 
 Improvements target **repo-local** files:
 
@@ -96,7 +107,7 @@ Improvements target **repo-local** files:
 **Limit to at most 2 PRs per run.** Pick the highest-confidence findings; note the rest in the
 tracking issue.
 
-## Step 6: Summary
+## Step 7: Summary
 
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, sessions
 reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking

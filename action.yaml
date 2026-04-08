@@ -41,6 +41,13 @@ inputs:
     default: "actions: read"
     description: Additional permissions for claude-code-action
 
+outputs:
+  token_usage:
+    description: >-
+      JSON object with token usage: input_tokens, output_tokens,
+      cache_creation_input_tokens, cache_read_input_tokens, turns
+    value: ${{ steps.tokens.outputs.usage }}
+
 runs:
   using: composite
   steps:
@@ -159,6 +166,44 @@ runs:
           --model ${{ inputs.model }}
           --allowedTools ${{ inputs.allowed_tools }}
           --append-system-prompt "${{ inputs.system_prompt_append }}"
+
+    - name: Token usage
+      if: always()
+      id: tokens
+      shell: bash
+      run: |
+        LOGS_DIR="/home/runner/.claude/projects"
+        mkdir -p "$LOGS_DIR"
+
+        mapfile -t FILES < <(find "$LOGS_DIR" -name "*.jsonl" -type f 2>/dev/null)
+
+        if [ ${#FILES[@]} -eq 0 ]; then
+          USAGE='{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"turns":0}'
+        else
+          USAGE=$(cat "${FILES[@]}" | jq -s '
+            [.[] | select(.type == "assistant") | .message.usage | select(.)] |
+            {
+              input_tokens: (map(.input_tokens // 0) | add // 0),
+              output_tokens: (map(.output_tokens // 0) | add // 0),
+              cache_creation_input_tokens: (map(.cache_creation_input_tokens // 0) | add // 0),
+              cache_read_input_tokens: (map(.cache_read_input_tokens // 0) | add // 0),
+              turns: length
+            }')
+        fi
+
+        echo "$USAGE" > "$LOGS_DIR/token-usage.json"
+        echo "usage=$(jq -c . <<< "$USAGE")" >> "$GITHUB_OUTPUT"
+
+        jq -r '
+          "## Token Usage",
+          "| Metric | Tokens |",
+          "|--------|--------|",
+          "| Input | \(.input_tokens) |",
+          "| Output | \(.output_tokens) |",
+          "| Cache creation | \(.cache_creation_input_tokens) |",
+          "| Cache read | \(.cache_read_input_tokens) |",
+          "| Turns | \(.turns) |"
+        ' <<< "$USAGE" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Report failure
       if: failure() && steps.claude.outcome == 'failure'
