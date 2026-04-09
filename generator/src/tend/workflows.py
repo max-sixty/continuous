@@ -204,8 +204,10 @@ jobs:
         contains(github.event.issue.body, '@{bn}')) ||
       (github.event_name == 'issue_comment' &&
         github.event.comment.user.login != '{bn}') ||
-      github.event_name == 'pull_request_review_comment' ||
-      github.event_name == 'pull_request_review'
+      (github.event_name == 'pull_request_review_comment' &&
+        github.event.comment.user.login != '{bn}') ||
+      (github.event_name == 'pull_request_review' &&
+        github.event.review.user.login != '{bn}')
     runs-on: ubuntu-24.04
     outputs:
       should_run: ${{{{ steps.check.outputs.should_run }}}}
