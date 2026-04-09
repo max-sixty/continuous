@@ -5,8 +5,6 @@ description: Sets up tend (Claude-powered CI) on a GitHub repo. Creates config, 
 
 # Install Tend
 
-@README.md for config options and available settings.
-
 Set up tend on the current repo. Ask the user for the bot name if not provided.
 
 Follow each step in order. Skip steps that are already done — check each
@@ -249,39 +247,9 @@ gh secret list --repo "$REPO"
 All invitation acceptance in this step uses the bot's PAT from step 8 via
 `GH_TOKEN=<bot-pat>` to authenticate as the bot.
 
-Check whether the repo belongs to a GitHub organization:
-
-```bash
-gh api "repos/$REPO" --jq '.owner.type'
-```
-
-### Organization repos
-
-The bot must be an org member, not just an outside collaborator. Outside
-collaborators have been observed to get empty `secrets.BOT_TOKEN` when
-their actions trigger workflows (e.g., the bot submits a review, firing
-`tend-mention`), causing the verify step to fail with exit code 4.
-
-Check existing membership:
-
-```bash
-gh api "orgs/<org>/members/<bot-name>" && echo "ALREADY MEMBER" || echo "NOT MEMBER"
-```
-
-If not a member, invite and accept. The invite requires org admin
-access — if the user lacks it, ask them to have an org admin invite the
-bot manually, then accept via the API call below:
-
-```bash
-gh api "orgs/<org>/memberships/<bot-name>" -X PUT -f role=member
-GH_TOKEN=<bot-pat> gh api "user/memberships/orgs/<org>" -X PATCH -f state=active
-gh api "orgs/<org>/members/<bot-name>" && echo "MEMBER" || echo "NOT MEMBER"
-```
-
-### Grant repo write access (both org and personal repos)
-
-GitHub may grant access directly (204) without creating an invitation —
-only accept if one exists:
+Add the bot as a repo collaborator with write access. GitHub may grant
+access directly (204) without creating an invitation — only accept if
+one exists:
 
 ```bash
 gh api "repos/$REPO/collaborators/<bot-name>" -X PUT -f permission=push
@@ -314,5 +282,5 @@ After completing all steps, present this checklist:
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Claude token: `CLAUDE_CODE_OAUTH_TOKEN` secret set
 - [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo`+`workflow`+`notifications`+`write:discussion` or fine-grained)
-- [ ] Bot access: org member (org repos) or repo collaborator (personal repos), invitation accepted
+- [ ] Bot access: repo collaborator with write access, invitation accepted
 - [ ] Committed (push requires explicit permission)
