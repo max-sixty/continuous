@@ -229,7 +229,8 @@ The bot needs a classic PAT with `repo`, `workflow`, `notifications`, and
 `.github/workflows/` files. `notifications` lets the bot read/dismiss its own
 notifications. `write:discussion` allows commenting on GitHub Discussions.
 Fine-grained PATs also work (`contents:write`, `pull-requests:write`,
-`issues:write`, `workflows:write`, `discussions:write`) — create one manually
+`issues:write`, `workflows:write`, `discussions:write`,
+`notifications:read`) — create one manually
 and skip to step 9. Use Chrome for classic PATs:
 
 1. Verify the browser is logged in as `<bot-name>` (click avatar, check
