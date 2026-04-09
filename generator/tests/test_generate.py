@@ -261,11 +261,9 @@ def test_mention_verify_handles_empty_gh_token(tmp_path: Path) -> None:
     verify_script = data["jobs"]["verify"]["steps"][0]["run"]
 
     # Script must check for empty GH_TOKEN before calling gh commands
-    assert "GH_TOKEN" in verify_script, (
-        "verify script must check GH_TOKEN availability"
-    )
+    assert "GH_TOKEN" in verify_script, "verify script must check GH_TOKEN availability"
     # The empty-token guard must appear before any `gh ` command
-    gh_token_check_pos = verify_script.index("-z \"$GH_TOKEN\"")
+    gh_token_check_pos = verify_script.index('-z "$GH_TOKEN"')
     first_gh_cmd_pos = verify_script.index("gh ")
     assert gh_token_check_pos < first_gh_cmd_pos, (
         "GH_TOKEN emptiness check must appear before the first gh command "
