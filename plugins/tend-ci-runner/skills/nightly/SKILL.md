@@ -1,14 +1,14 @@
 ---
 name: nightly
-description: Nightly code quality sweep — resolves bot PR conflicts, reviews recent commits, surveys existing code, and checks resolved issues.
+description: Nightly code quality sweep — resolves bot PR conflicts, reviews recent commits, surveys existing code, checks resolved issues, and updates tend workflows.
 metadata:
   internal: true
 ---
 
 # Nightly Code Quality Sweep
 
-Three phases: resolve conflicts on bot PRs, review recent commits, and survey a slice of existing
-code/docs.
+Resolve conflicts on bot PRs, review recent commits, survey a slice of existing code/docs, and
+update tend workflows.
 
 ## Step 1: Resolve conflicts on bot PRs
 
@@ -94,7 +94,27 @@ Used by both Step 2 (applied to recent diffs) and Step 4 (applied to full files)
 - Skills that have drifted from actual project behavior (instructions that no longer match how the
   code works)
 
-## Step 5: Fix findings
+## Step 5: Update tend workflows
+
+Regenerate the tend workflow files and open a PR if anything changed.
+
+```bash
+uvx tend@latest init
+```
+
+Check for changes:
+```bash
+git diff --name-only .github/workflows/tend-*.yaml
+```
+
+If files changed:
+1. Create a branch: `git checkout -b tend/update-workflows`
+2. Commit the changes: `git add .github/workflows/tend-*.yaml && git commit -m "chore: update tend workflows"`
+3. Open a PR: `gh pr create --title "chore: update tend workflows" --body "Automated nightly regeneration of tend workflow files."`
+
+If no changes, continue to the next step.
+
+## Step 6: Fix findings
 
 Before acting on findings, check for duplicates and existing work:
 
@@ -134,7 +154,7 @@ changelog file and the branch to push to.
 6. Commit and push directly to the changelog branch — no PR needed, the branch is kept ready to
    merge for the next release.
 
-## Step 6: Summary
+## Step 7: Summary
 
 Report: commits reviewed, files surveyed, findings, actions taken, assessment (clean / minor
 issues / needs attention).
