@@ -36,7 +36,8 @@ bot_name = "my-project-bot"
 # `workflow` is required to push commits that modify `.github/workflows/` files.
 #
 # Fine-grained PAT permissions: `contents:write`, `pull-requests:write`,
-# `issues:write`, `actions:write`, `workflows:write`, `discussions:write`.
+# `issues:write`, `actions:write`, `workflows:write`, `discussions:write`,
+# `notifications:read`.
 #
 # Override names if the repo uses different secret names:
 #

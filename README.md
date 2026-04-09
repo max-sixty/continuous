@@ -100,7 +100,7 @@ Two repo secrets are required:
 
 | Secret                    | Value                                                                                                                       |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `BOT_TOKEN`               | Bot account PAT — classic with `repo`+`workflow` scopes, or fine-grained (see [example config](docs/tend.example.toml)) |
+| `BOT_TOKEN`               | Bot account PAT — classic or fine-grained (see [example config](docs/tend.example.toml) for scopes) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (via PKCE flow, not an API key)                                                                     |
 
 All other options — secret name overrides, setup steps, protected branches,

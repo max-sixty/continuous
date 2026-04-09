@@ -19,19 +19,9 @@ REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 
 ## Chrome automation
 
-Steps 6 and 8 require Chrome (account creation, PAT generation).
-Use Chrome automation tools for these:
-
-1. Call `tabs_context_mcp` to connect
-2. Create a tab or reuse an existing one
-3. Navigate, interact with forms, and verify outcomes
-
-If Chrome is unavailable, fall back to giving the user URLs and waiting for
-confirmation.
-
-For any step where the browser must be logged in as the bot account, verify
-the logged-in user by clicking the avatar menu and checking the username
-before proceeding.
+Steps 6 and 8 require Chrome. If Chrome is unavailable, give the user URLs
+and wait for confirmation. Before acting as the bot in the browser, verify
+the logged-in user by clicking the avatar menu and checking the username.
 
 ## 1. Create config
 
@@ -93,8 +83,6 @@ uvx tend@latest init
 
 Verify workflow files appear in `.github/workflows/tend-*.yaml`. Run
 `uvx tend@latest check` to validate branch protection, secrets, and bot access.
-
-## 2b. Remove existing claude-code-action workflows
 
 Check for workflows using `anthropics/claude-code-action`:
 
@@ -201,8 +189,8 @@ If the account doesn't exist:
    using `gh api users/<name>` (404 = available). Suggest options.
 2. Navigate Chrome to `https://github.com/signup`. The user must create the
    account themselves (account creation is a prohibited action for Claude).
-3. If a verification code is needed, use jean-claude to search for the
-   GitHub email: `jean-claude gmail search "from:github subject:code" -n 1`
+3. If a verification code is needed, use the `/jean-claude` skill to
+   search Gmail: `/jean-claude gmail search "from:github subject:code" -n 1`
 4. After confirmation, re-verify via API.
 
 ## 7. Claude OAuth token
@@ -229,9 +217,9 @@ The bot needs a classic PAT with `repo`, `workflow`, `notifications`, and
 `.github/workflows/` files. `notifications` lets the bot read/dismiss its own
 notifications. `write:discussion` allows commenting on GitHub Discussions.
 Fine-grained PATs also work (`contents:write`, `pull-requests:write`,
-`issues:write`, `workflows:write`, `discussions:write`,
-`notifications:read`) — create one manually
-and skip to step 9. Use Chrome for classic PATs:
+`issues:write`, `actions:write`, `workflows:write`, `discussions:write`,
+`notifications:read`) — create one manually and skip to step 9.
+Use Chrome for classic PATs:
 
 1. Verify the browser is logged in as `<bot-name>` (click avatar, check
    username). If not, tell the user to log in as the bot first.
@@ -261,19 +249,20 @@ gh secret list --repo "$REPO"
 All invitation acceptance in this step uses the bot's PAT from step 8 via
 `GH_TOKEN=<bot-pat>` to authenticate as the bot.
 
-First, check whether the repo belongs to a GitHub organization:
+Check whether the repo belongs to a GitHub organization:
 
 ```bash
 gh api "repos/$REPO" --jq '.owner.type'
 ```
 
-**Organization repos:** The bot must be an **org member**, not just an outside
-collaborator. Outside collaborators have been observed to get empty
-`secrets.BOT_TOKEN` when their actions trigger workflows (e.g., the bot
-submits a review, firing `tend-mention`), causing the verify step to fail
-with exit code 4.
+### Organization repos
 
-Check whether the bot is already an org member:
+The bot must be an org member, not just an outside collaborator. Outside
+collaborators have been observed to get empty `secrets.BOT_TOKEN` when
+their actions trigger workflows (e.g., the bot submits a review, firing
+`tend-mention`), causing the verify step to fail with exit code 4.
+
+Check existing membership:
 
 ```bash
 gh api "orgs/<org>/members/<bot-name>" && echo "ALREADY MEMBER" || echo "NOT MEMBER"
@@ -289,20 +278,10 @@ GH_TOKEN=<bot-pat> gh api "user/memberships/orgs/<org>" -X PATCH -f state=active
 gh api "orgs/<org>/members/<bot-name>" && echo "MEMBER" || echo "NOT MEMBER"
 ```
 
-Then grant write access to the repo (org members don't automatically get
-repo access). For org members, GitHub may grant access directly (204)
-without creating an invitation — only accept if one exists:
+### Grant repo write access (both org and personal repos)
 
-```bash
-gh api "repos/$REPO/collaborators/<bot-name>" -X PUT -f permission=push
-INVITE_ID=$(GH_TOKEN=<bot-pat> gh api "user/repository_invitations" --jq ".[] | select(.repository.full_name == \"$REPO\") | .id")
-if [ -n "$INVITE_ID" ]; then
-  GH_TOKEN=<bot-pat> gh api "user/repository_invitations/$INVITE_ID" -X PATCH
-fi
-gh api "repos/$REPO/collaborators" --jq '.[].login'
-```
-
-**Personal repos:** Add as a repo collaborator and accept:
+GitHub may grant access directly (204) without creating an invitation —
+only accept if one exists:
 
 ```bash
 gh api "repos/$REPO/collaborators/<bot-name>" -X PUT -f permission=push
