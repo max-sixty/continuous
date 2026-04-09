@@ -405,7 +405,9 @@ def test_init_notifications_has_precheck(
 
     # All subsequent steps are gated on the check output
     for step in steps[1:]:
-        assert "if" in step, f"step {step.get('uses', step.get('name'))} missing if guard"
+        assert "if" in step, (
+            f"step {step.get('uses', step.get('name'))} missing if guard"
+        )
         assert "steps.check.outputs.count" in step["if"]
         # workflow_dispatch bypasses the pre-check
         assert "workflow_dispatch" in step["if"]

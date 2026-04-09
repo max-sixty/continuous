@@ -29,4 +29,4 @@ homepage = "https://github.com/max-sixty/tend"
 packages = ["src/tend"]
 
 [dependency-groups]
-dev = ["pytest>=9.0.2", "pyyaml>=6.0.3"]
+dev = ["pytest>=9.0.2", "pytest-regtest>=2.1.1", "pyyaml>=6.0.3"]

@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from tend.cli import main
 from tend.config import Config
-from tend.workflows import generate_all, generate_mention
+from tend.workflows import generate_all, generate_mention, generate_notifications
 
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
@@ -338,3 +338,23 @@ def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
     assert "format(" in prompt, "delay preamble must use conditional format()"
     # "Before acting" must always appear (it's the unconditional part)
     assert "Before acting" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Regtest snapshots — full YAML output for notifications workflow
+# ---------------------------------------------------------------------------
+
+
+def test_notifications_minimal_regtest(regtest: object, tmp_path: Path) -> None:
+    """Snapshot the full notifications YAML with minimal config."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    wf = generate_notifications(cfg)
+    print(wf.content, file=regtest)  # type: ignore[arg-type]
+
+
+def test_notifications_with_setup_regtest(regtest: object, tmp_path: Path) -> None:
+    """Snapshot the full notifications YAML with a setup step."""
+    extra = 'setup = [{uses = "astral-sh/setup-uv@v6"}]'
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    wf = generate_notifications(cfg)
+    print(wf.content, file=regtest)  # type: ignore[arg-type]
