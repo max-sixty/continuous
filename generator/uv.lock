@@ -76,6 +76,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-regtest"
+version = "2.3.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/35/1bb4e70cc7ae259486dcea45fd19f73ab78f1e84e9b65537afb7585b6bfa/pytest_regtest-2.3.7.tar.gz", hash = "sha256:dad5e66b1104dcd4d44fd3addb42710a26ccad0f5336c5413176e0eae1f6fc23", size = 22887, upload-time = "2026-02-25T14:50:09.442Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/c0/8b39923e9122c7c017e2d0122b29dc8982f884b82da79557b96004cffdf2/pytest_regtest-2.3.7-py3-none-any.whl", hash = "sha256:0c54fe2df7a30544d21e3f08440f911b75c81a30a7cdae359cc7495f5ede4f15", size = 17585, upload-time = "2026-02-25T14:50:08.242Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -141,6 +153,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "pytest-regtest" },
     { name = "pyyaml" },
 ]
 
@@ -150,5 +163,6 @@ requires-dist = [{ name = "click", specifier = ">=8.0" }]
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-regtest", specifier = ">=2.1.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
