@@ -193,8 +193,20 @@ on:
   # Works for same-repo PRs only; secrets unavailable on fork PRs (no _target variant exists)
   pull_request_review:
     types: [submitted]
+  # `created` is intentionally absent. Modern GitHub fires *both*
+  # pull_request_review and pull_request_review_comment for every newly-created
+  # inline comment (the standalone POST /pulls/PR/comments endpoint, the
+  # /replies endpoint, the "Add single comment" UI button, and reviews
+  # submitted with inline comments — all empirically verified). Subscribing to
+  # `created` would produce a duplicate workflow run that collides on the
+  # tend-mention-handle-PR concurrency group, with the loser cancelled and
+  # posted as a CANCELLED check_run on the PR head SHA — which renders the
+  # PR's statusCheckRollup as FAILURE even though the bot did its job from the
+  # sibling run. Edits have no sibling event (review submissions don't fire on
+  # edits), so we still need to listen for `edited` to catch edit-to-summon
+  # ("@bot" added to an existing comment after the fact).
   pull_request_review_comment:
-    types: [created, edited]
+    types: [edited]
 
 jobs:
   verify:
@@ -225,6 +237,18 @@ jobs:
           if [ -n "$COMMENT_BODY" ] && printf '%s\\n' "$COMMENT_BODY" | grep -qF '@{bn}'; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # pull_request_review payloads include review.body (checked above)
+          # but NOT the bodies of inline comments attached to the review.
+          # Fetch them so a first-contact @-mention inside an inline comment
+          # is detected on PRs where the bot has no prior engagement.
+          if [ "$EVENT_NAME" = "pull_request_review" ] && [ -n "$REVIEW_ID" ]; then
+            if gh api "repos/$GITHUB_REPOSITORY/pulls/$EVENT_PR_NUMBER/reviews/$REVIEW_ID/comments" \\
+                 --jq '.[].body' | grep -qF '@{bn}'; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
           # Non-mention: check bot engagement
@@ -278,6 +302,7 @@ jobs:
           ISSUE_AUTHOR: ${{{{ github.event.issue.user.login }}}}
           PR_URL: ${{{{ github.event.issue.pull_request.url }}}}
           EVENT_PR_NUMBER: ${{{{ github.event.pull_request.number }}}}
+          REVIEW_ID: ${{{{ github.event.review.id }}}}
 
       - name: React to mention
         if: |

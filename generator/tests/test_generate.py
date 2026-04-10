@@ -247,6 +247,82 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
     assert "github.event.review.body" in prompt
 
 
+def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
+    """pull_request_review_comment must subscribe to `edited` only, not `created`.
+
+    Modern GitHub fires *both* pull_request_review and pull_request_review_comment
+    for every newly-created inline comment (verified across the standalone
+    POST /pulls/{n}/comments endpoint, the /replies endpoint, the "Add single
+    comment" UI button, and reviews submitted with inline comments). If we
+    subscribed to `created` here, the duplicate run would collide on the
+    tend-mention-handle-<PR#> concurrency group, the loser would be cancelled,
+    and the cancelled check_run on the PR head SHA would render the PR's
+    statusCheckRollup as FAILURE — even though the bot did its job from the
+    sibling run.
+
+    Edits have no sibling event (review submissions don't fire on edits), so
+    we still need to listen for `edited` to catch edit-to-summon ("@bot" added
+    to an existing comment after the fact)."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
+    assert data[True]["pull_request_review_comment"] == {"types": ["edited"]}, (
+        "pull_request_review_comment must subscribe to ['edited'] only — see "
+        "the trigger comment in generate_mention for the dedup rationale"
+    )
+
+
+def test_mention_verify_detects_inline_mentions_on_review(tmp_path: Path) -> None:
+    """For pull_request_review events, verify must fetch the review's inline
+    comments and grep their bodies for the bot mention.
+
+    The pull_request_review event payload exposes review.body but NOT the
+    bodies of the inline comments attached to that review. So a first-contact
+    "@bot" mention written *inside* an inline review comment is invisible to
+    the COMMENT_BODY check (which only sees review.body for review events) and
+    to the engagement check (which only fires when the bot has prior
+    engagement on the PR). Without this fetch, such mentions would be silently
+    dropped on PRs where the bot has no prior engagement.
+
+    Today the gap is masked stochastically by the pull_request_review_comment
+    sibling event firing in parallel and exposing comment.body. Once we stop
+    subscribing to `created` for that event (see
+    test_mention_review_comment_listens_only_for_edits), the masking goes away
+    and verify must detect the mention via the API."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+
+    # The fetch must target the specific review's inline comments by review_id
+    assert "/reviews/$REVIEW_ID/comments" in check_step["run"], (
+        "verify must fetch inline comments for pull_request_review events via "
+        "the /pulls/{n}/reviews/{review_id}/comments endpoint"
+    )
+    # And grep their bodies for the bot mention (test-bot is the bot_name in
+    # _minimal_config). grep -qF means fixed-string, quiet — same shape as the
+    # other mention checks in this script.
+    assert "grep -qF '@test-bot'" in check_step["run"], (
+        "verify must grep the fetched inline comment bodies for the bot mention"
+    )
+
+    # The fetch must be gated on event_name == 'pull_request_review' so it
+    # doesn't fire for issue_comment / issues / pull_request_review_comment.
+    assert '[ "$EVENT_NAME" = "pull_request_review" ]' in check_step["run"], (
+        "the inline-mention fetch must only run for pull_request_review events"
+    )
+
+    # REVIEW_ID env var must be wired from the event payload
+    assert check_step["env"]["REVIEW_ID"] == "${{ github.event.review.id }}", (
+        "REVIEW_ID env var must be set from github.event.review.id so the "
+        "fetch can target the right review"
+    )
+
+
 def test_mention_verify_no_concurrency(tmp_path: Path) -> None:
     """verify job must not have concurrency — a non-mention comment can cancel
     an explicit @bot mention if both arrive on the same PR within seconds (#93)."""
