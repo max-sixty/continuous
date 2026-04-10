@@ -99,6 +99,28 @@ Improvements target **repo-local** files:
 
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
+The checkout's `.claude/` directory is bind-mounted read-only under the sandbox
+(protecting bots from modifying their own skills in place), so edits to
+`.claude/skills/` files fail with `OSError: [Errno 30] Read-only file system`.
+Do the edit, commit, and push from a git worktree under `$TMPDIR`, which is
+writable:
+
+```bash
+git worktree add "$TMPDIR/review-runs-fix" -b daily/review-runs-$GITHUB_RUN_ID HEAD
+cd "$TMPDIR/review-runs-fix"
+# edit .claude/skills/... here
+git add .claude/skills/...
+git commit -m "skills(running-tend): ..."
+git push -u origin daily/review-runs-$GITHUB_RUN_ID
+gh pr create --title "..." --body-file /tmp/pr-body.md --head daily/review-runs-$GITHUB_RUN_ID
+cd -
+git worktree remove "$TMPDIR/review-runs-fix" --force
+```
+
+`.config/tend.toml` and `CLAUDE.md` are not under the read-only mount, but if
+you're already in the worktree for a `.claude/skills/` edit, do those edits
+there too so the branch stays self-contained.
+
 - **PR** (default): Branch `daily/review-runs-$GITHUB_RUN_ID`, fix, commit, push, create with
   label `review-runs`. Put full analysis in PR description (run IDs, log excerpts, root cause,
   gate assessment).
