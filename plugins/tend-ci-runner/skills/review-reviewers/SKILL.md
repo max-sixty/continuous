@@ -26,6 +26,22 @@ that follows tend's defaults but contradicts repo-specific guidance is a problem
 Frame your analysis around this hierarchy: did the bot follow the repo's guidance? Only fall back
 to evaluating against tend's defaults for behaviors the repo doesn't address.
 
+## Non-issues: do not flag these
+
+Some patterns look suspicious but are intentional. Before drafting a finding, check this list —
+flagging expected behaviors creates maintainer churn and costs trust.
+
+- **`tend-review` re-approving after the bot pushed a fix commit.** The reviewer role is
+  independent of commit and PR authorship. Re-reviewing (and re-approving) after
+  `tend-notifications`, `tend-ci-fix`, or a mention run pushes a fix is expected behavior, not a
+  re-approval loop. Two prior PRs attempted authorship-keyed guards and were both closed by the
+  maintainer as solving a non-problem — [#154](https://github.com/max-sixty/tend/pull/154)
+  ("skip re-review when bot pushes to already-approved PR") and
+  [#212](https://github.com/max-sixty/tend/pull/212) ("skip APPROVE when incremental commits are
+  bot-authored"). If you observe stacked approvals from concurrent runs that raced with
+  concurrency-group cancellation, that is a *concurrency* issue (the cancelled runs managed to
+  POST before the SIGTERM arrived) — do not propose changes to review's approval rules.
+
 ## Target repo
 
 **Target repo:** $ARGUMENTS

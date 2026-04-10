@@ -61,6 +61,11 @@ existing one stands. Do NOT proceed to steps 2–6. Rough heuristic:
 changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow
 are typically trivial.
 
+**Commit and PR authorship do not affect review behavior.** Apply the same trivial-vs-substantive
+heuristic regardless of who pushed the new commits. When `tend-notifications` or `tend-ci-fix`
+pushes a fix to a human-authored PR, reviewing (and re-approving) the updated state is expected —
+the reviewer role is independent of commit authorship.
+
 Then read all previous bot feedback and conversation:
 
 ```bash
