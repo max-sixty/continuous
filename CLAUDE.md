@@ -43,4 +43,8 @@ directly.
 The generator is a Python package under `generator/` — uses hatchling, requires
 Python 3.11+, only runtime dependency is click. Dev dependencies: pytest, pyyaml.
 
+Consuming repos regenerate their `tend-*.yaml` workflows nightly (tend itself
+included — it dogfoods its own workflows). Changes to the generator do not
+require manual regeneration in downstream repos.
+
 Linting: `pre-commit run --all-files` (ruff, typos, actionlint, uv-lock).
