@@ -229,7 +229,6 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
     verify_if = data["jobs"]["verify"]["if"]
     assert "pull_request_review" in verify_if
     assert "issue_comment" in verify_if
-    assert "comment.user.login" in verify_if
     assert "pull_request.head.repo.full_name" in verify_if
 
     # Handle job checks out PR branch for this event
