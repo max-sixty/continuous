@@ -17,7 +17,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["click>=8.0"]
+dependencies = ["click>=8.0", "pyyaml>=6.0"]
 
 [project.scripts]
 tend = "tend.cli:main"

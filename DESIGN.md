@@ -126,6 +126,49 @@ jobs:
 | Skills (generic) | Tend | `tend` plugin (marketplace) |
 | Skills (project-specific) | Adopter | `.claude/skills/` in their repo |
 
+## Extending generated workflows
+
+The generator owns the workflow file, but adopters can override individual
+keys at the workflow level or job level via `.config/tend.toml`:
+
+```toml
+# Add top-level env vars to the review workflow
+[workflows.review.workflow_extra.env]
+MY_VAR = "hello"
+
+# Override job-level keys (addressed by job name)
+[workflows.review.jobs.review]
+timeout-minutes = 240
+runs-on = "ubuntu-22.04-large"
+
+# Multi-job workflows: target a specific job
+[workflows.mention.jobs.handle]
+timeout-minutes = 180
+```
+
+Overrides use RFC 7396 (JSON Merge Patch) semantics: mappings deep-merge,
+scalars and lists replace. This means an adopter can add a permission without
+losing existing ones:
+
+```toml
+[workflows.review.jobs.review.permissions]
+packages = "read"
+# Result: packages added, contents/pull-requests/id-token/actions/issues preserved
+```
+
+When overrides are present, the generator renders the base template, parses it,
+merges the overrides, and re-serializes. The output YAML formatting differs
+slightly from the base template (block-style lists, quoted `'on':` key) but is
+functionally identical.
+
+**Scope:** Workflow-level (`workflow_extra`) and job-level (`jobs.<name>`)
+overrides are supported. Step-level overrides are not — the existing `[[setup]]`
+mechanism handles step injection, and step modification is deferred until there's
+concrete demand.
+
+**No validation of override keys.** The adopter can set anything; the generator
+doesn't maintain an allowlist. Unknown job names produce a warning.
+
 ## Auth
 
 Each adopter creates a GitHub bot account and a classic PAT (`public_repo`

@@ -47,6 +47,8 @@ class WorkflowConfig:
     cron: str = ""
     watched_workflows: list[str] | None = None
     branches: list[str] | None = None
+    workflow_extra: dict | None = None
+    jobs: dict[str, dict] | None = None
 
 
 KNOWN_MODELS = {"opus", "sonnet", "haiku"}
@@ -141,12 +143,27 @@ class Config:
                         "workflow_run requires at least one workflow name. "
                         "Disable ci-fix with enabled = false instead."
                     )
+                workflow_extra = wf_raw.get("workflow_extra")
+                if workflow_extra is not None and not isinstance(workflow_extra, dict):
+                    raise click.ClickException(
+                        f"workflows.{name}.workflow_extra must be a table"
+                    )
+                jobs_raw = wf_raw.get("jobs")
+                if jobs_raw is not None and (
+                    not isinstance(jobs_raw, dict)
+                    or not all(isinstance(v, dict) for v in jobs_raw.values())
+                ):
+                    raise click.ClickException(
+                        f"workflows.{name}.jobs must be a table of tables"
+                    )
                 workflows[name] = WorkflowConfig(
                     enabled=wf_raw.get("enabled", True),
                     prompt=wf_raw.get("prompt", ""),
                     cron=wf_raw.get("cron", ""),
                     watched_workflows=watched,
                     branches=wf_raw.get("branches"),
+                    workflow_extra=workflow_extra,
+                    jobs=jobs_raw,
                 )
             else:
                 workflows[name] = WorkflowConfig(enabled=bool(wf_raw))

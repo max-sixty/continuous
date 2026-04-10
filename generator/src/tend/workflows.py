@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import click
+import yaml
 
 from tend.config import Config, WorkflowConfig
 
@@ -646,6 +647,60 @@ def generate_review_runs(cfg: Config) -> GeneratedWorkflow:
 
 
 # ---------------------------------------------------------------------------
+# Extras (workflow_extra / jobs pass-through)
+# ---------------------------------------------------------------------------
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """RFC 7396 JSON Merge Patch: mappings deep-merge, scalars/lists replace."""
+    result = dict(base)
+    for key, value in override.items():
+        if value is None:
+            result.pop(key, None)
+        elif isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _apply_extras(wf: GeneratedWorkflow, wf_cfg: WorkflowConfig) -> GeneratedWorkflow:
+    """Merge workflow_extra and per-job extras into rendered YAML (RFC 7396)."""
+    if not wf_cfg.workflow_extra and not wf_cfg.jobs:
+        return wf
+
+    data = yaml.safe_load(wf.content)
+
+    # YAML parses bare `on:` as boolean True — restore the string key
+    if True in data:
+        data["on"] = data.pop(True)
+
+    if wf_cfg.workflow_extra:
+        data = _deep_merge(data, wf_cfg.workflow_extra)
+
+    if wf_cfg.jobs:
+        jobs = data.get("jobs", {})
+        for job_name, job_extra in wf_cfg.jobs.items():
+            if job_name in jobs:
+                jobs[job_name] = _deep_merge(jobs[job_name], job_extra)
+            else:
+                click.echo(
+                    f"Warning: job '{job_name}' not found in {wf.filename} "
+                    f"(known: {', '.join(sorted(jobs))})",
+                    err=True,
+                )
+
+    rendered = yaml.dump(
+        data,
+        default_flow_style=False,
+        sort_keys=False,
+        width=200,
+        allow_unicode=True,
+    )
+    return GeneratedWorkflow(filename=wf.filename, content=HEADER + "\n" + rendered)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -677,5 +732,7 @@ def generate_all(cfg: Config) -> list[GeneratedWorkflow]:
                 err=True,
             )
             continue
-        results.append(gen_fn(cfg))
+        wf = gen_fn(cfg)
+        wf = _apply_extras(wf, wf_cfg)
+        results.append(wf)
     return results
