@@ -20,7 +20,13 @@
 # Requires: gh, jq, GNU coreutils (date -d)
 
 set -euo pipefail
+# Disable gh's colored JSON output. NO_COLOR=1 alone is insufficient when the
+# environment sets CLICOLOR_FORCE=1 (e.g. PRQL/prql's tend-setup action sets
+# it in $GITHUB_ENV to force cargo/clippy colors), because gh treats
+# CLICOLOR_FORCE as higher priority than NO_COLOR — resulting in ANSI codes
+# in --json output that break downstream jq parsing.
 export NO_COLOR=1
+export CLICOLOR_FORCE=0
 
 HOURS=${1:-168}
 SINCE=$(date -u -d "$HOURS hours ago" +%Y-%m-%dT%H:%M:%SZ)
@@ -43,20 +49,11 @@ if [ ${#WORKFLOWS[@]} -eq 0 ]; then
   exit 0
 fi
 
-# Strips ANSI color escape sequences. In some CI environments (observed on
-# PRQL/prql, gh 2.89.0) `gh run list --json` emits ANSI color codes even with
-# NO_COLOR=1/CLICOLOR=0/GH_FORCE_TTY="" set, breaking downstream jq parsing.
-# We strip defensively so the script is robust regardless of what the
-# environment does. The sed expression is a no-op when no codes are present.
-strip_ansi() {
-  sed -E $'s/\x1b\\[[0-9;]*[A-Za-z]//g'
-}
-
 # Collect all completed runs across workflows
 ALL_RUNS="[]"
 for wf in "${WORKFLOWS[@]}"; do
   runs=$(gh run list "${repo_args[@]}" --workflow "$wf" --created ">=$SINCE" --status completed \
-    --json databaseId,conclusion,createdAt,name --limit 100 2>/dev/null | strip_ansi || echo "[]")
+    --json databaseId,conclusion,createdAt,name --limit 100 2>/dev/null || echo "[]")
   ALL_RUNS=$(echo "$ALL_RUNS" "$runs" | jq -s 'add | unique_by(.databaseId)')
 done
 
