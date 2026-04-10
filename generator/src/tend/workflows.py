@@ -215,8 +215,7 @@ jobs:
     if: |
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@{bn}')) ||
-      (github.event_name == 'issue_comment' &&
-        github.event.comment.user.login != '{bn}') ||
+      (github.event_name == 'issue_comment') ||
       (github.event_name == 'pull_request_review_comment' &&
         github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'pull_request_review' &&
