@@ -291,9 +291,10 @@ you're running. **NEVER use `--watch` flags** — they hang forever.
 
 ```bash
 # Run with Bash tool's run_in_background: true.
-# Use `||` rather than `if !` — the Bash tool escapes `!` as `\!`, which
-# prevents bash from recognizing the pipeline-negation reserved word and leaves
-# the loop stuck until the 10-minute timeout.
+# Use `||` rather than `if`-based negation. The Bash tool escapes the
+# exclamation mark to a literal backslash-exclamation, which prevents bash
+# from recognizing the pipeline-negation reserved word and leaves the loop
+# stuck until the 10-minute timeout.
 for i in $(seq 1 10); do
   sleep 60
   gh pr checks <number> --required 2>&1 \
