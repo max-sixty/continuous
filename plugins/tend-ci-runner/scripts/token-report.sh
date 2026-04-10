@@ -20,7 +20,13 @@
 # Requires: gh, jq, GNU coreutils (date -d)
 
 set -euo pipefail
+# Disable gh's colored JSON output. NO_COLOR=1 alone is insufficient when the
+# environment sets CLICOLOR_FORCE=1 (e.g. PRQL/prql's tend-setup action sets
+# it in $GITHUB_ENV to force cargo/clippy colors), because gh treats
+# CLICOLOR_FORCE as higher priority than NO_COLOR — resulting in ANSI codes
+# in --json output that break downstream jq parsing.
 export NO_COLOR=1
+export CLICOLOR_FORCE=0
 
 HOURS=${1:-168}
 SINCE=$(date -u -d "$HOURS hours ago" +%Y-%m-%dT%H:%M:%SZ)
