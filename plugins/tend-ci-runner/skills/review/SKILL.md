@@ -45,13 +45,24 @@ If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit
 exception: an unanswered conversation question directed at the bot (check below).
 
 If the bot reviewed a previous commit (`LAST_REVIEW_SHA` exists but differs from `HEAD_SHA`),
-check the incremental changes:
+check the incremental changes **and their authors**:
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+BOT_LOGIN=$(gh api user --jq '.login')
 gh api "repos/$REPO/compare/$LAST_REVIEW_SHA...$HEAD_SHA" \
-  --jq '{total: ([.files[] | .additions + .deletions] | add), files: [.files[] | "\(.filename)\t+\(.additions)/-\(.deletions)"]}'
+  --jq '{total: ([.files[] | .additions + .deletions] | add),
+         files: [.files[] | "\(.filename)\t+\(.additions)/-\(.deletions)"],
+         authors: ([.commits[].author.login] | unique)}'
 ```
+
+**Bot-authored incremental commits**: If every author in `authors` is the bot itself (i.e. a fix
+pushed from `tend-notifications`, `tend-ci-fix`, or a prior mention run), do not submit a new
+APPROVE regardless of whether the changes are trivial — self-approval of your own commits is not
+an independent review signal. Leave any existing approval in place. If you find a genuine new
+issue in the bot-authored code, post it as a COMMENT; otherwise exit silently and proceed to step
+6 to monitor CI. This guards against the re-approval loop where each bot-pushed fix triggers
+`tend-review`, which then ratifies its own commit.
 
 If the incremental changes are trivial, skip the full review — go directly to step 7 to resolve
 any bot threads addressed by the new changes. After resolving threads: if the most recent bot
