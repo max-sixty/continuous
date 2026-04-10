@@ -100,23 +100,35 @@ Used by both Step 2 (applied to recent diffs) and Step 4 (applied to full files)
 
 ## Step 5: Update tend workflows
 
-Regenerate the tend workflow files and open a PR if anything changed.
+Regenerate the tend workflow files and open a PR if anything changed. The
+checkout's `.github/` directory may be mounted read-only under the sandbox
+(protecting bots from modifying their own workflows in place), so do the
+regeneration in a git worktree under `$TMPDIR`, which is writable:
 
 ```bash
-uvx tend@latest init
+git worktree add "$TMPDIR/tend-update-workflows" -b tend/update-workflows HEAD
+(cd "$TMPDIR/tend-update-workflows" && uvx tend@latest init)
+git -C "$TMPDIR/tend-update-workflows" status --porcelain .github/workflows
 ```
 
-Check for changes:
+If `git status` shows no changes, clean up and continue:
+
 ```bash
-git diff --name-only .github/workflows/tend-*.yaml
+git worktree remove "$TMPDIR/tend-update-workflows" --force
 ```
 
-If files changed:
-1. Create a branch: `git checkout -b tend/update-workflows`
-2. Commit the changes: `git add .github/workflows/tend-*.yaml && git commit -m "chore: update tend workflows"`
-3. Open a PR: `gh pr create --title "chore: update tend workflows" --body "Automated nightly regeneration of tend workflow files."`
+If files changed, commit and open the PR from the worktree:
 
-If no changes, continue to the next step.
+```bash
+cd "$TMPDIR/tend-update-workflows"
+git add .github/workflows/tend-*.yaml
+git commit -m "chore: update tend workflows"
+git push -u origin tend/update-workflows
+gh pr create --title "chore: update tend workflows" \
+  --body "Automated nightly regeneration of tend workflow files."
+cd -
+git worktree remove "$TMPDIR/tend-update-workflows" --force
+```
 
 ## Step 6: Fix findings
 
