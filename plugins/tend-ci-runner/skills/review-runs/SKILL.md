@@ -40,11 +40,21 @@ done
 
 If no runs found, report "no runs to review" and exit.
 
-Then, for each run ID from above, pull its jobs and flag any that ran over 30 min. Tend runs typically finish
-in single-digit minutes — longer is worth a look, and a ~360-min `failure` signals a runner kill at GitHub's
-default cap.
+Then, for each run ID from above, pull its jobs and classify them:
+
+- **Long-running** (>30 min): Tend runs typically finish in single-digit minutes. Anything over 30 is worth
+  a look — download session logs in Step 3 and diagnose where the time went (long background waits,
+  push-wait-fix cycles, a stuck tool call).
+- **Near-timeout** (within 90% of the cap): A job that consumed most of its timeout budget is one slow
+  external check away from being killed. These are **structural** failures: one occurrence is enough to act on.
+
+To determine the timeout cap for a workflow, read `timeout-minutes` from the workflow YAML file
+(`.github/workflows/tend-*.yaml`). Tend's generated workflows do not set `timeout-minutes`, so GitHub's
+360-minute default applies unless the adopter has overridden it via `[workflows.<name>.jobs.<job>.timeout-minutes]`
+in `.config/tend.toml`.
 
 ```bash
+# Flag long-running and near-timeout jobs
 gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
   --jq '.jobs[]
     | ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) as $dur
@@ -52,8 +62,8 @@ gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
     | {name, conclusion, duration_min: ($dur / 60 | floor), url: .html_url}'
 ```
 
-For flagged jobs, download session logs in Step 3 and diagnose where the time went — long background waits,
-push-wait-fix cycles, a stuck tool call. These are **structural** failures: one occurrence is enough to act on.
+After retrieving the timeout cap from the workflow file, flag any job whose duration exceeded 90% of it as a
+near-timeout. For the default 360-min cap, that threshold is 324 min.
 
 ## Step 2: Token usage report
 
