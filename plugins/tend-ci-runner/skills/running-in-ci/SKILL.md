@@ -20,6 +20,9 @@ trying it returns `Unknown skill`).
 
 Repo-local skills must have YAML frontmatter (`name` + `description`) to be auto-discovered.
 
+If you are going to propose a code fix for a bug, load `/tend-ci-runner:triage` first — it
+contains reproduction and testing gates that apply to all fix attempts, not just initial triage.
+
 ## Conduct
 
 Follow the project's code of conduct. Avoid causing disruption — unnecessary comments, bulk
@@ -188,6 +191,14 @@ Reply in context rather than creating new top-level comments:
     -F body=@/tmp/reply.md
   ```
 
+- **Review events with inline comments** (review ID in prompt): A review may include inline
+  comments. Fetch them by review ID and reply to each individually:
+  ```bash
+  gh api repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/comments \
+    --jq '.[] | {id: .id, path: .path, body: .body}'
+  ```
+  Reply to each comment using the inline review comment reply endpoint above.
+
 - **Conversation comments** (`#issuecomment-`): Post a regular comment (GitHub doesn't support
   threading).
 
@@ -203,7 +214,17 @@ Do not:
 - Post "makes sense" or "good point" agreement comments
 - Echo a user's findings back to them ("Good find!", "That's the smoking gun!")
 
+A comment that responds to concerns you raised in a review is directed at you — briefly
+acknowledge resolution or explain why concerns remain.
+
 If a maintainer has already addressed the point, exit silently unless you can add something they missed.
+
+## Self-conversation Guard
+
+If you are responding to your own prior comment or review (not a human's reply to it), only
+respond if there is a distinct role boundary (e.g., you are the reviewer on your own PR and need
+to address review feedback). If there is no such role distinction, exit silently to avoid
+self-conversation loops.
 
 ## Recheck Before Posting
 
