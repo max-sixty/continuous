@@ -45,7 +45,7 @@ If no runs found, report "no runs to review" and exit.
 Run the token report script to get per-run token counts:
 
 ```bash
-"${CLAUDE_SKILL_DIR}/../scripts/token-report.sh" 12 > /tmp/token-report.json
+"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 12 > /tmp/token-report.json
 ```
 
 Include the totals and per-workflow breakdown in the summary (Step 6). Flag any
