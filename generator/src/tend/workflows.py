@@ -245,7 +245,7 @@ jobs:
           # Fetch them so a first-contact @-mention inside an inline comment
           # is detected on PRs where the bot has no prior engagement.
           if [ "$EVENT_NAME" = "pull_request_review" ] && [ -n "$REVIEW_ID" ]; then
-            if gh api "repos/$GITHUB_REPOSITORY/pulls/$EVENT_PR_NUMBER/reviews/$REVIEW_ID/comments" \\
+            if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$EVENT_PR_NUMBER/reviews/$REVIEW_ID/comments" \\
                  --jq '.[].body' | grep -qF '@{bn}'; then
               echo "should_run=true" >> "$GITHUB_OUTPUT"
               exit 0
@@ -263,7 +263,7 @@ jobs:
               if printf '%s\\n' "$ISSUE_BODY" | grep -qF '@{bn}'; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
-              BOT_COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \\
+              BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \\
                 --jq '[.[] | select(.user.login == "{bn}")] | length')
               if [ "$BOT_COMMENTS" -gt "0" ]; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
@@ -281,13 +281,13 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          BOT_REVIEWS=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \\
+          BOT_REVIEWS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \\
             --jq '[.[] | select(.user.login == "{bn}")] | length')
           if [ "$BOT_REVIEWS" -gt "0" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          BOT_COMMENTS=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \\
+          BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \\
             --jq '[.[] | select(.user.login == "{bn}")] | length')
           if [ "$BOT_COMMENTS" -gt "0" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
