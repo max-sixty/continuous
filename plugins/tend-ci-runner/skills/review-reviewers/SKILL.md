@@ -72,10 +72,11 @@ If empty, report "no runs to review" and exit.
 
 ## Step 2: Load repo-specific guidance and download session logs
 
-First, read the target repo's repo-specific guidance to understand what the bot was told to do:
+First, read the target repo's repo-specific guidance to understand what the bot was told to do.
+`gh api` does not accept `-R` — embed the repo in the endpoint path instead:
 
 ```bash
-gh -R $ARGUMENTS api repos/{owner}/{repo}/contents/.claude/skills/running-tend/SKILL.md \
+gh api "repos/$ARGUMENTS/contents/.claude/skills/running-tend/SKILL.md" \
   --jq '.content' | base64 -d
 ```
 
@@ -84,7 +85,9 @@ If the file doesn't exist, try common alternatives (`.claude/skills/running-tend
 session — without it, you'll misjudge authorized behavior as a violation.
 
 Then load `/install-tend:debug-ci-session` for download commands and JSONL parsing queries. Use
-`-R $ARGUMENTS` for all `gh` commands targeting the adopter repo.
+`-R $ARGUMENTS` for `gh run`, `gh pr`, and `gh issue` commands targeting the adopter repo. For
+`gh api` calls, substitute the repo into the endpoint path (as shown above) since the `-R` flag is
+not supported there.
 
 Skip runs without artifacts. Trace decision chains: what did Claude decide, what evidence did it
 use, what was the outcome?
