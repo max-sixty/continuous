@@ -290,14 +290,17 @@ individual sleep commands. Use the Bash tool with `run_in_background: true` and 
 you're running. **NEVER use `--watch` flags** — they hang forever.
 
 ```bash
-# Run with Bash tool's run_in_background: true
+# Run with Bash tool's run_in_background: true.
+# Use `||` rather than `if !` — the Bash tool escapes `!` as `\!`, which
+# prevents bash from recognizing the pipeline-negation reserved word and leaves
+# the loop stuck until the 10-minute timeout.
 for i in $(seq 1 10); do
   sleep 60
-  if ! gh pr checks <number> --required 2>&1 \
-       | grep -v "tend-review" | grep -q 'pending\|queued\|in_progress'; then
+  gh pr checks <number> --required 2>&1 \
+       | grep -v "tend-review" | grep -q 'pending\|queued\|in_progress' || {
     gh pr checks <number> --required
     exit 0
-  fi
+  }
 done
 echo "CI still running after 10 minutes"
 exit 1
