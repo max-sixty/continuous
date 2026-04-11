@@ -36,20 +36,16 @@ justification than a new paragraph. Prefer small, targeted fixes over broad rewr
 
 Before applying the gates, classify each failure by asking: **did the bot have a decision point?**
 
-- **Structural**: no decision point — the environment produces the failure regardless of how the
-  bot approached the task. E.g., "the checkout differs between `pull_request_target` and
-  `issue_comment` events, so grepping always finds stale content." The same conditions produce
-  the same failure every time, no matter which tool the bot reaches for. One clear occurrence is
-  sufficient evidence for a targeted fix.
+- **Structural**: no decision point — the same conditions produce the same failure every time,
+  regardless of how the bot approached the task. E.g., "the checkout differs between
+  `pull_request_target` and `issue_comment` events, so grepping always finds stale content." One
+  clear occurrence is sufficient evidence for a targeted fix.
 
-- **Stochastic**: the bot picked one option from several valid-looking alternatives, and a
-  different session might pick differently. This includes cases where the chosen tool is
-  deterministically lossy *once invoked* — the *choice* to invoke it is still a model behavior,
-  not a structural property of the environment. E.g., "the model was too agreeable when
-  challenged," "the model forgot to check X," or "the model reached for a lossy command when a
-  safe alternative existed." These need significantly more evidence (5+ occurrences) because
-  adding guidance for a one-off stochastic lapse adds noise that can degrade performance on other
-  tasks.
+- **Stochastic**: the failure is a probabilistic model behavior — e.g., "the model was too
+  agreeable when challenged" or "the model forgot to check X." The same model might handle the
+  next identical situation correctly without any guidance change. These need significantly more
+  evidence (5+ occurrences) because adding guidance for a one-off stochastic lapse adds noise
+  that can degrade performance on other tasks.
 
 The test: "If I replayed this exact scenario 10 times, would the failure occur every time
 (structural) or only sometimes (stochastic)?" When in doubt, classify as stochastic and wait for
