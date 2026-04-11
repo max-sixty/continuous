@@ -144,9 +144,10 @@ background task completes you will be notified — check the result and take any
 # show as "pending" since it IS the running job. Watching yourself deadlocks.
 # Match on the run URL, not the check name: `gh pr checks` shows the job name
 # (e.g. "review"), which does not match $GITHUB_WORKFLOW ("tend-review").
-# Use `||` rather than `if !` — the Bash tool escapes `!` as `\!`, which
-# prevents bash from recognizing the pipeline-negation reserved word and
-# leaves the loop stuck until the 10-minute timeout.
+# Use `||` rather than if-based negation. The Bash tool escapes the
+# exclamation mark to a literal backslash-exclamation, which prevents bash
+# from recognizing the pipeline-negation reserved word and leaves the loop
+# stuck until the 10-minute timeout.
 for i in $(seq 1 10); do
   sleep 60
   gh pr checks <number> --required 2>&1 | grep -v "/runs/$GITHUB_RUN_ID/" | grep -q 'pending\|queued\|in_progress' || {
