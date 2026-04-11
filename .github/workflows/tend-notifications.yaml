@@ -33,19 +33,22 @@ jobs:
           fi
 
           # Pre-mark notifications shadowed by recent dedicated-workflow runs.
-          # Event workflows mark their own notifications read in action.yaml's
-          # post-step; this is defense in depth for races and for runs whose
-          # action.yaml predates that post-step.
+          # Event workflows mark their own notifications read via action.yaml's
+          # post-step on success; this sweeps the case where Claude failed
+          # (post-step is gated by `if: success()`) so the notification still
+          # gets cleared without burning Claude turns to rediscover it.
           SINCE=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
-          RECENT_PRS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?created=>=$SINCE&per_page=50" --jq '[.workflow_runs[] | select(.name | test("tend-review|tend-mention|tend-triage|tend-ci-fix")) | .pull_requests[]?.number] | unique | .[]' 2>/dev/null || echo "")
+          RECENT_PRS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?created=>=$SINCE&per_page=50" --jq '[.workflow_runs[] | select(.name | test("^(tend-review|tend-mention|tend-triage|tend-ci-fix)$")) | .pull_requests[]?.number] | unique | .[]' || true)
 
-          for pr in $RECENT_PRS; do
-            URL_PR="https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$pr"
-            URL_ISSUE="https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$pr"
-            gh api notifications | jq -r --arg url_pr "$URL_PR" --arg url_issue "$URL_ISSUE" '.[] | select(.subject.url == $url_pr or .subject.url == $url_issue) | .id' 2>/dev/null | while read -r tid; do
-              [ -n "$tid" ] && gh api "notifications/threads/$tid" -X PATCH 2>/dev/null || true
+          if [ -n "$RECENT_PRS" ]; then
+            NOTIFS=$(gh api notifications)
+            for pr in $RECENT_PRS; do
+              echo "$NOTIFS" | jq -r --arg repo "$GITHUB_REPOSITORY" --arg pr "$pr" '.[] | select(.subject.url == "https://api.github.com/repos/" + $repo + "/pulls/" + $pr or .subject.url == "https://api.github.com/repos/" + $repo + "/issues/" + $pr) | .id' | while read -r tid; do
+                [ -n "$tid" ] || continue
+                gh api "notifications/threads/$tid" -X PATCH || true
+              done
             done
-          done
+          fi
 
           COUNT=$(gh api notifications --jq 'length')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
