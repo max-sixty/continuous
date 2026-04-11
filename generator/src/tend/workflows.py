@@ -563,6 +563,10 @@ jobs:
     return GeneratedWorkflow(filename=f"tend-{name}.yaml", content=content)
 
 
+# Default cron times target Anthropic's off-peak hours (outside weekday
+# 8am–2pm ET / 12:00–18:00 UTC). Non-round minutes avoid thundering herd.
+
+
 def generate_nightly(cfg: Config) -> GeneratedWorkflow:
     return _generate_scheduled(cfg, "nightly", "17 6 * * *", "/tend-ci-runner:nightly")
 
