@@ -119,6 +119,25 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
 
+    # Ensure uv/uvx is on PATH for Claude sessions. The nightly skill runs
+    # `uvx tend@latest init` to regenerate workflow files, and mention/review
+    # skills may invoke tend as well. Adopters can override the workflow
+    # `setup` step with their own composite action (e.g. one that installs
+    # project toolchains) — if that custom setup doesn't install uv, the
+    # Claude session won't have it. Install here as a no-op when already
+    # present so tend's own skills always have a working uvx regardless of
+    # how adopters customize their setup steps.
+    - name: Ensure uv is available
+      shell: bash
+      run: |
+        if command -v uvx >/dev/null 2>&1; then
+          echo "uvx already available at $(command -v uvx)"
+          exit 0
+        fi
+        echo "uvx not found; installing uv"
+        curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --quiet
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
     # claude-code-action restores these from the base branch on all PRs
     # (RCE vectors — hooks, env vars, MCP servers):
     #   .claude/  .mcp.json  .claude.json  .gitmodules  .ripgreprc
