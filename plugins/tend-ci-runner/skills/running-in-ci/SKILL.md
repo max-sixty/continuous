@@ -285,9 +285,10 @@ gist without expanding. Don't collapse content that *is* the answer (e.g., a req
 </details>
 ```
 
-Always use markdown links for files, issues, PRs, and docs. Prefer permalinks (commit SHA URLs)
-over branch-based links for line references — line numbers shift and `blob/main/...#L42` links go
-stale.
+Always use markdown links for files, issues, PRs, and docs. **Any link containing `#L` must
+use a commit SHA, never `blob/main/...#L42`** — line numbers shift silently, so the link stays
+valid but starts pointing at different code than the comment describes. Get the SHA with
+`git rev-parse HEAD` before composing the link.
 
 **GitHub URLs — always embed `$GITHUB_REPOSITORY`.** Construct links as
 `https://github.com/${GITHUB_REPOSITORY}/...`; never hand-type the owner. The model reliably
@@ -295,7 +296,8 @@ guesses wrong — past comments have shipped with `anthropics/worktrunk` and `wo
 on a repo actually owned by `max-sixty`. Before posting a comment, scan it for `github.com/` and
 confirm every owner matches `$GITHUB_REPOSITORY`.
 
-- **Files**: link to GitHub (`blob/main/...` for file-level, `blob/<sha>/...#L42` for lines)
+- **File-level link (no `#L` anchor)**: `blob/main/src/foo.rs` is fine
+- **Line reference**: `blob/<sha>/src/foo.rs#L42` — commit SHA required, never `blob/main/...#L42`
 - **Issues/PRs**: `#123` shorthand
 - **External**: `[text](url)` format
 
