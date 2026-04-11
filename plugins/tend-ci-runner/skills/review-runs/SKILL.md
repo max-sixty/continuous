@@ -73,6 +73,9 @@ Run the token report script to get per-run token counts:
 "${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 > /tmp/token-report.json
 ```
 
+Pass additional workflow prefixes to include non-`tend-*` workflows that use the tend
+action (e.g., `review-reviewers`). Check the repo's `running-tend` skill for the list.
+
 Include the totals and per-workflow breakdown in the summary (Step 7). Flag any
 runs with unusually high token usage for closer inspection in Step 3.
 

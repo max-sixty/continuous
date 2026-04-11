@@ -8,8 +8,9 @@
 # Reads the token-usage.json file from each run's session log artifact
 # (produced by the "Token usage" step in action.yaml).
 #
-# Usage: ./token-report.sh [HOURS]
+# Usage: ./token-report.sh [HOURS] [PREFIX ...]
 #   HOURS: lookback period in hours (default: 168 = 7 days)
+#   PREFIX: additional workflow name prefixes to include (default: tend-)
 #
 # Output (stdout): JSON — { runs: [...], totals: {...} }
 # Output (stderr): human-readable summary table
@@ -29,6 +30,9 @@ export NO_COLOR=1
 export CLICOLOR_FORCE=0
 
 HOURS=${1:-168}
+shift 2>/dev/null || true
+EXTRA_PREFIXES=("$@")
+
 SINCE=$(date -u -d "$HOURS hours ago" +%Y-%m-%dT%H:%M:%SZ)
 
 repo_args=()
@@ -39,10 +43,15 @@ fi
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
-# Discover tend workflows
-mapfile -t WORKFLOWS < <(
-  gh workflow list "${repo_args[@]}" --json name --jq '.[].name | select(startswith("tend-"))'
-)
+# Discover tend workflows (tend-* by default, plus any extra prefixes)
+PREFIXES=("tend-" "${EXTRA_PREFIXES[@]}")
+WORKFLOWS=()
+for prefix in "${PREFIXES[@]}"; do
+  mapfile -t matches < <(
+    gh workflow list "${repo_args[@]}" --json name --jq ".[].name | select(startswith(\"$prefix\"))"
+  )
+  WORKFLOWS+=("${matches[@]}")
+done
 
 if [ ${#WORKFLOWS[@]} -eq 0 ]; then
   echo '{"runs":[],"totals":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"turns":0}}'
@@ -78,12 +87,21 @@ for row in "${ROWS[@]}"; do
     continue
   fi
 
-  USAGE_FILE=$(find "$RUNDIR" -name "token-usage.json" -type f | head -1)
-  if [ -z "$USAGE_FILE" ]; then
+  mapfile -t USAGE_FILES < <(find "$RUNDIR" -name "token-usage.json" -type f)
+  if [ ${#USAGE_FILES[@]} -eq 0 ]; then
     continue
   fi
 
-  jq -c --argjson usage "$(cat "$USAGE_FILE")" \
+  # Aggregate across matrix jobs (each job produces its own token-usage.json)
+  USAGE=$(cat "${USAGE_FILES[@]}" | jq -s '{
+    input_tokens: (map(.input_tokens) | add),
+    output_tokens: (map(.output_tokens) | add),
+    cache_creation_input_tokens: (map(.cache_creation_input_tokens) | add),
+    cache_read_input_tokens: (map(.cache_read_input_tokens) | add),
+    turns: (map(.turns) | add)
+  }')
+
+  jq -c --argjson usage "$USAGE" \
     '. + $usage + {run_id: .databaseId, workflow: .name, created_at: .createdAt} | del(.databaseId, .name, .createdAt)' \
     <<< "$row" >> "$ENTRIES"
 
