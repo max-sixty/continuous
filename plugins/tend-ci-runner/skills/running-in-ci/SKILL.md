@@ -139,16 +139,17 @@ background task completes you will be notified — check the result and take any
 (dismiss approval, post analysis) at that point.
 
 ```bash
-# Run with Bash tool's run_in_background: true
-# Filter out the current workflow ($GITHUB_WORKFLOW) — it will always show as
-# "pending" since it IS the running job. Watching yourself deadlocks.
-# Use `||` rather than `if`-based negation. The Bash tool escapes the
-# exclamation mark to a literal backslash-exclamation, which prevents bash
-# from recognizing the pipeline-negation reserved word and leaves the loop
-# stuck until the 10-minute timeout.
+# Run with Bash tool's run_in_background: true.
+# Filter out the current run ($GITHUB_RUN_ID) — its own job check will always
+# show as "pending" since it IS the running job. Watching yourself deadlocks.
+# Match on the run URL, not the check name: `gh pr checks` shows the job name
+# (e.g. "review"), which does not match $GITHUB_WORKFLOW ("tend-review").
+# Use `||` rather than `if !` — the Bash tool escapes `!` as `\!`, which
+# prevents bash from recognizing the pipeline-negation reserved word and
+# leaves the loop stuck until the 10-minute timeout.
 for i in $(seq 1 10); do
   sleep 60
-  gh pr checks <number> --required 2>&1 | grep -v "$GITHUB_WORKFLOW" | grep -q 'pending\|queued\|in_progress' || {
+  gh pr checks <number> --required 2>&1 | grep -v "/runs/$GITHUB_RUN_ID/" | grep -q 'pending\|queued\|in_progress' || {
     gh pr checks <number> --required
     exit 0
   }
@@ -158,9 +159,9 @@ exit 1
 ```
 
 1. Poll `gh pr checks <number> --required` every 60 seconds until all required checks complete
-   (up to ~10 minutes). Ignore non-required checks (benchmarks). **Filter out
-   `$GITHUB_WORKFLOW`** — the current workflow's own check is always pending while polling and must
-   be excluded to avoid a deadlock.
+   (up to ~10 minutes). Ignore non-required checks (benchmarks). **Filter out the current run's
+   URL (`/runs/$GITHUB_RUN_ID/`)** — the current workflow's own check is always pending while
+   polling and must be excluded to avoid a deadlock.
 2. If a required check fails, diagnose with `gh run view <run-id> --log-failed`, fix, commit,
    push, repeat.
 3. Report completion only after all required checks pass.

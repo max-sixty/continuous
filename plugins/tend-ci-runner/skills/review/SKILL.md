@@ -286,19 +286,20 @@ Instead, when a 422 occurs on inline comments:
 
 After approving or staying silent, poll CI in **a single background loop** — do not launch
 individual sleep commands. Use the Bash tool with `run_in_background: true` and the loop below.
-**Exclude the `tend-review` check** (your own workflow) — it will always show as pending while
-you're running. **NEVER use `--watch` flags** — they hang forever.
+**Exclude your own run (`/runs/$GITHUB_RUN_ID/`)** — your own job check will always show as
+pending while you're running. Filter on the run URL, not the check name: `gh pr checks` shows
+the job name (`review`), which does not match `$GITHUB_WORKFLOW` (`tend-review`). **NEVER use
+`--watch` flags** — they hang forever.
 
 ```bash
 # Run with Bash tool's run_in_background: true.
-# Use `||` rather than `if`-based negation. The Bash tool escapes the
-# exclamation mark to a literal backslash-exclamation, which prevents bash
-# from recognizing the pipeline-negation reserved word and leaves the loop
-# stuck until the 10-minute timeout.
+# Use `||` rather than `if !` — the Bash tool escapes `!` as `\!`, which
+# prevents bash from recognizing the pipeline-negation reserved word and
+# leaves the loop stuck until the 10-minute timeout.
 for i in $(seq 1 10); do
   sleep 60
   gh pr checks <number> --required 2>&1 \
-       | grep -v "tend-review" | grep -q 'pending\|queued\|in_progress' || {
+       | grep -v "/runs/$GITHUB_RUN_ID/" | grep -q 'pending\|queued\|in_progress' || {
     gh pr checks <number> --required
     exit 0
   }
