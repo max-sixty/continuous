@@ -41,7 +41,8 @@ from `.config/tend.toml`. Edit the generator or config, not the workflow files
 directly.
 
 The generator is a Python package under `generator/` — uses hatchling, requires
-Python 3.11+, only runtime dependency is click. Dev dependencies: pytest, pyyaml.
+Python 3.11+. Runtime dependencies: click, pyyaml. Dev dependencies: pytest,
+pytest-regtest.
 
 Consuming repos regenerate their `tend-*.yaml` workflows nightly (tend itself
 included — it dogfoods its own workflows). Changes to the generator do not
