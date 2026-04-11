@@ -73,7 +73,7 @@ Run the token report script to get per-run token counts:
 "${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 > /tmp/token-report.json
 ```
 
-Include the totals and per-workflow breakdown in the summary (Step 6). Flag any
+Include the totals and per-workflow breakdown in the summary (Step 7). Flag any
 runs with unusually high token usage for closer inspection in Step 3.
 
 ## Step 3: Download and analyze session logs
@@ -159,3 +159,10 @@ tracking issue.
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, sessions
 reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking
 issue.
+
+Save the summary to `/tmp/summary.md`, then write it to the GitHub Actions step summary so it
+appears on the run page:
+
+```bash
+cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
+```
