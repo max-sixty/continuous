@@ -160,7 +160,8 @@ If no problems found (or none passed the gates), report "all clear" with: runs a
 reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking
 issue.
 
-Write the summary to the GitHub Actions step summary so it appears on the run page:
+Save the summary to `/tmp/summary.md`, then write it to the GitHub Actions step summary so it
+appears on the run page:
 
 ```bash
 cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
