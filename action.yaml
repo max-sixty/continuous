@@ -187,6 +187,51 @@ runs:
           --allowedTools ${{ inputs.allowed_tools }}
           --append-system-prompt "${{ inputs.system_prompt_append }}"
 
+    - name: Mark event notification read
+      if: success()
+      shell: bash
+      run: |
+        # Mark the GitHub notification thread for the triggering event as read
+        # so the scheduled tend-notifications poll doesn't burn tokens
+        # rediscovering it. The thread is only marked when its updated_at
+        # predates this run's start — newer activity stays unread for the next
+        # workflow run to handle.
+        case "$GITHUB_EVENT_NAME" in
+          pull_request_target|pull_request_review|pull_request_review_comment)
+            NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
+            SUBJECT_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/pulls/${NUM}"
+            ;;
+          issue_comment)
+            # issue_comment fires for both issues AND PR conversation comments,
+            # but PR notifications always use /pulls/N in subject.url. Detect
+            # via the issue's pull_request field.
+            NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+            if [ "$(jq -r '.issue.pull_request.url // empty' "$GITHUB_EVENT_PATH")" != "" ]; then
+              SUBJECT_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/pulls/${NUM}"
+            else
+              SUBJECT_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${NUM}"
+            fi
+            ;;
+          issues)
+            NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+            SUBJECT_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${NUM}"
+            ;;
+          *)
+            exit 0
+            ;;
+        esac
+
+        gh api notifications \
+          | jq -r --arg url "$SUBJECT_URL" --arg started "$RUN_STARTED_AT" \
+              '.[] | select(.subject.url == $url and .updated_at <= $started) | .id' \
+          | while read -r tid; do
+              [ -n "$tid" ] || continue
+              gh api "notifications/threads/$tid" -X PATCH || true
+            done
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        RUN_STARTED_AT: ${{ github.event.workflow_run.created_at || github.run_started_at }}
+
     - name: Token usage
       if: always()
       id: tokens

@@ -72,46 +72,42 @@ Before acting on ANY notification:
 
 For each unread notification (oldest first):
 
-### 4a. Determine if already handled
+### 4a. Dedup check
 
-Check whether the bot has already responded since the notification was generated. `BOT_LOGIN`
-and `NOTIF_UPDATED_AT` are not pre-populated by the workflow — set them explicitly before the jq
-call (`NOTIF_UPDATED_AT` is the `updated_at` field from the notification fetched in step 1):
+Most unread same-repo notifications are leftovers from events the dedicated workflows
+(`tend-review`, `tend-mention`, `tend-triage`, `tend-ci-fix`) already handled. The action's
+post-step marks them read on success, and the workflow's pre-check sweeps any that slipped
+through. Anything still unread by the time you reach this step needs one targeted check:
+
+For same-repo notifications on a PR or Issue, ask: has the bot posted a comment or review newer
+than the notification's `updated_at`?
 
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
 NOTIF_UPDATED_AT=<updated_at from the notification>
 
-# For issues
-gh api repos/{owner}/{repo}/issues/{number}/comments \
+# Conversation comments (covers issues and PR conversation, not PR reviews)
+gh api "repos/{owner}/{repo}/issues/{number}/comments" \
   --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .created_at > \"$NOTIF_UPDATED_AT\")] | length"
+```
 
-# For PRs — also check reviews
-gh api repos/{owner}/{repo}/pulls/{number}/reviews \
+For PR notifications, also check reviews (a separate endpoint):
+
+```bash
+gh api "repos/{owner}/{repo}/pulls/{number}/reviews" \
   --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .submitted_at > \"$NOTIF_UPDATED_AT\")] | length"
 ```
 
-If the bot already responded after the notification timestamp, mark the notification as read and
-move on:
+If either returns `> 0`, mark read and move on:
 
 ```bash
 gh api notifications/threads/{thread_id} -X PATCH
 ```
 
-### 4b. Skip notifications handled by dedicated workflows
+Cross-repo notifications skip dedup (no good signal for "already handled" across repos) — go
+straight to step 4b. Stop the check here: no author-association lookups, no workflow-run queries.
 
-Other workflows (`tend-triage`, `tend-review`, event-triggered runs) already handle most same-repo activity. To avoid duplicate work, **mark as read and skip** these notification types when they come from `$GITHUB_REPOSITORY`:
-
-- **`review_requested`** — handled by the `tend-review` workflow.
-- **`assign`** on issues — handled by `tend-triage`.
-- **`mention`** or **`subscribed`/`comment`** on issues/PRs that already have a recent bot response or a workflow run triggered by the same event — the dedicated workflow got there first. Check with:
-  ```bash
-  # Did a workflow already run for this issue/PR recently?
-  gh api "repos/{owner}/{repo}/actions/runs?event=issues&created=>=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)&per_page=5" \
-    --jq '[.workflow_runs[] | select(.name | test("triage|review"))] | length'
-  ```
-
-### 4c. Respond to notifications only this skill covers
+### 4b. Respond to notifications only this skill covers
 
 The notifications skill is the **sole handler** for these categories — respond to them:
 
@@ -126,7 +122,7 @@ The notifications skill is the **sole handler** for these categories — respond
 
 - **`subscribed`/`comment`** on threads the bot participates in (same-repo), where the comment is directed at the bot and no dedicated workflow handled it — respond if the comment asks a question, requests changes, or replies to a concern the bot raised. If the conversation is between humans, do not respond.
 
-### 4d. Mark as read
+### 4c. Mark as read
 
 After processing (whether or not a response was posted):
 

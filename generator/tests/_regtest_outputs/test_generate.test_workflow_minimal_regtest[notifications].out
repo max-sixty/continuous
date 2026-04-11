@@ -26,11 +26,36 @@ jobs:
         id: check
         run: |
           COUNT=$(gh api notifications --jq 'length')
+          if [ "$COUNT" = "0" ]; then
+            echo "count=0" >> "$GITHUB_OUTPUT"
+            echo "No unread notifications ? skipping"
+            exit 0
+          fi
+
+          # Pre-mark notifications shadowed by recent dedicated-workflow runs.
+          # Event workflows mark their own notifications read via action.yaml's
+          # post-step on success; this sweeps the case where Claude failed
+          # (post-step is gated by `if: success()`) so the notification still
+          # gets cleared without burning Claude turns to rediscover it.
+          SINCE=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          RECENT_PRS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?created=>=$SINCE&per_page=50" --jq '[.workflow_runs[] | select(.name | test("^(tend-review|tend-mention|tend-triage|tend-ci-fix)$")) | .pull_requests[]?.number] | unique | .[]' || true)
+
+          if [ -n "$RECENT_PRS" ]; then
+            NOTIFS=$(gh api notifications)
+            for pr in $RECENT_PRS; do
+              echo "$NOTIFS" | jq -r --arg repo "$GITHUB_REPOSITORY" --arg pr "$pr" '.[] | select(.subject.url == "https://api.github.com/repos/" + $repo + "/pulls/" + $pr or .subject.url == "https://api.github.com/repos/" + $repo + "/issues/" + $pr) | .id' | while read -r tid; do
+                [ -n "$tid" ] || continue
+                gh api "notifications/threads/$tid" -X PATCH || true
+              done
+            done
+          fi
+
+          COUNT=$(gh api notifications --jq 'length')
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           if [ "$COUNT" = "0" ]; then
-            echo "No unread notifications ? skipping"
+            echo "All notifications shadowed by dedicated workflows ? skipping"
           else
-            echo "$COUNT unread notification(s) ? proceeding"
+            echo "$COUNT unread notification(s) remain ? proceeding"
           fi
         env:
           GH_TOKEN: ${{ secrets.BOT_TOKEN }}

@@ -216,7 +216,9 @@ The bot needs a classic PAT with `repo`, `workflow`, `notifications`, and
 notifications. `write:discussion` allows commenting on GitHub Discussions.
 Fine-grained PATs also work (`contents:write`, `pull-requests:write`,
 `issues:write`, `actions:write`, `workflows:write`, `discussions:write`,
-`notifications:read`) — create one manually and skip to step 9.
+`notifications:write`) — create one manually and skip to step 9.
+`notifications:write` is required so the action can mark threads read after
+handling an event (the classic `notifications` scope already includes write).
 Use Chrome for classic PATs:
 
 1. Verify the browser is logged in as `<bot-name>` (click avatar, check
