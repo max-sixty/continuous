@@ -266,21 +266,30 @@ object keys, which GitHub rejects.
 
 #### Recovering from inline comment 422 errors
 
-GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when inline comment line numbers don't map to valid positions in the diff. This happens most often on large or complex diffs. **Do not retry by posting a second review** — the first `POST` to the reviews endpoint already created a review record (with the body but without the failed inline comments), so a second attempt creates a duplicate.
+GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when inline comment line numbers don't map to valid positions in the diff. Two failure modes produce the same error message but differ in whether a review record is persisted:
 
-Instead, when a 422 occurs on inline comments:
+- **(a) Large / complex diff**: the body is persisted first, then the inline comments are rejected — leaving an **orphan body-only review** on the PR. A blind retry creates a duplicate.
+- **(b) Line outside the diff entirely**: the entire POST is rejected up front — **no review is persisted**. Retrying without inline comments is correct; editing a non-existent review will fail.
 
-1. **Move the failed inline comments into the review body** as fenced code blocks with file paths.
-2. **Edit the existing review** rather than creating a new one:
-   ```bash
-   # Find the review that was just created (body posted, inline comments rejected)
-   REVIEW_ID=$(gh api "repos/$REPO/pulls/<number>/reviews" \
-     --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\")] | last | .id")
-   # Update its body to include the failed inline suggestions
-   gh api "repos/$REPO/pulls/<number>/reviews/$REVIEW_ID" \
-     -X PUT -F body=@/tmp/updated-review-body.md
-   ```
-3. If editing fails, **do not post another review** — the body-only review is sufficient.
+**Check which case you are in before deciding how to recover** — query for an orphan review on the current HEAD first, then branch on the result.
+
+```bash
+ORPHAN_ID=$(gh api "repos/$REPO/pulls/<number>/reviews" \
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\")] | last | .id // empty")
+```
+
+Then, in either case, **move the failed inline comments into the review body** as fenced code blocks with file paths, and:
+
+- **If `ORPHAN_ID` is non-empty (case a)**: edit the existing review instead of creating a duplicate.
+  ```bash
+  gh api "repos/$REPO/pulls/<number>/reviews/$ORPHAN_ID" \
+    -X PUT -F body=@/tmp/updated-review-body.md
+  ```
+  If the edit itself fails, **do not post another review** — the body-only review is sufficient.
+
+- **If `ORPHAN_ID` is empty (case b)**: retry the `POST` with `comments` omitted (body-only), since no duplicate is possible.
+
+Prevention: before writing any inline comment, verify the target line falls inside one of the PR's diff hunks. For fixes outside the diff, use the "push a fix commit" path instead of an inline suggestion (see above).
 
 ### 6. Monitor CI
 
