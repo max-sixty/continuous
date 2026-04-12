@@ -1,5 +1,5 @@
 name: review-reviewers
-# Hourly analysis of Claude CI session logs from adopter repos to improve tend.
+# Hourly outcome-based analysis of bot behavior across adopter repos.
 #
 # Each matrix entry is a repo to analyze. The job checks out the tend repo
 # (for creating improvement PRs/issues). BOT_TOKEN is sufficient for reading

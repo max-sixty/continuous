@@ -1,6 +1,6 @@
 ---
 name: review-reviewers
-description: Hourly analysis of Claude CI session logs — identifies behavioral problems, skill gaps, and workflow issues.
+description: Hourly outcome-based analysis of Claude CI behavior — checks whether bot outputs were accepted or rejected, escalating to session logs only when outcomes look wrong.
 argument-hint: "<owner/repo>"
 metadata:
   internal: true
@@ -8,8 +8,32 @@ metadata:
 
 # Review Reviewers
 
-Analyze Claude-powered CI runs from the past hour. Identify behavioral problems, skill gaps, and
-workflow issues — then create PRs or issues to fix them.
+Analyze Claude-powered CI behavior on the target repo over the past hour. Focus on **outcomes** —
+what the bot produced publicly and whether it was accepted — rather than internal session mechanics.
+Create PRs or issues on tend when outcomes reveal behavioral problems.
+
+## Cost discipline: Haiku subagents for exploration
+
+Session log parsing and outcome checking are token-heavy. Delegate all broad exploration to **Haiku
+subagents** (`Agent` tool with `model: "haiku"`). Keep the main Opus agent for judgment: evaluating
+findings against gates, deciding whether to act, and drafting PRs.
+
+Pattern:
+1. Opus sets up context (bot identity, repo guidance, run list)
+2. Opus spawns Haiku subagent to survey outcomes across all runs → receives structured summary
+3. Opus evaluates the summary against gates
+4. If needed, Opus spawns another Haiku subagent to investigate specific session logs → receives
+   diagnosis
+5. Opus drafts fix PR if warranted
+
+## Core principle: outcomes over internals
+
+The bot's job is to produce useful outputs: reviews, triage comments, fix commits, issue responses.
+The cheapest way to evaluate quality is to check whether those outputs were **accepted** (merged,
+kept, acted on) or **rejected** (reverted, closed, corrected, disagreed with).
+
+Session logs are expensive to download and parse. Only escalate to session-log inspection when
+outcome signals indicate a real problem worth diagnosing.
 
 ## Core principle: repo-specific guidance is primary
 
@@ -17,14 +41,6 @@ Each adopter repo has its own guidance (`running-tend` skill or equivalent) that
 should behave in that repo. This repo-specific guidance **takes precedence** over tend's default
 rules. The bot's job is to follow the repo-specific guidance first, falling back to tend's defaults
 only where the repo doesn't specify.
-
-When reviewing a session, always load and read the target repo's repo-specific guidance before
-evaluating whether the bot behaved correctly. An action that would violate tend's defaults (e.g.,
-closing an issue) is correct if the repo's guidance explicitly authorized it. Conversely, an action
-that follows tend's defaults but contradicts repo-specific guidance is a problem.
-
-Frame your analysis around this hierarchy: did the bot follow the repo's guidance? Only fall back
-to evaluating against tend's defaults for behaviors the repo doesn't address.
 
 ## Non-issues: do not flag these
 
@@ -49,17 +65,33 @@ flagging expected behaviors creates maintainer churn and costs trust.
 Analysis targets an adopter repo whose CI runs are analyzed. Findings result in PRs/issues on the
 current repo (tend) to improve skills and workflows.
 
-Use `-R $ARGUMENTS` for commands that access the target repo (downloading artifacts, querying runs
-and PRs). Commands without `-R` default to tend.
+Use `-R $ARGUMENTS` for commands that access the target repo (querying runs, PRs, issues). Commands
+without `-R` default to tend.
 
 @review-gates.md
 
-Use `TRACKING_LABEL="review-reviewers-tracking"` for this skill's tracking issues. Use
-`-R $ARGUMENTS` when downloading session logs for historical evidence verification.
+Use `TRACKING_LABEL="review-reviewers-tracking"` for this skill's tracking issues.
 
-## Step 1: Find recent runs
+## Step 1: Setup
 
-List recently completed Claude CI runs on the target repo:
+Resolve the bot's identity and load repo-specific guidance upfront — both are needed throughout:
+
+```bash
+BOT_LOGIN=$(gh api user --jq '.login')
+```
+
+Read the target repo's repo-specific guidance to understand what the bot was told to do:
+
+```bash
+gh api "repos/$ARGUMENTS/contents/.claude/skills/running-tend/SKILL.md" \
+  --jq '.content' | base64 -d
+```
+
+If the file doesn't exist, try common alternatives (`.claude/skills/running-tend.md`,
+`.claude/CLAUDE.md`). Understanding the repo's guidance is essential context for evaluating outcomes
+— without it, you'll misjudge authorized behavior as a violation.
+
+Then list recently completed Claude CI runs on the target repo:
 
 ```bash
 TARGET_REPO=$ARGUMENTS ${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh
@@ -70,42 +102,89 @@ include other workflows (e.g., `review-reviewers` when analyzing tend itself).
 
 If empty, report "no runs to review" and exit.
 
-## Step 2: Load repo-specific guidance and download session logs
+## Step 2: Survey outcomes via Haiku subagent
 
-First, read the target repo's repo-specific guidance to understand what the bot was told to do.
-`gh api` does not accept `-R` — embed the repo in the endpoint path instead:
+Spawn a Haiku subagent to check outcomes across all runs from Step 1. The subagent does the
+token-heavy work of mapping runs to PRs/issues and checking acceptance signals.
 
-```bash
-gh api "repos/$ARGUMENTS/contents/.claude/skills/running-tend/SKILL.md" \
-  --jq '.content' | base64 -d
-```
+Use `Agent` with `model: "haiku"` and a prompt like:
 
-If the file doesn't exist, try common alternatives (`.claude/skills/running-tend.md`,
-`.claude/CLAUDE.md`). Understanding the repo's guidance is essential context for evaluating every
-session — without it, you'll misjudge authorized behavior as a violation.
+> Survey bot outcomes on `$ARGUMENTS` for the following runs: [run IDs from Step 1].
+> The bot's login is `$BOT_LOGIN`.
+>
+> For each run, determine:
+> 1. Did the bot produce visible output (review, comment, issue action, commit)?
+> 2. If yes, was the output accepted or rejected?
+>
+> **How to map runs to outputs:**
+> - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
+>   `gh -R $ARGUMENTS pr list --head <branch> --state all` → check bot reviews via
+>   `gh api repos/$ARGUMENTS/pulls/<pr>/reviews`
+> - `tend-notifications`: check for recent bot comments/issue-close events in the past hour
+> - `tend-mention`: map run to issue/PR from triggering comment, check for bot replies
+> - `tend-ci-fix`: map run → PR via `headBranch`, check for bot commits
+>
+> **Negative outcome signals** (report these):
+> - Human reviewer posted CHANGES_REQUESTED after bot approved
+> - PR closed without merge shortly after bot approved
+> - Bot posted no review despite a `tend-review` run completing on an open PR
+> - Subsequent commits reversed changes the bot approved
+> - Bot-closed issue was reopened
+> - Fix commit was reverted or CI still failing after bot pushed
+> - Human replied to bot with correction or complaint
+> - Bot comment contains corruption (literal `${`, unescaped bangs, broken heredoc markers)
+>
+> **Report format** — return a structured summary:
+> ```
+> ## Runs with no bot output (skipped)
+> - <run-id>: <workflow> — <reason> (e.g., "no artifacts", "notification no-op")
+>
+> ## Runs with accepted output
+> - <run-id>: <workflow> on PR #N — bot reviewed, PR merged
+>
+> ## Runs with concerning output
+> - <run-id>: <workflow> on PR #N — <signal> (e.g., "human posted CHANGES_REQUESTED")
+>
+> ## Sanity check
+> <note if zero bot activity found across all runs — may indicate systemic failure>
+> ```
 
-Then load `/install-tend:debug-ci-session` for download commands and JSONL parsing queries. Use
-`-R $ARGUMENTS` for `gh run`, `gh pr`, and `gh issue` commands targeting the adopter repo. For
-`gh api` calls, substitute the repo into the endpoint path (as shown above) since the `-R` flag is
-not supported there.
+Review the subagent's summary. If all outputs are accepted and no sanity-check flags, skip to
+Step 5 (summary). If concerning outcomes exist, continue to Step 3.
 
-Skip runs without artifacts. Trace decision chains: what did Claude decide, what evidence did it
-use, what was the outcome?
+## Step 3: Investigate concerning outcomes via Haiku subagent
 
-## Step 3: Cross-check review sessions
+For runs with negative outcome signals (or suspicious lack of output), spawn another Haiku subagent
+to download and inspect the specific session logs.
 
-For `tend-review` runs, compare what the bot said against what happened next:
+Use `Agent` with `model: "haiku"` and a prompt like:
 
-```bash
-HEAD_BRANCH=$(gh -R $ARGUMENTS run view <run-id> --json headBranch --jq '.headBranch')
-PR_NUMBER=$(gh -R $ARGUMENTS pr list --head "$HEAD_BRANCH" --state all --json number --jq '.[0].number')
-```
+> Investigate session logs for run <run-id> on `$ARGUMENTS`.
+>
+> Download: `gh run download <run-id> -R $ARGUMENTS --pattern 'claude-session-logs*' --dir /tmp/session-logs/<run-id>/`
+>
+> The concerning outcome was: <signal from Step 2>.
+>
+> **JSONL parsing** — each line has a `type` field (`user`, `assistant`, `system`). Key queries:
+> ```
+> # Tool calls in order
+> jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | "\(.name): \(.input | tostring | .[0:120])"' FILE
+> # Assistant reasoning
+> jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' FILE
+> # Bash commands executed
+> jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "Bash") | .input.command' FILE
+> ```
+>
+> Focus narrowly: what decision did the bot make that led to this bad outcome? Trace the decision
+> chain in the JSONL for the specific problematic action. Don't parse the entire session.
+> CI polling (sleep loops checking `gh pr checks`) in session logs is expected bot behavior — do
+> not flag it.
+>
+> Report: what the bot decided, what evidence it used, and what went wrong.
 
-Check for subsequent commits that undid something the bot approved (gap in review), and human
-review comments flagging issues the bot missed. Pull in the full PR context — not just changes
-from the past hour.
-
-CI polling time is expected and acceptable — do not flag it.
+Evaluate the subagent's diagnosis against the repo-specific guidance from Step 1. Determine whether
+the failure is structural (same conditions always produce this failure) or stochastic (probabilistic
+model behavior that might not recur).
 
 ## Step 4: Deduplicate
 
@@ -127,16 +206,20 @@ progress updates, fix-PR status, or re-statements of evidence already in the iss
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
 - **PR** (default): Branch `hourly/review-$GITHUB_RUN_ID`, fix, commit, push, create with label
-  `claude-behavior`. Put full analysis in PR description (run ID, log excerpts, root cause, **gate
-  assessment** including historical evidence count). Don't also create a separate issue.
+  `claude-behavior`. Put full analysis in PR description (run ID, outcome evidence, root cause,
+  **gate assessment** including historical evidence count). Don't also create a separate issue.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly. Include run ID,
-  log excerpts, root cause analysis.
+  outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more
 findings, pick the highest-confidence ones and note the rest in the tracking issue.
 
+**Do not poll CI** after creating a PR. The `tend-review` and `tend-ci-fix` workflows handle PRs
+independently. Exit after pushing and creating the PR.
+
 ## Step 6: Summary
 
-If no problems found (or none passed the gates), report "all clear" with: runs analyzed, sessions
-reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking
-issue.
+Report results to both the log and `$GITHUB_STEP_SUMMARY`:
+
+If no problems found (or none passed the gates), report "all clear" with: runs analyzed, outcomes
+checked, brief quality assessment, and any below-threshold findings recorded in the tracking issue.
