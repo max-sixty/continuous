@@ -72,15 +72,18 @@ Before acting on ANY notification:
 
 For each unread notification (oldest first):
 
-### 4a. Dedup check
+### 4a. Freshness gate and dedup check
 
-Most unread same-repo notifications are leftovers from events the dedicated workflows
-(`tend-review`, `tend-mention`, `tend-triage`, `tend-ci-fix`) already handled. The action's
-post-step marks them read on success, and the workflow's pre-check sweeps any that slipped
-through. Anything still unread by the time you reach this step needs one targeted check:
+**Freshness gate (same-repo only):** Same-repo notifications younger than 10 minutes are likely
+being handled by a concurrent dedicated workflow (`tend-review`, `tend-mention`, etc.) that hasn't
+posted its response yet. **Skip** these — do not process, do not mark read. The next scheduled run
+will pick them up once the grace period has elapsed and the dedicated workflow has either succeeded
+or failed.
 
-For same-repo notifications on a PR or Issue, ask: has the bot posted a comment or review newer
-than the notification's `updated_at`?
+Cross-repo notifications are exempt from the freshness gate — no dedicated workflow handles them.
+
+**Dedup check:** For same-repo notifications older than 10 minutes, check whether the bot already
+responded:
 
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
@@ -115,7 +118,7 @@ The notifications skill is the **sole handler** for these categories — respond
 
 - **Cross-repo mentions** — the bot was `@`-mentioned in another repository. Read the context and respond helpfully, but do not push code or create PRs in other repos (per step 3 scope rules).
 
-- **Stale unanswered items** — notifications where the `updated_at` timestamp is more than 30 minutes old and no bot response exists. This catches items where a dedicated workflow was expected to run but failed or was skipped. Process these as if they were new:
+- **Stale unanswered items** — same-repo notifications older than 10 minutes where no bot response exists. This catches items where a dedicated workflow was expected to run but failed or was skipped. Process these as if they were new:
   - For issues: attempt triage following `/tend-ci-runner:triage`.
   - For PRs with review requested: load `/tend-ci-runner:review`.
   - For mentions/comments: read context and respond helpfully.
