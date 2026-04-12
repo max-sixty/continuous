@@ -177,6 +177,15 @@ Always comment via `gh issue comment`. Keep it brief, polite, and specific. A
 maintainer will always review — never claim the issue is fully resolved by
 automation alone.
 
+**Drop the "a maintainer will review" closer when `author_association` is
+`OWNER`, `MEMBER`, or `COLLABORATOR`** — deferring to a maintainer reads as
+absurd when the reporter is one. Keep it otherwise, where it signals the
+action isn't authoritative.
+
+```bash
+gh issue view $ARGUMENTS --json author,authorAssociation --jq '.authorAssociation'
+```
+
 **Stay within what you verified.** State facts you found in the codebase — don't characterize
 something as "known" unless you find prior issues or documentation about it. Don't speculate
 beyond the code you read.
@@ -235,3 +244,14 @@ Choose the appropriate template:
 ### Duplicate
 
 > Thanks for reporting this! This appears to be related to #EXISTING_ISSUE [and/or PR #EXISTING_PR]. I'll leave it to a maintainer to confirm and link them.
+
+### Maintainer-filed request (feature example)
+
+When the filer's `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`,
+drop the deferral closer and the "I'll leave it for a maintainer to evaluate
+and prioritize" framing — the filer already has that authority. The opener can
+stay or go; lead with substance either way.
+
+> Searched the codebase — no existing implementation of [feature]. The closest related functionality is [X], which does [Y].
+>
+> [If a PR was opened: opened #PR_NUMBER with an implementation.]
