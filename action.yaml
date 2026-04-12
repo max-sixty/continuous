@@ -221,16 +221,26 @@ runs:
             ;;
         esac
 
-        gh api notifications \
+        # github.run_started_at is not a real context property — the env
+        # expression only has a value for workflow_run events.  Fall back
+        # to the REST API, then to "now" if the API call fails.
+        if [ -z "$RUN_STARTED_AT" ]; then
+          RUN_STARTED_AT=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --jq '.run_started_at' 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+        fi
+
+        # Wrap in a subshell — a transient API error (non-JSON response)
+        # must not fail the composite action.
+        (gh api notifications \
           | jq -r --arg url "$SUBJECT_URL" --arg started "$RUN_STARTED_AT" \
               '.[] | select(.subject.url == $url and .updated_at <= $started) | .id' \
           | while read -r tid; do
               [ -n "$tid" ] || continue
               gh api "notifications/threads/$tid" -X PATCH || true
-            done
+            done) || echo "::warning::Failed to mark notification as read (non-fatal)"
       env:
         GH_TOKEN: ${{ inputs.github_token }}
-        RUN_STARTED_AT: ${{ github.event.workflow_run.created_at || github.run_started_at }}
+        RUN_STARTED_AT: ${{ github.event.workflow_run.created_at }}
 
     - name: Token usage
       if: always()
