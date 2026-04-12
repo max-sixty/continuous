@@ -303,13 +303,18 @@ runs:
 
         TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-        # Fetch error annotations from the current (in-progress) job
+        # Fetch error annotations from the current job.
+        # Sleep briefly — GitHub indexes ##[error] annotations asynchronously
+        # and they may not be available via the API immediately after the step
+        # fails. Also match both in_progress (normal) and failure (if GitHub
+        # already transitioned the status) to handle matrix timing.
+        sleep 5
         ERRORS=""
         JOB_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
-          --jq '[.jobs[] | select(.status == "in_progress")] | first | .id' 2>/dev/null || true)
+          --jq '[.jobs[] | select(.status == "in_progress" or .conclusion == "failure")] | first | .id' 2>/dev/null || true)
         if [ -n "$JOB_ID" ] && [ "$JOB_ID" != "null" ]; then
           ERRORS=$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${JOB_ID}/annotations" \
-            --jq '[.[] | select(.annotation_level == "failure") | .message] | join("\n")' 2>/dev/null || true)
+            --jq '[.[] | select(.annotation_level == "failure") | .message | select(test("^Process completed") | not)] | join("\n")' 2>/dev/null || true)
         fi
 
         ERROR_BLOCK=""
