@@ -181,11 +181,6 @@ attempt `gh pr review --approve` — GitHub rejects self-approvals. Submit as CO
 concerns, or stay silent and skip to step 6. Always post CI failure analysis as a COMMENT, even on
 self-authored PRs.
 
-PRs authored by the repo owner, a maintainer, or any other human are **not** self-authored.
-GitHub only blocks self-approval when reviewer and author are the same account, so approve those
-PRs normally when there are no concerns — do not fall back to "skip review, owner can't
-self-approve." That reasoning only applies when `PR_AUTHOR` exactly equals `BOT_LOGIN`.
-
 **Not confident enough to approve** (unfamiliar module, subtle logic): Add a `+1` reaction
 instead — no review needed unless there are specific observations.
 
