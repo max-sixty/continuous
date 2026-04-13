@@ -105,20 +105,19 @@ checkout's `.github/` directory may be mounted read-only under the sandbox
 (protecting bots from modifying their own workflows in place), so do the
 regeneration in a git worktree under `$TMPDIR`, which is writable.
 
-If the repo contains the tend generator in-tree (`generator/pyproject.toml`
-exists — i.e. the tend repo itself), run against the in-tree generator so
-nightly regeneration reflects `main`'s generator state. Otherwise, use the
-published release. Running `uvx tend@latest init` on tend itself would pull
-from PyPI, which lags `main` — that produces PRs that revert unreleased
-generator commits back to the last published version.
+**Skip this step on tend itself.** If the repo contains the tend generator
+in-tree (`generator/pyproject.toml` exists), workflow regeneration is part of
+the release flow, not nightly. Running `uvx tend@latest init` against tend
+between releases produces PRs that revert unreleased generator commits back to
+the last published version.
 
 ```bash
-git worktree add "$TMPDIR/tend-update-workflows" -b tend/update-workflows HEAD
-if [ -f "$TMPDIR/tend-update-workflows/generator/pyproject.toml" ]; then
-  (cd "$TMPDIR/tend-update-workflows" && uv run --project generator tend init)
-else
-  (cd "$TMPDIR/tend-update-workflows" && uvx tend@latest init)
+if [ -f generator/pyproject.toml ]; then
+  echo "Skipping workflow regen on tend (handled at release time)"
+  exit 0
 fi
+git worktree add "$TMPDIR/tend-update-workflows" -b tend/update-workflows HEAD
+(cd "$TMPDIR/tend-update-workflows" && uvx tend@latest init)
 git -C "$TMPDIR/tend-update-workflows" status --porcelain .github/workflows
 ```
 
