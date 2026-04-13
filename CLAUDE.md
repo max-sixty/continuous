@@ -48,4 +48,11 @@ Consuming repos regenerate their `tend-*.yaml` workflows nightly (tend itself
 included — it dogfoods its own workflows). Changes to the generator do not
 require manual regeneration in downstream repos.
 
+Tend's own `tend-*.yaml` workflows track the latest published release. They
+update each night via `uvx tend@latest init`. Updating earlier to the latest
+release (e.g., during a release commit) is fine. Do not update them beyond
+the latest release using the in-tree generator — between a generator commit
+and the next release, the local workflows lag the in-tree generator, and
+that is expected; the gap closes at the next release.
+
 Linting: `pre-commit run --all-files` (ruff, typos, actionlint, uv-lock).
