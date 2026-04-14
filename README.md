@@ -149,6 +149,19 @@ For tend-specific guidance, add a skill overlay at
 `.claude/skills/running-tend/SKILL.md`. Common uses: recording which CI
 workflow names `tend-ci-fix` watches, PR title conventions, label policies.
 
+## Using your Claude subscription
+
+Tend wraps
+[`claude-code-action`](https://github.com/anthropics/claude-code-action),
+Anthropic's official GitHub Action for running Claude Code in CI. Your
+`CLAUDE_CODE_OAUTH_TOKEN` is used exactly as it would be in any
+claude-code-action workflow — tend adds the framework (workflows, skills,
+prompts) around it but never sees the token itself.
+
+Running Anthropic's own action against your own repo, with your own OAuth
+token and Max subscription, is a supported use of Claude Code. If you already
+have a Max subscription, tend is a safe way to put it to work on your project.
+
 ## Badge
 
 A badge signals the repo is maintained with tend:
