@@ -213,10 +213,17 @@ jobs:
   verify:
     # Filter out fork PRs for review events — secrets are unavailable there
     # (no _target variant exists). The notifications workflow polls for these.
+    # Skip comments on `tend-outage` issues: the action's Report-failure step
+    # auto-comments on those when Claude invocation fails, and without this
+    # guard those comments re-trigger tend-mention during a persistent outage
+    # (e.g. Anthropic 401), producing a self-sustaining ~1 run/minute loop
+    # until the outage clears. The prompt's self-loop guard can't help here
+    # because the model never executes — the action fails before Claude starts.
     if: |
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@{bn}')) ||
-      (github.event_name == 'issue_comment') ||
+      (github.event_name == 'issue_comment' &&
+        !contains(github.event.issue.labels.*.name, 'tend-outage')) ||
       (github.event_name == 'pull_request_review_comment' &&
         github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'pull_request_review' &&
