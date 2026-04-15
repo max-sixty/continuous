@@ -99,7 +99,21 @@ gh api "repos/{owner}/{repo}/pulls/{number}/reviews" \
   --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .submitted_at > \"$NOTIF_UPDATED_AT\")] | length"
 ```
 
-If either returns `> 0`, mark read and move on:
+For issue notifications, also check the timeline for bot-authored PRs that cross-reference the
+issue. `tend-mention` typically handles an `@`-mention-asking-for-a-PR by opening a PR with
+`Refs #N` in its body — *without* commenting on the issue. The comments check above misses that
+path, so without this timeline check the same notification races to a duplicate PR from this
+skill (observed in run 24438413763 which opened PR #278 duplicating PR #277):
+
+```bash
+gh api "repos/{owner}/{repo}/issues/{number}/timeline" \
+  --jq "[.[] | select(.event == \"cross-referenced\"
+    and .source.issue.pull_request
+    and .source.issue.user.login == \"$BOT_LOGIN\"
+    and .created_at > \"$NOTIF_UPDATED_AT\")] | length"
+```
+
+If any of the three returns `> 0`, mark read and move on:
 
 ```bash
 gh api notifications/threads/{thread_id} -X PATCH
