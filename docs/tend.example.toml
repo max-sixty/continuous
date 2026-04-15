@@ -60,17 +60,19 @@ bot_name = "my-project-bot"
 #     name, id, if, with, env, shell, working-directory,
 #     continue-on-error, timeout-minutes
 #
-# The escape hatch is `raw` — verbatim YAML, useful for emitting multiple
-# steps from one config entry or for fields outside the list above.
+# For multi-step setup, add multiple `[[setup]]` entries — they render in
+# declared order. For anything more elaborate (conditional shells, shared
+# env across many steps, anchored caches), move the YAML into a local
+# composite action (`.github/actions/tend-setup/action.yaml`) and reference
+# it from one `[[setup]]` entry with `uses`.
 #
-# `tend-notifications` injects an `if:` guard on every structured step so
-# setup is skipped when the pre-check finds no work. `raw` steps can't receive
-# that guard — use the structured form whenever the step can express what you
-# need, and `raw` only when you actually need to emit multiple steps.
+# `tend-notifications` injects an `if:` guard on every step so setup is
+# skipped when the pre-check finds no work. A user-supplied `if:` is passed
+# through unchanged (with a generation-time warning) — your condition wins.
 #
 # Each form below shows the TOML and the YAML it produces inside the `steps:`
 # block. The `if:` guard injected in `tend-notifications` is shown on the
-# first example; it's added the same way on every structured step.
+# first example; it's added the same way on every step.
 #
 # `uses`:
 #
@@ -114,29 +116,6 @@ bot_name = "my-project-bot"
 #     #     working-directory: ./crates/core
 #     #     env:
 #     #       RUSTFLAGS: -D warnings
-#
-# A user-supplied `if:` on a step is passed through unchanged — tend will
-# *not* also add the notifications guard, and you'll see a warning at
-# generation time reminding you that step runs purely on your condition.
-#
-# `raw` — verbatim YAML, re-indented into the `steps:` block:
-#
-#     [[setup]]
-#     raw = """
-#     - uses: Swatinem/rust-cache@v2
-#       with:
-#         save-if: false
-#     - run: cargo binstall cargo-nextest --no-confirm
-#     """
-#
-#     # renders as:
-#     #   - uses: Swatinem/rust-cache@v2
-#     #     with:
-#     #       save-if: false
-#     #   - run: cargo binstall cargo-nextest --no-confirm
-#
-# For complex setups, a local composite action
-# (`.github/actions/tend-setup/action.yaml`) referenced via `uses` is cleaner.
 
 # ## Workflows
 #

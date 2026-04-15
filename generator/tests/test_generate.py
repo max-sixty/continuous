@@ -177,14 +177,6 @@ def test_setup_step_rejects_unknown_field(tmp_path: Path) -> None:
         Config.load(_minimal_config(tmp_path, extra))
 
 
-def test_setup_step_rejects_raw_mixed_with_fields(tmp_path: Path) -> None:
-    extra = dedent("""\
-        setup = [{raw = "- run: echo hi", name = "oops"}]
-    """)
-    with pytest.raises(click.ClickException, match="`raw` cannot be combined"):
-        Config.load(_minimal_config(tmp_path, extra))
-
-
 def test_setup_step_env_must_be_table(tmp_path: Path) -> None:
     extra = dedent("""\
         setup = [{run = "echo hi", env = "not a table"}]
@@ -282,52 +274,20 @@ def test_setup_after_checkout_in_review(tmp_path: Path) -> None:
     assert setup_idx > checkout_idx, "Setup must come after checkout"
 
 
-def test_setup_raw_yaml_injected(tmp_path: Path) -> None:
+def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
+    """`raw` was removed in favor of structured steps — the error message
+    must point users at the two supported paths so they can migrate."""
     extra = dedent('''\
         setup = [
           {raw = """
         - uses: Swatinem/rust-cache@v2
           with:
             save-if: false
-        - run: cargo binstall cargo-insta --no-confirm
-          shell: bash
         """},
         ]
     ''')
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in generate_all(cfg):
-        data = yaml.safe_load(wf.content)
-        assert isinstance(data, dict), f"{wf.filename} did not parse as valid YAML"
-        assert "Swatinem/rust-cache@v2" in wf.content, (
-            f"{wf.filename} missing raw uses step"
-        )
-        assert "save-if: false" in wf.content, f"{wf.filename} missing with parameter"
-        assert "cargo binstall" in wf.content, f"{wf.filename} missing raw run step"
-
-
-def test_setup_raw_interleaved_with_steps(tmp_path: Path) -> None:
-    extra = dedent('''\
-        setup = [
-          {uses = "./.github/actions/my-setup"},
-          {raw = """
-        - uses: Swatinem/rust-cache@v2
-          with:
-            save-if: false
-        """},
-          {run = "echo FOO=bar >> $GITHUB_ENV"},
-        ]
-    ''')
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in generate_all(cfg):
-        assert "./.github/actions/my-setup" in wf.content
-        assert "Swatinem/rust-cache@v2" in wf.content
-        assert "save-if: false" in wf.content
-        assert "echo FOO=bar" in wf.content
-        # Order preserved: uses, raw, run
-        uses_idx = wf.content.index("./.github/actions/my-setup")
-        raw_idx = wf.content.index("Swatinem/rust-cache@v2")
-        run_idx = wf.content.index("echo FOO=bar")
-        assert uses_idx < raw_idx < run_idx, f"{wf.filename}: wrong order"
+    with pytest.raises(click.ClickException, match="composite action"):
+        Config.load(_minimal_config(tmp_path, extra))
 
 
 def test_mention_handles_pull_request_review(tmp_path: Path) -> None:

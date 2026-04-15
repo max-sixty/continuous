@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -28,17 +27,6 @@ def _bot_token(cfg: Config) -> str:
 
 def _claude_token(cfg: Config) -> str:
     return f"${{{{ secrets.{cfg.claude_token_secret} }}}}"
-
-
-def _reindent(text: str, indent: int) -> str:
-    """Dedent raw YAML and re-indent to `indent` spaces."""
-    stripped = textwrap.dedent(text).strip("\n")
-    if not stripped:
-        return ""
-    pad = " " * indent
-    return "\n".join(
-        pad + line if line.strip() else line for line in stripped.splitlines()
-    )
 
 
 _STEP_FIELD_ORDER = [
@@ -74,24 +62,12 @@ def _setup_yaml(cfg: Config, indent: int = 6, condition: str = "") -> str:
     Returns empty string when no steps, or newline-prefixed block when present,
     so templates can write `{setup}` without extra blank lines.
 
-    When *condition* is set, structured steps without an explicit `if:`
-    receive one so they only run when the pre-check found work. Steps that
-    already specify `if:` are left alone (with a warning), and `raw` steps
-    are emitted verbatim (also with a warning) since tend can't splice into
-    user-supplied YAML reliably.
+    When *condition* is set, steps without an explicit `if:` receive one so
+    they only run when the pre-check found work. Steps that already specify
+    `if:` are left alone (with a warning) — their condition wins.
     """
     lines = []
     for step in cfg.setup:
-        if step.raw:
-            if condition:
-                click.echo(
-                    "Warning: raw setup steps cannot be conditionally skipped; "
-                    "notifications pre-check will not gate this step",
-                    err=True,
-                )
-            lines.append(_reindent(step.raw, indent))
-            continue
-        assert step.fields is not None
         fields = dict(step.fields)
         if condition:
             if "if" in fields:

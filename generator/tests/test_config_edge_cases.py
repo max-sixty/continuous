@@ -599,7 +599,7 @@ def test_setup_steps_empty_list(tmp_path: Path) -> None:
 
 
 def test_setup_steps_entry_missing_key(tmp_path: Path) -> None:
-    """setup entry without uses, run, or raw is rejected."""
+    """setup entry without uses or run is rejected."""
     path = _write_config(
         tmp_path,
         dedent("""\

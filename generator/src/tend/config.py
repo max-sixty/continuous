@@ -49,22 +49,16 @@ DICT_STEP_FIELDS = {"with", "env"}
 
 @dataclass
 class SetupStep:
-    """A single project setup step.
+    """A single project setup step, mirroring GitHub's step schema.
 
-    Two forms:
-
-    - **Structured** — `fields` is a dict mirroring GitHub's step schema
-      (exactly one of `uses` or `run`, plus any of `with`, `env`, `name`,
-      `id`, `shell`, `working-directory`, `continue-on-error`,
-      `timeout-minutes`, `if`). The renderer injects the notifications
-      pre-check `if:` guard when absent.
-    - **Raw** — `raw` is verbatim YAML spliced into the steps block.
-      Escape hatch for emitting multiple steps or YAML the structured form
-      can't express. Cannot receive the notifications guard.
+    Exactly one of `uses` or `run`, plus any of `with`, `env`, `name`,
+    `id`, `shell`, `working-directory`, `continue-on-error`,
+    `timeout-minutes`, `if`. The renderer injects the notifications
+    pre-check `if:` guard when absent. For multi-step setup, add multiple
+    `[[setup]]` entries — or reference a local composite action with `uses`.
     """
 
-    fields: dict | None = None
-    raw: str = ""
+    fields: dict
 
 
 @dataclass
@@ -141,25 +135,24 @@ class Config:
         for i, entry in enumerate(raw.get("setup", [])):
             if not isinstance(entry, dict):
                 raise click.ClickException(
-                    f"setup[{i}] must be a table with 'uses', 'run', or 'raw'"
+                    f"setup[{i}] must be a table with `uses` or `run`"
                 )
             if "raw" in entry:
-                if set(entry.keys()) != {"raw"}:
-                    raise click.ClickException(
-                        f"setup[{i}]: `raw` cannot be combined with other step fields"
-                    )
-                setup.append(SetupStep(raw=entry["raw"]))
-                continue
+                raise click.ClickException(
+                    f"setup[{i}]: `raw` was removed. Split into multiple "
+                    "[[setup]] entries, or move the YAML into a local "
+                    "composite action and reference it with `uses`."
+                )
             unknown = set(entry.keys()) - ALLOWED_STEP_FIELDS
             if unknown:
                 raise click.ClickException(
                     f"setup[{i}]: unknown field(s): {', '.join(sorted(unknown))}. "
-                    f"Allowed: {', '.join(sorted(ALLOWED_STEP_FIELDS))}, or use `raw`."
+                    f"Allowed: {', '.join(sorted(ALLOWED_STEP_FIELDS))}."
                 )
             step_keys = {"uses", "run"} & entry.keys()
             if len(step_keys) != 1:
                 raise click.ClickException(
-                    f"setup[{i}] must have exactly one of 'uses', 'run', or 'raw'"
+                    f"setup[{i}] must have exactly one of `uses` or `run`"
                 )
             for k in DICT_STEP_FIELDS:
                 if k in entry and not isinstance(entry[k], dict):
