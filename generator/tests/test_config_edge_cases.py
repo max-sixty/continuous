@@ -419,8 +419,8 @@ def test_duplicate_setup_steps_accepted(tmp_path: Path) -> None:
     )
     cfg = Config.load(path)
     assert len(cfg.setup) == 2
-    assert cfg.setup[0].uses == "./.github/actions/setup"
-    assert cfg.setup[1].uses == "./.github/actions/setup"
+    assert cfg.setup[0].fields == {"uses": "./.github/actions/setup"}
+    assert cfg.setup[1].fields == {"uses": "./.github/actions/setup"}
     # Both duplicates appear in generated YAML
     workflows = generate_all(cfg)
     for wf in workflows:
@@ -573,9 +573,9 @@ def test_setup_steps_preserves_order(tmp_path: Path) -> None:
     )
     cfg = Config.load(path)
     assert len(cfg.setup) == 3
-    assert cfg.setup[0].uses == "./.github/actions/setup-node"
-    assert cfg.setup[1].run == "echo middle"
-    assert cfg.setup[2].uses == "./.github/actions/setup-cache"
+    assert cfg.setup[0].fields == {"uses": "./.github/actions/setup-node"}
+    assert cfg.setup[1].fields == {"run": "echo middle"}
+    assert cfg.setup[2].fields == {"uses": "./.github/actions/setup-cache"}
     # Verify order in generated YAML
     workflows = generate_all(cfg)
     for wf in workflows:

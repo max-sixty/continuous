@@ -54,34 +54,86 @@ bot_name = "my-project-bot"
 # ## Setup steps
 #
 # Build tools, caches, and environment variables that run before Claude in every
-# workflow. Three forms:
+# workflow. A `[[setup]]` entry mirrors a GitHub Actions step: give it exactly
+# one of `uses` or `run`, plus any of these optional fields:
 #
-# - `uses` — a GitHub Action (local composite or marketplace); optional `with`
-#            table passes parameters to the action
-# - `run`  — a shell command
-# - `raw`  — verbatim YAML (for fall-back cases, e.g. injecting multiple steps
-#            or step-level `shell:`/`env:`)
+#     name, id, if, with, env, shell, working-directory,
+#     continue-on-error, timeout-minutes
 #
-# Prefer `uses` + `with` over `raw` when possible: `raw` steps cannot receive
-# the `if:` guard used by the notifications workflow, so they run even when
-# the pre-check has decided to skip the Claude invocation.
-
-# [[setup]]
-# uses = "astral-sh/setup-uv@v6"
+# The escape hatch is `raw` — verbatim YAML, useful for emitting multiple
+# steps from one config entry or for fields outside the list above.
 #
-# [[setup]]
-# uses = "actions/setup-node@v4"
-# with = { node-version-file = ".node-version" }
+# `tend-notifications` injects an `if:` guard on every structured step so
+# setup is skipped when the pre-check finds no work. `raw` steps can't receive
+# that guard — use the structured form whenever the step can express what you
+# need, and `raw` only when you actually need to emit multiple steps.
 #
-# [[setup]]
-# run = "echo CARGO_TERM_COLOR=always >> $GITHUB_ENV"
+# Each form below shows the TOML and the YAML it produces inside the `steps:`
+# block. The `if:` guard injected in `tend-notifications` is shown on the
+# first example; it's added the same way on every structured step.
 #
-# [[setup]]
-# raw = """
-# - uses: Swatinem/rust-cache@v2
-#   with:
-#     save-if: false
-# """
+# `uses`:
+#
+#     [[setup]]
+#     uses = "astral-sh/setup-uv@v6"
+#
+#     # renders as (in tend-notifications):
+#     #   - uses: astral-sh/setup-uv@v6
+#     #     if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
+#     #
+#     # and in other workflows:
+#     #   - uses: astral-sh/setup-uv@v6
+#
+# `uses` with action inputs and step-level env:
+#
+#     [[setup]]
+#     uses = "actions/setup-node@v4"
+#     name = "Setup Node"
+#     with = { node-version-file = ".node-version" }
+#     env = { FORCE_COLOR = "1" }
+#
+#     # renders as:
+#     #   - uses: actions/setup-node@v4
+#     #     name: Setup Node
+#     #     with:
+#     #       node-version-file: .node-version
+#     #     env:
+#     #       FORCE_COLOR: '1'
+#
+# `run` with shell and working directory:
+#
+#     [[setup]]
+#     run = "cargo build --release"
+#     shell = "bash"
+#     working-directory = "./crates/core"
+#     env = { RUSTFLAGS = "-D warnings" }
+#
+#     # renders as:
+#     #   - run: cargo build --release
+#     #     shell: bash
+#     #     working-directory: ./crates/core
+#     #     env:
+#     #       RUSTFLAGS: -D warnings
+#
+# A user-supplied `if:` on a step is passed through unchanged — tend will
+# *not* also add the notifications guard, and you'll see a warning at
+# generation time reminding you that step runs purely on your condition.
+#
+# `raw` — verbatim YAML, re-indented into the `steps:` block:
+#
+#     [[setup]]
+#     raw = """
+#     - uses: Swatinem/rust-cache@v2
+#       with:
+#         save-if: false
+#     - run: cargo binstall cargo-nextest --no-confirm
+#     """
+#
+#     # renders as:
+#     #   - uses: Swatinem/rust-cache@v2
+#     #     with:
+#     #       save-if: false
+#     #   - run: cargo binstall cargo-nextest --no-confirm
 #
 # For complex setups, a local composite action
 # (`.github/actions/tend-setup/action.yaml`) referenced via `uses` is cleaner.

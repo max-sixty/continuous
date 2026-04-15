@@ -107,6 +107,92 @@ def test_setup_uses_with_parameters_gets_if_guard(tmp_path: Path) -> None:
     )
 
 
+def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
+    """Any GitHub step field (env, name, shell, working-directory, etc.) flows
+    through on a structured step, so users don't need `raw` just to pass them.
+    """
+    extra = dedent("""\
+        [[setup]]
+        uses = "actions/setup-node@v4"
+        name = "Setup Node"
+        with = {node-version-file = ".node-version"}
+        env = {FORCE_COLOR = "1"}
+
+        [[setup]]
+        run = "cargo build --release"
+        shell = "bash"
+        working-directory = "./crates/core"
+        env = {RUSTFLAGS = "-D warnings"}
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    review = workflows["tend-review.yaml"]
+    data = yaml.safe_load(review.content)
+
+    steps = data["jobs"]["review"]["steps"]
+    node = next(s for s in steps if s.get("uses") == "actions/setup-node@v4")
+    assert node["name"] == "Setup Node"
+    assert node["with"] == {"node-version-file": ".node-version"}
+    assert node["env"] == {"FORCE_COLOR": "1"}
+
+    build = next(s for s in steps if s.get("run") == "cargo build --release")
+    assert build["shell"] == "bash"
+    assert build["working-directory"] == "./crates/core"
+    assert build["env"] == {"RUSTFLAGS": "-D warnings"}
+
+
+def test_setup_step_user_if_preserved_in_notifications(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """User-supplied `if:` on a setup step is passed through; tend does not
+    add its own notifications guard on top. A warning is emitted so the user
+    knows they've opted out of the pre-check gating."""
+    extra = dedent("""\
+        setup = [
+          {run = "./flaky.sh", if = "runner.os == 'Linux'"},
+        ]
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    captured = capsys.readouterr()
+    assert "explicit `if:`" in captured.err
+
+    notifications = workflows["tend-notifications.yaml"]
+    data = yaml.safe_load(notifications.content)
+    step = next(
+        s
+        for s in data["jobs"]["notifications"]["steps"]
+        if s.get("run") == "./flaky.sh"
+    )
+    assert step["if"] == "runner.os == 'Linux'"
+
+
+def test_setup_step_rejects_unknown_field(tmp_path: Path) -> None:
+    """Typos in step field names fail at config load, not at workflow parse."""
+    extra = dedent("""\
+        setup = [{uses = "actions/checkout@v4", continue-on-errors = true}]
+    """)
+    with pytest.raises(click.ClickException, match="unknown field.*continue-on-errors"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
+def test_setup_step_rejects_raw_mixed_with_fields(tmp_path: Path) -> None:
+    extra = dedent("""\
+        setup = [{raw = "- run: echo hi", name = "oops"}]
+    """)
+    with pytest.raises(click.ClickException, match="`raw` cannot be combined"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
+def test_setup_step_env_must_be_table(tmp_path: Path) -> None:
+    extra = dedent("""\
+        setup = [{run = "echo hi", env = "not a table"}]
+    """)
+    with pytest.raises(click.ClickException, match="`env` must be a table"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
 def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path))
     for wf in generate_all(cfg):

@@ -31,19 +31,40 @@ KNOWN_SECRETS_KEYS = {"bot_token", "claude_token", "allowed"}
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 
 
+ALLOWED_STEP_FIELDS = {
+    "uses",
+    "run",
+    "name",
+    "id",
+    "if",
+    "with",
+    "env",
+    "shell",
+    "working-directory",
+    "continue-on-error",
+    "timeout-minutes",
+}
+DICT_STEP_FIELDS = {"with", "env"}
+
+
 @dataclass
 class SetupStep:
-    """A single project setup step — `uses:`, `run:`, or `raw:` YAML.
+    """A single project setup step.
 
-    `uses` steps may carry a `with` table of parameters; this avoids forcing
-    parameterized actions (e.g. `actions/setup-node@v4`) into `raw`, which
-    cannot receive the `if:` guard used by the notifications workflow.
+    Two forms:
+
+    - **Structured** — `fields` is a dict mirroring GitHub's step schema
+      (exactly one of `uses` or `run`, plus any of `with`, `env`, `name`,
+      `id`, `shell`, `working-directory`, `continue-on-error`,
+      `timeout-minutes`, `if`). The renderer injects the notifications
+      pre-check `if:` guard when absent.
+    - **Raw** — `raw` is verbatim YAML spliced into the steps block.
+      Escape hatch for emitting multiple steps or YAML the structured form
+      can't express. Cannot receive the notifications guard.
     """
 
-    uses: str = ""
-    run: str = ""
+    fields: dict | None = None
     raw: str = ""
-    with_: dict | None = None
 
 
 @dataclass
@@ -122,21 +143,28 @@ class Config:
                 raise click.ClickException(
                     f"setup[{i}] must be a table with 'uses', 'run', or 'raw'"
                 )
-            keys = {"uses", "run", "raw"} & entry.keys()
-            if len(keys) != 1:
+            if "raw" in entry:
+                if set(entry.keys()) != {"raw"}:
+                    raise click.ClickException(
+                        f"setup[{i}]: `raw` cannot be combined with other step fields"
+                    )
+                setup.append(SetupStep(raw=entry["raw"]))
+                continue
+            unknown = set(entry.keys()) - ALLOWED_STEP_FIELDS
+            if unknown:
+                raise click.ClickException(
+                    f"setup[{i}]: unknown field(s): {', '.join(sorted(unknown))}. "
+                    f"Allowed: {', '.join(sorted(ALLOWED_STEP_FIELDS))}, or use `raw`."
+                )
+            step_keys = {"uses", "run"} & entry.keys()
+            if len(step_keys) != 1:
                 raise click.ClickException(
                     f"setup[{i}] must have exactly one of 'uses', 'run', or 'raw'"
                 )
-            key = keys.pop()
-            with_value = entry.get("with")
-            if with_value is not None:
-                if key != "uses":
-                    raise click.ClickException(
-                        f"setup[{i}]: `with` is only valid alongside `uses`"
-                    )
-                if not isinstance(with_value, dict):
-                    raise click.ClickException(f"setup[{i}]: `with` must be a table")
-            setup.append(SetupStep(**{key: entry[key], "with_": with_value}))
+            for k in DICT_STEP_FIELDS:
+                if k in entry and not isinstance(entry[k], dict):
+                    raise click.ClickException(f"setup[{i}]: `{k}` must be a table")
+            setup.append(SetupStep(fields=dict(entry)))
 
         workflows: dict[str, WorkflowConfig] = {}
         for name, wf_raw in raw.get("workflows", {}).items():

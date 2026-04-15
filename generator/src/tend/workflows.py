@@ -41,31 +41,48 @@ def _reindent(text: str, indent: int) -> str:
     )
 
 
+_STEP_FIELD_ORDER = [
+    "uses",
+    "run",
+    "name",
+    "id",
+    "if",
+    "shell",
+    "working-directory",
+    "continue-on-error",
+    "timeout-minutes",
+    "with",
+    "env",
+]
+# Scalar fields where we want plain (unquoted) YAML emission, matching the
+# existing style of generated workflows and letting GitHub Actions expressions
+# pass through unescaped.
+_PLAIN_TOP_LEVEL = {
+    "uses",
+    "run",
+    "if",
+    "name",
+    "id",
+    "shell",
+    "working-directory",
+}
+
+
 def _setup_yaml(cfg: Config, indent: int = 6, condition: str = "") -> str:
     """Render setup steps as YAML, indented to `indent` spaces.
 
     Returns empty string when no steps, or newline-prefixed block when present,
     so templates can write `{setup}` without extra blank lines.
 
-    When *condition* is set, each step gets an ``if:`` guard. `uses` steps may
-    also carry a `with` table which is rendered as a nested block so actions
-    requiring parameters don't have to fall back to `raw` (which can't be
-    conditionally guarded).
+    When *condition* is set, structured steps without an explicit `if:`
+    receive one so they only run when the pre-check found work. Steps that
+    already specify `if:` are left alone (with a warning), and `raw` steps
+    are emitted verbatim (also with a warning) since tend can't splice into
+    user-supplied YAML reliably.
     """
-    pad = " " * indent
-    if_line = f"\n{pad}  if: {condition}" if condition else ""
     lines = []
     for step in cfg.setup:
-        if step.uses:
-            block = f"{pad}- uses: {step.uses}{if_line}"
-            if step.with_:
-                block += f"\n{pad}  with:"
-                for k, v in step.with_.items():
-                    block += f"\n{pad}    {k}: {_yaml_scalar(v)}"
-            lines.append(block)
-        elif step.run:
-            lines.append(f"{pad}- run: {step.run}{if_line}")
-        elif step.raw:
+        if step.raw:
             if condition:
                 click.echo(
                     "Warning: raw setup steps cannot be conditionally skipped; "
@@ -73,9 +90,49 @@ def _setup_yaml(cfg: Config, indent: int = 6, condition: str = "") -> str:
                     err=True,
                 )
             lines.append(_reindent(step.raw, indent))
+            continue
+        assert step.fields is not None
+        fields = dict(step.fields)
+        if condition:
+            if "if" in fields:
+                click.echo(
+                    "Warning: setup step has an explicit `if:`; the "
+                    "notifications pre-check guard will not be added. "
+                    "The step runs based on your condition alone.",
+                    err=True,
+                )
+            else:
+                fields["if"] = condition
+        lines.append(_render_step(_order_step_fields(fields), indent))
     if not lines:
         return ""
     return "\n" + "\n".join(lines) + "\n"
+
+
+def _order_step_fields(fields: dict) -> dict:
+    """Emit keys in a stable order: step kind first, then metadata, then tables."""
+    ordered = {k: fields[k] for k in _STEP_FIELD_ORDER if k in fields}
+    for k, v in fields.items():
+        if k not in ordered:
+            ordered[k] = v
+    return ordered
+
+
+def _render_step(fields: dict, indent: int) -> str:
+    """Render a step dict as a YAML list item at the given indent column."""
+    pad = " " * indent
+    lines = []
+    for i, (key, value) in enumerate(fields.items()):
+        prefix = f"{pad}- " if i == 0 else f"{pad}  "
+        if isinstance(value, dict):
+            lines.append(f"{prefix}{key}:")
+            for sk, sv in value.items():
+                lines.append(f"{pad}    {sk}: {_yaml_scalar(sv)}")
+        elif key in _PLAIN_TOP_LEVEL:
+            lines.append(f"{prefix}{key}: {value}")
+        else:
+            lines.append(f"{prefix}{key}: {_yaml_scalar(value)}")
+    return "\n".join(lines)
 
 
 def _yaml_scalar(value: object) -> str:
