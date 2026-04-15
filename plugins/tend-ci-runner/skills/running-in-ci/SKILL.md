@@ -97,6 +97,23 @@ git branch -r --list 'origin/fix/*'
 
 If an existing PR addresses the same problem, work on that PR instead.
 
+### Dedup recheck immediately before `gh pr create`
+
+A separate mention on a different issue/PR can trigger a concurrent run asking for the same fix.
+Those runs are not serialized — each has its own concurrency group — so both may read an empty
+`gh pr list` at session start and then each open their own PR minutes later, producing
+near-duplicates. Re-run the check **as the last step before `gh pr create`**:
+
+```bash
+BOT_LOGIN=$(gh api user --jq '.login')
+gh pr list --state open --author "$BOT_LOGIN" --json number,title,headRefName,createdAt
+```
+
+Compare by title keywords **and** the files the new PR would modify — two concurrent fixes for
+the same bug typically pick different branch names, so a branch-name match is not sufficient.
+If a sibling bot PR overlaps in scope, **do not create**: post a comment on the triggering
+thread linking the existing PR and exit.
+
 ## Pushing to PR Branches
 
 Always use `git push` without specifying a remote — `gh pr checkout` configures tracking to the
