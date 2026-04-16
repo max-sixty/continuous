@@ -61,8 +61,16 @@ gh pr list --state open --json number,title,headRefName
 
 For each open issue, check whether recent commits or the current codebase state already resolve
 it. If resolved, comment with the evidence (commits, CI runs, or code state that resolves the
-issue). Only close the issue with `gh issue close` if the repo's guidance (e.g., `running-tend`
-skill) explicitly authorizes closing issues. Otherwise, leave it open for a maintainer to close.
+issue). Close the issue with `gh issue close` when:
+
+- The bot opened the issue itself to report a transient condition (e.g., a "Nightly tests failed"
+  report from a prior run) and the condition has clearly resolved — the fix PR is merged and the
+  relevant CI on `main` is passing. Skip this case if the issue body contains "do not close
+  manually"; those are recurring tracking issues (e.g., monthly review-runs trackers) with their
+  own lifecycle.
+- The repo's guidance (e.g., `running-tend` skill) explicitly authorizes closing issues.
+
+Otherwise, leave it open for a maintainer to close.
 
 ## Step 4: Rolling survey
 
