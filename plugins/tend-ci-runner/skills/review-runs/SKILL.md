@@ -161,11 +161,4 @@ tracking issue.
 
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, sessions
 reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking
-issue.
-
-Save the summary to `/tmp/summary.md`, then write it to the GitHub Actions step summary so it
-appears on the run page:
-
-```bash
-cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
-```
+issue. Report the summary in the conversation log.

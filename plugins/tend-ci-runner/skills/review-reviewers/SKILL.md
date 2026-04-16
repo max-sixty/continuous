@@ -244,7 +244,7 @@ independently. Exit after pushing and creating the PR.
 
 ## Step 6: Summary
 
-Report results to both the log and `$GITHUB_STEP_SUMMARY`:
+Report results in the conversation log.
 
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, outcomes
 checked, brief quality assessment, and any below-threshold findings recorded in the tracking issue.
