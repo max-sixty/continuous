@@ -175,10 +175,11 @@ The BOT_TOKEN needs `gist` scope (see install-tend). Without it, `gh gist create
 ### Reading historical evidence
 
 Before applying the gates, read the current month's gist for this target. Pass `--raw` so
-`gh` emits the file content verbatim instead of a TTY-rendered form:
+`gh` emits the file content verbatim instead of a TTY-rendered form. The recording step
+below appends to this same file, so fetch once:
 
 ```bash
-gh gist view "$GIST_ID" -f findings.md --raw > /tmp/historical-findings.md
+gh gist view "$GIST_ID" -f findings.md --raw > /tmp/current.md
 ```
 
 Also check last month's gist for recent carry-over. Compute last month by subtracting a day
@@ -197,12 +198,12 @@ LAST_GIST_ID=$(gh api /gists --paginate \
 ### Recording below-threshold findings
 
 After applying the gates, write each run's new findings (format in `@review-gates.md`) to
-`/tmp/findings.md`, then append them to the gist's `findings.md`. Read current content with
-`--raw`, concatenate, and PATCH via the API (`--rawfile` preserves trailing newlines that
-command substitution would strip):
+`/tmp/findings.md`, then append them to the gist's `findings.md`. Reuse the current content
+already fetched into `/tmp/current.md` in "Reading historical evidence", concatenate, and
+PATCH via the API (`--rawfile` preserves trailing newlines that command substitution would
+strip):
 
 ```bash
-gh gist view "$GIST_ID" -f findings.md --raw > /tmp/current.md
 cat /tmp/current.md /tmp/findings.md > /tmp/combined.md
 jq -n --rawfile content /tmp/combined.md \
   '{files: {"findings.md": {content: $content}}}' \
