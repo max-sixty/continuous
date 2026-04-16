@@ -243,9 +243,13 @@ If no problems found (or none passed the gates), report "all clear" with: runs a
 reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking
 issue.
 
-Save the summary to `/tmp/summary.md`, then write it to the GitHub Actions step summary so it
-appears on the run page:
+Save the summary to `/tmp/claude/step-summary.md` (a post-Claude step copies this into the GitHub
+Actions step summary):
 
 ```bash
-cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
+mkdir -p /tmp/claude
+cat > /tmp/claude/step-summary.md << 'EOF'
+## Review-runs summary
+...
+EOF
 ```

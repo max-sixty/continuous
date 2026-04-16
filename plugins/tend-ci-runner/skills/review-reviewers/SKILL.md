@@ -370,8 +370,20 @@ independently. Exit after pushing and creating the PR.
 
 ## Step 6: Summary
 
-Report results to both the log and `$GITHUB_STEP_SUMMARY`. Include `$GIST_URL` at the top so
-maintainers viewing the run page can click through to the full evidence log.
+Report results in the conversation log and save a markdown summary to `/tmp/claude/step-summary.md`
+(a post-Claude step copies this into the GitHub Actions step summary). Include `$GIST_URL` at the
+top so maintainers viewing the run page can click through to the full evidence log:
+
+```bash
+mkdir -p /tmp/claude
+cat > /tmp/claude/step-summary.md << EOF
+## Review-reviewers summary
+
+Evidence: $GIST_URL
+
+...
+EOF
+```
 
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, outcomes
 checked, brief quality assessment, and a link to the evidence gist for any below-threshold findings
