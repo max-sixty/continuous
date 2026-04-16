@@ -236,6 +236,15 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
 
+    - name: Append skill step summary
+      if: always()
+      shell: bash
+      run: |
+        if [ -f /tmp/claude/step-summary.md ]; then
+          cat /tmp/claude/step-summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
     - name: Token usage
       if: always()
       id: tokens

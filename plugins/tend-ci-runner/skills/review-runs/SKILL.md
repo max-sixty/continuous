@@ -161,4 +161,15 @@ tracking issue.
 
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, sessions
 reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking
-issue. Report the summary in the conversation log.
+issue.
+
+Save the summary to `/tmp/claude/step-summary.md` (a post-Claude step copies this into the GitHub
+Actions step summary):
+
+```bash
+mkdir -p /tmp/claude
+cat > /tmp/claude/step-summary.md << 'EOF'
+## Review-runs summary
+...
+EOF
+```
