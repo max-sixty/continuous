@@ -14,11 +14,12 @@ Before creating a PR, every finding must pass two gates.
 | **Medium** | Plausible problem seen once, could be noise | 5+ |
 | **Low** | Nitpick or stylistic preference | Do not act |
 
-Occurrences include both the current analysis **and** historical evidence from the tracking issue
-(see [Evidence accumulation](#evidence-accumulation)).
+Occurrences include both the current analysis **and** historical evidence recorded by prior runs.
+Each skill defines where that evidence lives — see the calling skill's "Evidence accumulation"
+section.
 
 If a finding doesn't meet the threshold, **skip it** — don't create a PR, don't create an issue,
-don't comment. Record it in the tracking issue so it can accumulate evidence over future runs.
+don't comment. Record it in the evidence store so it can accumulate over future runs.
 
 ### Gate 2: Magnitude — is the fix proportionate?
 
@@ -61,91 +62,13 @@ For each finding, state:
 
 Only proceed to act on findings that pass both gates.
 
-## Evidence accumulation
+## Finding format
 
-Each run only sees a window of CI sessions, but patterns may emerge over days or weeks. Use a
-**monthly tracking issue** to accumulate evidence across runs.
-
-The tracking issue label should match the calling skill — e.g., `review-reviewers-tracking` or
-`review-runs-tracking`.
-
-### Finding or creating the tracking issue
-
-```bash
-MONTH=$(date +%Y-%m)
-TRACKING_LABEL="<skill-name>-tracking"  # set by the calling skill
-gh issue list --state open --label "$TRACKING_LABEL" \
-  --json number,title --jq ".[] | select(.title | contains(\"$MONTH\"))"
-```
-
-If none exists for the current month, create one:
-
-```bash
-cat > /tmp/tracking-body.md << 'EOF'
-Monthly tracking issue for below-threshold findings. Each run appends findings as a comment. Future runs read these to build cumulative evidence.
-
-**Do not close manually** — a new issue is created each month.
-EOF
-gh issue create \
-  --title "$TRACKING_LABEL: $MONTH" \
-  --label "$TRACKING_LABEL" \
-  -F /tmp/tracking-body.md
-```
-
-### Reading historical evidence
-
-Before applying the gates, read the current tracking issue's comments to find prior observations
-that overlap with current findings:
-
-```bash
-TRACKING_NUMBER=<number from above>
-gh issue view "$TRACKING_NUMBER" --json comments \
-  --jq '.comments[] | {author: .author.login, body: .body}'
-```
-
-Also check last month's tracking issue (if it exists) for recent carry-over.
-
-When a historical entry looks like it might match a current finding, **download and investigate the
-linked workflow's session logs** — don't rely on the summary text alone, which lacks sufficient
-context to judge relatedness. Trace the original decision chain in the session JSONL to confirm the
-historical case is genuinely the same pattern, not just superficially similar.
-
-### Recording below-threshold findings
-
-After analysis, find **the bot's existing comment** on the tracking issue and **append** new
-findings to it. If no bot comment exists yet, create one. This avoids notification spam from
-frequent runs.
-
-```bash
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-BOT_LOGIN=$(gh api user --jq '.login')
-EXISTING_COMMENT=$(gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | last | .id // empty")
-```
-
-If `EXISTING_COMMENT` is non-empty, check its size before appending. GitHub rejects comment bodies
-over 65536 characters — start a new comment when the existing one is too large.
-
-```bash
-gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" --jq '.body' > /tmp/existing.md
-EXISTING_SIZE=$(wc -c < /tmp/existing.md)
-if [ "$EXISTING_SIZE" -lt 50000 ]; then
-  cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
-  gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" -X PATCH -F body=@/tmp/combined.md
-else
-  # Comment approaching limit — start a new one
-  gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
-fi
-```
-
-Never replace the body — prior entries contain per-run evidence needed for gate evaluation.
-
-If `EXISTING_COMMENT` is empty, create a new comment.
-
-Format each finding under a `## Run <run-id>` heading. **Always derive the run ID, timestamp, and
-repo from the CI environment — never hand-type them.** Past sessions have filled the `<run-id>`
-placeholder with fabricated round numbers (e.g. `24294000000`) when the skill didn't explicitly
-point at `$GITHUB_RUN_ID`, producing dead link-anchors in the tracking log.
+Each run appends findings to the skill's evidence store under a `## Run <run-id>` heading.
+**Always derive the run ID, timestamp, and repo from the CI environment — never hand-type them.**
+Past sessions have filled the `<run-id>` placeholder with fabricated round numbers (e.g.
+`24294000000`) when the skill didn't explicitly point at `$GITHUB_RUN_ID`, producing dead
+link-anchors in the evidence log.
 
 ```bash
 RUN_ID="$GITHUB_RUN_ID"
@@ -170,3 +93,8 @@ When composing the findings file, either interpolate the values with an unquoted
 
 Each run gets its own heading so future runs can count prior occurrences and trace incidents to
 session logs.
+
+When a historical entry looks like it might match a current finding, **download and investigate the
+linked workflow's session logs** — don't rely on the summary text alone, which lacks sufficient
+context to judge relatedness. Trace the original decision chain in the session JSONL to confirm the
+historical case is genuinely the same pattern, not just superficially similar.

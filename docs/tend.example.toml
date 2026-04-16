@@ -32,12 +32,15 @@ bot_name = "my-project-bot"
 # | `BOT_TOKEN`               | Bot account PAT (see scopes below)                          |
 # | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (PKCE flow, not an API key)         |
 #
-# Classic PAT scopes: `repo`, `workflow`, `notifications`, `write:discussion`.
-# `workflow` is required to push commits that modify `.github/workflows/` files.
+# Classic PAT scopes: `repo`, `workflow`, `notifications`, `write:discussion`,
+# `gist`. `workflow` is required to push commits that modify
+# `.github/workflows/` files. `gist` lets internal skills store structured
+# evidence in secret gists owned by the bot.
 #
 # Fine-grained PAT permissions: `contents:write`, `pull-requests:write`,
 # `issues:write`, `actions:write`, `workflows:write`, `discussions:write`,
-# `notifications:read`.
+# `notifications:write`, `gists:write`. `notifications:write` is required so
+# the action can mark threads read after handling an event.
 #
 # Override names if the repo uses different secret names:
 #

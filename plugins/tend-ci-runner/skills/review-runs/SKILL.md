@@ -23,7 +23,87 @@ Load any repo-specific skill overlay before proceeding.
 
 @review-gates.md
 
-Use `TRACKING_LABEL="review-runs-tracking"` for this skill's tracking issues.
+## Evidence accumulation
+
+Each run only sees a window of CI sessions, but patterns emerge over days or weeks. Accumulate
+evidence in a **monthly tracking issue** labeled `review-runs-tracking`.
+
+<!-- TODO: migrate this to gist-backed storage once the review-reviewers pilot validates it -->
+
+### Finding or creating the tracking issue
+
+`gh issue create` prints the new issue's URL; parse the number from its basename. Sort and
+pick the lowest-numbered match so later runs stay deterministic if the month ever has
+duplicate tracking issues.
+
+```bash
+MONTH=$(date +%Y-%m)
+TRACKING_LABEL="review-runs-tracking"
+TRACKING_NUMBER=$(gh issue list --state open --label "$TRACKING_LABEL" \
+  --json number,title --jq ".[] | select(.title | contains(\"$MONTH\")) | .number" \
+  | sort -n | head -1)
+
+if [ -z "$TRACKING_NUMBER" ]; then
+  cat > /tmp/tracking-body.md << 'EOF'
+Monthly tracking issue for below-threshold findings. Each run appends findings as a comment. Future runs read these to build cumulative evidence.
+
+**Do not close manually** — a new issue is created each month.
+EOF
+  TRACKING_URL=$(gh issue create \
+    --title "$TRACKING_LABEL: $MONTH" \
+    --label "$TRACKING_LABEL" \
+    -F /tmp/tracking-body.md)
+  if [ -z "$TRACKING_URL" ]; then
+    echo "ERROR: gh issue create failed" >&2
+    exit 1
+  fi
+  TRACKING_NUMBER=$(basename "$TRACKING_URL")
+fi
+```
+
+### Reading historical evidence
+
+Before applying the gates, read the current tracking issue's comments to find prior observations
+that overlap with current findings:
+
+```bash
+gh issue view "$TRACKING_NUMBER" --json comments \
+  --jq '.comments[] | {author: .author.login, body: .body}'
+```
+
+Also check last month's tracking issue (if it exists) for recent carry-over.
+
+### Recording below-threshold findings
+
+After analysis, find **the bot's existing comment** on the tracking issue and **append** new
+findings to it. If no bot comment exists yet, create one. This avoids notification spam from
+frequent runs.
+
+```bash
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+BOT_LOGIN=$(gh api user --jq '.login')
+EXISTING_COMMENT=$(gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" \
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | last | .id // empty")
+```
+
+If `EXISTING_COMMENT` is non-empty, check its size before appending. GitHub rejects comment bodies
+over 65536 characters — start a new comment when the existing one is too large.
+
+```bash
+gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" --jq '.body' > /tmp/existing.md
+EXISTING_SIZE=$(wc -c < /tmp/existing.md)
+if [ "$EXISTING_SIZE" -lt 50000 ]; then
+  cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
+  gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" -X PATCH -F body=@/tmp/combined.md
+else
+  # Comment approaching limit — start a new one
+  gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
+fi
+```
+
+Never replace the body — prior entries contain per-run evidence needed for gate evaluation.
+
+If `EXISTING_COMMENT` is empty, create a new comment. See the finding format in `@review-gates.md`.
 
 ## Step 1: Find recent runs
 

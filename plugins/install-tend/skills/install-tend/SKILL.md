@@ -229,13 +229,16 @@ echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO"
 
 ## 8. Bot PAT and secret
 
-The bot needs a classic PAT with `repo`, `workflow`, `notifications`, and
-`write:discussion` scopes. `workflow` is required to push commits that modify
-`.github/workflows/` files. `notifications` lets the bot read/dismiss its own
-notifications. `write:discussion` allows commenting on GitHub Discussions.
+The bot needs a classic PAT with `repo`, `workflow`, `notifications`,
+`write:discussion`, and `gist` scopes. `workflow` is required to push commits
+that modify `.github/workflows/` files. `notifications` lets the bot read/dismiss
+its own notifications. `write:discussion` allows commenting on GitHub
+Discussions. `gist` allows skills like `review-reviewers` to store structured
+evidence in secret gists owned by the bot.
+
 Fine-grained PATs also work (`contents:write`, `pull-requests:write`,
 `issues:write`, `actions:write`, `workflows:write`, `discussions:write`,
-`notifications:write`) — create one manually and skip to step 9.
+`notifications:write`, `gists:write`) — create one manually and skip to step 9.
 `notifications:write` is required so the action can mark threads read after
 handling an event (the classic `notifications` scope already includes write).
 Use Chrome for classic PATs:
@@ -243,7 +246,7 @@ Use Chrome for classic PATs:
 1. Verify the browser is logged in as `<bot-name>` (click avatar, check
    username). If not, tell the user to log in as the bot first.
 2. Navigate to
-   `https://github.com/settings/tokens/new?scopes=repo,workflow,notifications,write:discussion&description=tend-ci`
+   `https://github.com/settings/tokens/new?scopes=repo,workflow,notifications,write:discussion,gist&description=tend-ci`
 3. The URL pre-fills the note and scopes. Set expiration to
    "No expiration" via the dropdown.
 4. Click "Generate token" (scroll to bottom of page).
@@ -302,6 +305,6 @@ After completing all steps, present this checklist:
 - [ ] Badge: offered to add to README (optional)
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Claude token: `CLAUDE_CODE_OAUTH_TOKEN` secret set
-- [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo`+`workflow`+`notifications`+`write:discussion` or fine-grained)
+- [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo`+`workflow`+`notifications`+`write:discussion`+`gist` or fine-grained)
 - [ ] Bot access: repo collaborator with write access, invitation accepted
 - [ ] Committed (push requires explicit permission)

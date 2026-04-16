@@ -84,7 +84,133 @@ without `-R` default to tend.
 
 @review-gates.md
 
-Use `TRACKING_LABEL="review-reviewers-tracking"` for this skill's tracking issues.
+## Evidence accumulation
+
+Each run only sees a window of CI sessions, but patterns emerge over days or weeks. Evidence
+for this skill lives in **secret gists owned by the bot** — one per `(target repo, month)`
+pair. A monthly tracking issue on tend labeled `review-reviewers-tracking` lists the gists
+via bot comments, so maintainers can discover them.
+
+Secret gists are URL-unlisted but readable by anyone with the URL; they are at least as
+private as the current public tracking issues, and give a single structured file that
+accumulates per-target findings without hitting the 65 KB comment limit.
+
+### Setup
+
+```bash
+MONTH=$(date +%Y-%m)
+TRACKING_LABEL="review-reviewers-tracking"
+TARGET="$ARGUMENTS"
+GIST_DESC="review-reviewers evidence: $TARGET $MONTH"
+```
+
+### Finding or creating the tracking issue
+
+The tracking issue lives on tend (the current repo). It indexes gists via one comment per
+new gist — no per-run comments, no body edits.
+
+The matrix runs three targets concurrently on the same cron tick, so the first run of a new
+month races: all three targets can find no tracking issue and each create one. Sorting and
+picking the lowest-numbered match keeps later runs deterministic — maintainers can close any
+duplicates. `gh issue create` prints the new issue's URL; parse the number from its basename.
+
+```bash
+TRACKING_NUMBER=$(gh issue list --state open --label "$TRACKING_LABEL" \
+  --json number,title --jq ".[] | select(.title | contains(\"$MONTH\")) | .number" \
+  | sort -n | head -1)
+
+if [ -z "$TRACKING_NUMBER" ]; then
+  cat > /tmp/tracking-body.md << 'EOF'
+Monthly tracking issue for `review-reviewers`. Per-target evidence lives in secret gists owned by the bot. A comment below is posted when each target's gist is first created.
+
+**Do not close manually** — a new issue is created each month.
+EOF
+  TRACKING_URL=$(gh issue create \
+    --title "$TRACKING_LABEL: $MONTH" \
+    --label "$TRACKING_LABEL" \
+    -F /tmp/tracking-body.md)
+  if [ -z "$TRACKING_URL" ]; then
+    echo "ERROR: gh issue create failed" >&2
+    exit 1
+  fi
+  TRACKING_NUMBER=$(basename "$TRACKING_URL")
+fi
+```
+
+### Finding or creating the evidence gist
+
+Search the bot's own gists by description. Descriptions are our stable key — GitHub does not
+let us pick gist IDs.
+
+```bash
+GIST_ID=$(gh api /gists --paginate \
+  --jq ".[] | select(.description == \"$GIST_DESC\") | .id" | head -1)
+
+if [ -z "$GIST_ID" ]; then
+  # The gist file takes its name from the local file's basename; later reads
+  # and PATCHes target `findings.md`, so the seed must live at that basename.
+  mkdir -p /tmp/gist-seed
+  cat > /tmp/gist-seed/findings.md << EOF
+# review-reviewers evidence — $TARGET — $MONTH
+
+Secret gist. Append-only log of below-threshold findings used for gate evaluation.
+EOF
+  GIST_URL=$(gh gist create --desc "$GIST_DESC" /tmp/gist-seed/findings.md)
+  if [ -z "$GIST_URL" ]; then
+    echo "ERROR: gh gist create failed — BOT_TOKEN likely lacks 'gist' scope (see install-tend)" >&2
+    exit 1
+  fi
+  GIST_ID=$(basename "$GIST_URL")
+  # First time this month for this target — announce the gist on the tracking issue
+  gh issue comment "$TRACKING_NUMBER" \
+    --body "Evidence gist for \`$TARGET\`: $GIST_URL"
+else
+  GIST_URL="https://gist.github.com/$GIST_ID"
+fi
+```
+
+The BOT_TOKEN needs `gist` scope (see install-tend). Without it, `gh gist create` fails with
+`403 Forbidden` and the skill exits before posting a broken tracking-issue comment.
+
+### Reading historical evidence
+
+Before applying the gates, read the current month's gist for this target. Pass `--raw` so
+`gh` emits the file content verbatim instead of a TTY-rendered form:
+
+```bash
+gh gist view "$GIST_ID" -f findings.md --raw > /tmp/historical-findings.md
+```
+
+Also check last month's gist for recent carry-over. Compute last month by subtracting a day
+from the first of the current month — `date -d 'last month'` on the 31st can return the
+current month on GNU date, silently skipping the prior month's evidence:
+
+```bash
+FIRST=$(date -u +%Y-%m-01)
+LAST_MONTH=$(date -u -d "$FIRST -1 day" +%Y-%m 2>/dev/null || date -u -v-1d -jf %Y-%m-%d "$FIRST" +%Y-%m)
+LAST_DESC="review-reviewers evidence: $TARGET $LAST_MONTH"
+LAST_GIST_ID=$(gh api /gists --paginate \
+  --jq ".[] | select(.description == \"$LAST_DESC\") | .id" | head -1)
+[ -n "$LAST_GIST_ID" ] && gh gist view "$LAST_GIST_ID" -f findings.md --raw > /tmp/last-month-findings.md
+```
+
+### Recording below-threshold findings
+
+After applying the gates, write each run's new findings (format in `@review-gates.md`) to
+`/tmp/findings.md`, then append them to the gist's `findings.md`. Read current content with
+`--raw`, concatenate, and PATCH via the API (`--rawfile` preserves trailing newlines that
+command substitution would strip):
+
+```bash
+gh gist view "$GIST_ID" -f findings.md --raw > /tmp/current.md
+cat /tmp/current.md /tmp/findings.md > /tmp/combined.md
+jq -n --rawfile content /tmp/combined.md \
+  '{files: {"findings.md": {content: $content}}}' \
+  | gh api "/gists/$GIST_ID" -X PATCH --input -
+```
+
+Never replace wholesale — prior entries contain per-run evidence needed for gate evaluation.
+See `@review-gates.md` for the per-finding format.
 
 ## Step 1: Setup
 
@@ -237,7 +363,10 @@ progress updates, fix-PR status, or re-statements of evidence already in the iss
   outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more
-findings, pick the highest-confidence ones and note the rest in the tracking issue.
+findings, pick the highest-confidence ones and record the rest in the evidence gist.
+
+PR/issue bodies should link to the evidence gist (`$GIST_URL`) so reviewers can see the
+accumulated history behind the finding.
 
 **Do not poll CI** after creating a PR. The `tend-review` and `tend-ci-fix` workflows handle PRs
 independently. Exit after pushing and creating the PR.
@@ -245,15 +374,20 @@ independently. Exit after pushing and creating the PR.
 ## Step 6: Summary
 
 Report results in the conversation log and save a markdown summary to `/tmp/claude/step-summary.md`
-(a post-Claude step copies this into the GitHub Actions step summary):
+(a post-Claude step copies this into the GitHub Actions step summary). Include `$GIST_URL` at the
+top so maintainers viewing the run page can click through to the full evidence log:
 
 ```bash
 mkdir -p /tmp/claude
-cat > /tmp/claude/step-summary.md << 'EOF'
+cat > /tmp/claude/step-summary.md << EOF
 ## Review-reviewers summary
+
+Evidence: $GIST_URL
+
 ...
 EOF
 ```
 
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, outcomes
-checked, brief quality assessment, and any below-threshold findings recorded in the tracking issue.
+checked, brief quality assessment, and a link to the evidence gist for any below-threshold findings
+recorded this run.
