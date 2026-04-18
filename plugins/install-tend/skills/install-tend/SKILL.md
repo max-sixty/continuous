@@ -230,15 +230,17 @@ echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO"
 ## 8. Bot PAT and secret
 
 The bot needs a classic PAT with `repo`, `workflow`, `notifications`,
-`write:discussion`, and `gist` scopes. `workflow` is required to push commits
-that modify `.github/workflows/` files. `notifications` lets the bot read/dismiss
-its own notifications. `write:discussion` allows commenting on GitHub
-Discussions. `gist` allows skills like `review-reviewers` to store structured
-evidence in secret gists owned by the bot.
+`write:discussion`, `gist`, and `user` scopes. `workflow` is required to push
+commits that modify `.github/workflows/` files. `notifications` lets the bot
+read/dismiss its own notifications. `write:discussion` allows commenting on
+GitHub Discussions. `gist` allows skills like `review-reviewers` to store
+structured evidence in secret gists owned by the bot. `user` lets step 10
+set the bot's profile bio via `PATCH /user`.
 
 Fine-grained PATs also work (`contents:write`, `pull-requests:write`,
 `issues:write`, `actions:write`, `workflows:write`, `discussions:write`,
-`notifications:write`, `gists:write`) — create one manually and skip to step 9.
+`notifications:write`, `gists:write`, plus the account-level `Profile: read
+and write` permission for the bio) — create one manually and skip to step 9.
 `notifications:write` is required so the action can mark threads read after
 handling an event (the classic `notifications` scope already includes write).
 Use Chrome for classic PATs:
@@ -246,7 +248,7 @@ Use Chrome for classic PATs:
 1. Verify the browser is logged in as `<bot-name>` (click avatar, check
    username). If not, tell the user to log in as the bot first.
 2. Navigate to
-   `https://github.com/settings/tokens/new?scopes=repo,workflow,notifications,write:discussion,gist&description=tend-ci`
+   `https://github.com/settings/tokens/new?scopes=repo,workflow,notifications,write:discussion,gist,user&description=tend-ci`
 3. The URL pre-fills the note and scopes. Set expiration to
    "No expiration" via the dropdown.
 4. Click "Generate token" (scroll to bottom of page).
@@ -258,7 +260,7 @@ Use Chrome for classic PATs:
 echo "<pat-value>" | gh secret set BOT_TOKEN --repo "$REPO"
 ```
 
-Keep the PAT value — step 9 uses it to accept invitations as the bot.
+Keep the PAT value — steps 9 and 10 use it to act as the bot.
 
 Verify both secrets exist:
 
@@ -284,7 +286,33 @@ fi
 gh api "repos/$REPO/collaborators" --jq '.[].login'
 ```
 
-## 10. Commit and push
+## 10. Bot profile bio
+
+Capture what the creator is comfortable with contributors/users asking the
+bot to do, then reflect that stance in the bot's profile bio (≤160 chars)
+so it's discoverable on the bot's user page. This is advisory — the bot
+doesn't gate behavior on it.
+
+Ask the creator which stance applies. Each option is a drop-in bio suffix;
+the middle one is the recommended default.
+
+- `tend agent for <owner>/<repo>. Feel free to ask me questions about <repo>.`
+- `tend agent for <owner>/<repo>. I triage issues and help maintain <repo>.` (recommended)
+- `tend agent for <owner>/<repo>. I respond to maintainers of <repo>.`
+
+Check the current bio as the bot — skip if already set to the chosen value:
+
+```bash
+GH_TOKEN=<bot-pat> gh api user --jq '.bio'
+```
+
+Otherwise write it (requires `user` scope on the PAT from step 8):
+
+```bash
+GH_TOKEN=<bot-pat> gh api user -X PATCH -f bio="<drafted bio>"
+```
+
+## 11. Commit and push
 
 Stage all changes:
 
@@ -305,6 +333,7 @@ After completing all steps, present this checklist:
 - [ ] Badge: offered to add to README (optional)
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Claude token: `CLAUDE_CODE_OAUTH_TOKEN` secret set
-- [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo`+`workflow`+`notifications`+`write:discussion`+`gist` or fine-grained)
+- [ ] Bot PAT: `BOT_TOKEN` secret set (classic `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` or fine-grained)
 - [ ] Bot access: repo collaborator with write access, invitation accepted
+- [ ] Bot bio: profile bio reflects the authorization stance
 - [ ] Committed (push requires explicit permission)

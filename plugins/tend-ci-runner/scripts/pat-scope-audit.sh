@@ -13,8 +13,9 @@
 #   MISSING=<csv of missing scopes>    (missing)
 #
 # Required scopes are duplicated in prose at docs/tend.example.toml,
-# DESIGN.md, and plugins/install-tend/skills/install-tend/SKILL.md — keep
-# in sync when adding a scope. This script is the one executable reference.
+# DESIGN.md, plugins/install-tend/skills/install-tend/SKILL.md, and
+# plugins/tend-ci-runner/skills/nightly/SKILL.md — keep in sync when adding
+# a scope. This script is the one executable reference.
 #
 # Exit code: 0 when the check ran to completion (STATUS carries the result);
 # non-zero only if gh or bash itself failed.
@@ -23,7 +24,7 @@
 
 set -euo pipefail
 
-REQUIRED="repo workflow notifications write:discussion gist"
+REQUIRED="repo workflow notifications write:discussion gist user"
 
 HEADERS=$(gh api -i user)
 SCOPES_LINE=$(printf '%s\n' "$HEADERS" | grep -i '^x-oauth-scopes:' | head -1 || true)

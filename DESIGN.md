@@ -173,11 +173,13 @@ doesn't maintain an allowlist. Unknown job names produce a warning.
 
 Each adopter creates a GitHub bot account and a classic PAT (`public_repo`
 for public repos, `repo` for private) plus `workflow`, `notifications`,
-`write:discussion`, and `gist` scopes. The PAT and a Claude OAuth token are
-stored as repo secrets. The `gist` scope supports bot-owned secret gists
-used by internal skills as a per-month structured evidence store (currently
-`review-reviewers`), avoiding the 65 KB comment-body limit and the
-append-to-issue-comment complexity.
+`write:discussion`, `gist`, and `user` scopes. The PAT and a Claude OAuth
+token are stored as repo secrets. The `gist` scope supports bot-owned
+secret gists used by internal skills as a per-month structured evidence
+store (currently `review-reviewers`), avoiding the 65 KB comment-body
+limit and the append-to-issue-comment complexity. The `user` scope lets
+`install-tend` set the bot's profile bio (`PATCH /user`) so the account's
+authorization stance is discoverable on the bot's user page.
 
 Classic PATs are all-or-nothing — `public_repo` grants full write to every
 public repo the user can access. Fine-grained PATs allow per-category

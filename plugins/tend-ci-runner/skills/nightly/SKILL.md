@@ -13,7 +13,8 @@ update tend workflows.
 ## Step 1: Verify bot PAT scopes
 
 Run the scope audit script to check the bot PAT against tend's required classic
-OAuth scopes (`repo`, `workflow`, `notifications`, `write:discussion`, `gist`):
+OAuth scopes (`repo`, `workflow`, `notifications`, `write:discussion`, `gist`,
+`user`):
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/scripts/pat-scope-audit.sh
