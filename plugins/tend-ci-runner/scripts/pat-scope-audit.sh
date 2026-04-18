@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-REQUIRED="repo workflow notifications write:discussion gist"
+REQUIRED="repo workflow notifications write:discussion gist user"
 
 HEADERS=$(gh api -i user)
 SCOPES_LINE=$(printf '%s\n' "$HEADERS" | grep -i '^x-oauth-scopes:' | head -1 || true)
