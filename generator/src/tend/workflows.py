@@ -183,9 +183,6 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
 
     setup = _setup_yaml(cfg)
     perms = _permissions()
-    checkout_ref = (
-        f"refs/pull/${{{{ github.event.pull_request.number }}}}/{wf.checkout_ref}"
-    )
 
     content = f"""\
 {HEADER}
@@ -205,9 +202,26 @@ jobs:
     permissions:
 {perms}
     steps:
+      # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
+      # conflicting PRs it 404s and every downstream step cascades as skipped.
+      # Probe first and fall back to /head so review always runs; on fallback
+      # the review sees the PR branch in isolation rather than the post-merge
+      # tree.
+      - name: Resolve PR checkout ref
+        id: pr_ref
+        env:
+          GH_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
+          PR: ${{{{ github.event.pull_request.number }}}}
+        run: |
+          if gh api "repos/${{{{ github.repository }}}}/git/ref/pull/$PR/merge" --silent 2>/dev/null; then
+            echo "ref=refs/pull/$PR/merge" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=refs/pull/$PR/head" >> "$GITHUB_OUTPUT"
+            echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
+          fi
       - uses: actions/checkout@v6
         with:
-          ref: {checkout_ref}
+          ref: ${{{{ steps.pr_ref.outputs.ref }}}}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}

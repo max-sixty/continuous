@@ -70,10 +70,6 @@ class WorkflowConfig:
     branches: list[str] | None = None
     workflow_extra: dict | None = None
     jobs: dict[str, dict] | None = None
-    checkout_ref: str = "merge"
-
-
-CHECKOUT_REF_VALUES = {"merge", "head"}
 
 
 KNOWN_MODELS = {"opus", "sonnet", "haiku"}
@@ -195,17 +191,6 @@ class Config:
                     raise click.ClickException(
                         f"workflows.{name}.jobs must be a table of tables"
                     )
-                checkout_ref = wf_raw.get("checkout_ref", "merge")
-                if checkout_ref not in CHECKOUT_REF_VALUES:
-                    raise click.ClickException(
-                        f"workflows.{name}.checkout_ref '{checkout_ref}' is "
-                        f"not recognized (known: {', '.join(sorted(CHECKOUT_REF_VALUES))})"
-                    )
-                if checkout_ref != "merge" and name != "review":
-                    raise click.ClickException(
-                        f"workflows.{name}.checkout_ref is only supported on "
-                        "the review workflow"
-                    )
                 workflows[name] = WorkflowConfig(
                     enabled=wf_raw.get("enabled", True),
                     prompt=wf_raw.get("prompt", ""),
@@ -214,7 +199,6 @@ class Config:
                     branches=wf_raw.get("branches"),
                     workflow_extra=workflow_extra,
                     jobs=jobs_raw,
-                    checkout_ref=checkout_ref,
                 )
             else:
                 workflows[name] = WorkflowConfig(enabled=bool(wf_raw))

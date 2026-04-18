@@ -142,15 +142,13 @@ bot_name = "my-project-bot"
 #
 # [workflows.review]
 # prompt = "/my-custom-review {pr_number}"    # override default prompt
-# checkout_ref = "head"                       # "merge" (default) or "head"
 #
-# By default tend-review checks out `refs/pull/N/merge` — the prospective
-# post-merge tree. GitHub only materializes that ref for mergeable PRs, so on
-# PRs with conflicts against the base branch the checkout 404s and the whole
-# review job fails. Setting `checkout_ref = "head"` switches to
-# `refs/pull/N/head`, which always exists. The trade-off: the review sees the
-# PR branch in isolation rather than its post-merge state, so conflicts and
-# post-merge behavior must be inferred rather than observed directly.
+# tend-review checks out the prospective post-merge tree
+# (`refs/pull/N/merge`) when available, and falls back to the PR branch head
+# (`refs/pull/N/head`) when it isn't — GitHub only materializes the merge ref
+# for mergeable PRs, so the fallback keeps review running on PRs with merge
+# conflicts against the base. On fallback the review sees the PR branch in
+# isolation rather than the post-merge tree.
 
 # ### mention
 #
