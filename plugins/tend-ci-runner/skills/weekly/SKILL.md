@@ -7,6 +7,12 @@ metadata:
 
 # Weekly Maintenance
 
+## Step 0: Load environment skills
+
+Load `/tend-ci-runner:running-in-ci` first — it contains CI security rules, review/comment
+formatting, and polling conventions. This skill posts approvals and comments on PRs, so those
+rules apply.
+
 ## Step 1: Find dependency PRs
 
 ```bash

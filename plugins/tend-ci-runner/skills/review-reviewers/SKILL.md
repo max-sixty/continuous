@@ -12,6 +12,12 @@ Analyze Claude-powered CI behavior on the target repo over the past hour. Focus 
 what the bot produced publicly and whether it was accepted — rather than internal session mechanics.
 Create PRs or issues on tend when outcomes reveal behavioral problems.
 
+## First steps
+
+Load `/tend-ci-runner:running-in-ci` first — it contains CI security rules, PR/comment
+formatting (line wrapping, heredoc hazards), and polling conventions. This skill opens PRs
+and issue comments on tend, so those rules apply.
+
 ## Cost discipline: Haiku subagents for exploration
 
 Session log parsing and outcome checking are token-heavy. Delegate all broad exploration to **Haiku
