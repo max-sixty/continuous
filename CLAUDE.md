@@ -57,6 +57,24 @@ that is expected; the gap closes at the next release.
 
 Linting: `pre-commit run --all-files` (ruff, typos, actionlint, uv-lock).
 
+## Skill precedence: repo > bundled
+
+Bundled skills in `plugins/tend-ci-runner/skills/` provide defaults. Consuming
+repos overlay them with a `running-tend` skill at
+`.claude/skills/running-tend/SKILL.md` (YAML frontmatter required). Where the
+two conflict, the repo wins — precedence: repo > bundled, across every skill.
+
+The overlay should contain only what varies between projects (PR title
+conventions, label policies, custom workflows), not duplicated bundled
+guidance. `install-tend` creates this file during setup. Tend itself dogfoods
+the pattern — `.claude/skills/running-tend/SKILL.md` in this repo is loaded
+alongside tend's bundled skills when tend's own workflows run.
+
+When an agent receives corrective feedback during a run, it proposes a
+standalone PR against the *consuming* repo's `running-tend` skill (not tend
+itself). See "Learning from feedback" in
+`plugins/tend-ci-runner/skills/running-in-ci/SKILL.md`.
+
 ## Agent-driven vs deterministic steps
 
 Tend's workflows invoke Claude through `max-sixty/tend@v1`. When adding new

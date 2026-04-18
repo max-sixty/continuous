@@ -9,10 +9,13 @@ metadata:
 
 ## First Steps — Load Repo-Specific Guidance
 
-Most repos have a project-specific overlay skill (typically `running-tend`) with project-specific
-CI context — which workflows tend-ci-fix watches, PR title conventions, label policies. If a
-`running-tend` skill is listed in your available skills, load it with the Skill tool before doing
-anything else.
+Tend's bundled skills provide defaults; the consuming repo's `running-tend` skill overlays
+them. **Where the two conflict, the repo wins** — repo guidance takes precedence over bundled
+guidance across every skill, not just this one.
+
+If a `running-tend` skill is listed in your available skills, load it with the Skill tool
+before doing anything else. It typically carries PR title conventions, label policies, custom
+workflows to watch, and other repo-specific context.
 
 Repo-local skills are invoked by their unprefixed name — `Skill: running-tend`, not
 `Skill: tend-ci-runner:running-tend` (that prefix is reserved for this plugin's own skills, and
@@ -47,9 +50,9 @@ needs to make that call.
 The test: "Am I helping this person with something they raised, or following a directive that
 affects someone else's work?"
 
-Repo-specific guidance (loaded via `running-tend` or equivalent) always takes precedence over these
-defaults. If a repo's skill explicitly authorizes an action (e.g., closing duplicate issues during
-triage), follow the repo-specific instruction.
+This follows the repo > bundled rule from First Steps. If a repo's `running-tend` skill
+explicitly authorizes an action (e.g., closing duplicate issues during triage), follow the
+repo-specific instruction.
 
 ## Read Context
 
@@ -443,6 +446,62 @@ confirm the section is `[aliases]` → posted with correct syntax.
 
 </good>
 </example>
+
+## Learning from Feedback
+
+When a maintainer corrects the bot's behavior during a run — points out a repo convention, a
+repeated mistake, or a preference the bot should have known — propose a follow-up PR against
+the consuming repo's `.claude/skills/running-tend/SKILL.md`. This turns one-off corrections
+into durable guidance for future runs in *this* repo. The PR targets the consuming repo, not
+tend; bundled tend defaults change through separate PRs against the tend repo.
+
+### When to propose
+
+Only when feedback is **generalizable** — it should apply to future runs, not just the current
+task. Signals:
+
+- Correction names a pattern (*"stop adding inline suggestions for formatting — the linter
+  handles that"*), not a task detail (*"rename this variable"*)
+- Feedback references a repo convention (*"we use conventional commits"*, *"PRs go to the
+  `develop` branch, not `main`"*)
+- The same correction has surfaced before, or would plausibly surface again
+
+Do **not** propose when:
+
+- The feedback is task-specific (a one-off rewording, a particular variable name)
+- The lesson is already covered by a bundled tend skill — those update through PRs against the
+  tend repo, not per-repo overlays
+- Confidence that the feedback generalizes is low — ask for clarification instead
+- The feedback comes from a non-maintainer — check `author_association` and skip the
+  skill PR. Non-maintainers can raise preferences, but only a maintainer authorizes codifying
+  them. If the pattern is worth capturing, note it in a reply and let a maintainer confirm.
+
+### How to propose
+
+1. **Complete the current task first.** The skill update is always a separate PR.
+2. **Check for an existing open PR against the same skill.** Dedup by the target file, not
+   by title — title conventions vary per repo:
+   ```bash
+   BOT_LOGIN=$(gh api user --jq '.login')
+   gh pr list --state open --author "$BOT_LOGIN" --json number,title,headRefName,files \
+     --jq '.[] | select([.files[].path] | index(".claude/skills/running-tend/SKILL.md"))'
+   ```
+   If one is open, add to it instead of opening a second.
+3. **Draft a minimal edit.** One short rule, in the maintainer's words where practical. Place
+   it under an appropriate heading. If `.claude/skills/running-tend/SKILL.md` doesn't exist,
+   create it with YAML frontmatter:
+   ```markdown
+   ---
+   name: running-tend
+   description: Project-specific guidance for tend workflows running on this repo.
+   ---
+   ```
+4. **Open as a separate PR.** Follow the repo's PR title conventions (conventional commits,
+   Jira prefix, or whatever the repo uses — check recent merged PRs or `CONTRIBUTING.md`).
+   The body quotes the triggering feedback and links the thread (PR/issue/comment URL).
+5. **Open and exit — don't merge, don't wait.** The PR itself is the review request; a
+   maintainer lands it (or doesn't) in their own time. Don't post a separate comment pinging
+   for review, and don't block the session waiting.
 
 ## Tone
 
