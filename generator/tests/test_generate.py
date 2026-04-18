@@ -263,6 +263,64 @@ def test_cli_init_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert len(list(wf_dir.glob("tend-*.yaml"))) == 7
 
 
+def test_review_checkout_ref_default_is_merge(tmp_path: Path) -> None:
+    """Default checkout_ref is 'merge' — matches the historical behavior."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    checkout = next(
+        s
+        for s in data["jobs"]["review"]["steps"]
+        if s.get("uses") == "actions/checkout@v6"
+    )
+    assert checkout["with"]["ref"] == (
+        "refs/pull/${{ github.event.pull_request.number }}/merge"
+    )
+
+
+def test_review_checkout_ref_head(tmp_path: Path) -> None:
+    """`checkout_ref = "head"` lets tend-review run on PRs with merge conflicts.
+
+    GitHub doesn't materialize `refs/pull/N/merge` for conflicting PRs — only
+    `/head` exists in that state. Switching ref to `head` keeps review running;
+    the review is of the PR branch rather than the prospective post-merge tree.
+    """
+    extra = dedent("""\
+        [workflows.review]
+        checkout_ref = "head"
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    checkout = next(
+        s
+        for s in data["jobs"]["review"]["steps"]
+        if s.get("uses") == "actions/checkout@v6"
+    )
+    assert checkout["with"]["ref"] == (
+        "refs/pull/${{ github.event.pull_request.number }}/head"
+    )
+
+
+def test_review_checkout_ref_unknown_value_rejected(tmp_path: Path) -> None:
+    extra = dedent("""\
+        [workflows.review]
+        checkout_ref = "sha"
+    """)
+    with pytest.raises(click.ClickException, match="checkout_ref 'sha'"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
+def test_checkout_ref_only_on_review(tmp_path: Path) -> None:
+    """checkout_ref is meaningful only for tend-review; reject on other workflows."""
+    extra = dedent("""\
+        [workflows.triage]
+        checkout_ref = "head"
+    """)
+    with pytest.raises(click.ClickException, match="only supported on the review"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
 def test_setup_after_checkout_in_review(tmp_path: Path) -> None:
     """Setup steps must run after checkout, not before."""
     extra = 'setup = [{uses = "./.github/actions/my-setup"}]'

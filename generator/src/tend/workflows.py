@@ -183,6 +183,9 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
 
     setup = _setup_yaml(cfg)
     perms = _permissions()
+    checkout_ref = (
+        f"refs/pull/${{{{ github.event.pull_request.number }}}}/{wf.checkout_ref}"
+    )
 
     content = f"""\
 {HEADER}
@@ -204,7 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: refs/pull/${{{{ github.event.pull_request.number }}}}/merge
+          ref: {checkout_ref}
           fetch-depth: 0
           fetch-tags: true
           token: {bt}
