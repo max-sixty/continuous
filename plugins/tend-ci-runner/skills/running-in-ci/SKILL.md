@@ -351,6 +351,15 @@ expanded** — if you see a literal `${GITHUB_REPOSITORY}` in the rendered comme
 single-quoted heredoc (`<< 'EOF'`) which disables expansion. Rewrite using an unquoted `<<EOF`
 (so `${GITHUB_REPOSITORY}` interpolates) or compose the body with the Write tool.
 
+The Bash tool rewrites every exclamation mark to a literal backslash-bang before bash parses
+the command, so a greeting like "Thanks for the suggestion!" renders as "Thanks for the
+suggestion\!" in the posted comment. Quoting and heredoc form don't matter: `<< 'EOF'`,
+`<<EOF`, plain single-quoted, and double-quoted arguments all lose the character. Use the
+Write tool for any comment body containing an exclamation mark, then pass the file to
+`gh ... --body-file`. The same trap applies to `--jq` filters with `!=` — either avoid the
+`!=` operator (rephrase as `== "x" | not`), filter client-side after fetching, or load the
+jq script from a file written with the Write tool via `jq -f`.
+
 - **File-level link (no `#L` anchor)**: `blob/main/src/foo.rs` is fine
 - **Line reference**: `blob/<sha>/src/foo.rs#L42` — commit SHA required, never `blob/main/...#L42`
 - **Issues/PRs**: `#123` shorthand

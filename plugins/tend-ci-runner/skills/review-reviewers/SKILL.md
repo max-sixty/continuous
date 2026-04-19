@@ -290,7 +290,7 @@ Use `Agent` with `model: "haiku"` and a prompt like:
 > - Bot-closed issue was reopened
 > - Fix commit was reverted or CI still failing after bot pushed
 > - Human replied to bot with correction or complaint
-> - Bot comment contains corruption (literal `${`, broken heredoc markers)
+> - Bot comment contains corruption (literal `${`, unescaped bangs, broken heredoc markers)
 >
 > **Report format** — return a structured summary:
 > ```
