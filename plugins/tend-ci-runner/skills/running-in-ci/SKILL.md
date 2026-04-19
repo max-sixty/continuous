@@ -351,13 +351,6 @@ expanded** — if you see a literal `${GITHUB_REPOSITORY}` in the rendered comme
 single-quoted heredoc (`<< 'EOF'`) which disables expansion. Rewrite using an unquoted `<<EOF`
 (so `${GITHUB_REPOSITORY}` interpolates) or compose the body with the Write tool.
 
-Bash heredocs are also a trap for comment bodies containing exclamation marks — the Bash tool
-rewrites every exclamation mark to a literal backslash-bang before bash parses the heredoc, so
-a greeting like "Thanks for the suggestion!" renders as "Thanks for the suggestion\!" in the
-posted comment. The quoting mode doesn't matter: both `<< 'EOF'` and `<<EOF` lose the
-character. Use the Write tool for any comment body containing an exclamation mark, then pass
-the file to `gh ... --body-file`.
-
 - **File-level link (no `#L` anchor)**: `blob/main/src/foo.rs` is fine
 - **Line reference**: `blob/<sha>/src/foo.rs#L42` — commit SHA required, never `blob/main/...#L42`
 - **Issues/PRs**: `#123` shorthand
