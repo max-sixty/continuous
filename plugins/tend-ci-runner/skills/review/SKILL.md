@@ -294,46 +294,11 @@ Prevention: before writing any inline comment, verify the target line falls insi
 
 ### 6. Monitor CI
 
-After approving or staying silent, poll CI in **a single background loop** — do not launch
-individual sleep commands. Use the Bash tool with `run_in_background: true` and the loop below.
-**Exclude your own run (`/runs/$GITHUB_RUN_ID/`)** — your own job check will always show as
-pending while you're running. Filter on the run URL, not the check name: `gh pr checks` shows
-the job name (`review`), which does not match `$GITHUB_WORKFLOW` (`tend-review`). **NEVER use
-`--watch` flags** — they hang forever.
+After approving or staying silent, poll CI using the polling loop in
+`/tend-ci-runner:running-in-ci` under "CI Monitoring". Run it with the Bash tool's
+`run_in_background: true`.
 
-```bash
-# Run with Bash tool's run_in_background: true.
-# Poll statusCheckRollup (every check-run + status context on the commit).
-# `gh pr checks --required` only sees already-registered check-runs, so a
-# late-starting `if: always()` omnibus (e.g. `check-ok-to-merge`) could race
-# the loop and let it exit green while CI was still running (see
-# https://github.com/max-sixty/tend/issues/305). The 30s grace re-check
-# below covers the short gap between `needs:` jobs finishing and the omnibus
-# check-run registering.
-#
-# Don't use mergeStateStatus as an exit signal: it stays BLOCKED for the
-# entire run because our own check is pending, and the API can't distinguish
-# "self-blocking" from "required context not yet registered".
-pending() {
-  gh pr view <number> --json statusCheckRollup \
-    | jq --arg own "/runs/$GITHUB_RUN_ID/" '
-      [.statusCheckRollup[]
-       | select((.detailsUrl // .targetUrl // "") | test($own) | not)
-       | (.status // .state)
-       | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING")
-      ] | length'
-}
-for i in $(seq 1 15); do
-  sleep 60
-  [ "$(pending)" -gt 0 ] && continue
-  sleep 30
-  [ "$(pending)" -eq 0 ] || continue
-  gh pr checks <number>
-  exit 0
-done
-echo "CI still running after 15 minutes"
-exit 1
-```
+Then handle the outcome:
 
 - **All required checks passed** -> done.
 - **A check failed** and it's related to the PR -> post a follow-up COMMENT review with analysis

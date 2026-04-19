@@ -159,29 +159,43 @@ background task completes you will be notified — check the result and take any
 
 ```bash
 # Run with Bash tool's run_in_background: true.
-# Poll statusCheckRollup (every check-run + status context on the commit).
-# `gh pr checks --required` only sees already-registered check-runs, so a
-# late-starting `if: always()` omnibus (e.g. `check-ok-to-merge`) could race
-# the loop and let it exit green while CI was still running (see
-# https://github.com/max-sixty/tend/issues/305). The 30s grace re-check
-# below covers the short gap between `needs:` jobs finishing and the omnibus
-# check-run registering.
+#
+# Poll statusCheckRollup — every check-run + status context on the commit.
+# Exit when all non-own items are terminal.
+#
+# Why rollup, not `gh pr checks --required`:
+# `--required` only returns required contexts that are ALREADY registered on
+# the commit. An `if: always()` omnibus with a long `needs:` list (e.g.
+# PRQL's `check-ok-to-merge`) only registers once every dependency has
+# reached terminal. With `--required`, the loop would see only fast required
+# contexts (e.g. `pre-commit.ci - pr`), exit green, and miss the matrix
+# entirely. The rollup shows matrix jobs as IN_PROGRESS while they run, so
+# we correctly wait for them, then for the omnibus once it registers.
+# See https://github.com/max-sixty/tend/issues/305.
+#
+# The 30s grace re-check handles actual registration lag: when the matrix's
+# last `needs:` job finishes, the omnibus check-run registers within a
+# second or two. A poll in that narrow window might see PENDING=0; the
+# grace re-check catches the newly-IN_PROGRESS omnibus. The 23-min gap
+# described in #305 is NOT registration lag — that was the matrix running,
+# during which matrix jobs are visibly IN_PROGRESS in the rollup.
 #
 # Filter out the current run ($GITHUB_RUN_ID) — its own CheckRun is
 # IN_PROGRESS for the whole loop. Match on the run URL, not the check name:
 # `gh pr checks` shows the job name (e.g. "review"), which does not match
 # $GITHUB_WORKFLOW ("tend-review").
 #
-# Don't use mergeStateStatus as an exit signal: it stays BLOCKED for the
-# entire run because our own check is pending, and the API can't distinguish
-# "self-blocking" from "required context not yet registered".
+# Don't use mergeStateStatus as an exit signal. BLOCKED is a catch-all:
+# required checks pending, branch out of date (`type: update` rulesets),
+# required reviews missing, or our own check still running — all produce
+# BLOCKED, indistinguishable without admin scope on branch protection.
 pending() {
   gh pr view <number> --json statusCheckRollup \
     | jq --arg own "/runs/$GITHUB_RUN_ID/" '
       [.statusCheckRollup[]
        | select((.detailsUrl // .targetUrl // "") | test($own) | not)
        | (.status // .state)
-       | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING")
+       | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING" or . == "REQUESTED" or . == "EXPECTED")
       ] | length'
 }
 for i in $(seq 1 15); do
