@@ -140,18 +140,18 @@ regeneration in a git worktree under `$TMPDIR`, which is writable:
 git worktree add "$TMPDIR/tend-update-workflows" -b tend/update-workflows HEAD
 cd "$TMPDIR/tend-update-workflows"
 
-# Capture the pinned tend version (if any) before regenerating, so the PR
-# body can report the bump. Supports `uvx tend@X.Y.Z` and `tend==X.Y.Z`
+# Capture the pinned tend version (if any) before regenerating, so the next
+# bash call can report the bump. Supports `uvx tend@X.Y.Z` and `tend==X.Y.Z`
 # markers. Today's templates use `uvx tend@latest` and the rolling
 # `max-sixty/tend@v1` action tag, so extraction typically returns an empty
 # string — the renderer below falls back to omitting the version line rather
-# than printing `unknown → unknown`.
-extract_tend_version() {
-  grep -hoE '(uvx tend@|tend==)[0-9]+\.[0-9]+\.[0-9]+' \
-    .github/workflows/tend-*.yaml 2>/dev/null \
-    | sed -E 's/^(uvx tend@|tend==)//' | sort -u | head -1
-}
-OLD_VER=$(extract_tend_version)
+# than printing `unknown → unknown`. Shell state doesn't persist between
+# bash calls, so the version is stashed to a temp file rather than a shell
+# variable.
+grep -hoE '(uvx tend@|tend==)[0-9]+\.[0-9]+\.[0-9]+' \
+  .github/workflows/tend-*.yaml 2>/dev/null \
+  | sed -E 's/^(uvx tend@|tend==)//' | sort -u | head -1 \
+  > "$TMPDIR/tend-old-ver"
 
 uvx tend@latest init
 git status --porcelain .github/workflows
@@ -169,7 +169,10 @@ detected) and a `git diff --stat` summary, then commit, push, and open the
 PR:
 
 `````bash
-NEW_VER=$(extract_tend_version)
+OLD_VER=$(cat "$TMPDIR/tend-old-ver")
+NEW_VER=$(grep -hoE '(uvx tend@|tend==)[0-9]+\.[0-9]+\.[0-9]+' \
+  .github/workflows/tend-*.yaml 2>/dev/null \
+  | sed -E 's/^(uvx tend@|tend==)//' | sort -u | head -1)
 DIFF_STAT=$(git diff --stat .github/workflows)
 
 TITLE="chore: update tend workflows"
