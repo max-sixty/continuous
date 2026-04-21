@@ -360,6 +360,18 @@ Write tool for any comment body containing an exclamation mark, then pass the fi
 `!=` operator (rephrase as `== "x" | not`), filter client-side after fetching, or load the
 jq script from a file written with the Write tool via `jq -f`.
 
+`gh pr create` / `gh pr edit` / `gh issue create` / `gh issue edit` have no
+`--title-file` flag, so a title containing an exclamation mark (e.g. the
+conventional-commits breaking-change marker in a title like "feat(hooks)!:
+rename …") hits the same rewrite and ships a visibly corrupted title. Write the
+title with the Write tool and pass it via command substitution — `$(cat …)` is
+evaluated by bash after the preprocessor's string scan, so the exclamation mark
+stays literal:
+
+```bash
+gh pr create --title "$(cat /tmp/pr-title.txt)" --body-file /tmp/pr-body.md ...
+```
+
 - **File-level link (no `#L` anchor)**: `blob/main/src/foo.rs` is fine
 - **Line reference**: `blob/<sha>/src/foo.rs#L42` — commit SHA required, never `blob/main/...#L42`
 - **Issues/PRs**: `#123` shorthand
