@@ -501,6 +501,23 @@ Do **not** propose when:
   skill PR. Non-maintainers can raise preferences, but only a maintainer authorizes codifying
   them. If the pattern is worth capturing, note it in a reply and let a maintainer confirm.
 
+### Bundled-skill defects: ask permission to file in tend
+
+When the correction identifies a gap or bug in a **bundled** skill — the same root cause would
+fire in every tend consumer — open an issue in the current repo asking for permission to file
+the same issue in tend. On maintainer approval, open the tend issue.
+
+Signals:
+
+- The fix reads as generic guidance that would apply to any consumer.
+- The behavior being corrected comes from bundled skill text.
+
+Include in the permission request (and reuse verbatim in the tend issue once approved):
+
+- Problem statement: what fires, in which bundled skill, under what conditions.
+- Evidence: run links; cost/duration if relevant.
+- Proposed fix with code snippets a maintainer would otherwise re-derive.
+
 ### How to propose
 
 1. **Complete the current task first.** The skill update is always a separate PR.
