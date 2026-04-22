@@ -96,7 +96,7 @@ IN_PROGRESS=$(gh api \
   | jq --arg title "$SUBJECT_TITLE" --argjson own "$GITHUB_RUN_ID" \
       '[.workflow_runs[]
         | select(.name | startswith("tend-"))
-        | select(.id != $own)
+        | select((.id == $own) | not)
         | select(.display_title == $title)
        ] | length')
 ```
@@ -108,8 +108,12 @@ marks read) or fails (stale-items path in 4b processes it).
 Match on `display_title` because the `workflow_run` payload does not expose the triggering issue
 number for `issue_comment` / `pull_request_review` events; `display_title` equals the issue/PR
 title for those events. Title collisions across unrelated subjects are rare enough that skipping
-one unrelated notification is cheaper than one duplicate implementation session. Note also that
-`gh api --jq` does not accept `--arg`/`--argjson` — pipe to a standalone `jq` as above.
+one unrelated notification is cheaper than one duplicate implementation session.
+
+Two bash-tool gotchas in the query above: `gh api --jq` does not accept `--arg`/`--argjson`, so
+pipe to a standalone `jq`. Avoid jq's not-equal operator (bang-equals) in filters authored via the
+Bash tool — the tool can still rewrite a bare bang to backslash-bang outside heredocs, which
+breaks the filter; use the `(X) | not` form as above.
 
 **Dedup check:** For same-repo notifications older than 10 minutes with no in-flight dedicated run,
 check whether the bot already responded:
