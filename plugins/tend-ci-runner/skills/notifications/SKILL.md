@@ -80,13 +80,9 @@ or failed.
 
 Cross-repo notifications are exempt from the freshness gate — no dedicated workflow handles them.
 
-**In-flight check (same-repo only):** The freshness gate is a time-based proxy; dedicated workflows
-that implement real code changes (especially `tend-mention`) routinely run well past 10 minutes. If
-the bot proceeds, it duplicates in-progress work — observed on worktrunk run 24742688091, which
-spent ~79 min / ~$25 re-implementing [PR #2361](https://github.com/max-sixty/worktrunk/pull/2361)
-because dedup at minute 43 saw nothing (the dedicated run didn't push until minute 65). For
-same-repo notifications past the freshness gate, check for a concurrent `tend-*` run on the same
-subject:
+**In-flight check (same-repo only):** A dedicated workflow can still be executing past the
+freshness gate. For notifications older than 10 minutes, check for a concurrent `tend-*` run on the
+same subject:
 
 ```bash
 # $NOTIF_SUBJECT_URL is .subject.url from the notification record
@@ -101,19 +97,13 @@ IN_PROGRESS=$(gh api \
        ] | length')
 ```
 
-If `IN_PROGRESS > 0`, **skip without marking read** — same behavior as the freshness gate. The next
-scheduled poll picks it up once the dedicated run succeeds (dedup below finds its response and
-marks read) or fails (stale-items path in 4b processes it).
+If `IN_PROGRESS > 0`, **skip without marking read** — the next poll will see the completed response
+via the dedup check below. Match on `display_title` because the `workflow_run` payload does not
+expose the triggering issue number for `issue_comment` / `pull_request_review` events.
 
-Match on `display_title` because the `workflow_run` payload does not expose the triggering issue
-number for `issue_comment` / `pull_request_review` events; `display_title` equals the issue/PR
-title for those events. Title collisions across unrelated subjects are rare enough that skipping
-one unrelated notification is cheaper than one duplicate implementation session.
-
-Two bash-tool gotchas in the query above: `gh api --jq` does not accept `--arg`/`--argjson`, so
-pipe to a standalone `jq`. Avoid jq's not-equal operator (bang-equals) in filters authored via the
-Bash tool — the tool can still rewrite a bare bang to backslash-bang outside heredocs, which
-breaks the filter; use the `(X) | not` form as above.
+`gh api --jq` does not accept `--arg`/`--argjson` — pipe to standalone `jq`. Avoid jq's not-equal
+operator in filters authored via the Bash tool (a bare bang can get rewritten outside heredocs);
+use `(X) | not`.
 
 **Dedup check:** For same-repo notifications older than 10 minutes with no in-flight dedicated run,
 check whether the bot already responded:
