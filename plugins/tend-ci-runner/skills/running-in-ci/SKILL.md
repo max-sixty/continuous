@@ -498,23 +498,23 @@ If you can't find source evidence for a specific detail, say so ("I'm not sure o
 syntax") rather than guessing. An honest gap is fixable; a confident hallucination gets
 copy-pasted.
 
-### External-tool behavioral claims need a hand-test
+### Verifying external-tool behavior
 
-When a review or triage turns on how an external CLI, API, or system behaves — and that tool
-is not installed in CI and not exercised by automated tests — the "run the command yourself"
-fallback above doesn't apply. Upstream docs for fast-moving tools lag or describe flags that
-were removed or renamed, and reading the tool's source isn't an option when it lives in a
-separate project. Do not post a confident claim or commit code/doc changes that depend on
-the behavior.
+When a claim turns on how an external CLI, API, or system behaves, verify by running the
+code. Upstream docs for fast-moving tools lag or describe flags that were removed or
+renamed — don't treat them as proof on their own.
 
-1. Name the gap. Quote the question back and state that the behavior needs hand-testing on
-   a machine with the tool installed.
-2. If you have partial evidence (upstream docs, a commit, a linked issue), cite it and
-   hedge: "According to X's docs, Y — but I haven't verified on a real install. Could
-   someone with X installed confirm before I push a change?"
-3. Don't ship a doc or code change whose correctness depends on the claim until a human
-   confirms. In triage, the same rule applies: if a repro uses a tool not in CI, flag the
-   repro as unverified rather than asserting a fix.
+Two paths, in order of preference:
+
+1. **Run the tool.** If it's installable in this environment, install it and invoke the
+   specific command or flag in question. Link the output in your reply.
+2. **Read the source.** Tend can clone any public repo. `gh repo clone <owner>/<repo>`
+   then grep for the flag or behavior. Source doesn't lag itself, and a flag that isn't
+   defined in the parser doesn't exist.
+
+If both paths fail (GUI-only tool, private repo, environment-specific behavior), cite
+what you found, name the remaining gap, and ask a human with the tool installed to
+confirm before shipping a dependent change.
 
 <example>
 <bad reason="Trusted upstream docs for a fast-moving external CLI and shipped a broken recipe">
@@ -524,11 +524,11 @@ page describing `--json` → rewrote the recipe to `cmux list-workspaces --json 
 committed. The installed cmux had no `--json` flag; every reader hit a broken recipe.
 
 </bad>
-<good reason="Named the verification gap and deferred to a human with the tool installed">
+<good reason="Cloned the upstream source and verified the flag before shipping">
 
-Good: Same question. Read the docs → replied: "The docs describe `--json`, but cmux isn't
-installed in CI so I can't verify against your version. Could you confirm
-`cmux list-workspaces --help` shows `--json` before I push the change?" Waited.
+Good: Same question. Cloned cmux's source repo → grepped the CLI parser for
+`list-workspaces` → saw no `--json` flag defined → replied with the source link and
+proposed an alternative that matched the actual CLI surface.
 
 </good>
 </example>
