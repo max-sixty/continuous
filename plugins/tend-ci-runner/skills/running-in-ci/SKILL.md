@@ -605,7 +605,9 @@ Include in the permission request (and reuse verbatim in the tend issue once app
    git worktree add "$TMPDIR/skill-fix" -b skills/<topic>-$GITHUB_RUN_ID HEAD
 
    # Use the Write tool to author the new skill file to /tmp/running-tend-new.md.
-   # Then move it into place from inside the worktree:
+   # Then move it into place from inside the worktree. mkdir -p covers the
+   # new-skill case where .claude/skills/<name>/ doesn't yet exist in HEAD:
+   mkdir -p "$TMPDIR/skill-fix/.claude/skills/running-tend"
    cd "$TMPDIR/skill-fix/.claude/skills/running-tend" && mv /tmp/running-tend-new.md SKILL.md
 
    cd "$TMPDIR/skill-fix"
