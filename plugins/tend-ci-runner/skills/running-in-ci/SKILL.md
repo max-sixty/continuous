@@ -185,15 +185,27 @@ background task completes you will be notified — check the result and take any
 # `gh pr checks` shows the job name (e.g. "review"), which does not match
 # $GITHUB_WORKFLOW ("tend-review").
 #
+# Also exclude same-workflow check runs ($GITHUB_WORKFLOW). When the current
+# session pushes a commit or replies to an inline review comment, GitHub
+# fires events that trigger a *sibling* run of the same workflow on the same
+# PR. For workflows whose handle job uses `cancel-in-progress: false` (e.g.
+# tend-mention's `tend-mention-handle-{PR#}` group), the sibling's handle job
+# queues behind the current one — its CheckRun shows PENDING in the rollup
+# but it can't start until the current run exits. Polling for it deadlocks
+# until the 15-min cap breaks it ($1+ wasted per occurrence). For workflows
+# with `cancel-in-progress: true`, the older sibling is cancelled and
+# wouldn't gate polling anyway, so this filter is a no-op there.
+#
 # Don't use mergeStateStatus as an exit signal. BLOCKED is a catch-all:
 # required checks pending, branch out of date (`type: update` rulesets),
 # required reviews missing, or our own check still running — all produce
 # BLOCKED, indistinguishable without admin scope on branch protection.
 pending() {
   gh pr view <number> --json statusCheckRollup \
-    | jq --arg own "/runs/$GITHUB_RUN_ID/" '
+    | jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
       [.statusCheckRollup[]
        | select((.detailsUrl // .targetUrl // "") | test($own) | not)
+       | select((.workflowName // "") != $wf)
        | (.status // .state)
        | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING" or . == "REQUESTED" or . == "EXPECTED")
       ] | length'
@@ -213,7 +225,10 @@ exit 1
 1. Poll every 60 seconds (up to ~15 minutes) until all non-own check-runs on the commit are
    terminal. **Filter out the current run's URL (`/runs/$GITHUB_RUN_ID/`)** — the current
    workflow's own check is always pending while polling and must be excluded to avoid a
-   deadlock. The 30s grace re-check catches late-registering omnibus checks.
+   deadlock. **Also filter same-workflow check runs (`$GITHUB_WORKFLOW`)** — sibling runs of
+   the same workflow on the same PR are subject to concurrency rules (queueing or
+   cancel-in-progress) and don't represent independent CI signals. The 30s grace re-check
+   catches late-registering omnibus checks.
 2. If a required check fails, diagnose with `gh run view <run-id> --log-failed`, fix, commit,
    push, repeat.
 3. Report completion only after all required checks pass.
