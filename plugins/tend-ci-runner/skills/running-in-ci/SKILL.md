@@ -205,7 +205,7 @@ pending() {
     | jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
       [.statusCheckRollup[]
        | select((.detailsUrl // .targetUrl // "") | test($own) | not)
-       | select((.workflowName // "") != $wf)
+       | select((.workflowName // "") == $wf | not)
        | (.status // .state)
        | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING" or . == "REQUESTED" or . == "EXPECTED")
       ] | length'
