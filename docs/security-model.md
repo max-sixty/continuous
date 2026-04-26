@@ -178,14 +178,14 @@ passing between them.
 
 ### What each workflow needs to do
 
-| Capability | Triage | Mention | Review | CI Fix | Nightly | Renovate |
+| Capability | Triage | Mention | Review | CI Fix | Nightly | Weekly |
 |------------|:---:|:---:|:---:|:---:|:---:|:---:|
-| Read issues/PRs | Yes | Yes | Yes | Yes | Yes | — |
-| Comment on issues | Yes | Yes | Yes | — | Yes | — |
+| Read issues/PRs | Yes | Yes | Yes | Yes | Yes | Yes |
+| Comment on issues | Yes | Yes | Yes | — | Yes | Yes |
 | Create branches | Yes | Yes | Yes | Yes | Yes | Yes |
 | Push commits | Yes | Yes | Yes | Yes | Yes | Yes |
 | Create PRs | Yes | Yes | — | Yes | Yes | Yes |
-| Post PR reviews | — | — | Yes | — | — | — |
+| Post PR reviews | — | — | Yes | — | — | Yes |
 | Resolve review threads | — | — | Yes | — | — | — |
 | Monitor CI | Yes | Yes | Yes | Yes | Yes | Yes |
 | **Pushes must trigger CI** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
