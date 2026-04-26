@@ -22,15 +22,18 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/pat-scope-audit.sh
 
 The script prints `key=value` lines. Act on `STATUS`:
 
-- `STATUS=ok`: all scopes present. Search for an open tracking issue whose
-  body contains the marker `<!-- tend-pat-scope-audit -->`; if found, close it
-  with a comment noting the scopes are now granted.
-- `STATUS=fine-grained`: no `X-OAuth-Scopes` header. Fine-grained PATs have
-  no documented self-introspection endpoint — skip.
-- `STATUS=missing`: open a tracking issue (or update an existing one matched
-  by the marker). The issue body must include the marker on its own line
-  for dedup, list the values from `MISSING=`, and link step 8 of the
-  `install-tend` skill for remediation:
+- `STATUS=ok`: all scopes present. Search open issues for a PAT scope
+  audit tracking issue (`gh issue list --state open --search "PAT
+  in:title"`); if found, close it with a comment noting the scopes are
+  now granted.
+- `STATUS=fine-grained`: no `X-OAuth-Scopes` header. Fine-grained PATs
+  have no documented self-introspection endpoint — skip.
+- `STATUS=missing`: open or update a tracking issue. Use a title
+  containing "PAT" (e.g. `Bot PAT: missing scopes`) so future runs can
+  dedup by title search. Before creating, run `gh issue list --state open
+  --search "PAT in:title"` and update the existing issue with `gh issue
+  edit` if one is already open. The body lists the values from `MISSING=`
+  and links step 8 of the `install-tend` skill for remediation:
   https://github.com/max-sixty/tend/blob/main/plugins/install-tend/skills/install-tend/SKILL.md#8-bot-pat-and-secret
 
 ## Step 2: Resolve conflicts on bot PRs
