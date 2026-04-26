@@ -22,58 +22,19 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/pat-scope-audit.sh
 
 The script prints `key=value` lines. Act on `STATUS`:
 
-- `STATUS=ok`: all scopes present. Search for an open tracking issue (see
-  "Marker handling" below); if found, close it with a comment noting the
-  scopes are now granted.
-- `STATUS=fine-grained`: no `X-OAuth-Scopes` header. Fine-grained PATs have
-  no documented self-introspection endpoint — skip.
-- `STATUS=missing`: open a tracking issue (or update an existing one matched
-  by the marker). The issue body must include the marker
-  `<!-- tend-pat-scope-audit -->` on its own line for dedup, list the values
-  from `MISSING=`, and link step 8 of the `install-tend` skill for
-  remediation:
+- `STATUS=ok`: all scopes present. Search open issues for a PAT scope
+  audit tracking issue (`gh issue list --state open --search "PAT
+  in:title"`); if found, close it with a comment noting the scopes are
+  now granted.
+- `STATUS=fine-grained`: no `X-OAuth-Scopes` header. Fine-grained PATs
+  have no documented self-introspection endpoint — skip.
+- `STATUS=missing`: open or update a tracking issue. Use a title
+  containing "PAT" (e.g. `Bot PAT: missing scopes`) so future runs can
+  dedup by title search. Before creating, run `gh issue list --state open
+  --search "PAT in:title"` and update the existing issue with `gh issue
+  edit` if one is already open. The body lists the values from `MISSING=`
+  and links step 8 of the `install-tend` skill for remediation:
   https://github.com/max-sixty/tend/blob/main/plugins/install-tend/skills/install-tend/SKILL.md#8-bot-pat-and-secret
-
-### Marker handling — bang-escape mitigation
-
-The marker `<!-- tend-pat-scope-audit -->` contains an exclamation mark,
-which the Bash tool rewrites to backslash-bang before bash parses the
-command — the universal hazard documented in `running-in-ci`. Both
-directions of the dedup workflow are broken if you put `<!--` in any
-Bash-tool command string:
-
-- **Body composition** via `gh issue create --body "..."` or a Bash heredoc
-  ships the marker with the exclamation mark backslash-escaped — visible
-  corruption in the posted body, and future runs searching for the intact
-  marker will not match it.
-- **Search** via `jq '... contains("<!-- tend-pat-scope-audit -->")'`
-  rewrites the exclamation mark; jq fails to parse the backslash-bang
-  sequence as an escape and the search silently returns nothing — so the
-  agent concludes no audit issue exists and opens a duplicate.
-
-Use the bang-safe forms instead:
-
-- **Search by the bang-free substring** `tend-pat-scope-audit` (the
-  identifier is unique on its own — the `<!--` wrapping is purely for
-  human-invisibility in the rendered issue):
-
-  ```bash
-  gh issue list --state open --search "tend-pat-scope-audit in:body" \
-    --json number,title,body \
-    --jq '.[] | select(.body | contains("tend-pat-scope-audit"))'
-  ```
-
-- **Compose the body with the Write tool** to a file, then pass via
-  `--body-file`. Authoring through the Write tool preserves `<!--`
-  verbatim:
-
-  ```bash
-  # Author /tmp/pat-scope-body.md with the Write tool. The body must
-  # include the literal marker line: <!-- tend-pat-scope-audit -->
-  gh issue create --title "..." --body-file /tmp/pat-scope-body.md ...
-  # When updating an existing tracking issue:
-  gh issue edit <number> --body-file /tmp/pat-scope-body.md
-  ```
 
 ## Step 2: Resolve conflicts on bot PRs
 
