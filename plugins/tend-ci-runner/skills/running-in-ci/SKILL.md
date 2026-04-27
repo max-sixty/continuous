@@ -323,27 +323,29 @@ silently.
 
 **Line wrapping:** GitHub renders newlines literally in issue bodies, PR descriptions, and
 comments — a line break in the source becomes a `<br>` in the output. Write each paragraph as a
-single long line and let the browser reflow. Hard wraps at 72–80 chars create awkward mid-sentence
-breaks on GitHub. (This applies to GitHub-rendered content only, not to skill files or code.)
-
-This applies to every delivery path — heredoc, `--body "…"`, and `--body-file`. The Write tool
-does not reflow paragraphs, so authoring to a file is not a fix on its own: the wrapping you
-type is the wrapping that ships.
+single long line and let the browser reflow. This applies to every delivery path — heredoc,
+`--body "…"`, `--body-file`, and what the Write tool puts in a file.
 
 <example>
-<bad reason="Paragraph hard-wrapped at ~72 chars; GitHub renders each newline as `<br>`, producing mid-sentence breaks">
+<bad reason="Paragraph hard-wrapped at ~72 chars inside the heredoc; GitHub renders each newline as `<br>`, producing mid-sentence breaks">
 
-```
+```bash
+gh pr create --body "$(cat <<'EOF'
 Extend the bang-escape workaround in `running-in-ci` to cover PR and issue
 titles. PR #318 restored the warning for comment bodies (via `--body-file`);
 titles are still uncovered because `gh pr create` has no `--title-file` flag.
+EOF
+)"
 ```
 
 </bad>
-<good reason="Paragraph is one long line; GitHub reflows it to the reader's window width">
+<good reason="Each paragraph is one long line inside the heredoc; GitHub reflows to the reader's window width">
 
-```
+```bash
+gh pr create --body "$(cat <<'EOF'
 Extend the bang-escape workaround in `running-in-ci` to cover PR and issue titles. PR #318 restored the warning for comment bodies (via `--body-file`); titles are still uncovered because `gh pr create` has no `--title-file` flag.
+EOF
+)"
 ```
 
 </good>
