@@ -324,19 +324,26 @@ runs:
 
         TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-        # Fetch error annotations from the current job.
-        # Sleep briefly — GitHub indexes ##[error] annotations asynchronously
-        # and they may not be available via the API immediately after the step
-        # fails. Also match both in_progress (normal) and failure (if GitHub
-        # already transitioned the status) to handle matrix timing.
-        sleep 5
+        # Fetch error annotations from the current job. GitHub indexes
+        # ##[error] annotations asynchronously, so poll with backoff up to
+        # ~50s before giving up — a single 5s sleep was never long enough
+        # in practice. Also match both in_progress (normal) and failure
+        # (if GitHub already transitioned the status) to handle matrix
+        # timing.
         ERRORS=""
-        JOB_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
-          --jq '[.jobs[] | select(.status == "in_progress" or .conclusion == "failure")] | first | .id' 2>/dev/null || true)
-        if [ -n "$JOB_ID" ] && [ "$JOB_ID" != "null" ]; then
-          ERRORS=$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${JOB_ID}/annotations" \
-            --jq '[.[] | select(.annotation_level == "failure") | .message | select(test("^Process completed") | not)] | join("\n")' 2>/dev/null || true)
-        fi
+        JOB_ID=""
+        for delay in 5 15 30; do
+          sleep "$delay"
+          if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "null" ]; then
+            JOB_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+              --jq '[.jobs[] | select(.status == "in_progress" or .conclusion == "failure")] | first | .id' 2>/dev/null || true)
+          fi
+          if [ -n "$JOB_ID" ] && [ "$JOB_ID" != "null" ]; then
+            ERRORS=$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${JOB_ID}/annotations" \
+              --jq '[.[] | select(.annotation_level == "failure") | .message | select(test("^Process completed") | not)] | join("\n")' 2>/dev/null || true)
+            [ -n "$ERRORS" ] && break
+          fi
+        done
 
         ERROR_BLOCK=""
         if [ -n "$ERRORS" ]; then
