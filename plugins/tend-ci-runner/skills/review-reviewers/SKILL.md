@@ -151,6 +151,8 @@ LAST_GIST_ID=$(gh api /gists --paginate \
 
 ### Recording below-threshold findings
 
+**Append a `## Run <RUN_ID>` heading every run**, even when no problem finding exceeded a gate threshold. For all-clear hours, record a single Low-evidence "all-clear" entry as the body — runs analyzed, outcomes checked, no concerning signals. The heading per run is the audit trail that prior runs read to count cumulative occurrences and confirm which hours were analyzed; missing entries leave gaps that erode gate evaluation across runs.
+
 After applying the gates, write each run's new findings (format in `@review-gates.md`) to `/tmp/findings.md`, then append them to the gist's `findings.md`. Reuse the current content already fetched into `/tmp/current.md` in "Reading historical evidence", concatenate, and PATCH via the API (`--rawfile` preserves trailing newlines that command substitution would strip):
 
 ```bash
