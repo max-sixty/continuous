@@ -69,6 +69,23 @@ formats, label names, branch routing) belongs in an overlay. Tend has its
 own overlay at `.claude/skills/running-tend/SKILL.md` — use it for guidance
 that only applies to developing tend itself.
 
+### Authoring skills
+
+When adding to or editing files in `plugins/tend-ci-runner/skills/` or
+`.claude/skills/`:
+
+- **Be brief.** Skills are loaded into every relevant session — extra prose
+  is overhead. Lead with the rule or recipe; cut motivation, anecdotes, and
+  historical context unless required to apply the rule.
+- **No specific past-run references.** Don't link GitHub Actions runs, cite
+  session IDs, or quote durations from individual incidents. They age into
+  trivia and aren't useful when the skill is reused. State the structural
+  rule without the run links.
+- **Date-stamp only when the value depends on time.** A baseline number
+  expected to drift can be dated; a one-shot incident citation should not be.
+- **Prefer recipe over narrative.** A code block plus a one-sentence framing
+  beats a multi-paragraph explanation.
+
 ## Agent-driven vs deterministic steps
 
 Tend's workflows invoke Claude through `max-sixty/tend@v1`. When adding new
