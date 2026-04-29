@@ -326,13 +326,15 @@ runs:
 
         # Fetch error annotations from the current job. GitHub indexes
         # ##[error] annotations asynchronously, so poll with backoff up to
-        # ~50s before giving up — a single 5s sleep was never long enough
-        # in practice. Also match both in_progress (normal) and failure
-        # (if GitHub already transitioned the status) to handle matrix
-        # timing.
+        # ~8 min before giving up — earlier 50s and 5s windows lost the
+        # race on slow-indexing runs. The loop breaks as soon as an
+        # annotation surfaces, so the long tail is only paid when the
+        # annotation never indexes. Also match both in_progress (normal)
+        # and failure (if GitHub already transitioned the status) to
+        # handle matrix timing.
         ERRORS=""
         JOB_ID=""
-        for delay in 5 15 30; do
+        for delay in 5 15 30 60 120 240; do
           sleep "$delay"
           if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "null" ]; then
             JOB_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
