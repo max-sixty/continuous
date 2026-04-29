@@ -296,6 +296,17 @@ repo must be selected manually, each scope is a separate permission:
 `gists:write`, plus the account-level `Profile: read and write`
 permission for the bio.
 
+After creating the token, store it in gh's keyring under the bot's
+account so steps 9 and 10 can retrieve it via `gh auth token --user
+<bot-name>` the same way as the OAuth and classic-PAT paths, then
+switch back and set the repo secret:
+
+```bash
+echo "<pat-value>" | gh auth login --hostname github.com --with-token
+gh auth switch --user <maintainer>
+gh auth token --user <bot-name> | gh secret set BOT_TOKEN --repo "$REPO"
+```
+
 ### Verify
 
 ```bash
