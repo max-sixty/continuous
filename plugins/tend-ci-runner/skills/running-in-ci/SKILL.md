@@ -473,7 +473,7 @@ Always use markdown links for files, issues, PRs, and docs. **Any link containin
 - **Issues/PRs**: `#123` shorthand
 - **External**: `[text](url)` format
 
-Don't add job links, footers, or authorship sign-offs (e.g. `> _Written by Claude Code on behalf of @maintainer_`) — the bot account already conveys authorship, and `claude-code-action` adds any needed footer automatically. This covers PR and issue bodies too, not just comments.
+Don't add job links, footers, or authorship sign-offs (e.g. `> _Written by Claude Code on behalf of @maintainer_`) — the bot account already conveys authorship, and the harness suppresses the default Claude Code footer. This covers PR and issue bodies too, not just comments.
 
 ## Keeping PR Titles and Descriptions Current
 

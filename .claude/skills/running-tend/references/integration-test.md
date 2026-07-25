@@ -211,7 +211,7 @@ self-authored, trivial PRs (GitHub blocks self-approval; the skill keeps
 quiet when there are no concerns). So an "is there a bot review on the
 PR?" assertion can't distinguish "the action never ran" from "the action
 ran and stayed silent by design" — both produce zero reviews. Asserting
-on the session-log artifact, which `claude-code-action` uploads
+on the session-log artifact, which the tend harness action uploads
 unconditionally on every invocation, distinguishes the two.
 
 ```bash
@@ -261,7 +261,7 @@ for _ in $(seq 1 60); do
 done
 [ "$conclusion" = "success" ] || { echo "tend-review: $status/$conclusion"; exit 1; }
 
-# Session-log artifact presence proves claude-code-action invoked the
+# Session-log artifact presence proves the tend harness action invoked the
 # Claude session. The skill may then post a review, post nothing, or
 # anything in between — that's a separate concern from "did tend-review
 # fire end-to-end?".
