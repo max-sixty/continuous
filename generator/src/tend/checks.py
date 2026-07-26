@@ -18,6 +18,33 @@ from dataclasses import dataclass
 from tend.config import CLAUDE_FAMILY_HARNESSES, Config
 
 
+# GitHub's base repository role IDs, as they appear in a ruleset's
+# `bypass_actors`. The IDs are not ordered by privilege — maintain (2) sits
+# below write (4) — so the plausible guess for "maintain" is in fact the bot's
+# own role, and guessing it into a bypass list hands the bot the merge. The API
+# reports only the number; GraphQL names it, so verify against a live ruleset:
+#
+#   gh api graphql -f query='{repository(owner:"OWNER", name:"REPO")
+#     {rulesets(first:10){nodes{name bypassActors(first:10)
+#     {nodes{repositoryRoleDatabaseId repositoryRoleName}}}}}}'
+ROLE_ID_MAINTAIN = 2
+ROLE_ID_WRITE = 4
+ROLE_ID_ADMIN = 5
+
+# The roles above the bot's write access, so the only ones that can bypass a
+# ruleset. The bot must hold none of them, and a merge restriction may grant no
+# others. Keyed by name for the collaborators endpoint, valued by ID for
+# `bypass_actors` — the two APIs name the same role differently.
+BYPASS_ROLES = {"maintain": ROLE_ID_MAINTAIN, "admin": ROLE_ID_ADMIN}
+BYPASS_ROLE_IDS = frozenset(BYPASS_ROLES.values())
+
+# Non-role bypass actors that also unambiguously outrank a write-access bot. A
+# `User` actor is resolved against the bot's own id; the rest (Team,
+# Integration, DeployKey) name a principal whose membership isn't visible from
+# the ruleset, so the bot can't be ruled out.
+BYPASS_ACTOR_TYPES_ABOVE_BOT = frozenset({"OrganizationAdmin", "EnterpriseOwner"})
+
+
 @dataclass
 class CheckResult:
     name: str
@@ -91,7 +118,7 @@ def detect_default_branch(repo: str) -> str | None:
     return None
 
 
-def check_branch_protection(repo: str, branch: str) -> CheckResult:
+def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResult:
     """Check if a branch is protected against bot merges.
 
     Checks both that the branch is protected and that the protection actually
@@ -116,7 +143,7 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
 
     # Branch is protected — now check if the bot can still merge.
     # A restrict-updates ruleset is sufficient (and preferred).
-    ruleset = _has_restrict_updates_ruleset(repo, branch)
+    ruleset = _has_restrict_updates_ruleset(repo, branch, bot_name)
     if ruleset is True:
         return CheckResult(
             name,
@@ -152,24 +179,101 @@ def check_branch_protection(repo: str, branch: str) -> CheckResult:
         return CheckResult(
             name,
             None,
-            f"Branch '{branch}' is protected but could not verify rulesets "
-            "(insufficient API permissions). Check rulesets manually.",
+            f"Branch '{branch}' is protected but could not verify that the bot "
+            "cannot bypass its rulesets — either they aren't readable with this "
+            "token, or a bypass actor names a team, app, or deploy key whose "
+            "membership isn't resolvable here. Check the bypass list manually.",
         )
 
     return CheckResult(
         name,
         False,
         f"Branch '{branch}' is protected but the bot can still merge PRs "
-        f"(required_approving_review_count is 0 and no restrict-updates ruleset found). "
-        "Either require at least 1 approving review, or add a 'Restrict updates' "
-        "ruleset with only admins bypassing. See docs/security-model.md.",
+        "(required_approving_review_count is 0, and no restrict-updates ruleset "
+        "the bot cannot bypass). Either require at least 1 approving review, or "
+        "add a 'Restrict updates' ruleset whose bypass actors are all above write. "
+        "See docs/security-model.md.",
     )
 
 
-def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool | None:
-    """Check if any active ruleset restricts updates to the branch.
+def _ruleset_endpoint(rule: dict) -> str | None:
+    """The API path for the ruleset a branch rule came from.
 
-    Returns True if found, False if confirmed absent, None if unable to check.
+    A rule carries the ruleset's id and where it lives, and org rulesets are
+    readable only under `/orgs`. Returns None when the ruleset can't be
+    addressed — an Enterprise ruleset has no endpoint a repo-scoped token can
+    reach — which the caller treats as unverifiable.
+    """
+    source = rule.get("ruleset_source")
+    ruleset_id = rule.get("ruleset_id")
+    if not source or ruleset_id is None:
+        return None
+    source_type = rule.get("ruleset_source_type")
+    if source_type == "Repository":
+        return f"repos/{source}/rulesets/{ruleset_id}"
+    if source_type == "Organization":
+        return f"orgs/{source}/rulesets/{ruleset_id}"
+    return None
+
+
+def _user_id(login: str) -> int | None:
+    """The numeric GitHub user id for a login, which is how a `User` bypass
+    actor names its principal."""
+    result = _gh("api", f"users/{login}", "--jq", ".id")
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _ruleset_blocks_bot(endpoint: str, bot_name: str) -> bool | None:
+    """Whether a ruleset's bypass list keeps a write-access bot out.
+
+    Returns True if every bypass actor outranks the bot, False if one of them
+    is the bot itself or a role at write or below, None if the ruleset can't be
+    read or names a principal this can't resolve (a team, app, or deploy key).
+    """
+    result = _gh("api", endpoint)
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    unresolved = False
+    for actor in data.get("bypass_actors") or []:
+        actor_type = actor.get("actor_type")
+        if actor_type == "RepositoryRole":
+            if actor.get("actor_id") not in BYPASS_ROLE_IDS:
+                return False
+        elif actor_type == "User":
+            # A user exemption is decidable: the bot's login resolves to the id
+            # the actor names. Naming the bot is the worst case — an explicit
+            # grant of the merge the restriction exists to deny.
+            bot_id = _user_id(bot_name)
+            if bot_id is None:
+                unresolved = True
+            elif actor.get("actor_id") == bot_id:
+                return False
+        elif actor_type not in BYPASS_ACTOR_TYPES_ABOVE_BOT:
+            unresolved = True
+    return None if unresolved else True
+
+
+def _has_restrict_updates_ruleset(repo: str, branch: str, bot_name: str) -> bool | None:
+    """Check if an active ruleset stops the bot updating the branch.
+
+    An `update` rule alone isn't enough — a bypass actor at write or below
+    defeats it, and write is exactly what the bot holds. So each update rule is
+    followed back to its ruleset and its bypass list checked.
+
+    Returns True if found, False if confirmed absent or bypassable, None if
+    unable to check.
 
     Uses the per-branch rules endpoint which resolves patterns like
     ~DEFAULT_BRANCH.
@@ -183,16 +287,36 @@ def _has_restrict_updates_ruleset(repo: str, branch: str) -> bool | None:
         return None
     if not isinstance(rules, list):
         return None
-    return any(r.get("type") == "update" for r in rules)
+
+    update_rules = [r for r in rules if r.get("type") == "update"]
+    if not update_rules:
+        return False
+
+    # Several rulesets can contribute an update rule; one the bot can't bypass
+    # is enough to protect the branch. A rule we can't trace back to its
+    # ruleset is unverified, not absent.
+    unresolved = False
+    for rule in update_rules:
+        endpoint = _ruleset_endpoint(rule)
+        verdict = _ruleset_blocks_bot(endpoint, bot_name) if endpoint else None
+        if verdict is True:
+            return True
+        unresolved = unresolved or verdict is None
+    return None if unresolved else False
 
 
 def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
-    """Check the bot's permission level (should be write, not admin)."""
+    """Check the bot's role (should be write or below, so it can't bypass).
+
+    Reads `.role_name`, not `.permission`: the latter is the legacy
+    admin/write/read/none field, which reports a maintain-role collaborator as
+    "write" — and maintain bypasses the merge restriction.
+    """
     result = _gh(
         "api",
         f"repos/{repo}/collaborators/{bot_name}/permission",
         "--jq",
-        ".permission",
+        ".role_name",
     )
     if result is None:
         return CheckResult("bot-permission", None, "gh CLI not found")
@@ -208,16 +332,16 @@ def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
             "bot-permission", None, "Could not check (may require admin access to read)"
         )
 
-    perm = result.stdout.strip()
-    if perm == "admin":
+    role = result.stdout.strip()
+    if role in BYPASS_ROLES:
         return CheckResult(
             "bot-permission",
             False,
-            f"Bot '{bot_name}' has admin permission — it can bypass branch protection. "
+            f"Bot '{bot_name}' has {role} permission — it can bypass branch protection. "
             "Downgrade to write access.",
         )
     return CheckResult(
-        "bot-permission", True, f"Bot '{bot_name}' has '{perm}' permission"
+        "bot-permission", True, f"Bot '{bot_name}' has '{role}' permission"
     )
 
 
@@ -367,7 +491,7 @@ def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
             "rules": [{"type": "update"}],
             "bypass_actors": [
                 {
-                    "actor_id": 5,
+                    "actor_id": ROLE_ID_ADMIN,
                     "actor_type": "RepositoryRole",
                     "bypass_mode": "exempt",
                 }
@@ -384,7 +508,7 @@ def fix_branch_protection(
     """Create a restrict-updates ruleset covering protected branches.
 
     Always covers the default branch. Extra branches from config are included
-    in the same ruleset. Only admins (actor_id 5) can bypass.
+    in the same ruleset. Only admins can bypass.
     """
     extra = [b for b in (extra_branches or []) if b != default_branch]
     body = _restrict_updates_ruleset(extra)
@@ -459,10 +583,10 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
         cfg.allowed_repo_secrets
     )
 
-    results = [check_branch_protection(repo, default_branch)]
+    results = [check_branch_protection(repo, default_branch, cfg.bot_name)]
     for branch in cfg.protected_branches:
         if branch != default_branch:
-            results.append(check_branch_protection(repo, branch))
+            results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness in CLAUDE_FAMILY_HARNESSES:

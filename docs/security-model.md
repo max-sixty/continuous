@@ -123,11 +123,12 @@ signing keys) live in GitHub Environments whose `deployment_branch_policy`
 lists only admin-gated refs: the default branch (merge restriction) and
 all tags (a sibling tag-target ruleset that gates `creation` and `update`
 with admin-only bypass; `update` is what force-push of an existing tag
-fires, so it must be blocked alongside `creation`). The bot has write
-but not admin, so it cannot push to the default branch and cannot push
-any tag, and therefore cannot reach any environment pinned to those
-refs. The chain holds for workflows whose only path to invocation is
-updating one of those refs: trigger on `push: tags:` (release) or
+fires, so it must be blocked alongside `creation`). The bot has write,
+which is below every role that can bypass, so it cannot push to the
+default branch and cannot push any tag, and therefore cannot reach any
+environment pinned to those refs. The chain holds for workflows whose
+only path to invocation is updating one of those refs: trigger on
+`push: tags:` (release) or
 `push: branches: [main]` (continuous deploy). Other triggers
 (`workflow_dispatch`, `release: published`, `deployment`, `schedule`,
 chained dispatches) can be initiated by a write-scoped bot against an
@@ -135,8 +136,9 @@ allowed ref, so the env policy alone does not gate them; workflows
 keeping those triggers need trigger-specific containment (typically
 required reviewers on the Environment) before release or deploy secrets
 are migrated there. The chain inherits the merge restriction's
-assumption that the bot has write, not admin; an admin session voids
-both the same way.
+assumption that the bot holds no role that can bypass; an admin session
+voids both the same way. `tend check` verifies both halves: the bot's
+role, and that every bypass actor on the merge ruleset outranks write.
 
 OIDC-to-cloud deploys have no GitHub-stored secret to gate; there, the
 Environment plus the cloud provider's trust policy is the only control.

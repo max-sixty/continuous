@@ -11,6 +11,9 @@ import pytest
 from click.testing import CliRunner
 
 from tend.checks import (
+    ROLE_ID_ADMIN,
+    ROLE_ID_MAINTAIN,
+    ROLE_ID_WRITE,
     CheckResult,
     _has_restrict_updates_ruleset,
     _restrict_updates_ruleset,
@@ -68,9 +71,54 @@ def _write_config(tmp_path: Path, content: str = "bot_name: test-bot") -> Path:
     return cfg
 
 
-def _make_branch_rules(*rule_types: str) -> str:
+def _make_branch_rules(
+    *rule_types: str,
+    ruleset_id: int | None = 1,
+    source_type: str = "Repository",
+    source: str = "owner/repo",
+) -> str:
     """Build a JSON array of branch rules (as returned by /rules/branches/{branch})."""
-    return json.dumps([{"type": t} for t in rule_types])
+    rule: dict[str, object]
+    rules = []
+    for t in rule_types:
+        rule = {"type": t, "ruleset_source_type": source_type, "ruleset_source": source}
+        if ruleset_id is not None:
+            rule["ruleset_id"] = ruleset_id
+        rules.append(rule)
+    return json.dumps(rules)
+
+
+def _role_actor(actor_id: int) -> dict[str, object]:
+    """A `bypass_actors` entry granting a base repository role."""
+    return {
+        "actor_id": actor_id,
+        "actor_type": "RepositoryRole",
+        "bypass_mode": "exempt",
+    }
+
+
+def _gh_ruleset(
+    rules: str,
+    bypass_actors: list[dict[str, object]] | None,
+    user_id: int | None = None,
+) -> object:
+    """Build a `_gh` fake serving the calls `_has_restrict_updates_ruleset` makes:
+    `/rules/branches/<branch>` returns `rules`; `/rulesets/<id>` returns a ruleset
+    with `bypass_actors` (or returncode=1 if None); `users/<login>` returns
+    `user_id` (or returncode=1 if None)."""
+
+    def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str] | None:
+        if "/rules/branches/" in args[1]:
+            return _make_completed(rules)
+        if args[1].startswith("users/"):
+            if user_id is None:
+                return _make_completed(returncode=1)
+            return _make_completed(f"{user_id}\n")
+        if bypass_actors is None:
+            return _make_completed(returncode=1)
+        return _make_completed(json.dumps({"bypass_actors": bypass_actors}))
+
+    return fake
 
 
 # ---------------------------------------------------------------------------
@@ -167,23 +215,27 @@ def test_detect_canonical_owner_api_failure_returns_none() -> None:
 
 
 def test_branch_protected() -> None:
+    """Protected via a restrict-updates ruleset the bot can't bypass."""
     branch_rules = _make_branch_rules("update")
+    ruleset = json.dumps({"bypass_actors": [_role_actor(ROLE_ID_ADMIN)]})
 
     def fake_gh(*args, **kwargs):
         url = args[1]
         if "rules/branches" in url:
             return _make_completed(branch_rules)
+        if "/rulesets/" in url:
+            return _make_completed(ruleset)
         return _make_completed("true\n")
 
     with patch("tend.checks._gh", side_effect=fake_gh):
-        result = check_branch_protection("owner/repo", "main")
+        result = check_branch_protection("owner/repo", "main", "my-bot")
     assert result.passed is True
-    assert "protected" in result.message
+    assert "restrict-updates ruleset" in result.message
 
 
 def test_branch_not_protected() -> None:
     with patch("tend.checks._gh", return_value=_make_completed("false\n")):
-        result = check_branch_protection("owner/repo", "main")
+        result = check_branch_protection("owner/repo", "main", "my-bot")
     assert result.passed is False
     assert "NOT protected" in result.message
 
@@ -193,14 +245,14 @@ def test_branch_protection_api_error() -> None:
         "tend.checks._gh",
         return_value=_make_completed(returncode=1, stderr="Not Found"),
     ):
-        result = check_branch_protection("owner/repo", "main")
+        result = check_branch_protection("owner/repo", "main", "my-bot")
     assert result.passed is None
     assert "API error" in result.message
 
 
 def test_branch_protection_no_gh() -> None:
     with patch("tend.checks._gh", return_value=None):
-        result = check_branch_protection("owner/repo", "main")
+        result = check_branch_protection("owner/repo", "main", "my-bot")
     assert result.passed is None
 
 
@@ -221,16 +273,16 @@ def test_branch_protected_ruleset_inconclusive_skips() -> None:
         return _make_completed(returncode=1)
 
     with patch("tend.checks._gh", side_effect=fake_gh):
-        result = check_branch_protection("owner/repo", "main")
+        result = check_branch_protection("owner/repo", "main", "my-bot")
     assert result.passed is None
-    assert "could not verify rulesets" in result.message
+    assert "could not verify that the bot cannot bypass" in result.message
 
 
 def test_branch_protection_result_name_includes_branch() -> None:
     """Each branch gets a distinct check name for identification."""
     with patch("tend.checks._gh", return_value=_make_completed("false\n")):
-        main_result = check_branch_protection("owner/repo", "main")
-        v1_result = check_branch_protection("owner/repo", "v1")
+        main_result = check_branch_protection("owner/repo", "main", "my-bot")
+        v1_result = check_branch_protection("owner/repo", "v1", "my-bot")
     assert main_result.name == "branch-protection:main"
     assert v1_result.name == "branch-protection:v1"
 
@@ -243,28 +295,162 @@ def test_branch_protection_result_name_includes_branch() -> None:
 def test_no_rules_for_branch() -> None:
     """No rules at all for this branch → False."""
     with patch("tend.checks._gh", return_value=_make_completed("[]\n")):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is False
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
 
 
 def test_update_rule_present() -> None:
-    """Branch rules include an update rule → True."""
-    data = _make_branch_rules("update")
-    with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is True
+    """Update rule whose ruleset only admins bypass → True."""
+    fake = _gh_ruleset(_make_branch_rules("update"), [_role_actor(ROLE_ID_ADMIN)])
+    with patch("tend.checks._gh", side_effect=fake) as gh:
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+    assert gh.call_args.args[-1] == "repos/owner/repo/rulesets/1"
+
+
+def test_org_ruleset_read_from_orgs_endpoint() -> None:
+    """An org-level ruleset is readable only under /orgs, not /repos."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update", source_type="Organization", source="owner"),
+        [_role_actor(ROLE_ID_ADMIN)],
+    )
+    with patch("tend.checks._gh", side_effect=fake) as gh:
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+    assert gh.call_args.args[-1] == "orgs/owner/rulesets/1"
+
+
+def test_enterprise_ruleset_unverifiable() -> None:
+    """An enterprise ruleset has no endpoint a repo-scoped token can read → None."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update", source_type="Enterprise", source="acme"),
+        [_role_actor(ROLE_ID_ADMIN)],
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
 
 
 def test_only_non_update_rules() -> None:
     """Branch has rules but none are update → False."""
     data = _make_branch_rules("deletion", "required_linear_history")
     with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is False
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
 
 
 def test_update_rule_among_others() -> None:
     """Update rule mixed with other rules → True."""
-    data = _make_branch_rules("deletion", "update", "required_signatures")
-    with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is True
+    fake = _gh_ruleset(
+        _make_branch_rules("deletion", "update", "required_signatures"),
+        [_role_actor(ROLE_ID_ADMIN)],
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_update_rule_bypassed_by_write() -> None:
+    """A write-role bypass defeats the update rule — the bot holds write.
+
+    This is the hole the check missed: the rule is present and the branch looks
+    protected, but the bot can merge anyway.
+    """
+    fake = _gh_ruleset(_make_branch_rules("update"), [_role_actor(ROLE_ID_WRITE)])
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+
+
+def test_update_rule_maintain_bypass_ok() -> None:
+    """Maintain outranks the bot's write, so a maintain bypass still protects."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        [_role_actor(ROLE_ID_ADMIN), _role_actor(ROLE_ID_MAINTAIN)],
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_update_rule_org_admin_bypass_ok() -> None:
+    """OrganizationAdmin isn't a repository role but still outranks the bot."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        [{"actor_type": "OrganizationAdmin", "actor_id": None}],
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_update_rule_bot_user_bypass() -> None:
+    """A user exemption naming the bot is an explicit grant of the merge.
+
+    Without resolving the bot's login to its id this reads as unverifiable, and
+    an unverifiable check exits 0 — so the misconfiguration would pass.
+    """
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        [{"actor_type": "User", "actor_id": 999}],
+        user_id=999,
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+
+
+def test_update_rule_other_user_bypass_ok() -> None:
+    """A user exemption naming someone else doesn't let the bot through."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        [{"actor_type": "User", "actor_id": 12345}],
+        user_id=999,
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_update_rule_user_bypass_unresolvable_login() -> None:
+    """If the bot's login won't resolve, a user exemption stays unverifiable."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        [{"actor_type": "User", "actor_id": 999}],
+        user_id=None,
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+
+
+def test_update_rule_team_bypass_unresolved() -> None:
+    """A team bypass could contain the bot; membership isn't visible → None."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        [{"actor_type": "Team", "actor_id": 42}],
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+
+
+def test_update_rule_write_bypass_beats_unresolved() -> None:
+    """A definite write bypass outweighs an unresolvable actor in the same list."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        [{"actor_type": "Team", "actor_id": 42}, _role_actor(ROLE_ID_WRITE)],
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+
+
+def test_update_rule_no_bypass_actors() -> None:
+    """An empty bypass list means nobody bypasses → protected."""
+    fake = _gh_ruleset(_make_branch_rules("update"), [])
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_update_rule_ruleset_unreadable() -> None:
+    """Update rule present but its ruleset can't be read → None, not a pass."""
+    fake = _gh_ruleset(_make_branch_rules("update"), None)
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+
+
+def test_update_rule_without_ruleset_id() -> None:
+    """An update rule we can't trace to a ruleset is unverified, not absent."""
+    fake = _gh_ruleset(_make_branch_rules("update", ruleset_id=None), None)
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
 
 
 def test_branch_rules_api_error() -> None:
@@ -273,13 +459,13 @@ def test_branch_rules_api_error() -> None:
         "tend.checks._gh",
         return_value=_make_completed(returncode=1, stderr="Not Found"),
     ):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
 
 
 def test_branch_rules_no_gh() -> None:
     """gh CLI not found → None (can't check either endpoint)."""
     with patch("tend.checks._gh", return_value=None):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
 
 
 def test_branch_rules_non_list_response() -> None:
@@ -288,7 +474,7 @@ def test_branch_rules_non_list_response() -> None:
         "tend.checks._gh",
         return_value=_make_completed('{"message": "Not Found"}'),
     ):
-        assert _has_restrict_updates_ruleset("owner/repo", "main") is None
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +516,26 @@ def test_bot_admin_permission() -> None:
     assert result.passed is False
     assert "admin" in result.message
     assert "bypass" in result.message
+
+
+def test_bot_maintain_permission() -> None:
+    """Maintain bypasses the merge restriction, so the bot must not hold it.
+
+    The legacy `.permission` field reports a maintain collaborator as "write",
+    which is why the check reads `.role_name`.
+    """
+    with patch("tend.checks._gh", return_value=_make_completed("maintain\n")):
+        result = check_bot_permission("owner/repo", "my-bot")
+    assert result.passed is False
+    assert "maintain" in result.message
+    assert "bypass" in result.message
+
+
+def test_bot_permission_reads_role_name() -> None:
+    """The check must query `.role_name`, not the legacy `.permission` field."""
+    with patch("tend.checks._gh", return_value=_make_completed("write\n")) as gh:
+        check_bot_permission("owner/repo", "my-bot")
+    assert gh.call_args.args[-1] == ".role_name"
 
 
 def test_bot_permission_403() -> None:

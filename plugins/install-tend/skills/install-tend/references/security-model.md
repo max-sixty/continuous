@@ -10,7 +10,8 @@ the subset an installing agent needs.
 
 Tend runs an agent with write access on attacker-controlled input. The
 boundary is structural: every code path into a privileged workflow chains
-back to an admin-controlled operation, and the bot has write, not admin.
+back to an admin-controlled operation, and the bot has write, which is below
+every role that can bypass a ruleset.
 
 The two admin-gated operations are:
 

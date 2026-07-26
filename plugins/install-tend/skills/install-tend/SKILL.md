@@ -272,8 +272,8 @@ user that team members should @-mention the bot account instead of `@claude`.
 Two ref classes can land code that reaches a deploy or publish workflow:
 the default branch (via merge) and tags (via tag push). Restrict both to
 admin-only operations so every privileged code path chains back to an
-admin action. The bot has write, not admin, so it satisfies neither
-bypass.
+admin action. The bot has write, which is below every role that can
+bypass, so it satisfies neither.
 
 Survey existing rulesets; skip any slot already covered:
 
@@ -300,6 +300,17 @@ gh api "repos/$REPO/rulesets" --method POST --input - << 'EOF'
   }]
 }
 EOF
+```
+
+`actor_id: 5` is the admin role. The base role IDs run maintain 2, write 4,
+admin 5 — not ordered by privilege, so the plausible guess for maintain is in
+fact write, the bot's own role, and granting it hands the bot the merge. Before
+adding any bypass actor, read back what the ruleset actually granted:
+
+```bash
+gh api graphql -f query='{repository(owner:"OWNER", name:"REPO")
+  {rulesets(first:10){nodes{name bypassActors(first:10)
+  {nodes{repositoryRoleDatabaseId repositoryRoleName}}}}}}'
 ```
 
 **Tag operations.** Same shape, applied to all tags. Pushing a new tag or
