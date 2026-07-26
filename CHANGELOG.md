@@ -20,6 +20,7 @@ https://github.com/max-sixty/tend/compare for their history.
 
 ### Internal
 
+- Bumped pinned `claude_version` to 2.1.220 in both Claude harnesses. ([#794](https://github.com/max-sixty/tend/pull/794))
 - Bumped pinned `claude_version` to 2.1.215. ([#782](https://github.com/max-sixty/tend/pull/782))
 
 ## 0.1.11
