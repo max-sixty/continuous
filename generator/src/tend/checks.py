@@ -31,12 +31,9 @@ ROLE_ID_MAINTAIN = 2
 ROLE_ID_WRITE = 4
 ROLE_ID_ADMIN = 5
 
-# The roles above the bot's write access, so the only ones that can bypass a
-# ruleset. The bot must hold none of them, and a merge restriction may grant no
-# others. Keyed by name for the collaborators endpoint, valued by ID for
-# `bypass_actors` — the two APIs name the same role differently.
-BYPASS_ROLES = {"maintain": ROLE_ID_MAINTAIN, "admin": ROLE_ID_ADMIN}
-BYPASS_ROLE_IDS = frozenset(BYPASS_ROLES.values())
+# The roles above the bot's write access, so the only ones a merge
+# restriction's `bypass_actors` may grant.
+BYPASS_ROLE_IDS = frozenset({ROLE_ID_MAINTAIN, ROLE_ID_ADMIN})
 
 # Non-role bypass actors that also unambiguously outrank a write-access bot. A
 # `User` actor is resolved against the bot's own id; the rest (Team,
@@ -245,17 +242,21 @@ def _ruleset_blocks_bot(endpoint: str, bot_name: str) -> bool | None:
     if not isinstance(data, dict):
         return None
 
+    actors = data.get("bypass_actors") or []
+    # A user exemption is decidable: the bot's login resolves to the id the
+    # actor names. Naming the bot is the worst case — an explicit grant of the
+    # merge the restriction exists to deny.
+    bot_id = None
+    if any(a.get("actor_type") == "User" for a in actors):
+        bot_id = _user_id(bot_name)
+
     unresolved = False
-    for actor in data.get("bypass_actors") or []:
+    for actor in actors:
         actor_type = actor.get("actor_type")
         if actor_type == "RepositoryRole":
             if actor.get("actor_id") not in BYPASS_ROLE_IDS:
                 return False
         elif actor_type == "User":
-            # A user exemption is decidable: the bot's login resolves to the id
-            # the actor names. Naming the bot is the worst case — an explicit
-            # grant of the merge the restriction exists to deny.
-            bot_id = _user_id(bot_name)
             if bot_id is None:
                 unresolved = True
             elif actor.get("actor_id") == bot_id:
@@ -306,18 +307,16 @@ def _has_restrict_updates_ruleset(repo: str, branch: str, bot_name: str) -> bool
 
 
 def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
-    """Check the bot's role (should be write or below, so it can't bypass).
+    """Check the bot's effective access stays at write or below.
 
-    Reads `.role_name`, not `.permission`: the latter is the legacy
-    admin/write/read/none field, which reports a maintain-role collaborator as
-    "write" — and maintain bypasses the merge restriction.
+    Reads the `permissions` booleans: they report effective capabilities, so a
+    custom role built on maintain or admin fails the same as the base role.
+    Neither string field works — the legacy `.permission` reports a
+    maintain-role collaborator as "write" (and maintain bypasses the merge
+    restriction), while matching `.role_name` against base-role names would
+    pass any custom role whatever it grants.
     """
-    result = _gh(
-        "api",
-        f"repos/{repo}/collaborators/{bot_name}/permission",
-        "--jq",
-        ".role_name",
-    )
+    result = _gh("api", f"repos/{repo}/collaborators/{bot_name}/permission")
     if result is None:
         return CheckResult("bot-permission", None, "gh CLI not found")
     if result.returncode != 0:
@@ -332,8 +331,16 @@ def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
             "bot-permission", None, "Could not check (may require admin access to read)"
         )
 
-    role = result.stdout.strip()
-    if role in BYPASS_ROLES:
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return CheckResult(
+            "bot-permission", None, "Could not parse permission response"
+        )
+
+    perms = data["user"]["permissions"]
+    role = data["role_name"]
+    if perms["admin"] or perms["maintain"]:
         return CheckResult(
             "bot-permission",
             False,

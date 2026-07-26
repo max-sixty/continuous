@@ -297,11 +297,47 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
     if url == "repos/owner/repo" and ".default_branch" in args:
         return _make_completed("main\n")
     if "rules/branches" in url:
-        return _make_completed(json.dumps([{"type": "update"}]))
+        return _make_completed(
+            json.dumps(
+                [
+                    {
+                        "type": "update",
+                        "ruleset_id": 1,
+                        "ruleset_source_type": "Repository",
+                        "ruleset_source": "owner/repo",
+                    }
+                ]
+            )
+        )
+    if "/rulesets/" in url:
+        # Admin-only bypass — the shape `tend check --fix` creates.
+        return _make_completed(
+            json.dumps(
+                {
+                    "bypass_actors": [
+                        {
+                            "actor_id": 5,
+                            "actor_type": "RepositoryRole",
+                            "bypass_mode": "exempt",
+                        }
+                    ]
+                }
+            )
+        )
     if "branches" in url:
         return _make_completed("true\n")
     if "collaborators" in url:
-        return _make_completed("write\n")
+        return _make_completed(
+            json.dumps(
+                {
+                    "permission": "write",
+                    "role_name": "write",
+                    "user": {
+                        "permissions": {"admin": False, "maintain": False, "push": True}
+                    },
+                }
+            )
+        )
     if "secrets" in url:
         return _make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
     return _make_completed(returncode=1)

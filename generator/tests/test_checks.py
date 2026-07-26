@@ -503,15 +503,32 @@ def test_ruleset_with_extra_branches() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _permission_response(
+    role_name: str, *, admin: bool = False, maintain: bool = False
+) -> str:
+    """The /collaborators/{user}/permission response, trimmed to what's read."""
+    return json.dumps(
+        {
+            "permission": "admin" if admin else "write",
+            "role_name": role_name,
+            "user": {
+                "permissions": {"admin": admin, "maintain": maintain, "push": True}
+            },
+        }
+    )
+
+
 def test_bot_write_permission() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed("write\n")):
+    resp = _permission_response("write")
+    with patch("tend.checks._gh", return_value=_make_completed(resp)):
         result = check_bot_permission("owner/repo", "my-bot")
     assert result.passed is True
     assert "write" in result.message
 
 
 def test_bot_admin_permission() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed("admin\n")):
+    resp = _permission_response("admin", admin=True, maintain=True)
+    with patch("tend.checks._gh", return_value=_make_completed(resp)):
         result = check_bot_permission("owner/repo", "my-bot")
     assert result.passed is False
     assert "admin" in result.message
@@ -522,20 +539,27 @@ def test_bot_maintain_permission() -> None:
     """Maintain bypasses the merge restriction, so the bot must not hold it.
 
     The legacy `.permission` field reports a maintain collaborator as "write",
-    which is why the check reads `.role_name`.
+    which is why the check reads the `permissions` booleans instead.
     """
-    with patch("tend.checks._gh", return_value=_make_completed("maintain\n")):
+    resp = _permission_response("maintain", maintain=True)
+    with patch("tend.checks._gh", return_value=_make_completed(resp)):
         result = check_bot_permission("owner/repo", "my-bot")
     assert result.passed is False
     assert "maintain" in result.message
     assert "bypass" in result.message
 
 
-def test_bot_permission_reads_role_name() -> None:
-    """The check must query `.role_name`, not the legacy `.permission` field."""
-    with patch("tend.checks._gh", return_value=_make_completed("write\n")) as gh:
-        check_bot_permission("owner/repo", "my-bot")
-    assert gh.call_args.args[-1] == ".role_name"
+def test_bot_custom_role_with_maintain_fails() -> None:
+    """A custom role is judged by its capabilities, not its name.
+
+    Its `role_name` matches no base role, so only the `permissions` booleans
+    reveal that it can bypass.
+    """
+    resp = _permission_response("release-manager", maintain=True)
+    with patch("tend.checks._gh", return_value=_make_completed(resp)):
+        result = check_bot_permission("owner/repo", "my-bot")
+    assert result.passed is False
+    assert "release-manager" in result.message
 
 
 def test_bot_permission_403() -> None:
@@ -806,10 +830,14 @@ def _fake_gh_all_pass(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         return _make_completed("main\n")
     if "rules/branches" in url:
         return _make_completed(_BRANCH_HAS_UPDATE_RULE)
+    if "/rulesets/" in url:
+        return _make_completed(
+            json.dumps({"bypass_actors": [_role_actor(ROLE_ID_ADMIN)]})
+        )
     if "branches" in url:
         return _make_completed("true\n")
     if "collaborators" in url:
-        return _make_completed("write\n")
+        return _make_completed(_permission_response("write"))
     if "secrets" in url:
         return _make_completed('["T1","T2"]\n')
     return _make_completed(returncode=1)
@@ -846,10 +874,14 @@ def test_run_all_checks_allowlist_catches_unexpected() -> None:
             return _make_completed("main\n")
         if "rules/branches" in url:
             return _make_completed(_BRANCH_HAS_UPDATE_RULE)
+        if "/rulesets/" in url:
+            return _make_completed(
+                json.dumps({"bypass_actors": [_role_actor(ROLE_ID_ADMIN)]})
+            )
         if "branches" in url:
             return _make_completed("true\n")
         if "collaborators" in url:
-            return _make_completed("write\n")
+            return _make_completed(_permission_response("write"))
         if "secrets" in url:
             return _make_completed('["T1","T2","PYPI_TOKEN"]\n')
         return _make_completed(returncode=1)
