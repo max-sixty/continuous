@@ -11,7 +11,12 @@ the subset an installing agent needs.
 Tend runs an agent with write access on attacker-controlled input. The
 boundary is structural: every code path into a privileged workflow chains
 back to an admin-controlled operation, and the bot has write, which is below
-every role that can bypass a ruleset.
+every role that can bypass a ruleset. The merge half is re-proven on every
+run: preflight, holding the bot's own token, reads `current_user_can_bypass`
+on each ruleset covering the default branch — GitHub's evaluation of the
+bot's standing, teams and custom roles included — and aborts unless some
+restrict-updates ruleset answers `never` or the branch is otherwise
+protected.
 
 The two admin-gated operations are:
 

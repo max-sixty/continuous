@@ -122,7 +122,12 @@ layers:
 
 **Merge restriction** is the primary boundary. A GitHub ruleset prevents the
 bot from merging to protected branches — bot-authored PRs require human
-approval. `tend check` verifies this; `tend check --fix` creates the ruleset.
+approval. The bot proves this against itself on every run: preflight asks
+GitHub whether the bot's own credentials can bypass any ruleset covering the
+default branch (`current_user_can_bypass` — GitHub's evaluation, so teams,
+custom roles, and org-level rulesets are all accounted for) and refuses to
+start unless the answer is no. `tend check` verifies the setup;
+`tend check --fix` creates the ruleset.
 
 **Credential isolation** — the Claude harness runs the agent as a separate
 non-sudo user and keeps the bot token and Anthropic credential in a local

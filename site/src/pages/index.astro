@@ -149,7 +149,7 @@ claude /install-tend</code></pre>
     <div class="marginalia">
       <div class="margin-note">model</div>
       <div class="body">
-        <p>Tend gives Claude write access to your repo, but not the merge. A GitHub ruleset blocks the bot from merging to protected branches — whoever opened the PR, however it's been reviewed — so every change lands through a human; tend's setup verifies the ruleset and (if you ask) creates it for you. Around that sit config-pinning, rate limits, and a fixed prompt and Skill set.</p>
+        <p>Tend gives Claude write access to your repo, but not the merge. A GitHub ruleset blocks the bot from merging to protected branches — whoever opened the PR, however it's been reviewed — so every change lands through a human. The bot proves this against itself on every run: before starting, it asks GitHub whether its own credentials could bypass the ruleset, and refuses to run if the answer is yes. Tend's setup verifies the ruleset and (if you ask) creates it for you; around that sit config-pinning, rate limits, and a fixed prompt and Skill set.</p>
         <p><a href="https://github.com/max-sixty/tend/blob/main/docs/security-model.md">Read the full threat model →</a></p>
       </div>
     </div>
