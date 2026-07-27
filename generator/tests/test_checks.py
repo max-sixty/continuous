@@ -101,11 +101,12 @@ def _gh_ruleset(
     rules: str,
     bypass_actors: list[dict[str, object]] | None,
     user_id: int | None = None,
+    ruleset_json: str | None = None,
 ) -> object:
     """Build a `_gh` fake serving the calls `_has_restrict_updates_ruleset` makes:
     `/rules/branches/<branch>` returns `rules`; `/rulesets/<id>` returns a ruleset
-    with `bypass_actors` (or returncode=1 if None); `users/<login>` returns
-    `user_id` (or returncode=1 if None)."""
+    with `bypass_actors` (or `ruleset_json` verbatim if given, or returncode=1 if
+    both are None); `users/<login>` returns `user_id` (or returncode=1 if None)."""
 
     def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str] | None:
         if "/rules/branches/" in args[1]:
@@ -114,6 +115,8 @@ def _gh_ruleset(
             if user_id is None:
                 return _make_completed(returncode=1)
             return _make_completed(f"{user_id}\n")
+        if ruleset_json is not None:
+            return _make_completed(ruleset_json)
         if bypass_actors is None:
             return _make_completed(returncode=1)
         return _make_completed(json.dumps({"bypass_actors": bypass_actors}))
@@ -306,22 +309,27 @@ def test_update_rule_present() -> None:
     assert gh.call_args.args[-1] == "repos/owner/repo/rulesets/1"
 
 
-def test_org_ruleset_read_from_orgs_endpoint() -> None:
-    """An org-level ruleset is readable only under /orgs, not /repos."""
+def test_org_ruleset_read_via_repo_endpoint() -> None:
+    """The repo-scoped endpoint serves org-sourced rulesets too."""
     fake = _gh_ruleset(
         _make_branch_rules("update", source_type="Organization", source="owner"),
         [_role_actor(ROLE_ID_ADMIN)],
     )
     with patch("tend.checks._gh", side_effect=fake) as gh:
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
-    assert gh.call_args.args[-1] == "orgs/owner/rulesets/1"
+    assert gh.call_args.args[-1] == "repos/owner/repo/rulesets/1"
 
 
-def test_enterprise_ruleset_unverifiable() -> None:
-    """An enterprise ruleset has no endpoint a repo-scoped token can read → None."""
+def test_ruleset_bypass_list_not_visible() -> None:
+    """GitHub omits `bypass_actors` below ruleset-admin → unverifiable, not empty.
+
+    Reading the missing key as an empty list would report "nobody bypasses" —
+    a false pass for exactly the caller who can't see the danger.
+    """
     fake = _gh_ruleset(
-        _make_branch_rules("update", source_type="Enterprise", source="acme"),
-        [_role_actor(ROLE_ID_ADMIN)],
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
     )
     with patch("tend.checks._gh", side_effect=fake):
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None

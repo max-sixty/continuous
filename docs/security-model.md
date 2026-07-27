@@ -50,8 +50,11 @@ There are two load-bearing boundaries, one per path code can take.
 **Merge restriction** covers code that reaches the default branch through a
 merge. A GitHub ruleset (or branch protection) prevents the bot from merging
 to protected branches (the default branch plus any in `protected_branches`)
-regardless of review status, and the composite action refuses to start if the
-default branch isn't protected.
+regardless of review status. The composite action's preflight verifies this
+as the bot itself: `current_user_can_bypass` on each applying ruleset is
+GitHub's own evaluation of the bot's standing — teams, custom roles, and
+org-level rulesets included — and the run aborts if the bot can bypass every
+restrict-updates ruleset, or if the branch is unprotected entirely.
 
 **Environment-protected secrets** (below) covers code that runs *without* a
 merge: a tag push, a release, a manual or chained dispatch. The merge

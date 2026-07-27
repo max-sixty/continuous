@@ -193,26 +193,6 @@ def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResul
     )
 
 
-def _ruleset_endpoint(rule: dict) -> str | None:
-    """The API path for the ruleset a branch rule came from.
-
-    A rule carries the ruleset's id and where it lives, and org rulesets are
-    readable only under `/orgs`. Returns None when the ruleset can't be
-    addressed — an Enterprise ruleset has no endpoint a repo-scoped token can
-    reach — which the caller treats as unverifiable.
-    """
-    source = rule.get("ruleset_source")
-    ruleset_id = rule.get("ruleset_id")
-    if not source or ruleset_id is None:
-        return None
-    source_type = rule.get("ruleset_source_type")
-    if source_type == "Repository":
-        return f"repos/{source}/rulesets/{ruleset_id}"
-    if source_type == "Organization":
-        return f"orgs/{source}/rulesets/{ruleset_id}"
-    return None
-
-
 def _user_id(login: str) -> int | None:
     """The numeric GitHub user id for a login, which is how a `User` bypass
     actor names its principal."""
@@ -225,14 +205,19 @@ def _user_id(login: str) -> int | None:
         return None
 
 
-def _ruleset_blocks_bot(endpoint: str, bot_name: str) -> bool | None:
+def _ruleset_blocks_bot(repo: str, ruleset_id: int, bot_name: str) -> bool | None:
     """Whether a ruleset's bypass list keeps a write-access bot out.
+
+    The repo-scoped endpoint serves organization- and enterprise-sourced
+    rulesets too, so any applying ruleset can be fetched here.
 
     Returns True if every bypass actor outranks the bot, False if one of them
     is the bot itself or a role at write or below, None if the ruleset can't be
-    read or names a principal this can't resolve (a team, app, or deploy key).
+    verified: unreadable, a bypass list GitHub withholds (only ruleset admins
+    see `bypass_actors`), or a principal this can't resolve (a team, app, or
+    deploy key).
     """
-    result = _gh("api", endpoint)
+    result = _gh("api", f"repos/{repo}/rulesets/{ruleset_id}")
     if result is None or result.returncode != 0:
         return None
     try:
@@ -242,7 +227,9 @@ def _ruleset_blocks_bot(endpoint: str, bot_name: str) -> bool | None:
     if not isinstance(data, dict):
         return None
 
-    actors = data.get("bypass_actors") or []
+    actors = data.get("bypass_actors")
+    if actors is None:
+        return None
     # A user exemption is decidable: the bot's login resolves to the id the
     # actor names. Naming the bot is the worst case — an explicit grant of the
     # merge the restriction exists to deny.
@@ -298,8 +285,12 @@ def _has_restrict_updates_ruleset(repo: str, branch: str, bot_name: str) -> bool
     # ruleset is unverified, not absent.
     unresolved = False
     for rule in update_rules:
-        endpoint = _ruleset_endpoint(rule)
-        verdict = _ruleset_blocks_bot(endpoint, bot_name) if endpoint else None
+        ruleset_id = rule.get("ruleset_id")
+        verdict = (
+            _ruleset_blocks_bot(repo, ruleset_id, bot_name)
+            if ruleset_id is not None
+            else None
+        )
         if verdict is True:
             return True
         unresolved = unresolved or verdict is None
