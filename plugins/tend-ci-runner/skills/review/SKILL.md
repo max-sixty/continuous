@@ -231,9 +231,12 @@ FAILED=$(gh pr view <number> --json statusCheckRollup \
          | select((.conclusion // .state) == "FAILURE")
          | .name // .context // "unknown"] | join(", ")')
 PENDING=$(gh pr view <number> --json statusCheckRollup \
-  --jq '[.statusCheckRollup[]
-         | (.status // .state)
-         | select(IN(["IN_PROGRESS","QUEUED","PENDING","WAITING","REQUESTED","EXPECTED"][]))] | length')
+  | jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
+      [.statusCheckRollup[]
+       | select((.detailsUrl // .targetUrl // "") | test($own) | not)
+       | select((.workflowName // "") == $wf | not)
+       | (.status // .state)
+       | select(IN(["IN_PROGRESS","QUEUED","PENDING","WAITING","REQUESTED","EXPECTED"][]))] | length')
 ```
 
 **Don't treat a mid-flight rollup as settled.** A `FAILURE` co-existing with checks still in flight (`$PENDING > 0`) is often a *stale cancellation-cascade* artifact, not a real failure: when several events fire near-simultaneously (e.g. Dependabot opening a PR), the `tests` concurrency group cancels all but the latest, and a cancelled contributor makes an `if: always()` merge-gate omnibus (like PRQL's `check-ok-to-merge`) resolve to conclusion `FAILURE` — *not* `cancelled`, so it slips past the post-approve cancellation awareness below and reads as red. A fresh replacement run is already in flight and will re-register the omnibus. So decide on the **settled** rollup:
