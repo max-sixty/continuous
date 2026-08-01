@@ -45,7 +45,10 @@ Four pieces:
      PTY). `claude-interactive` is kept in case the paused 2026-06-15
      metering resumes, since it covered `claude -p` but not interactive
      sessions. While it stays paused the two bill identically and nothing
-     else distinguishes them.
+     else distinguishes them, so it is supported but undocumented: the
+     generator accepts `harness: claude-interactive`, and the adopter-facing
+     docs (README, `tend.example.yaml`, install-tend, security model) leave
+     it out.
    - `max-sixty/tend/codex@X.Y.Z` (Codex) — installs `@openai/codex` and
      shells out to `codex exec`. Skills are staged on disk and an
      `AGENTS.md` in `$CODEX_HOME` teaches Codex to resolve
