@@ -42,9 +42,10 @@ Four pieces:
      step bodies as scripts under `shared/steps/`; they differ only in how
      completion is supervised — headless `-p` exit code vs the PTY Stop-hook
      sentinel. `claude` is the default and recommended path (simpler, no
-     PTY); `claude-interactive` is a footnoted variant. Both bill against
-     the Claude subscription — the 2026-06-15 per-token metering that once
-     distinguished them is paused.
+     PTY). `claude-interactive` is kept in case the paused 2026-06-15
+     metering resumes, since it covered `claude -p` but not interactive
+     sessions. While it stays paused the two bill identically and nothing
+     else distinguishes them.
    - `max-sixty/tend/codex@X.Y.Z` (Codex) — installs `@openai/codex` and
      shells out to `codex exec`. Skills are staged on disk and an
      `AGENTS.md` in `$CODEX_HOME` teaches Codex to resolve

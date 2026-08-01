@@ -29,7 +29,13 @@ Tend has Claude-powered workflows beyond the generated `tend-*` set:
 
 These use the tend composite action and produce `claude-session-logs*` artifacts,
 but their names don't match the `tend-*` prefix that scripts filter on by
-default.
+default. `uvx tend@latest init` doesn't rewrite them either, so their
+`max-sixty/tend/<harness>@X.Y.Z` pins move only when someone edits the file.
+When a regen bumps the generated workflows, restamp these to match:
+
+```bash
+rg 'max-sixty/tend/' .github/workflows/   # every ref: same harness, same tag
+```
 
 ### Usage analysis
 

@@ -249,5 +249,10 @@ MIT
 
 [^interactive]: A third harness, `claude-interactive`, runs the same
     `claude` binary under a PTY supervisor (`script(1)` with a `Stop`-hook
-    sentinel) instead of headless `-p`. Same proxy isolation and auth as the
-    default Claude harness. Opt in with `harness: claude-interactive`.
+    sentinel) rather than headless `-p`. Same proxy isolation, auth, and
+    billing as the default Claude harness. It's kept in case Anthropic's
+    [paused subscription
+    change](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+    resumes; it would meter `claude -p` but not interactive sessions.
+    While it stays paused, `claude` does the same job with less machinery.
+    Opt in with `harness: claude-interactive`.

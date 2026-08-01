@@ -1,15 +1,14 @@
 name: Tend (Claude interactive)
 description: >-
-  Tend's interactive-Claude harness: runs the official `claude` binary
-  inside a PTY (via `script(1)`) instead of going through
-  `claude-code-action` / `@anthropic-ai/claude-agent-sdk`. A Stop hook
-  writes a sentinel file the supervisor watches for; on fire, the session
-  is terminated cleanly. Inputs
-  overlap with `action.yaml`'s for the common ones (auth, prompt, model,
-  bot_name, allowed_tools, system_prompt_append, show_full_output); inputs
-  that only existed for the Agent-SDK harness (`use_sticky_comment`,
-  `additional_permissions`, `allowed_bots`, `allowed_non_write_users`)
-  are not accepted here.
+  Tend's PTY-supervised Claude harness: runs the official `claude` binary
+  inside a PTY (via `script(1)`) rather than headless `claude -p`. A Stop
+  hook writes a sentinel file the supervisor watches for; on fire, the
+  session is terminated cleanly. Everything else matches
+  `claude/action.yaml`: same inputs and defaults (a pre-commit hook fails
+  the commit if the two surfaces drift), same sandbox user, same credential
+  proxy, same billing. It exists in case Anthropic's paused subscription
+  change resumes; that change would meter `claude -p` but not interactive
+  sessions. `claude` is the default and recommended harness.
 
 inputs:
   github_token:
