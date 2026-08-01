@@ -17,7 +17,8 @@ concurrency:
 
 jobs:
   triage:
-    if: github.repository_owner == 'max-sixty' && contains(github.event.issue.labels.*.name, 'tend-outage') == false
+    if: github.repository_owner == 'max-sixty' && contains(github.event.issue.labels.*.name, 'tend-outage') == false && contains(github.event.issue.labels.*.name, 'review-reviewers-tracking') == false
+      && contains(github.event.issue.labels.*.name, 'review-runs-tracking') == false
     runs-on: ubuntu-24.04
     permissions:
       contents: write

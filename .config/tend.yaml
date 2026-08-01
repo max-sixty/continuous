@@ -6,3 +6,21 @@ setup:
 workflows:
   ci-fix:
     watched_workflows: ["ci"]
+  triage:
+    # Skip triage on the bot's own monthly bookkeeping issues. The
+    # review-reviewers / review-runs workflows auto-open these on the 1st of
+    # each month; the `issues: opened` event otherwise fires a full tend-triage
+    # agent run that reads the issue and exits silently via the
+    # self-conversation guard — pure wasted compute, recurring every month.
+    # This mirrors the base template's `tend-outage` label skip. These two
+    # labels are tend-specific (no adopter has these workflows), so the skip
+    # lives here in tend's config rather than the generic generator default.
+    # NOTE: `if` is scalar-replaced (RFC 7396), so this restates the base
+    # condition (fork guard + tend-outage skip) and appends the two labels.
+    jobs:
+      triage:
+        if: >-
+          github.repository_owner == 'max-sixty'
+          && contains(github.event.issue.labels.*.name, 'tend-outage') == false
+          && contains(github.event.issue.labels.*.name, 'review-reviewers-tracking') == false
+          && contains(github.event.issue.labels.*.name, 'review-runs-tracking') == false
