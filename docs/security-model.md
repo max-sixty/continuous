@@ -65,18 +65,19 @@ load-bearing.
 
 **Action distribution integrity.** Generated workflows pin the composite
 action to the generator's own release version
-(`max-sixty/tend/<harness>@X.Y.Z`), never a floating ref. Release-tag immutability is the boundary this relies on: a
-`tag` ruleset on `max-sixty/tend` restricts `update` and `deletion` (leaving
-`creation` open so the release can push a new `X.Y.Z`), with no bypass for
-write-access actors. That ruleset is applied out of band; until it is in
-place the boundary holds by convention, not enforcement, and anyone with
-write access on `max-sixty/tend` can rewrite a published tag. Once enforced,
-a leaked bot token or hijacked session cannot move a published tag and
+(`max-sixty/tend/<harness>@X.Y.Z`), never a floating ref. Release-tag
+immutability is the boundary this relies on: a `tag` ruleset on
+`max-sixty/tend` restricts `update` and `deletion` on `refs/tags/[0-9]*`
+and lists no bypass actors at all, so a published release tag cannot be
+moved or deleted by anyone. Unlike the merge restriction, an admin session
+does not void it. `creation` stays open so a release can push a new
+`X.Y.Z`. A leaked bot token or hijacked session therefore cannot
 retroactively change the code every adopter already runs; the worst it can
-do is push a new release tag, which adopters only pick up on their next
-nightly regen, as a reviewable workflow-file diff in their own repo. Adopters extend trust to `max-sixty/tend`'s release-tag integrity the
-same way they trust any third-party action's publisher; pinning to `X.Y.Z`
-(or a commit SHA) bounds that trust to a reviewed, immutable point.
+do is add a release tag, which adopters only pick up on their next nightly
+regen, as a reviewable workflow-file diff in their own repo. Adopters
+extend trust to `max-sixty/tend`'s release-tag integrity the same way they
+trust any third-party action's publisher; pinning to `X.Y.Z` (or a commit
+SHA) bounds that trust to a reviewed, immutable point.
 
 **Config pinning.** Both Claude harnesses (`claude/action.yaml` and
 `claude-interactive/action.yaml`) restore RCE-relevant config from the PR base branch
