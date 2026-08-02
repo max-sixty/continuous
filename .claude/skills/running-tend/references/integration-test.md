@@ -30,8 +30,8 @@ never pipe `$GITHUB_TOKEN` or `$CLAUDE_CODE_OAUTH_TOKEN` into
 `gh secret set`. The exported value is the placeholder (or empty), and
 the receiving repo's auth breaks. The fixture's secrets are owned by
 the `integration-secrets` workflow in `max-sixty/tend`, which copies
-this repo's real secrets to the fixture, outside the sandbox. §1
-dispatches it every run.
+this repo's real secrets into the fixture's `tend` environment (creating
+it if missing), outside the sandbox. §1 dispatches it every run.
 
 The bot PAT carries the `workflow` scope (so §5's self-heal push of
 generated workflow files succeeds through the proxy) but **does not**
