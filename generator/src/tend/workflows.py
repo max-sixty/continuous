@@ -229,21 +229,6 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
 
 
-_MENTION_RELAY_TMPL = _JINJA.get_template("mention-relay.yaml.j2")
-
-
-def generate_mention_relay(cfg: Config) -> GeneratedWorkflow:
-    """The secretless half of mention: review events in, `repository_dispatch` out.
-
-    Rendered from mention's own effective config so the bot name and fork guard
-    match the workflow it feeds.
-    """
-    wf = cfg.workflows.get("mention", WorkflowConfig())
-    eff = _effective_cfg(cfg, wf)
-    content = _MENTION_RELAY_TMPL.render(cfg=eff)
-    return GeneratedWorkflow(filename="tend-mention-relay.yaml", content=content)
-
-
 # ---------------------------------------------------------------------------
 # Triage
 # ---------------------------------------------------------------------------
@@ -512,7 +497,6 @@ jobs:
 GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
     "review": generate_review,
     "mention": generate_mention,
-    "mention-relay": generate_mention_relay,
     "triage": generate_triage,
     "ci-fix": generate_ci_fix,
     "nightly": lambda cfg: _generate_scheduled(cfg, "nightly"),
@@ -536,13 +520,6 @@ def generate_all(
     for name, gen_fn in GENERATORS.items():
         wf_cfg = cfg.workflows.get(name, WorkflowConfig())
         if not wf_cfg.enabled:
-            continue
-        # The relay has no purpose without the workflow it dispatches to, and
-        # is configured through that workflow's entry rather than its own.
-        if (
-            name == "mention-relay"
-            and not cfg.workflows.get("mention", WorkflowConfig()).enabled
-        ):
             continue
         if name == "ci-fix" and wf_cfg.watched_workflows is None:
             click.echo(

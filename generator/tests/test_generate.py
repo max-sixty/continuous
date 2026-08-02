@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from textwrap import dedent
 
 import pytest
-from tests import agent_workflows, ACTION_VERSION
+from tests import ACTION_VERSION
 from tests import _yaml as yaml
 import click
 from click.testing import CliRunner
@@ -19,7 +20,6 @@ from tend.workflows import (
     generate_all,
     generate_install_test,
     generate_mention,
-    generate_mention_relay,
 )
 
 
@@ -30,17 +30,15 @@ def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     return cfg
 
 
-def test_minimal_config_generates_eight_workflows(tmp_path: Path) -> None:
-    """ci-fix requires watched_workflows, so minimal config produces eight:
-    seven agent workflows plus mention's secretless relay."""
+def test_minimal_config_generates_seven_workflows(tmp_path: Path) -> None:
+    """ci-fix requires watched_workflows, so minimal config produces seven."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = generate_all(cfg)
-    assert len(workflows) == 8
+    assert len(workflows) == 7
     names = {wf.filename for wf in workflows}
     assert names == {
         "tend-review.yaml",
         "tend-mention.yaml",
-        "tend-mention-relay.yaml",
         "tend-triage.yaml",
         "tend-nightly.yaml",
         "tend-weekly.yaml",
@@ -65,7 +63,7 @@ def test_disabled_workflow_not_generated(tmp_path: Path) -> None:
     workflows = generate_all(cfg)
     names = {wf.filename for wf in workflows}
     assert "tend-weekly.yaml" not in names
-    assert len(workflows) == 7
+    assert len(workflows) == 6
 
 
 def test_setup_steps_rendered(tmp_path: Path) -> None:
@@ -75,7 +73,7 @@ def test_setup_steps_rendered(tmp_path: Path) -> None:
           - run: echo FOO=bar >> $GITHUB_ENV
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in agent_workflows(cfg):
+    for wf in generate_all(cfg):
         assert "./.github/actions/my-setup" in wf.content, (
             f"{wf.filename} missing uses step"
         )
@@ -265,7 +263,7 @@ def test_custom_secrets(tmp_path: Path) -> None:
           anthropic_api_key: MY_API_KEY
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in agent_workflows(cfg):
+    for wf in generate_all(cfg):
         assert "MY_BOT_PAT" in wf.content, f"{wf.filename} missing custom bot token"
         assert "MY_CLAUDE" in wf.content, f"{wf.filename} missing custom claude token"
         assert "MY_API_KEY" in wf.content, (
@@ -276,7 +274,7 @@ def test_custom_secrets(tmp_path: Path) -> None:
 def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:
     """Claude agent step references both OAuth token and API key secrets."""
     cfg = Config.load(_minimal_config(tmp_path))
-    for wf in agent_workflows(cfg):
+    for wf in generate_all(cfg):
         assert (
             "claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
             in wf.content
@@ -287,6 +285,45 @@ def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:
         assert "openai_api_key" not in wf.content, (
             f"{wf.filename} should not reference openai_api_key under claude"
         )
+
+
+def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
+    """A job names the environment exactly when it reads an operational secret.
+
+    The environment's deployment branch policy is what keeps a pushed workflow
+    from reading the secrets out of its own run, so a secret-bearing job that
+    forgets to name it reopens that hole. The converse matters too: a job
+    holding no secret (mention's relay) must not name it, or it loses the refs
+    the policy excludes for nothing — and for the relay those refs are the
+    whole point. `secrets.GITHUB_TOKEN` is workflow-scoped, not stored, so it
+    doesn't count."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    for wf in generate_all(cfg):
+        data = yaml.safe_load(wf.content)
+        for job_name, job in data["jobs"].items():
+
+            def _strings(x: object) -> list[str]:
+                if isinstance(x, str):
+                    return [x]
+                if isinstance(x, dict):
+                    return [s for v in x.values() for s in _strings(v)]
+                if isinstance(x, list):
+                    return [s for v in x for s in _strings(v)]
+                return []
+
+            reads_secret = any(
+                ref != "secrets.GITHUB_TOKEN"
+                for s in _strings(job)
+                for ref in re.findall(r"secrets\.[A-Za-z0-9_]+", s)
+            )
+            assert (job.get("environment") == "tend") == reads_secret, (
+                f"{wf.filename}:{job_name} "
+                + (
+                    "reads an operational secret without naming the environment"
+                    if reads_secret
+                    else "names the environment but holds no secret"
+                )
+            )
 
 
 def test_custom_prompt(tmp_path: Path) -> None:
@@ -346,10 +383,10 @@ def test_cli_init_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     runner = CliRunner()
     result = runner.invoke(main, ["init"])
     assert result.exit_code == 0
-    assert "Generated 8 workflow files" in result.output
+    assert "Generated 7 workflow files" in result.output
     wf_dir = tmp_path / ".github" / "workflows"
     assert wf_dir.exists()
-    assert len(list(wf_dir.glob("tend-*.yaml"))) == 8
+    assert len(list(wf_dir.glob("tend-*.yaml"))) == 7
 
 
 def test_review_probes_merge_ref_and_falls_back_to_head(tmp_path: Path) -> None:
@@ -402,33 +439,47 @@ def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
 
 
 def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
-    """A submitted review must still reach the bot on an engaged PR — now via
-    tend-mention-relay, which converts it into a repository_dispatch so the run
-    that holds the secrets carries a ref their environment admits."""
+    """A submitted review must still reach the bot on an engaged PR — via the
+    secretless relay job, which re-enters the event as a repository_dispatch so
+    the run holding the secrets carries a ref their environment admits."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
     data = yaml.safe_load(mention.content)
 
-    # The review events reach mention as a relayed dispatch: they carry
-    # refs/pull/N/merge, which the secrets' environment does not admit.
+    # The review events' own runs carry refs/pull/N/merge, which the secrets'
+    # environment does not admit, so they may reach only the relay job.
+    assert data["on"]["pull_request_review"] == {"types": ["submitted"]}
     assert data["on"]["repository_dispatch"] == {"types": ["tend-mention-review"]}
-    assert "pull_request_review" not in data["on"], (
-        "tend-mention must not subscribe to review events directly — their ref "
-        "is excluded by the environment holding the secrets"
-    )
-    verify_if = data["jobs"]["verify"]["if"]
-    assert "repository_dispatch" in verify_if
-    assert "issue_comment" in verify_if
-
-    relay = yaml.safe_load(workflows["tend-mention-relay.yaml"].content)
-    assert relay["on"]["pull_request_review"] == {"types": ["submitted"]}
+    relay = data["jobs"]["relay"]
+    assert "pull_request_review" in relay["if"]
     # The relay holds no secrets, so it is where the fork filter now lives.
-    assert "pull_request.head.repo.full_name" in relay["jobs"]["relay"]["if"]
-    assert "environment" not in relay["jobs"]["relay"], (
+    assert "pull_request.head.repo.full_name" in relay["if"]
+    assert "environment" not in relay, (
         "the relay must stay outside the secrets' environment — naming it "
         "would block the very refs it exists to accept"
     )
+    assert relay["permissions"] == {"contents": "read"}
+    # Identifiers only: verify re-reads the review from the API, so nothing
+    # judged downstream comes from the forgeable dispatch payload.
+    relay_run = relay["steps"][-1]["run"]
+    assert "client_payload[kind]" in relay_run
+    assert "client_payload[pr]" in relay_run
+    assert "client_payload[id]" in relay_run
+    assert "client_payload[url]" not in relay_run
+
+    # The secret-bearing jobs must not run on the review events themselves.
+    verify_if = data["jobs"]["verify"]["if"]
+    assert "repository_dispatch" in verify_if
+    assert "pull_request_review" not in verify_if
+
+    # A dispatch is judged against the API record, not waved through: the
+    # check script resolves {kind, pr, id} and rejects what it can't confirm.
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    assert "/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID" in check_step["run"]
+    assert "/pulls/comments/$PAYLOAD_ID" in check_step["run"]
 
     # Handle job checks out PR branch for this event
     handle_steps = data["jobs"]["handle"]["steps"]
@@ -437,17 +488,19 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
     )
     assert "repository_dispatch" in checkout_step["if"]
 
-    # Prompt includes review-specific branches
+    # Prompt keeps the review-kind and mention/participation branches apart,
+    # keyed on the payload's kind and verify's judged reason — never on a
+    # reason the payload itself claims.
     tend_step = next(
         s
         for s in handle_steps
         if s.get("uses", "").startswith("max-sixty/tend/claude@")
     )
     prompt = tend_step["with"]["prompt"]
-    # The relay decided *why* the bot is being woken; the prompt keeps the two
-    # response modes apart rather than re-deriving them from the payload text.
-    assert "github.event.client_payload.url" in prompt
-    assert "github.event.client_payload.reason == 'mention'" in prompt
+    assert "needs.verify.outputs.reason == 'mention'" in prompt
+    assert "needs.verify.outputs.url" in prompt
+    assert "client_payload.kind == 'pull_request_review'" in prompt
+    assert "client_payload.reason" not in prompt
 
 
 def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
@@ -468,11 +521,11 @@ def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
     to an existing comment after the fact)."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    relay = workflows["tend-mention-relay.yaml"]
-    data = yaml.safe_load(relay.content)
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
     assert data["on"]["pull_request_review_comment"] == {"types": ["edited"]}, (
         "pull_request_review_comment must subscribe to ['edited'] only — see "
-        "the trigger comment in generate_mention for the dedup rationale"
+        "the trigger comment in the mention template for the dedup rationale"
     )
 
 
@@ -495,16 +548,16 @@ def test_mention_verify_detects_inline_mentions_on_review(tmp_path: Path) -> Non
     and verify must detect the mention via the API."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    relay = workflows["tend-mention-relay.yaml"]
-    data = yaml.safe_load(relay.content)
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
     check_step = next(
-        s for s in data["jobs"]["relay"]["steps"] if s.get("id") == "check"
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
 
-    # The fetch must target the specific review's inline comments by review_id
-    assert "/reviews/$REVIEW_ID/comments" in check_step["run"], (
-        "verify must fetch inline comments for pull_request_review events via "
-        "the /pulls/{n}/reviews/{review_id}/comments endpoint"
+    # The fetch must target the specific review's inline comments by id
+    assert "/reviews/$PAYLOAD_ID/comments" in check_step["run"], (
+        "verify must fetch inline comments for pull_request_review dispatches "
+        "via the /pulls/{n}/reviews/{review_id}/comments endpoint"
     )
     # And grep their bodies for the bot mention (test-bot is the bot_name in
     # _minimal_config). grep -qF means fixed-string, quiet — same shape as the
@@ -513,17 +566,15 @@ def test_mention_verify_detects_inline_mentions_on_review(tmp_path: Path) -> Non
         "verify must grep the fetched inline comment bodies for the bot mention"
     )
 
-    # The fetch must be gated on event_name == 'pull_request_review' so it
-    # doesn't fire for issue_comment / issues / pull_request_review_comment.
-    assert '[ "$EVENT_NAME" = "pull_request_review" ]' in check_step["run"], (
+    # The fetch must be gated on the review kind so it doesn't fire for
+    # issue_comment / issues / pull_request_review_comment.
+    assert '[ "$KIND" = "pull_request_review" ]' in check_step["run"], (
         "the inline-mention fetch must only run for pull_request_review events"
     )
 
-    # REVIEW_ID env var must be wired from the event payload
-    assert check_step["env"]["REVIEW_ID"] == "${{ github.event.review.id }}", (
-        "REVIEW_ID env var must be set from github.event.review.id so the "
-        "fetch can target the right review"
-    )
+    # The ids must be wired from the dispatch payload
+    assert check_step["env"]["PAYLOAD_ID"] == "${{ github.event.client_payload.id }}"
+    assert check_step["env"]["PAYLOAD_PR"] == "${{ github.event.client_payload.pr }}"
 
 
 def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> None:
@@ -541,8 +592,8 @@ def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> No
     is the public-API-visible discriminator (Bot vs User)."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    relay = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(relay.content)
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
     check_step = next(
         s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
@@ -588,8 +639,8 @@ def test_mention_verify_skips_self_authored_comments(tmp_path: Path) -> None:
     guard, and there is no legitimate self-summons."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    relay = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(relay.content)
+    mention = workflows["tend-mention.yaml"]
+    data = yaml.safe_load(mention.content)
     check_step = next(
         s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
@@ -607,17 +658,14 @@ def test_mention_verify_skips_self_authored_comments(tmp_path: Path) -> None:
         "itself — its User-type account is missed by the Bot-type check"
     )
 
-    # The guard must cover both comment event types that take the engagement
-    # path: issue_comment and pull_request_review_comment (subscribed for
-    # `edited`), both of which carry github.event.comment.user.login.
-    assert '"$EVENT_NAME" = "issue_comment"' in run
-    relay_data = yaml.safe_load(workflows["tend-mention-relay.yaml"].content)
-    relay_run = next(
-        s for s in relay_data["jobs"]["relay"]["steps"] if s.get("id") == "check"
-    )["run"]
-    assert '"$EVENT_NAME" = "pull_request_review_comment"' in relay_run, (
-        "the relay must carry the same self-authored guard for inline "
-        "comments — it takes the same engagement-heuristic path"
+    # The guard must cover both comment kinds that take the engagement path:
+    # issue_comment (COMMENT_AUTHOR from the event) and
+    # pull_request_review_comment (COMMENT_AUTHOR resolved from the relayed
+    # dispatch's API fetch).
+    assert '"$KIND" = "issue_comment"' in run
+    assert '"$KIND" = "pull_request_review_comment"' in run, (
+        "the self-authored guard must cover relayed inline comments — they "
+        "take the same engagement-heuristic path"
     )
 
     # The self-authored guard must run *before* the @-mention check: a bot
@@ -745,25 +793,24 @@ def test_mention_skips_bot_approved_review(tmp_path: Path) -> None:
     COMMENTED review keeps actionable signal, and an approval carrying nits in
     its body may warrant follow-up changes, so both still fire (#166)."""
     cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention_relay(cfg)
+    wf = generate_mention(cfg)
     data = yaml.safe_load(wf.content)
     check_step = next(
-        s for s in data["jobs"]["relay"]["steps"] if s.get("id") == "check"
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
     script = check_step["run"]
-    # Gate on the (lowercase, per the webhook payload) approved state and an
-    # empty review body, so only no-op approvals are skipped.
-    assert "REVIEW_STATE" in script
-    assert "approved" in script
-    assert '[ -z "$REVIEW_BODY" ]' in script
+    # Gate on the approved state and an empty review body, so only no-op
+    # approvals are skipped. The record comes from REST, which reports the
+    # state uppercase, so the resolution step must normalize it before the
+    # gate compares against "approved".
+    assert '[ "$REVIEW_STATE" = "approved" ]' in script
+    assert ".state | ascii_downcase" in script
+    assert '[ -z "$COMMENT_BODY" ]' in script
     # The skip must precede the BOT_REVIEWS heuristic query that would
     # otherwise count the just-submitted review and return should_run=true.
-    assert script.index("REVIEW_STATE") < script.index("BOT_REVIEWS=$(")
-    # REVIEW_STATE/REVIEW_AUTHOR must be wired into the env block;
-    # COMMENT_BODY (review.body for a review event) is already present.
-    env = check_step["env"]
-    assert "REVIEW_STATE" in env
-    assert "REVIEW_AUTHOR" in env
+    assert script.index('[ "$REVIEW_STATE" = "approved" ]') < script.index(
+        "BOT_REVIEWS=$("
+    )
 
 
 def test_mention_self_comment_skip_spares_review_submissions(
@@ -785,37 +832,37 @@ def test_mention_self_comment_skip_spares_review_submissions(
     extend to the review submission, and a COMMENTED / non-empty-body bot
     self-review must fall through to should_run=true."""
     cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention_relay(cfg)
+    wf = generate_mention(cfg)
     data = yaml.safe_load(wf.content)
     check_step = next(
-        s for s in data["jobs"]["relay"]["steps"] if s.get("id") == "check"
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
     run = check_step["run"]
 
     # Isolate the self-authored-comment guard, from its opening condition to the
     # @-mention check that follows it.
     guard = run[
-        run.index('if [ "$EVENT_NAME" = "pull_request_review_comment"') : run.index(
+        run.index('if { [ "$KIND" = "issue_comment" ]') : run.index(
             "grep -qF '@test-bot'"
         )
     ]
-    # The skip keys on the bot as commenter over the two comment events; the
-    # review *submission* event (a bare pull_request_review equality, distinct
+    # The skip keys on the bot as commenter over the two comment kinds; the
+    # review *submission* kind (a bare pull_request_review equality, distinct
     # from pull_request_review_comment) is deliberately absent, so a bot
     # self-review is never short-circuited here.
     assert '[ "$COMMENT_AUTHOR" = "test-bot" ]' in guard
-    assert '[ "$EVENT_NAME" = "pull_request_review_comment" ]' in guard
-    assert '[ "$EVENT_NAME" = "pull_request_review" ]' not in guard, (
+    assert '[ "$KIND" = "pull_request_review_comment" ]' in guard
+    assert '[ "$KIND" = "pull_request_review" ]' not in guard, (
         "self-authored-comment skip must not extend to the pull_request_review "
-        "submission event — a bot self-review is actionable reviewer signal"
+        "submission kind — a bot self-review is actionable reviewer signal"
     )
 
     # The sole author-keyed skip for a review submission is the terminal
     # empty-body APPROVED gate; a COMMENTED / non-empty-body bot self-review
     # falls through to the actionable PR_AUTHOR == bot short-circuit.
-    review_skip = run[run.index('[ "$EVENT_NAME" = "pull_request_review" ]') :]
+    review_skip = run[run.index('[ "$KIND" = "pull_request_review" ]') :]
     assert '[ "$REVIEW_STATE" = "approved" ]' in review_skip
-    assert '[ -z "$REVIEW_BODY" ]' in review_skip
+    assert '[ -z "$COMMENT_BODY" ]' in review_skip
     assert '[ "$PR_AUTHOR" = "test-bot" ]' in run, (
         "a bot self-review that isn't the terminal empty approval must reach "
         "the actionable PR_AUTHOR == bot short-circuit"
@@ -1324,7 +1371,7 @@ def test_install_test_honors_workflow_extras(tmp_path: Path) -> None:
 def test_codex_action_ref(tmp_path: Path) -> None:
     """Codex workflows reference max-sixty/tend/codex@<release tag>."""
     cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
-    for wf in agent_workflows(cfg):
+    for wf in generate_all(cfg):
         assert f"max-sixty/tend/codex@{ACTION_VERSION}" in wf.content, (
             f"{wf.filename} missing codex action ref"
         )
@@ -1336,7 +1383,7 @@ def test_codex_action_ref(tmp_path: Path) -> None:
 def test_codex_workflows_use_openai_secrets_not_claude(tmp_path: Path) -> None:
     """Codex agent step references OPENAI_API_KEY, not Claude or auth.json."""
     cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
-    for wf in agent_workflows(cfg):
+    for wf in generate_all(cfg):
         assert "openai_api_key: ${{ secrets.OPENAI_API_KEY }}" in wf.content, (
             f"{wf.filename} missing openai_api_key input"
         )
@@ -1351,7 +1398,7 @@ def test_codex_workflows_use_openai_secrets_not_claude(tmp_path: Path) -> None:
 def test_codex_effort_only_when_set(tmp_path: Path) -> None:
     """effort: renders only when configured."""
     cfg_default = Config.load(_minimal_config(tmp_path, "harness: codex"))
-    for wf in agent_workflows(cfg_default):
+    for wf in generate_all(cfg_default):
         assert "effort:" not in wf.content, (
             f"{wf.filename} should omit effort when unset"
         )
@@ -1359,7 +1406,7 @@ def test_codex_effort_only_when_set(tmp_path: Path) -> None:
     cfg_with_effort = Config.load(
         _minimal_config(tmp_path, "harness: codex\neffort: high")
     )
-    for wf in agent_workflows(cfg_with_effort):
+    for wf in generate_all(cfg_with_effort):
         assert "effort: high" in wf.content, f"{wf.filename} missing effort: high"
 
 

@@ -58,7 +58,6 @@ def test_init_creates_correct_files_with_valid_yaml(
     wf_dir = _workflow_dir(tmp_path)
     files = sorted(p.name for p in wf_dir.glob("tend-*.yaml"))
     assert files == [
-        "tend-mention-relay.yaml",
         "tend-mention.yaml",
         "tend-nightly.yaml",
         "tend-notifications.yaml",
@@ -72,13 +71,9 @@ def test_init_creates_correct_files_with_valid_yaml(
         data = yaml.safe_load(path.read_text())
         assert "name" in data, f"{path.name} missing 'name'"
         assert "jobs" in data, f"{path.name} missing 'jobs'"
-        # Every workflow that runs an agent pins the tend composite action.
-        # tend-mention-relay runs none — it converts the review events into a
-        # repository_dispatch and holds no secrets.
-        if path.name != "tend-mention-relay.yaml":
-            assert f"max-sixty/tend/claude@{ACTION_VERSION}" in path.read_text(), (
-                f"{path.name} missing action reference"
-            )
+        assert f"max-sixty/tend/claude@{ACTION_VERSION}" in path.read_text(), (
+            f"{path.name} missing action reference"
+        )
 
 
 def test_init_workflows_have_correct_triggers(
@@ -123,11 +118,19 @@ def test_init_workflows_have_required_permissions(
     _run_init()
 
     wf_dir = _workflow_dir(tmp_path)
+    checked = 0
     for path in wf_dir.glob("tend-*.yaml"):
         data = yaml.safe_load(path.read_text())
         for job_name, job in data["jobs"].items():
-            if "permissions" not in job:
-                continue  # mention's verify job has no permissions block
+            # The invariant binds the jobs that run the agent; mention's
+            # verify job has no permissions block, and its relay job requests
+            # contents: read only — by design, it holds no secrets.
+            if not any(
+                s.get("uses", "").startswith("max-sixty/tend/")
+                for s in job.get("steps", [])
+            ):
+                continue
+            checked += 1
             perms = job["permissions"]
             assert perms.get("contents") == "write", (
                 f"{path.name}:{job_name} missing contents:write"
@@ -138,6 +141,7 @@ def test_init_workflows_have_required_permissions(
             assert perms.get("id-token") == "write", (
                 f"{path.name}:{job_name} missing id-token:write"
             )
+    assert checked == 7, "every workflow must contribute one agent job"
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +439,7 @@ def test_init_then_check_combined_flow(
     # Step 1: init
     init_result = runner.invoke(main, ["init"])
     assert init_result.exit_code == 0
-    assert "Generated 8 workflow files" in init_result.output
+    assert "Generated 7 workflow files" in init_result.output
     assert "tend check" in init_result.output  # reminder to run check
 
     # Step 2: check (mocked)
@@ -583,7 +587,7 @@ def test_init_with_install_test_generates_extra_file(
     wf_dir = _workflow_dir(tmp_path)
     files = sorted(p.name for p in wf_dir.glob("tend-*.yaml"))
     assert "tend-install-test.yaml" in files
-    assert len(files) == 9  # 7 agent workflows + mention relay + install-test
+    assert len(files) == 8  # 7 agent workflows + install-test
 
 
 def test_init_without_flag_omits_install_test(
