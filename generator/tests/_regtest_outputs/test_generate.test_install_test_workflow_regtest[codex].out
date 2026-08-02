@@ -15,7 +15,7 @@ on:
 
 jobs:
   install-test:
-    # Same-repo PRs only. Fork PRs don't carry secrets and the workflow
+    # Same-repo PRs only. Fork PRs are out of scope and the workflow
     # is short-lived (removed on the next nightly regen), so cross-fork
     # validation isn't worth special-casing.
     if: github.event.pull_request.head.repo.full_name == github.repository
@@ -25,20 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
-      - name: Verify required secrets are set
-        env:
-          BOT_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
-          OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          missing=""
-          [ -n "$BOT_TOKEN" ] || missing="$missing TEND_BOT_TOKEN"
-          if [ -z "$OPENAI_KEY" ]; then
-            missing="$missing harness-auth(set OPENAI_API_KEY)"
-          fi
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repo secrets:$missing"
-            exit 1
-          fi
       - name: Verify generator output matches committed files
         env:
           GH_TOKEN: ${{ github.token }}

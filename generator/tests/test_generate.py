@@ -296,7 +296,9 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
     holding no secret (mention's relay) must not name it, or it loses the refs
     the policy excludes for nothing — and for the relay those refs are the
     whole point. `secrets.GITHUB_TOKEN` is workflow-scoped, not stored, so it
-    doesn't count."""
+    doesn't count. install-test is included: it runs on `pull_request`, whose
+    merge ref the policy refuses, so it may neither read a secret nor name
+    the environment."""
 
     def _strings(x: object) -> list[str]:
         if isinstance(x, str):
@@ -308,7 +310,7 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
         return []
 
     cfg = Config.load(_minimal_config(tmp_path))
-    for wf in generate_all(cfg):
+    for wf in generate_all(cfg, with_install_test=True):
         data = yaml.safe_load(wf.content)
         for job_name, job in data["jobs"].items():
             reads_secret = any(

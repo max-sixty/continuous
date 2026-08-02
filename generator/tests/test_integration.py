@@ -706,8 +706,11 @@ def test_init_dry_run_previews_cleanup(
 def test_install_test_workflow_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The install-test workflow has the expected trigger, fork-PR skip,
-    secret-existence check, and generator-drift check."""
+    """The install-test workflow has the expected trigger, fork-PR skip, and
+    generator-drift check — and reads no secrets. It runs on `pull_request`,
+    whose merge ref the `tend` environment's policy refuses, so the secrets
+    are unreachable from here by design; `tend check` (run by the installer
+    with admin credentials) is what verifies them."""
     _write_config(tmp_path, "bot_name: test-bot")
     monkeypatch.chdir(tmp_path)
     _run_init(["--with-install-test"])
@@ -726,11 +729,7 @@ def test_install_test_workflow_shape(
     job = data["jobs"]["install-test"]
     assert "head.repo.full_name == github.repository" in job["if"]
     assert job["permissions"] == {"contents": "read"}
-
-    # Default Claude secret names appear in the env block.
-    assert "secrets.TEND_BOT_TOKEN" in content
-    assert "CLAUDE_CODE_OAUTH_TOKEN" in content
-    assert "ANTHROPIC_API_KEY" in content
+    assert "secrets." not in content
 
     # Generator-drift step regenerates with the same flag to keep output stable.
     # Version is pinned from the committed header (not `@latest`) so a release
@@ -745,42 +744,6 @@ def test_install_test_workflow_shape(
     assert "git remote set-head" not in content
     assert "gh api" in content and ".default_branch" in content
     assert "git symbolic-ref" in content
-
-
-def test_install_test_workflow_codex_secrets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Codex harness wires Codex-specific secret names into the workflow."""
-    _write_config(tmp_path, "bot_name: test-bot\nharness: codex\n")
-    monkeypatch.chdir(tmp_path)
-    _run_init(["--with-install-test"])
-
-    content = (_workflow_dir(tmp_path) / "tend-install-test.yaml").read_text()
-    assert "OPENAI_API_KEY" in content
-    assert "CODEX_AUTH_JSON" not in content
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in content
-
-
-def test_install_test_workflow_honors_secret_overrides(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Custom bot/harness secret names from config flow into the workflow."""
-    _write_config(
-        tmp_path,
-        dedent("""\
-            bot_name: test-bot
-            secrets:
-              bot_token: GH_BOT_TOKEN
-              claude_token: MY_OAUTH
-        """),
-    )
-    monkeypatch.chdir(tmp_path)
-    _run_init(["--with-install-test"])
-
-    content = (_workflow_dir(tmp_path) / "tend-install-test.yaml").read_text()
-    assert "secrets.GH_BOT_TOKEN" in content
-    assert "secrets.MY_OAUTH" in content
-    assert "secrets.TEND_BOT_TOKEN" not in content
 
 
 def test_init_bot_name_in_workflow_content(
