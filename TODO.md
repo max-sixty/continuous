@@ -24,8 +24,11 @@ workflows land:
 4. `uvx tend@latest check` — every line PASS.
 
 `tend-agent/tend-integration` is the exception: its `integration-secrets`
-reseed does steps 2–3 on its own, and the weekly recipe regenerates its
-workflows before anything reads a secret.
+reseed does steps 2–3 on its own. Step 3 waits for the fixture's workflows
+to name the environment, which happens a release later than the generator
+change — the fixture regenerates with the published `tend`, not this
+checkout — so the fixture completes its own migration on the first weekly
+after 0.1.13 ships.
 
 `max-sixty/tend` also needs `TEND_BOT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`
 copied into `tend-manual` (the required-reviewer environment `claude-smoke`
