@@ -116,61 +116,6 @@ repos:
                 sys.exit(1)
         pass_filenames: false
 
-      # claude/action.yaml (default `claude` harness) and
-      # claude-interactive/action.yaml run the same `claude` binary and are
-      # meant to be swap-in compatible: the generator stamps whichever ref the
-      # `harness:` config selects, emitting the same `with:` input block for
-      # both — so a pinned default (claude_version) silently drifting between
-      # the two breaks one harness. This guard fails the commit if the two
-      # actions' input surfaces diverge: a different default on a shared input,
-      # or an input present in one but not the other. If a divergence is ever
-      # intentional, narrow this check rather than letting parity rot.
-      - id: claude-action-input-parity
-        name: claude action input defaults stay in sync
-        language: python
-        additional_dependencies: ["ruamel.yaml"]
-        files: ^(claude/action\.yaml|claude-interactive/action\.yaml)$
-        entry: python3
-        args:
-          - -c
-          - |
-            import sys
-            from ruamel.yaml import YAML
-
-            yaml = YAML(typ="safe")
-
-            def inputs(path):
-                return yaml.load(open(path)).get("inputs", {})
-
-            a = inputs("claude/action.yaml")
-            b = inputs("claude-interactive/action.yaml")
-
-            problems = []
-            only_a = sorted(set(a) - set(b))
-            only_b = sorted(set(b) - set(a))
-            for name in only_a:
-                problems.append(f"input '{name}' is in claude/action.yaml but not claude-interactive/action.yaml")
-            for name in only_b:
-                problems.append(f"input '{name}' is in claude-interactive/action.yaml but not claude/action.yaml")
-            for name in sorted(set(a) & set(b)):
-                da, db = a[name].get("default"), b[name].get("default")
-                if da != db:
-                    problems.append(
-                        f"input '{name}' default differs: "
-                        f"claude/action.yaml={da!r} vs claude-interactive/action.yaml={db!r}"
-                    )
-
-            for p in problems:
-                print(p)
-            if problems:
-                print(
-                    "\nERROR: the two Claude actions' input surfaces drifted. "
-                    "They run the same binary and must stay swap-in compatible "
-                    "(see CLAUDE.md). Align the inputs above."
-                )
-                sys.exit(1)
-        pass_filenames: false
-
       # The set of env names an adopter's `sandbox_env:` may NOT set lives in
       # two places: RESERVED_SANDBOX_ENV in generator/src/tend/config.py (fails
       # at `init`) and the `case "$name"` guard in proxy/setup-sandbox.sh

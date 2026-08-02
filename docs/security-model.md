@@ -79,9 +79,8 @@ extend trust to `max-sixty/tend`'s release-tag integrity the same way they
 trust any third-party action's publisher; pinning to `X.Y.Z` (or a commit
 SHA) bounds that trust to a reviewed, immutable point.
 
-**Config pinning.** Both Claude harnesses (`claude/action.yaml` and
-`claude-interactive/action.yaml`) restore RCE-relevant config from the PR base branch
-before the agent starts: `.claude/`, `.mcp.json`, `.claude.json`,
+**Config pinning.** The Claude harness actions restore RCE-relevant config from
+the PR base branch before the agent starts: `.claude/`, `.mcp.json`, `.claude.json`,
 `.gitmodules`, `.ripgreprc`, `.husky`, plus `CLAUDE.md`/`CLAUDE.local.md` as a
 prompt-injection defense. A malicious PR's `SessionStart` hook, MCP server, or
 injected `CLAUDE.md` is reverted before Claude reads it. The restoration runs
@@ -91,10 +90,9 @@ in shell; the path list and ordering mirror claude-code-action's
 overwritten, so review skills can optionally inspect what the PR changed without
 those files ever being executed.
 
-**Credential isolation (Claude harnesses).** Both `claude/action.yaml` (headless
-`claude -p`) and `claude-interactive/action.yaml` (PTY) run the agent as a separate
-non-sudo `tend-sandbox` user, sharing the proxy machinery under the top-level
-`proxy/`. Both the bot PAT and the Anthropic credential (OAuth token
+**Credential isolation (Claude harnesses).** The Claude harness actions run the
+agent as a separate non-sudo `tend-sandbox` user, sharing the proxy machinery
+under the top-level `proxy/`. Both the bot PAT and the Anthropic credential (OAuth token
 or API key) live only in a local mitmproxy that the agent reaches over
 `HTTPS_PROXY`; the proxy injects each into requests to its own hosts (the PAT for
 GitHub hosts, the Anthropic secret for `api.anthropic.com`) and tunnels

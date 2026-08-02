@@ -964,7 +964,7 @@ def test_sandbox_levers_warn_on_codex(
     """),
     )
     Config.load(path)
-    assert "apply only to the Claude-family" in capsys.readouterr().err
+    assert "apply only to the Claude harness" in capsys.readouterr().err
 
 
 def test_sandbox_levers_no_warn_with_claude_override(
@@ -988,4 +988,4 @@ def test_sandbox_levers_no_warn_with_claude_override(
     """),
     )
     Config.load(path)
-    assert "apply only to the Claude-family" not in capsys.readouterr().err
+    assert "apply only to the Claude harness" not in capsys.readouterr().err

@@ -108,7 +108,7 @@ harness-auth credential whose form depends on `harness` in
 |-------|---------|
 | Bot token (PAT or App) | GitHub API and git operations. Consistent bot identity. |
 | Harness auth (one of, per harness) | Authenticates the agent runtime. |
-| ↳ Claude OAuth token | `harness: claude` or `harness: claude-interactive`: authenticates Claude Code to the Anthropic API. |
+| ↳ Claude OAuth token | `harness: claude`: authenticates Claude Code to the Anthropic API. |
 | ↳ `OPENAI_API_KEY` | `harness: codex`: standard OpenAI API key, per-token billing. The subscription `auth.json` path is not supported (see above). |
 
 A single bot token is safe across workflows because the merge restriction

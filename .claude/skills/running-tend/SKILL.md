@@ -29,7 +29,8 @@ Tend has Claude-powered workflows beyond the generated `tend-*` set:
 
 These use the tend composite action and produce `claude-session-logs*` artifacts,
 but their names don't match the `tend-*` prefix that scripts filter on by
-default.
+default. `uvx tend@latest init` doesn't rewrite them either, so their
+`max-sixty/tend/<harness>@X.Y.Z` pins move only when someone edits the file.
 
 ### Usage analysis
 
@@ -82,6 +83,25 @@ have recent activity on GitHub — that localizes the fault to the Worker. The
 bot can't rotate the Worker's Cloudflare-side secret itself, so leave the
 diagnosis to a maintainer; `worker/README.md` covers the Worker's setup.
 
+## Nightly: restamp the hand-maintained workflow refs
+
+`init` rewrites only the generated `tend-*.yaml` files, so the workflows under
+"Non-standard workflows" hold whatever action ref they were last given by hand.
+Every release leaves them a version further behind, and a harness change made by
+regenerating skips them entirely.
+
+Run this after the regen step, whether or not it produced a PR:
+
+```bash
+rg -o --no-filename 'max-sixty/tend/[a-z-]+@[0-9.]+' .github/workflows/ | sort -u
+```
+
+One line means every workflow agrees. Two or more, restamp the hand-maintained
+files onto the generated files' ref and fold it into the regen PR — same
+worktree, same commit. A differing *harness* rather than a differing version is
+the worse case: a config change reached the generated workflows and stopped
+there, so check what else that change was supposed to carry.
+
 ## Weekly: refresh `data/consumers.json`
 
 Public repos that have installed tend. Read by the website's data Worker
@@ -126,20 +146,18 @@ the whole list.
 ## Weekly: bump pinned agent binaries
 
 Every harness action installs a pinned agent binary: `claude_version` in
-both `claude/action.yaml` (headless `claude -p`) and
-`claude-interactive/action.yaml` (PTY), and `codex_version` in
-`codex/action.yaml`. These pins are static strings nothing else moves, so
+`claude/action.yaml` and `codex_version` in `codex/action.yaml`. These pins
+are static strings nothing else moves, so
 they drift behind and the harness resolves `--model opus`/`sonnet` to a stale
 alias target (an old binary maps `opus` to a superseded Opus version).
 
 ```bash
 # Claude: pinned defaults vs latest release
-rg -A1 'claude_version:' claude/action.yaml claude-interactive/action.yaml
+rg -A1 'claude_version:' claude/action.yaml
 npm view @anthropic-ai/claude-code dist-tags.latest
 ```
 
-If `latest` is newer, bump the `default:` in **both** `claude/action.yaml` and
-`claude-interactive/action.yaml` (keep the two Claude pins in step) and open a PR
+If `latest` is newer, bump the `default:` in `claude/action.yaml` and open a PR
 titled `chore: bump claude_version to <latest>`. Skim the claude-code
 CHANGELOG between the two versions for anything touching the agent paths
 (first-run onboarding, `--model` alias resolution, headless `-p` result

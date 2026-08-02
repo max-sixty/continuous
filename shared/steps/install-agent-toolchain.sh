@@ -5,7 +5,7 @@
 # be installed in place — installing as runner and moving breaks it. uv is the
 # agent's own (its skills run `uvx tend@latest …`); the runner has a separate uv
 # for the proxy. Installers fetch over the direct network (no proxy env here).
-# Shared by the two Claude harness actions.
+# Used by the Claude harness action.
 #
 # Inputs (env): CLAUDE_VERSION (claude binary version), SANDBOX and AGENT_HOME
 # (exported by setup-sandbox.sh via $GITHUB_ENV).

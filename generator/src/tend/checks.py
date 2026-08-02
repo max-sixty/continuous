@@ -15,7 +15,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-from tend.config import CLAUDE_FAMILY_HARNESSES, Config
+from tend.config import Config
 from tend.workflows import TEND_ENVIRONMENT
 
 
@@ -700,7 +700,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     results.append(check_bot_permission(repo, cfg.bot_name))
     results.append(check_environment(repo, admitted))
     results.append(check_secrets(repo, required_secrets))
-    if cfg.harness in CLAUDE_FAMILY_HARNESSES:
+    if cfg.harness == "claude":
         results.append(check_claude_auth(repo, cfg))
     else:
         results.append(check_codex_auth(repo, cfg))

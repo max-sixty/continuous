@@ -2,7 +2,7 @@
 # Compose the system prompt from shared/system-prompt.md (harness-neutral bulk:
 # conduct, scope, precedence) plus a Claude-specific skill-loading directive and
 # a CI-autonomy directive, then append the adopter's `system_prompt_append`
-# input if non-empty. Shared by the two Claude harness actions. Codex consumes
+# input if non-empty. Used by the Claude harness action. Codex consumes
 # the same shared/system-prompt.md from codex/action.yaml — keep edits to that
 # file in sync across both engines.
 #

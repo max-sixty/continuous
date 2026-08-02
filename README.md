@@ -153,7 +153,7 @@ Full threat model: [docs/security-model.md](docs/security-model.md).
 
 `.config/tend.yaml` — only `bot_name` is required. The default harness runs
 Claude; `harness: codex` selects OpenAI Codex (see
-[Harnesses](#harnesses) below).[^interactive]
+[Harnesses](#harnesses) below).
 
 ```yaml
 bot_name: my-project-bot
@@ -194,9 +194,9 @@ workflow names `tend-ci-fix` watches, PR title conventions, label policies.
 
 ## Harnesses
 
-Tend supports two harnesses. Pick whichever fits the credentials and
+Tend supports Claude and Codex. Pick whichever fits the credentials and
 billing path that already work for you; both run the same workflows and
-skills.[^interactive]
+skills.
 
 ### Claude (default)
 
@@ -246,8 +246,3 @@ The install-tend skill offers to add this automatically during setup.
 ## License
 
 MIT
-
-[^interactive]: A third harness, `claude-interactive`, runs the same
-    `claude` binary under a PTY supervisor (`script(1)` with a `Stop`-hook
-    sentinel) instead of headless `-p`. Same proxy isolation and auth as the
-    default Claude harness. Opt in with `harness: claude-interactive`.

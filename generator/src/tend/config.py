@@ -39,13 +39,7 @@ KNOWN_TOP_LEVEL = {
     "sandbox_path",
     "workflows",
 }
-KNOWN_HARNESSES = {"claude", "claude-interactive", "codex"}
-# Harnesses that consume Claude-shaped inputs (claude_code_oauth_token /
-# anthropic_api_key, /tend-ci-runner:NAME slash-command syntax). The
-# `claude-interactive` harness runs the official `claude` binary under a
-# PTY supervisor instead of the Agent SDK; everything upstream of the
-# action ref is the same.
-CLAUDE_FAMILY_HARNESSES = {"claude", "claude-interactive"}
+KNOWN_HARNESSES = {"claude", "codex"}
 # Claude harness reads claude_token (OAuth) and anthropic_api_key (console.
 # anthropic.com) — adopters set one. Codex harness reads openai_key.
 KNOWN_SECRETS_KEYS = {
@@ -132,8 +126,8 @@ class WorkflowConfig:
     workflow_extra: dict | None = None
     jobs: dict[str, dict] | None = None
     # Per-workflow harness override. Lets adopters trial a new harness on
-    # a single workflow (e.g. `claude-interactive` on nightly only) before
-    # flipping the whole bot. None means inherit from top-level `harness`.
+    # a single workflow (e.g. `codex` on nightly only) before flipping the
+    # whole bot. None means inherit from top-level `harness`.
     harness: str | None = None
     # Per-workflow model override. Pairs with `harness` for cross-family
     # overrides — top-level `model` may not be valid for the new harness.
@@ -150,11 +144,9 @@ class WorkflowConfig:
 # at runtime if it's wrong.
 KNOWN_MODELS_BY_HARNESS = {
     "claude": {"opus", "sonnet", "haiku"},
-    "claude-interactive": {"opus", "sonnet", "haiku"},
 }
 DEFAULT_MODEL_BY_HARNESS = {
     "claude": "opus",
-    "claude-interactive": "opus",
     "codex": "gpt-5.5",
 }
 # Codex `--config model_reasoning_effort=...` values, per the supported
@@ -184,7 +176,7 @@ class Config:
     # (gh unavailable, or no default repo configured).
     repo_owner: str = ""
     allowed_repo_secrets: list[str] = field(default_factory=list)
-    # Adopter levers that reach *inside* the Claude-family sandbox, before the
+    # Adopter levers that reach *inside* the Claude sandbox, before the
     # agent launches (runner-side `setup:` doesn't — it runs as the runner user
     # around the composite action). `sandbox_path` prepends dirs to the sandbox
     # PATH; `sandbox_env` adds NAME=VALUE pairs to the agent's launch env;
@@ -204,11 +196,7 @@ class Config:
         callers can splice their own placeholders (`{pr_number}` etc.) and run
         the existing replace step.
         """
-        prefix = (
-            f"/tend-ci-runner:{skill}"
-            if self.harness in CLAUDE_FAMILY_HARNESSES
-            else f"${skill}"
-        )
+        prefix = f"/tend-ci-runner:{skill}" if self.harness == "claude" else f"${skill}"
         return f"{prefix} {args}".rstrip()
 
     @classmethod
@@ -490,10 +478,10 @@ class Config:
             else:
                 workflows[name] = WorkflowConfig(enabled=bool(wf_raw))
 
-        # The sandbox_* levers reach inside the Claude-family proxy sandbox and
+        # The sandbox_* levers reach inside the Claude proxy sandbox and
         # no-op under codex (whose agent runs on the runner, already reachable
         # via `setup:`). Warn only when they'd be fully inert — i.e. no enabled
-        # workflow's *effective* harness is Claude-family. This mirrors the
+        # workflow's *effective* harness is Claude. This mirrors the
         # render gate (macros.yaml.j2 emits them per effective harness): a
         # top-level `codex` with a per-workflow `claude` override does apply
         # them, so don't warn there.
@@ -503,10 +491,10 @@ class Config:
                 for wf in workflows.values()
                 if wf.enabled and wf.harness is not None
             }
-            if not (effective_harnesses & CLAUDE_FAMILY_HARNESSES):
+            if "claude" not in effective_harnesses:
                 click.echo(
                     "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
-                    "to the Claude-family harnesses (the proxy sandbox). The "
+                    "to the Claude harness (the proxy sandbox). The "
                     "codex harness runs the agent on the runner, where the "
                     "`setup:` section already reaches its environment.",
                     err=True,
