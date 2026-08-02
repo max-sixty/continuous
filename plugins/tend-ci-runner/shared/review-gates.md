@@ -49,6 +49,15 @@ For each finding, state:
 
 Only proceed to act on findings that pass both gates.
 
+### Suppression: maintainer-rejected remediations
+
+A finding can clear both gates and still be off-limits. If a maintainer has already **rejected** its remediation, do not re-propose — recurrence does not reopen a settled call. A structural pattern that recurs every month is still settled if the maintainer weighed the fix and declined it. Rejection signals in the current repo's history:
+
+- A prior PR proposing this fix was closed by a maintainer — read the closing comment for the rationale.
+- The pattern is documented as an accepted non-issue in a skill's intentional-patterns list.
+
+When either holds, record the recurrence as a carry observation with a pointer to the rejection and move on — no PR, no issue. Re-propose only if new evidence changes the tradeoff the maintainer weighed (e.g. the cost grew by an order of magnitude), and name that change explicitly.
+
 ## Finding format
 
 Each run appends findings to the skill's evidence store under a `## Run <run-id>` heading. **Always derive the run ID, timestamp, and repo from the CI environment — never hand-type them.** Past sessions have filled the `<run-id>` placeholder with fabricated round numbers (e.g. `24294000000`) when the skill didn't explicitly point at `$GITHUB_RUN_ID`, producing dead link-anchors in the evidence log.
