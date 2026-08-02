@@ -103,12 +103,10 @@ outputs:
 runs:
   using: composite
   steps:
-    # Shared step bodies live in the top-level shared/steps/ so the three
-    # harness actions can't drift; each wrapper below passes inputs via env
+    # Shared step bodies live in the top-level shared/steps/ so the claude
+    # and codex actions can't drift; each wrapper below passes inputs via env
     # and runs the script (reached via ../shared/steps, since this action is
-    # one level deep). The two Claude actions are swap-in compatible — keep
-    # their input surfaces in sync (enforced by the claude-action-input-parity
-    # pre-commit hook).
+    # one level deep).
     - name: Security preflight
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/security-preflight.sh"

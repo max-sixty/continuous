@@ -3,7 +3,7 @@
 # scheduled tend-notifications poll doesn't burn tokens rediscovering it. The
 # thread is only marked when its updated_at predates this run's start — newer
 # activity stays unread for the next workflow run to handle. Shared verbatim by
-# all three harness actions; the caller gates it on a successful run.
+# both harness actions; the caller gates it on a successful run.
 #
 # Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME, GITHUB_EVENT_PATH,
 # GITHUB_REPOSITORY, GITHUB_RUN_ID (from Actions).

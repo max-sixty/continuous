@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fail fast unless a Claude credential is configured. Shared by the two Claude
+# Fail fast unless a Claude credential is configured. Used by the Claude
 # harness action (claude/).
 #
 # Secrets arrive via env (not argv/interpolation) so their values never land in

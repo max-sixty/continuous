@@ -3,7 +3,7 @@
 # reads at startup BEFORE any permission gating — SessionStart hooks, env-var
 # overrides (NODE_OPTIONS, LD_PRELOAD, PATH), MCP servers, apiKeyHelper shell
 # commands. Restore them from the PR base branch, which a maintainer reviewed
-# and merged. Shared by the two Claude harness actions.
+# and merged. Used by the Claude harness action.
 #
 # Path list and ordering mirror claude-code-action's restore-config.ts
 # (src/github/operations/restore-config.ts). Snapshot PR-authored versions to

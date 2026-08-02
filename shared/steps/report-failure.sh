@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # File or append to a `tend-outage` issue when a run fails, so outages are
-# tracked until resolved. Shared verbatim by all three harness actions; the
+# tracked until resolved. Shared verbatim by both harness actions; the
 # caller gates it on the agent step having failed.
 #
 # Just records the run link. Error annotations and logs are not reliably

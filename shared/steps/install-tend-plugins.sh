@@ -8,7 +8,7 @@
 # validates auth it reaches api.anthropic.com via the injecting proxy; the real
 # secret never enters the sandbox. `claude plugin install` is non-interactive
 # (CLAUDE_CODE_REMOTE=1 suppresses prompts), so it needs no onboarding pre-seed.
-# Shared by the two Claude harness actions.
+# Used by the Claude harness action.
 #
 # Inputs (env): MARKETPLACE_ROOT (dir containing .claude-plugin/ and plugins/;
 # differs per action by checkout depth), SANDBOX, AGENT_HOME, AGENT_ENV_FILE

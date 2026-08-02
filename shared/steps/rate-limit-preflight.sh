@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared preflight: abort if the bot is creating issues/PRs faster than a
 # burst limit (20-minute window) or a daily spike limit (vs a 6-day baseline).
-# Shared verbatim by all three harness actions.
+# Shared verbatim by both harness actions.
 #
 # Inputs (env): GITHUB_TOKEN (for gh), BOT_NAME (bot username),
 # GITHUB_REPOSITORY (from Actions).

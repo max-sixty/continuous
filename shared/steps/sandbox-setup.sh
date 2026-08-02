@@ -14,8 +14,8 @@
 # tool, warming a cache, generating a file).
 #
 # Inputs (env): TEND_SANDBOX_SETUP (the commands; empty → no-op), SANDBOX and
-# AGENT_ENV_FILE (exported by setup-sandbox.sh via $GITHUB_ENV). Shared by the
-# two Claude harness actions.
+# AGENT_ENV_FILE (exported by setup-sandbox.sh via $GITHUB_ENV). Used by the
+# Claude harness action.
 set -euo pipefail
 
 [ -n "${TEND_SANDBOX_SETUP:-}" ] || exit 0

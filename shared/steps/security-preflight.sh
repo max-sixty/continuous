@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared preflight: refuse to run unless the default branch is protected
-# against the bot itself. Shared verbatim by all three harness actions
+# against the bot itself. Shared verbatim by both harness actions
 # (claude/, codex/).
 #
 # Runs with the bot's own token, so `current_user_can_bypass` on each

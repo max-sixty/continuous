@@ -2,7 +2,7 @@
 # Ensure the runner has uv/uvx available. The runner's own uv runs the
 # mitmproxy that backs credential isolation (setup-sandbox.sh does
 # `uvx --from mitmproxy …`); the agent gets a separate uv in its sandbox home.
-# Shared verbatim by all three harness actions.
+# Shared verbatim by both harness actions.
 #
 # Inputs (env): GITHUB_PATH (from Actions), HOME.
 set -eo pipefail
