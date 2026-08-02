@@ -607,6 +607,95 @@ def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
     )
 
 
+def admitted_refs(default_branch: str, protected_branches: list[str]) -> list[str]:
+    """The refs the tend environment may admit: every one the bot cannot write.
+
+    That is the default branch and the protected branches, both covered by the
+    merge-restriction checks.
+    """
+    return [default_branch, *(b for b in protected_branches if b != default_branch)]
+
+
+def fix_environment(repo: str, admitted: list[str]) -> CheckResult:
+    """Create the tend environment and set its branch policy to `admitted`.
+
+    PUT is create-or-update, so one call owns every environment failure:
+    missing, no policy, protected-branches mode. The reconcile below then
+    adds missing admitted refs and deletes extras. Secrets are not moved —
+    their values cannot be read back, so minting them into the environment
+    stays with the installer.
+    """
+    name = "environment"
+    result = _gh(
+        "api",
+        "-X",
+        "PUT",
+        f"repos/{repo}/environments/{TEND_ENVIRONMENT}",
+        "--input",
+        "-",
+        input=json.dumps(
+            {
+                "deployment_branch_policy": {
+                    "protected_branches": False,
+                    "custom_branch_policies": True,
+                }
+            }
+        ),
+    )
+    if result is None:
+        return CheckResult(name, None, "gh CLI not found")
+    if result.returncode != 0:
+        return CheckResult(
+            name, False, f"Failed to create environment: {result.stderr.strip()}"
+        )
+
+    listed = _gh(
+        "api",
+        f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
+    )
+    if listed is None or listed.returncode != 0:
+        return CheckResult(name, None, "Could not list deployment branch policies")
+    policies = json.loads(listed.stdout)["branch_policies"]
+    existing = {p["name"]: p["id"] for p in policies}
+
+    for branch in admitted:
+        if branch in existing:
+            continue
+        created = _gh(
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
+            "-f",
+            f"name={branch}",
+            "-f",
+            "type=branch",
+        )
+        if created is None or created.returncode != 0:
+            stderr = created.stderr.strip() if created else "gh CLI not found"
+            return CheckResult(name, False, f"Failed to admit {branch}: {stderr}")
+    for branch, policy_id in existing.items():
+        if branch in admitted:
+            continue
+        deleted = _gh(
+            "api",
+            "-X",
+            "DELETE",
+            f"repos/{repo}/environments/{TEND_ENVIRONMENT}"
+            f"/deployment-branch-policies/{policy_id}",
+        )
+        if deleted is None or deleted.returncode != 0:
+            stderr = deleted.stderr.strip() if deleted else "gh CLI not found"
+            return CheckResult(name, False, f"Failed to remove {branch}: {stderr}")
+
+    return CheckResult(
+        name,
+        True,
+        f"Environment '{TEND_ENVIRONMENT}' admits only {', '.join(admitted)}. "
+        "Move each operational secret into it and delete the repo-level copy.",
+    )
+
+
 def fix_branch_protection(
     repo: str,
     default_branch: str,
@@ -685,13 +774,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     # closes. The allowlist check therefore flags them as unexpected.
     allowed = set(cfg.allowed_repo_secrets)
 
-    # Every ref the environment may admit is one the bot cannot write: the
-    # default branch and the protected branches, both covered by the merge
-    # restriction checks above.
-    admitted = [
-        default_branch,
-        *(b for b in cfg.protected_branches if b != default_branch),
-    ]
+    admitted = admitted_refs(default_branch, cfg.protected_branches)
 
     results = [check_branch_protection(repo, default_branch, cfg.bot_name)]
     for branch in cfg.protected_branches:

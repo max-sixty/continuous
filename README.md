@@ -134,7 +134,9 @@ repo's `tend` GitHub Environment, whose deployment policy admits only the
 default branch. A workflow pushed to any other branch is refused those
 secrets before its first step, so write access to the repo does not imply
 secret access. `tend check` verifies the environment, its policy, and that
-no repo-level copies remain.
+no repo-level copies remain; `tend check --fix` creates the environment and
+sets its policy. Moving the secrets into it stays manual — their values
+can't be read back.
 
 **Credential isolation** — the Claude harness runs the agent as a separate
 non-sudo user and keeps the bot token and Anthropic credential in a local

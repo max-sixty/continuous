@@ -9,10 +9,12 @@ import click
 
 from tend.checks import (
     CheckResult,
+    admitted_refs,
     detect_canonical_owner,
     detect_default_branch,
     detect_repo,
     fix_branch_protection,
+    fix_environment,
     run_all_checks,
 )
 from tend.config import Config
@@ -198,6 +200,17 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         )
         default_branch = detect_default_branch(repo) or "main"
         fix_result = fix_branch_protection(repo, default_branch, cfg.protected_branches)
+        _print_check_results([fix_result])
+        if fix_result.passed:
+            fixed_any = True
+
+    if any(r.name == "environment" for r in failures):
+        click.echo()
+        click.echo("Configuring the 'tend' environment...")
+        default_branch = detect_default_branch(repo) or "main"
+        fix_result = fix_environment(
+            repo, admitted_refs(default_branch, cfg.protected_branches)
+        )
         _print_check_results([fix_result])
         if fix_result.passed:
             fixed_any = True
