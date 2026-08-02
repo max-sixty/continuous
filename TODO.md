@@ -3,6 +3,34 @@
 Deferred work and unimplemented options. Each entry should justify the cost
 of building it if revisited.
 
+## Move the operational secrets into the `tend` environment (post-merge)
+
+The environment gate is inert until each adopter's secrets actually live in
+the environment and the repo-level copies are gone, and that half can only
+happen once the workflows naming the environment are on the default branch.
+Deleting a repo-level copy earlier breaks every run in between.
+
+Per repo (`max-sixty/tend`, `max-sixty/worktrunk`, `PRQL/prql`,
+`max-sixty/cargo-affected`, `numbagg/numbagg`), after its regenerated
+workflows land:
+
+1. `uvx tend@latest check --fix` — creates the environment and its
+   branch policy. (Already done for `max-sixty/tend` and
+   `tend-agent/tend-integration`.)
+2. Re-mint each operational secret into it — the old values can't be read
+   back:
+   `gh secret set <NAME> --repo <repo> --env tend`
+3. Delete the repo-level copies: `gh secret delete <NAME> --repo <repo>`
+4. `uvx tend@latest check` — every line PASS.
+
+`tend-agent/tend-integration` is the exception: its `integration-secrets`
+reseed does steps 2–3 on its own, and the weekly recipe regenerates its
+workflows before anything reads a secret.
+
+`max-sixty/tend` also needs `TEND_BOT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`
+copied into `tend-manual` (the required-reviewer environment `claude-smoke`
+uses), since a branch dispatch can never reach `tend`.
+
 ## Cut tend over to harness = "codex" (post-release)
 
 The Codex harness landed but tend itself still runs on Claude. The cutover
