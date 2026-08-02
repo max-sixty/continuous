@@ -131,8 +131,8 @@ start unless the answer is no. `tend check` verifies the setup;
 
 **Environment-gated secrets** — the bot token and model auth live in the
 repo's `tend` GitHub Environment, whose deployment policy admits only the
-refs the merge restriction covers: the default branch and any
-`protected_branches`. A workflow pushed to any other branch is refused
+refs `tend check` confirmed the merge restriction covers: the default
+branch and any `protected_branches` that exist and are protected. A workflow pushed to any other branch is refused
 those secrets before its first step, so write access to the repo does not
 imply secret access. `tend check` verifies the environment, its policy, and that
 no repo-level copies remain; `tend check --fix` creates the environment and

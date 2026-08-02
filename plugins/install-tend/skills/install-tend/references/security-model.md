@@ -47,8 +47,9 @@ names an environment runs only if the run's ref matches the environment's
 `deployment_branch_policy`, and only such jobs receive its secrets.
 
 Tend's own operational secrets — the bot token and harness auth — live in
-the `tend` environment (step 7 creates it), whose policy names the default
-branch and any `protected_branches`. Every generated secret-bearing job
+the `tend` environment (step 7 creates it), whose policy names only the
+branches `tend check` confirmed the bot cannot write — the default branch
+and any `protected_branches` that exist and are protected. Every generated secret-bearing job
 names it, so a workflow the bot pushes to a branch is refused the secrets
 before its first step: write access does not imply secret access.
 Environment secrets overlay repo-level ones, and a job naming a

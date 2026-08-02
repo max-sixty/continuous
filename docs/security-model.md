@@ -153,9 +153,12 @@ migration therefore keeps working on its repo-level secrets, with exactly
 its old exposure — the gate protects nothing until the policy is set, the
 secrets are moved, and the repo-level copies are deleted. `tend check`
 fails on each missing piece until then: it verifies the environment exists,
-its policy is a named list covering exactly the default branch and
-`protected_branches`, the operational secrets are present in it, and no
-repo-level copy remains. `tend check --fix` creates the environment and
+its policy is a named list matching exactly the branches whose protection
+that same run confirmed, the operational secrets are present in it, and no
+repo-level copy remains. Confirmed, not configured: a branch named in
+`protected_branches` that does not exist yet cannot be admitted, or the
+policy would name a ref the bot can create — and the merge restriction
+gates `update`, not `creation`. `tend check --fix` creates the environment and
 reconciles its policy; moving the secrets stays manual, since their values
 cannot be read back.
 

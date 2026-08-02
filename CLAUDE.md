@@ -185,9 +185,10 @@ Each adopter creates a GitHub bot account and a classic PAT (`public_repo`
 for public repos, `repo` for private) plus `workflow`, `notifications`,
 `write:discussion`, `gist`, `user`. The PAT and a Claude OAuth token are
 stored as secrets in the repo's `tend` GitHub Environment, whose deployment
-branch policy admits only the default branch and `protected_branches` — a
-workflow the bot pushes to any other ref is refused them before its first
-step. The `gist` scope supports bot-owned secret gists
+branch policy admits only the branches `tend check` confirmed the bot
+cannot write — the default branch and any `protected_branches` that exist
+and are protected. A workflow the bot pushes to any other ref is refused
+them before its first step. The `gist` scope supports bot-owned secret gists
 used by `review-reviewers` as a per-month structured evidence store
 (avoids the 65 KB comment-body limit). The `user` scope lets `install-tend`
 set the bot's profile bio (`PATCH /user`) so the account's authorization
