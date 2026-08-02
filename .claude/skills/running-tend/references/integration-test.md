@@ -33,13 +33,14 @@ the `integration-secrets` workflow in `max-sixty/tend`, which copies
 this repo's real secrets into the fixture's `tend` environment (creating
 it if missing), outside the sandbox. §1 dispatches it every run.
 
-The bot PAT carries the `workflow` scope (so §5's self-heal push of
+The bot PAT carries the `workflow` scope (so §2's self-heal push of
 generated workflow files succeeds through the proxy) but **does not**
 need `delete_repo` — the recipe never deletes the test repo; it resets
 in place.
 
-Run steps in order. If §3, §4, §4b, or §5 fails, jump to §6 (reset),
-then §7 (report).
+Run steps in order. The self-heal (§2) precedes the verification
+steps so they always exercise current workflows. If §2, §4, §5, or §6
+fails, jump to §7 (reset), then §8 (report).
 
 ## 1. Bootstrap (first run only) and reseed (every run)
 
@@ -131,7 +132,42 @@ done
 [ "$conclusion" = "success" ] || { echo "integration-secrets: $status/$conclusion"; exit 1; }
 ```
 
-## 2. Reset to a known-clean state
+## 2. Verify the generator (self-healing)
+
+Re-run the generator against the committed config. A diff is expected
+after every tend release (the version pin moves, and the fixture
+disables nightly so this is its only regeneration path) — push the
+regenerated files to `main` rather than failing. Assertions: `init`
+succeeds against the committed config, and is idempotent.
+
+This runs before the verification steps because §1 keeps the fixture's
+secrets in its `tend` environment: workflows a release ago, which don't
+name the environment, would be refused those secrets and every
+verification below would fail on stale files the same run is about to
+replace.
+
+```bash
+WORK=$(mktemp -d)
+gh repo clone tend-agent/tend-integration "$WORK"
+cd "$WORK"
+uvx tend@latest init
+if [ -n "$(git status --porcelain)" ]; then
+  git config user.email "tend-agent@users.noreply.github.com"
+  git config user.name "tend-agent"
+  gh auth setup-git
+  git add .
+  git commit -m "chore: regenerate tend workflows (weekly integration self-heal)"
+  git push origin main \
+    || { echo "tend-integration: push to main failed; fixture not updated"; exit 1; }
+fi
+uvx tend@latest init
+[ -z "$(git status --porcelain)" ] \
+  || { echo "tend-integration: init not idempotent: $(git status --porcelain)"; exit 1; }
+cd - >/dev/null
+rm -rf "$WORK"
+```
+
+## 3. Reset to a known-clean state
 
 Close any leftover issues/PRs from prior runs, delete any leftover
 branches. `main` is never touched.
@@ -157,7 +193,7 @@ for b in $(gh api repos/tend-agent/tend-integration/branches \
 done
 ```
 
-## 3. Verify tend-triage
+## 4. Verify tend-triage
 
 Open a fresh test issue, wait for `tend-triage` to register and finish,
 assert the bot commented.
@@ -199,7 +235,7 @@ COMMENTS=$(gh issue view "$ISSUE" --repo tend-agent/tend-integration \
 [ "$COMMENTS" -ge 1 ] || { echo "tend-triage: no bot comment on issue #$ISSUE"; exit 1; }
 ```
 
-## 4. Verify tend-review
+## 5. Verify tend-review
 
 Clone, create a branch with a trivial README edit, open a PR, wait for
 `tend-review` to register and finish, assert the action invoked the
@@ -272,9 +308,9 @@ cd - >/dev/null
 rm -rf "$WORK"
 ```
 
-## 4b. Verify tend-mention (review events)
+## 6. Verify tend-mention (review events)
 
-Submit a comment review on the §4 PR that mentions the bot, and assert
+Submit a comment review on the §5 PR that mentions the bot, and assert
 the bot replied. A review the bot leaves on its own PR is deliberately
 actionable — its reviewer role speaking — so the single bot identity can
 drive the full chain: review submitted → tend-mention → reply. On
@@ -318,38 +354,9 @@ done
   || { echo "tend-mention: no bot reply to the review on PR #$PR"; exit 1; }
 ```
 
-## 5. Verify the generator (self-healing)
+## 7. Reset (always — even on failure)
 
-Re-run the generator against the committed config. A diff is expected
-after every tend release (the version pin moves, and the fixture
-disables nightly so this is its only regeneration path) — push the
-regenerated files to `main` rather than failing. Assertions: `init`
-succeeds against the committed config, and is idempotent.
-
-```bash
-WORK=$(mktemp -d)
-gh repo clone tend-agent/tend-integration "$WORK"
-cd "$WORK"
-uvx tend@latest init
-if [ -n "$(git status --porcelain)" ]; then
-  git config user.email "tend-agent@users.noreply.github.com"
-  git config user.name "tend-agent"
-  gh auth setup-git
-  git add .
-  git commit -m "chore: regenerate tend workflows (weekly integration self-heal)"
-  git push origin main \
-    || { echo "tend-integration: push to main failed; fixture not updated"; exit 1; }
-fi
-uvx tend@latest init
-[ -z "$(git status --porcelain)" ] \
-  || { echo "tend-integration: init not idempotent: $(git status --porcelain)"; exit 1; }
-cd - >/dev/null
-rm -rf "$WORK"
-```
-
-## 6. Reset (always — even on failure)
-
-Same as §2; run again to close anything created in §3/§4.
+Same as §3; run again to close anything created in §4/§5/§6.
 
 ```bash
 for n in $(gh issue list --repo tend-agent/tend-integration \
@@ -371,9 +378,9 @@ for b in $(gh api repos/tend-agent/tend-integration/branches \
 done
 ```
 
-## 7. Report failure
+## 8. Report failure
 
-If any of §3–§5 failed, open a labeled issue in `max-sixty/tend`. The
+If any of §2, §4–§6 failed, open a labeled issue in `max-sixty/tend`. The
 label is created on demand so the first failure works without prior
 setup.
 
@@ -403,4 +410,4 @@ gh issue create --repo max-sixty/tend \
 ````
 
 Include the test repo's failing workflow run URL in the body when
-relevant (capture it during §3/§4 before §6's reset moves on).
+relevant (capture it during §4–§6 before §7's reset moves on).

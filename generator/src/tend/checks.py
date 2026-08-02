@@ -413,9 +413,11 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
             "so every ref reaches its secrets — including a branch the bot pushes.",
         )
     if policy.get("protected_branches"):
-        # "Protected branches" keys on whether a ruleset covers the branch, not
-        # on who may push it, so a branch the bot can push while a ruleset
-        # merely requires reviews would be admitted. Only a named list is
+        # "Protected branches" keys on whether a rule covers the branch, not on
+        # who may push it. Probed: under this mode a branch whose only
+        # protection was `required_linear_history` — which blocks no push —
+        # accepted a plain push and then read an environment secret, while an
+        # unprotected branch was refused with zero steps. Only a named list is
         # verifiable from here.
         return CheckResult(
             name,

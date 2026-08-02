@@ -203,9 +203,16 @@ The bot has write access; a merge restriction (ruleset or branch
 protection) is the primary security boundary — without it the bot can merge
 its own PRs — and the `tend` environment keeps the operational secrets out
 of any run the bot can cause on its own. `tend check` verifies both are
-configured correctly. See `docs/security-model.md` for the
-full threat model. Alternative models (GitHub App, triage+fork) are in
-`TODO.md`.
+configured correctly, and `--fix` creates either. See
+`docs/security-model.md` for the full threat model. Alternative models
+(GitHub App, triage+fork) are in `TODO.md`.
+
+This repo's own workflows sit behind the same gate, including the
+hand-maintained ones the generator never touches. `claude-smoke` is the
+exception the gate can't cover — dispatching it on a feature branch is its
+purpose, and that ref is one the bot can push — so its secrets live in a
+second environment, `tend-manual`, protected by a required reviewer rather
+than a branch policy: each run waits for a maintainer's approval.
 
 ## Concurrency and filtering
 

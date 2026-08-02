@@ -113,6 +113,14 @@ reviewed workflow file, faces the same engagement checks against the record
 GitHub holds, and can point the bot at nothing the actor couldn't reach by
 posting a comment.
 
+The relay stops at the repository boundary. A review event on a *fork* PR
+does start a run, on the merge ref and from the PR head's own workflow
+files, but that run's token is read-only: its `POST /repos/…/dispatches`
+returns 403 (probed). So a fork PR's reviews reach the bot only through the
+notifications poll, minutes later rather than seconds — the cost of the
+same property that makes the relay safe, since a fork run that could ring
+the doorbell would be a fork run that could write to the base repo.
+
 *Release secrets* (registry tokens, signing keys) use the same mechanism in
 adopter-owned environments whose policies list the default branch and/or
 all tags (a tag-target ruleset gates `creation` and `update` with
@@ -138,7 +146,16 @@ secrets are moved, and the repo-level copies are deleted. `tend check`
 fails on each missing piece until then: it verifies the environment exists,
 its policy is a named list covering exactly the default branch and
 `protected_branches`, the operational secrets are present in it, and no
-repo-level copy remains.
+repo-level copy remains. `tend check --fix` creates the environment and
+reconciles its policy; moving the secrets stays manual, since their values
+cannot be read back.
+
+The policy must be that named list rather than GitHub's "protected
+branches" mode, which keys on whether *a* rule covers the branch and not on
+who may push it. Probed: with that mode selected, a branch protected only
+by `required_linear_history` — which blocks no push — took a plain push and
+then read an environment secret, while an unprotected branch was refused
+with zero steps.
 
 Both environment chains inherit the merge restriction's assumption that the
 bot holds no role that can bypass; an admin session voids all of it the
