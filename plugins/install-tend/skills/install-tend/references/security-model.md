@@ -42,10 +42,24 @@ human approval) can layer additional rulesets and environment protection
 rules on top; install-tend packages the simplest configuration that holds
 the chain.
 
-Deploy and publish workflows declare a GitHub Environment whose
-`deployment_branch_policy` lists only those admin-gated refs (the default
-branch and/or all tags). Release secrets live in those environments, not
-at repo level. A leaked bot token can push a non-default branch, but it
+Secrets chain to the same refs through GitHub Environments: a job that
+names an environment runs only if the run's ref matches the environment's
+`deployment_branch_policy`, and only such jobs receive its secrets.
+
+Tend's own operational secrets — the bot token and harness auth — live in
+the `tend` environment (step 7 creates it), whose policy names the default
+branch and any `protected_branches`. Every generated secret-bearing job
+names it, so a workflow the bot pushes to a branch is refused the secrets
+before its first step: write access does not imply secret access.
+Environment secrets overlay repo-level ones, and a job naming a
+missing environment still runs, so an unfinished migration degrades to
+repo-level exposure rather than breakage; `tend check` fails until the
+policy is set, the secrets are in the environment, and the repo-level
+copies are deleted.
+
+Deploy and publish workflows declare their own Environments whose
+policies list the admin-gated refs (the default branch and/or all tags).
+Release secrets live in those environments, not at repo level. A leaked bot token can push a non-default branch, but it
 cannot push to the default branch and cannot push any tag, so no
 bot-pushed ref matches an admin-gated policy entry. The deploy job is
 rejected before it can read the secret. No admin operation → no
@@ -70,7 +84,7 @@ in depth.
 
 | Token | Lifetime | If leaked, attacker can... | ...but cannot |
 |-------|----------|----------------------------|---------------|
-| Bot token (PAT) | Long-lived | Push to unprotected branches, create PRs, impersonate the bot, indefinitely | Merge PRs (merge restriction), push to the default branch, access release secrets (environment-protected) |
+| Bot token (PAT) | Long-lived | Push to unprotected branches, create PRs, impersonate the bot, indefinitely | Merge PRs (merge restriction), push to the default branch, read any environment-gated secret — operational or release — from a workflow it pushes |
 | Bot token (App) | ~1 hour | Same as PAT, until the token expires | Same, plus auto-expiry |
 | Claude OAuth | Long-lived | Run Claude sessions billed to the account | Access GitHub |
 | `OPENAI_API_KEY` | Until revoked | Run Codex/OpenAI calls billed to the account | Access GitHub |
@@ -141,7 +155,7 @@ dir's `hosts.yml` via `--insecure-storage`. Two hazards drive this:
   too, as `x-access-token`.
 
 The plaintext copy adds no exposure: the same token is already stored
-server-side as the repo secret, and the dir is readable only by the
+server-side as an Actions secret, and the dir is readable only by the
 maintainer's user. The dir is the bot's durable store, not install
 scratch — scope audits and reinstalls read it to skip a fresh device
 flow — so it outlives the install.

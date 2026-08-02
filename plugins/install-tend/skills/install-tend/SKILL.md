@@ -97,7 +97,11 @@ secrets:
 ```
 
 Any repo-level secret not in `secrets.allowed` triggers a `tend check`
-warning. Classify each non-bot secret and act now — don't defer:
+warning. The operational secrets (bot token, harness auth) never belong at
+repo level — steps 7–8 store them in the `tend` environment, and a
+repo-level copy from a pre-environment install is exactly the exposure the
+environment closes, so it gets deleted once the environment copy is in
+place. Classify each remaining secret and act now — don't defer:
 
 - Build/observability tokens (e.g., `CODECOV_TOKEN`, `SENTRY_DSN`) are
   fine at the repo level. Add them to the allowlist:
@@ -250,8 +254,10 @@ uvx tend@latest init --with-install-test
 ```
 
 `--with-install-test` adds a one-shot `tend-install-test.yaml` workflow
-that runs on the install PR to verify secrets are set and the committed
-workflows match the generator's current output. The next nightly regen
+that runs on the install PR to verify the committed workflows match the
+generator's current output. (It cannot see secrets — its `pull_request`
+run is outside the `tend` environment — so `tend check` is what verifies
+those.) The next nightly regen
 runs `uvx tend@latest init` without the flag, and the init cleanup step
 removes the file from the default branch.
 
@@ -465,6 +471,25 @@ If the account doesn't exist:
 
 ## 7. Harness auth token
 
+This step and step 8 store their secrets in the `tend` GitHub
+Environment — a repo-level secret is readable by any workflow the repo
+runs, including one pushed to a branch, and the environment's deployment
+policy is what closes that. Create it first (idempotent; add a policy
+entry per additional ref in `protected_branches`):
+
+```bash
+DEFAULT_BRANCH=$(gh api "repos/$REPO" --jq .default_branch)
+gh api -X PUT "repos/$REPO/environments/tend" --input - \
+  <<< '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
+gh api -X POST "repos/$REPO/environments/tend/deployment-branch-policies" \
+  -f "name=$DEFAULT_BRANCH" -f type=branch
+```
+
+A repo-level copy of an operational secret (from a pre-environment
+install) can't be read back — GitHub secrets are write-only — so mint the
+value into the environment per the steps below, then delete the
+repo-level copy; `tend check` flags it until deleted.
+
 Branch on the harness chosen in Kickoff.
 
 ### 7a. Harness = claude
@@ -473,7 +498,7 @@ The Claude action accepts two auth modes; pick whichever the user has.
 The action prefers `CLAUDE_CODE_OAUTH_TOKEN` when both are set.
 
 ```bash
-gh secret list --repo "$REPO" --json name --jq '.[].name' \
+gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' \
   | grep -E -q '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)$' \
   && echo "SET" || echo "NOT SET"
 ```
@@ -513,7 +538,7 @@ For **OAuth token**: before offering the CLI option, check:
 Then store the secret:
 
 ```bash
-echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO"
+echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
 ```
 
 For **API key**:
@@ -521,7 +546,7 @@ For **API key**:
 Have the user paste the `sk-ant-…` key, then store it:
 
 ```bash
-gh secret set ANTHROPIC_API_KEY --repo "$REPO" --body "$KEY"
+gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend --body "$KEY"
 ```
 
 ### 7b. Harness = codex
@@ -534,13 +559,13 @@ workflows (review/mention/triage/nightly/…) would break each other's
 auth mid-run. See ${CLAUDE_SKILL_DIR}/references/security-model.md.
 
 ```bash
-gh secret list --repo "$REPO" --json name --jq '.[].name' | grep -q OPENAI_API_KEY && echo "SET" || echo "NOT SET"
+gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' | grep -q OPENAI_API_KEY && echo "SET" || echo "NOT SET"
 ```
 
 If not set, have the user paste the `sk-…` key. Store it:
 
 ```bash
-gh secret set OPENAI_API_KEY --repo "$REPO" --body "$KEY"
+gh secret set OPENAI_API_KEY --repo "$REPO" --env tend --body "$KEY"
 ```
 
 ## 8. Bot token and secret
@@ -550,7 +575,7 @@ The bot's token needs scopes `repo`, `workflow`, `notifications`,
 ${CLAUDE_SKILL_DIR}/references/tend.example.yaml).
 
 This step checks what gh already stores for the bot, mints a token
-only if needed (8a or 8b), and pushes it to the repo secret (8c). It
+only if needed (8a or 8b), and pushes it to the environment secret (8c). It
 serves both the install sequence and a standalone `Bot PAT`
 scope-audit remediation; in the audit case it is the whole fix, and
 you close the issue once 8c verifies. `<bot-name>` is `bot_name` in
@@ -564,7 +589,7 @@ Bot auth lives in a dedicated config dir,
 keys by account name globally, so a keychain-backed bot login could
 overwrite the maintainer's own credential. The bot also never enters
 the default config, which git's gh credential helper answers as, so a
-stray `git push` can't land as the bot. The token is already a repo
+stray `git push` can't land as the bot. The token is already an Actions
 secret, so the on-disk copy adds no exposure. The dir is durable:
 scope audits and reinstalls read it to skip a fresh device flow. Full
 rationale: ${CLAUDE_SKILL_DIR}/references/security-model.md.
@@ -664,7 +689,7 @@ rm -rf "$HOME/.config/gh-bots/<bot-name>"
 
 ### 8c. Push token to secret
 
-Copy the bot's token to the repo secret (`<secret-name>` is the
+Copy the bot's token to the environment secret (`<secret-name>` is the
 `secrets.bot_token` value from §1, default `TEND_BOT_TOKEN`; trust
 this over any name an audit issue quotes) and verify the `Updated`
 timestamp is fresh:
@@ -675,8 +700,8 @@ BOT_GH_TOKEN=$(env -u GH_TOKEN -u GITHUB_TOKEN \
 if [ -z "$BOT_GH_TOKEN" ]; then
   echo "bot token empty — fix step 8 first" >&2
 else
-  gh secret set <secret-name> --repo "$REPO" --body "$BOT_GH_TOKEN"
-  gh secret list --repo "$REPO"
+  gh secret set <secret-name> --repo "$REPO" --env tend --body "$BOT_GH_TOKEN"
+  gh secret list --repo "$REPO" --env tend
 fi
 ```
 

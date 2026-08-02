@@ -35,13 +35,17 @@ the attacker controls the entire PR diff, which Claude reads and reasons
 about. `tend-weekly` is the least exposed — triggered on a cron with no
 user-controlled input.
 
-| Workflow | Injection surface | Attacker control | Mitigations |
+The merge restriction, the environment gate on the operational secrets, and
+fixed prompts apply to every workflow; the table lists what is specific to
+each.
+
+| Workflow | Injection surface | Attacker control | Specific mitigations |
 |----------|-------------------|-------------------|-------------|
-| **review** | PR diff content, review body on bot PRs | Full (any PR) / Medium (reviewers) | Fixed prompt, merge restriction, CLAUDE.md pinning (fork PRs) |
-| **triage** | Issue body | Partial (structured skill) | Fixed prompt, merge restriction, environment protection |
-| **mention** | Comment body on any issue/PR | Full | Fixed prompt, merge restriction, engagement verification |
-| **ci-fix** | Failed CI logs | Minimal (must break CI on default branch) | Fixed prompt, automatic trigger |
-| **weekly** | None | None | Fixed prompt, scheduled trigger |
+| **review** | PR diff content, review body on bot PRs | Full (any PR) / Medium (reviewers) | CLAUDE.md pinning (fork PRs) |
+| **triage** | Issue body | Partial (structured skill) | Structured skill |
+| **mention** | Comment body on any issue/PR | Full | Engagement verification; review events re-entered via a secretless relay |
+| **ci-fix** | Failed CI logs | Minimal (must break CI on default branch) | Automatic trigger |
+| **weekly** | None | None | Scheduled trigger |
 
 ## What we do
 
@@ -56,9 +60,90 @@ GitHub's own evaluation of the bot's standing — teams, custom roles, and
 org-level rulesets included — and the run aborts if the bot can bypass every
 restrict-updates ruleset, or if the branch is unprotected entirely.
 
-**Environment-protected secrets** (below) covers code that runs *without* a
-merge: a tag push, a release, a manual or chained dispatch. The merge
-restriction does nothing there, so that gate carries the path on its own.
+**Environment-gated secrets** covers what a run can read. A job that names
+a GitHub Environment runs only if the run's `GITHUB_REF` matches the
+environment's deployment branch policy; otherwise the job is refused before
+its first step, and the environment's secrets are released only to jobs
+that name it. Pinning the policy to refs only admins can move therefore
+decides secret access by ref. The bot has write, so it can move neither the
+default branch (merge restriction) nor any tag (tag ruleset), and managing
+environments — the policy and the secrets inside — requires admin, which
+the bot also lacks.
+
+Tend applies this to both secret classes.
+
+*Operational secrets* — the bot PAT and the harness auth — live in the
+`tend` environment, whose policy names the default branch and any
+`protected_branches`. Every generated job that reads a secret carries
+`environment: tend`; jobs that hold none (mention's relay, below) must not,
+since naming it would cost them the refs the policy excludes. This closes
+the classic no-merge exfiltration: a write-scoped actor (a leaked PAT, or a
+hijacked session that can push a branch) commits a workflow that prints the
+secrets and reads them from its own run. Branch protection never touched
+that path — it bounds what gets *merged*, not what a run can *read* — but
+the environment does: the pushed workflow's run carries the branch's own
+ref, and the job naming the environment fails with zero steps executed
+(observed on a live probe).
+
+Where each trigger runs, observed on live probes — GitHub's "runs in the
+context of the default branch" sentence for review events refers to which
+workflow *file* runs, not to `GITHUB_REF`:
+
+| Trigger | `GITHUB_REF` | `tend` gate |
+|---|---|---|
+| `issues`, `issue_comment`, `schedule`, `workflow_run`, `repository_dispatch` | default branch | passes |
+| `pull_request_target` | default branch | passes |
+| `push` to a feature branch | that branch | refused |
+| same-repo `pull_request` | `refs/pull/N/merge` | refused |
+| `pull_request_review`, `pull_request_review_comment` | `refs/pull/N/merge` | refused |
+
+The last row is the one legitimate tenant on a refused ref: tend-mention
+answers review submissions and inline review comments. The merge ref can
+never be admitted, because a same-repo `pull_request` run executes the PR
+head's own workflow files on that same ref — admitting it would hand a
+pushed workflow the secrets back. So tend-mention re-enters those events
+instead: a secretless `relay` job (only the workflow-scoped `GITHUB_TOKEN`,
+`contents: read`) receives the review event and re-posts it as a
+`repository_dispatch` carrying identifiers only (`{kind, pr, id}`). The
+dispatch run carries the default branch, passes the gate, and its verify
+job re-reads the review or comment from the API before applying the
+engagement checks. Any write-scoped actor can forge such a dispatch, which
+is why the payload carries no judgement: a forged dispatch runs the same
+reviewed workflow file, faces the same engagement checks against the record
+GitHub holds, and can point the bot at nothing the actor couldn't reach by
+posting a comment.
+
+*Release secrets* (registry tokens, signing keys) use the same mechanism in
+adopter-owned environments whose policies list the default branch and/or
+all tags (a tag-target ruleset gates `creation` and `update` with
+admin-only bypass; `update` is what force-push of an existing tag fires, so
+it must be blocked alongside `creation`). The chain holds for workflows
+whose only path to invocation is updating one of those refs: trigger on
+`push: tags:` (release) or `push: branches: [main]` (continuous deploy).
+Other triggers (`workflow_dispatch`, `release: published`, `deployment`,
+`schedule`, chained dispatches) can be initiated by a write-scoped bot
+against an allowed ref, so the env policy alone does not gate *when* they
+fire; workflows keeping those triggers need trigger-specific containment
+(typically required reviewers on the Environment) before release or deploy
+secrets are migrated there. OIDC-to-cloud deploys have no GitHub-stored
+secret to gate; there, the Environment plus the cloud provider's trust
+policy is the only control.
+
+*Migration.* Environment secrets overlay repo-level ones, and a job naming
+an environment that does not yet exist auto-creates it with no policy and
+runs normally (observed on a live probe). A repo that has not completed the
+migration therefore keeps working on its repo-level secrets, with exactly
+its old exposure — the gate protects nothing until the policy is set, the
+secrets are moved, and the repo-level copies are deleted. `tend check`
+fails on each missing piece until then: it verifies the environment exists,
+its policy is a named list covering exactly the default branch and
+`protected_branches`, the operational secrets are present in it, and no
+repo-level copy remains.
+
+Both environment chains inherit the merge restriction's assumption that the
+bot holds no role that can bypass; an admin session voids all of it the
+same way. Configuration recipe:
+`plugins/install-tend/skills/install-tend/references/security-model.md`.
 
 Everything else in this section is defense in depth: useful, but not
 load-bearing.
@@ -105,8 +190,8 @@ exact-match on the connection's real destination, so a request to a lookalike
 host gets no token. (`claude` is Node and ignores the system trust store, so it
 trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) The Codex harness
 (`codex/action.yaml`) still passes both the PAT and the model auth directly to
-the agent. The merge restriction and `tend check` remain the load-bearing
-boundaries regardless of harness.
+the agent. The merge restriction and the environment gate remain the
+load-bearing boundaries regardless of harness.
 
 **Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
 spike detection (today's volume vs 6-day baseline, scaled per repo) abort
@@ -119,34 +204,6 @@ Claude session cannot skip it. Concrete limits live in
 the composite action and the tend marketplace, not from the PR. An attacker
 can influence what Claude *reads* (the diff, the issue body) but not the
 *instructions* Claude follows or the *tools* it has access to.
-
-**Environment-protected secrets.** Release secrets (registry tokens,
-signing keys) live in GitHub Environments whose `deployment_branch_policy`
-lists only admin-gated refs: the default branch (merge restriction) and
-all tags (a sibling tag-target ruleset that gates `creation` and `update`
-with admin-only bypass; `update` is what force-push of an existing tag
-fires, so it must be blocked alongside `creation`). The bot has write,
-which is below every role that can bypass, so it cannot push to the
-default branch and cannot push any tag, and therefore cannot reach any
-environment pinned to those refs. The chain holds for workflows whose
-only path to invocation is updating one of those refs: trigger on
-`push: tags:` (release) or
-`push: branches: [main]` (continuous deploy). Other triggers
-(`workflow_dispatch`, `release: published`, `deployment`, `schedule`,
-chained dispatches) can be initiated by a write-scoped bot against an
-allowed ref, so the env policy alone does not gate them; workflows
-keeping those triggers need trigger-specific containment (typically
-required reviewers on the Environment) before release or deploy secrets
-are migrated there. The chain inherits the merge restriction's
-assumption that the bot holds no role that can bypass; an admin session
-voids both the same way. `tend check` verifies both halves: the bot's
-role, and that every bypass actor on the merge ruleset outranks write.
-
-OIDC-to-cloud deploys have no GitHub-stored secret to gate; there, the
-Environment plus the cloud provider's trust policy is the only control.
-
-Configuration recipe:
-`plugins/install-tend/skills/install-tend/references/security-model.md`.
 
 **GitHub's log masking.** Secrets stored in GitHub are automatically redacted
 from workflow logs. This is exact-match only — if a token appears
@@ -169,22 +226,15 @@ on the standard runner image anyway. The boundaries that are load-bearing
 (merge restriction, scope-limited credentials) sit outside the harness's
 local-exec sandbox regardless.
 
-**Repo write access implies secret access.** The bot PAT and the harness
-token are repo-level secrets, readable by any workflow the repo runs; unlike
-the release secrets above, they are not environment-gated. Like any GitHub
-Actions secret, a write-scoped actor (a leaked PAT, or a hijacked session that
-can push a branch) can commit a workflow that prints them and read them from
-its own run. Branch protection bounds what gets *merged*; it does not bound
-what a write-scoped run can *read*, and the merge restriction does not apply
-because nothing is merged. Forks cannot reach them: GitHub withholds secrets from
-fork-PR workflows, and the secret-bearing events (`pull_request_target`, the
-review events, `schedule`) run only the default branch's reviewed workflow
-files. Pinning these secrets to the default-branch ref with a GitHub
-Environment does not close the gap: the policy keys on `GITHUB_REF`, which
-cannot tell a legitimate `tend-mention` review event (carrying
-`refs/pull/N/merge`) from a same-repo-PR exfiltration on the same ref, so it
-would break mention's review-comment paths without gaining protection; the full
-analysis is in `TODO.md`.
+**Write access still starts workflows.** With the operational secrets
+environment-gated, a write-scoped actor can no longer read them out of a
+workflow it pushes; what it keeps is invocation. It can post the comments
+and reviews that wake the bot, and it can forge the `repository_dispatch`
+that tend-mention's relay uses — both start only the default branch's
+reviewed workflow files, with the engagement checks applied to the record
+GitHub holds rather than to the payload. The secrets are also still in
+memory during every legitimate run, so an attacker who gets code execution
+inside one retains everything the side-channel entry below describes.
 
 **Token exfiltration via side channels.** Log masking only catches exact
 string matches in stdout. An attacker who gets code execution can exfiltrate

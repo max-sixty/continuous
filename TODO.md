@@ -126,47 +126,6 @@ Limitations: triage-level approvals don't satisfy required-review policies,
 and triage can't push to human PR branches — the bot posts review
 suggestions instead.
 
-## Environment-gating operational secrets: considered, rejected
-
-Moving `TEND_BOT_TOKEN` and the harness token into a `tend` GitHub Environment
-gated to the default branch was evaluated as a way to close the no-merge exfil
-path: a write-scoped actor (a hijacked session, attacker code in the sandbox, a
-leaked PAT) pushes `.github/workflows/exfil.yml` to a branch, or opens a
-same-repo `pull_request`, and reads the repo-level secret from that run without
-ever touching the proxy. It does not work, because GitHub evaluates an
-Environment's deployment branch policy against `GITHUB_REF`, and `tend-mention`'s
-legitimate review paths share their ref with the attack.
-
-Probe on `tend-agent/tend-integration` (current GitHub behavior, 2026-06), a job
-bound to an environment whose policy admits only the default branch:
-
-| Trigger | `GITHUB_REF` | Gate |
-|---|---|---|
-| `pull_request_target` | `refs/heads/main` | passes, `HAS_SECRET` |
-| `issue_comment`, `issues`, `schedule`, `workflow_run` | `refs/heads/main` | passes |
-| `push` to a feature branch | `refs/heads/<branch>` | blocked, 0 steps |
-| same-repo `pull_request` | `refs/pull/N/merge` | blocked |
-| `pull_request_review`, `pull_request_review_comment` | `refs/pull/N/merge` | **blocked, 0 steps** |
-
-(`pull_request_target`, `issue_comment`, both review events, and `push` were
-observed directly; the rest follow from the same default-ref vs merge-ref
-families.)
-
-The gate blocks the same-repo-PR exfil attempt, but also blocks mention's
-review-submission and inline-review-comment handling: those carry the same
-`refs/pull/N/merge` ref and a ref policy cannot tell them apart. There is no ref
-pattern that admits the review events without also admitting the attack. The
-"runs in the context of the default branch" docs sentence for review events
-refers to which workflow *file* runs, not `GITHUB_REF`.
-
-The precise gate keys on the workflow file's source ref, not the execution ref.
-That value exists as the OIDC `job_workflow_ref` claim, but no native mechanism
-releases a secret on it; it needs a token-minting service. That is the GitHub
-App route above, which also retires the durable-PAT-leak risk. Until then the
-operational tokens stay repo-level and `docs/security-model.md` records the
-accepted risk: repo write access implies secret access, as with any GitHub
-secret.
-
 ## Security hardening — deferred
 
 From the old `docs/security-model.md` "what we could do but don't" — none

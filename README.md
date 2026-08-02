@@ -117,7 +117,7 @@ on every `tend@latest init`.
 
 ## Security
 
-Tend gives Claude write access to a repository. The security model has five
+Tend gives Claude write access to a repository. The security model has six
 layers:
 
 **Merge restriction** is the primary boundary. A GitHub ruleset prevents the
@@ -128,6 +128,13 @@ default branch (`current_user_can_bypass` — GitHub's evaluation, so teams,
 custom roles, and org-level rulesets are all accounted for) and refuses to
 start unless the answer is no. `tend check` verifies the setup;
 `tend check --fix` creates the ruleset.
+
+**Environment-gated secrets** — the bot token and model auth live in the
+repo's `tend` GitHub Environment, whose deployment policy admits only the
+default branch. A workflow pushed to any other branch is refused those
+secrets before its first step, so write access to the repo does not imply
+secret access. `tend check` verifies the environment, its policy, and that
+no repo-level copies remain.
 
 **Credential isolation** — the Claude harness runs the agent as a separate
 non-sudo user and keeps the bot token and Anthropic credential in a local
@@ -163,7 +170,8 @@ bot_name: my-project-bot
 # effort: medium   # codex only: low | medium | high | xhigh
 ```
 
-Repo secrets depend on the harness:
+The secrets, stored in the repo's `tend` environment (install-tend creates
+it; `tend check` verifies it), depend on the harness:
 
 | Harness    | Required secrets                                                                                                         |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------- |

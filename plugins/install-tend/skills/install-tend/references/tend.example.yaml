@@ -46,7 +46,9 @@ bot_name: my-project-bot
 
 # ## Secrets
 #
-# Repo secrets, by harness:
+# Required secrets, by harness — stored in the repo's `tend` GitHub
+# Environment (install-tend creates it; a workflow the bot pushes to a
+# branch cannot read them there):
 #
 # | Harness    | Required                                                                  |
 # |------------|---------------------------------------------------------------------------|
@@ -85,8 +87,9 @@ bot_name: my-project-bot
 #   anthropic_api_key: MY_ANTHROPIC_KEY  # claude (API key)
 #   openai_key: MY_OPENAI_KEY            # codex
 #
-# `tend check` flags repo-level secrets not in an explicit allowlist. Repos with
-# additional legitimate secrets must list them:
+# `tend check` flags repo-level secrets not in an explicit allowlist — the
+# operational secrets above never belong at repo level, and a build token
+# that does must be listed:
 #
 # secrets:
 #   allowed: ["CODECOV_TOKEN", "DEPLOY_KEY"]
