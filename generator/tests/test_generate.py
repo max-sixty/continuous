@@ -15,8 +15,8 @@ from click.testing import CliRunner
 from tend.cli import main
 from tend.config import Config
 from tend.workflows import (
-    GENERATORS,
     _deep_merge,
+    GENERATORS,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -317,7 +317,12 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
         )
     )
     generated = generate_all(cfg, with_install_test=True)
-    assert "tend-ci-fix.yaml" in {wf.filename for wf in generated}
+    # Assert the corpus is *every* workflow, not that one name is present:
+    # the next generator with a config precondition would otherwise drop out
+    # of this invariant as silently as ci-fix did.
+    assert {wf.filename for wf in generated} == {
+        f"tend-{name}.yaml" for name in GENERATORS
+    } | {"tend-install-test.yaml"}
     for wf in generated:
         data = yaml.safe_load(wf.content)
         for job_name, job in data["jobs"].items():

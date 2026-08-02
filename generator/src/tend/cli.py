@@ -212,13 +212,21 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         _print_check_results([fix_result])
         if fix_result.passed:
             fixed_any = True
+            # The environment's admitted set is read off the branch-protection
+            # results, which the ruleset just changed. Re-read them, or the
+            # policy would be written from the pre-fix picture — for a repo
+            # whose only failure was the missing ruleset, an empty one.
+            results = run_all_checks(cfg, repo)
+            failures = [r for r in results if r.passed is False]
 
     if any(r.name == "environment" for r in failures):
         click.echo()
         click.echo("Configuring the 'tend' environment...")
-        fix_result = fix_environment(
-            repo, admitted_refs(default_branch, cfg.protected_branches)
-        )
+        # Read off the same run's branch-protection results, so the policy the
+        # fix writes is the set the check just demanded — never a ref whose
+        # protection this run could not verify. An empty set can't reach here:
+        # the check reports unknown rather than failure when nothing verified.
+        fix_result = fix_environment(repo, admitted_refs(results))
         _print_check_results([fix_result])
         if fix_result.passed:
             fixed_any = True

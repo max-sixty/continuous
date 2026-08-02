@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from tend.checks import (
+    admitted_refs,
     check_environment,
     check_manual_environment,
     fix_environment,
@@ -843,6 +844,10 @@ def _gh_all_pass(*admitted: str):
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         url = args[1]
+        # The common adopter shape: no reviewer-gated environment, which the
+        # API reports as 404 rather than a bare failure.
+        if url.endswith("environments/tend-manual"):
+            return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -1320,7 +1325,7 @@ def _manual_env_gh(body: str | None):
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         if body is None:
-            return _make_completed(returncode=1)
+            return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
         return _make_completed(body)
 
     return fake
@@ -1342,12 +1347,83 @@ def _reviewer_rule(*logins: str) -> str:
     )
 
 
+def test_admitted_refs_excludes_unverified_branches() -> None:
+    """A branch whose protection could not be verified — it 404s because it
+    does not exist yet — must not be admitted. Admitting it names a ref the bot
+    can then create, and the merge restriction gates `update`, not `creation`,
+    so a workflow pushed on that new branch would read the secrets."""
+    results = [
+        CheckResult("branch-protection:main", True, ""),
+        CheckResult("branch-protection:release", None, "API error: HTTP 404"),
+        CheckResult("branch-protection:staging", False, "NOT protected"),
+        CheckResult("bot-permission", True, ""),
+    ]
+    assert admitted_refs(results) == ["main"]
+
+
+def test_unverified_protected_branch_is_not_demanded(tmp_path: Path) -> None:
+    """End to end: configuring a protected branch that does not exist yet must
+    not make the check demand a policy entry for it — `--fix` would comply, and
+    the bot could then mint the ref."""
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        if args[1].endswith("branches/release"):
+            return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
+        return _gh_all_pass()(*args, **kwargs)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=fake),
+    ):
+        results = run_all_checks(
+            _config(protected_branches=["release"]), repo="owner/repo"
+        )
+    env = next(r for r in results if r.name == "environment")
+    assert env.passed is True, env.message
+    assert "release" not in env.message
+
+
 def test_manual_environment_absent_passes() -> None:
     """Most repos run no dispatch-triggered workflow, so no environment is
     the common case rather than a misconfiguration."""
     with patch("tend.checks._gh", side_effect=_manual_env_gh(None)):
         result = check_manual_environment("owner/repo", "bot")
     assert result.passed is True
+
+
+def test_manual_environment_unreadable_does_not_pass() -> None:
+    """A 403 or a 500 looks like absence at the exit code. Passing on those
+    would clear a reviewer-less environment holding live secrets whenever one
+    request fails."""
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        return _make_completed(stderr="HTTP 403: Forbidden", returncode=1)
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_manual_environment("owner/repo", "bot")
+    assert result.passed is None
+    assert "Could not read" in result.message
+
+
+def test_manual_environment_team_reviewer_is_unverifiable() -> None:
+    """Team membership is invisible here, so a team reviewer might be the bot
+    approving itself — the same reason a Team bypass actor is unresolvable."""
+    body = json.dumps(
+        {
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "reviewers": [
+                        {"type": "Team", "reviewer": {"slug": "maintainers"}}
+                    ],
+                }
+            ]
+        }
+    )
+    with patch("tend.checks._gh", side_effect=_manual_env_gh(body)):
+        result = check_manual_environment("owner/repo", "bot")
+    assert result.passed is None
+    assert "team" in result.message
 
 
 def test_manual_environment_without_reviewers_fails() -> None:
@@ -1382,10 +1458,10 @@ def test_fix_environment_reconciles_the_admitted_set() -> None:
     drops what an earlier config left behind (a ref the bot may be able to
     push), while leaving an already-admitted ref alone — re-POSTing it errors,
     and deleting it would refuse every tend workflow."""
-    calls: list[tuple[str, ...]] = []
+    calls: list[tuple[tuple[str, ...], dict]] = []
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        calls.append(args)
+        calls.append((args, kwargs))
         if args[-1].endswith("deployment-branch-policies"):
             return _make_completed(
                 json.dumps(
@@ -1405,14 +1481,49 @@ def test_fix_environment_reconciles_the_admitted_set() -> None:
     assert result.passed is True
     added = {
         arg.split("=", 1)[1]
-        for call in calls
-        for arg in call
+        for args, _ in calls
+        for arg in args
         if arg.startswith("name=")
     }
     assert added == {"release"}
     deleted = {
-        a[-1].rsplit("/", 1)[1]
-        for a in calls
-        if "DELETE" in a and "deployment-branch-policies/" in a[-1]
+        args[-1].rsplit("/", 1)[1]
+        for args, _ in calls
+        if "DELETE" in args and "deployment-branch-policies/" in args[-1]
     }
     assert deleted == {"7"}
+
+    # The PUT body is the security-critical half: `protected_branches` mode
+    # admits any branch carrying a rule, including ones the bot can push, and
+    # the check refuses it — so a fix writing that mode would leave check and
+    # fix disagreeing forever with `--fix` reporting success.
+    put_bodies = [
+        json.loads(kwargs["input"]) for args, kwargs in calls if "PUT" in args
+    ]
+    assert put_bodies == [
+        {
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            }
+        }
+    ]
+
+
+def test_fix_environment_surfaces_a_failed_delete() -> None:
+    """A stale ref left admitted is the hole the reconcile exists to close, so
+    a failed delete must not report success."""
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        if args[-1].endswith("deployment-branch-policies"):
+            return _make_completed(
+                json.dumps({"branch_policies": [{"name": "stale", "id": 7}]})
+            )
+        if "DELETE" in args:
+            return _make_completed(stderr="HTTP 422", returncode=1)
+        return _make_completed("{}")
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = fix_environment("owner/repo", ["main"])
+    assert result.passed is False
+    assert "stale" in result.message

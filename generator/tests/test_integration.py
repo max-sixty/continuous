@@ -302,6 +302,9 @@ def _make_completed(
 def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
     url = args[1]
+    # No reviewer-gated environment, which the API reports as a 404.
+    if url.endswith("environments/tend-manual"):
+        return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
     if url == "repos/owner/repo" and ".default_branch" in args:
         return _make_completed("main\n")
     if "rules/branches" in url:

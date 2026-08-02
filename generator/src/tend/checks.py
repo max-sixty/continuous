@@ -380,6 +380,16 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
     bot can push gives the secrets back.
     """
     name = "environment"
+    if not admitted:
+        # No branch was verified unwritable, so there is no ref the policy
+        # could name. Whatever this environment says, the branch-protection
+        # failure above is the thing to fix.
+        return CheckResult(
+            name,
+            None,
+            "No branch verified as protected, so the admitted set is unknown — "
+            "fix branch protection first.",
+        )
     result = _gh("api", f"repos/{repo}/environments/{TEND_ENVIRONMENT}")
     if result is None:
         return CheckResult(name, None, "gh CLI not found")
@@ -477,20 +487,44 @@ def check_manual_environment(repo: str, bot_name: str) -> CheckResult:
     if result is None:
         return CheckResult(name, None, "gh CLI not found")
     if result.returncode != 0:
+        # Only a 404 means "no such environment". A 403 or a 500 looks
+        # identical at the exit code, and passing on those would clear a
+        # reviewer-less environment holding live secrets whenever one GET
+        # happens to fail.
+        if "404" in result.stderr or "Not Found" in result.stderr:
+            return CheckResult(
+                name, True, f"No '{TEND_MANUAL_ENVIRONMENT}' environment (not required)"
+            )
         return CheckResult(
-            name, True, f"No '{TEND_MANUAL_ENVIRONMENT}' environment (not required)"
+            name,
+            None,
+            f"Could not read the '{TEND_MANUAL_ENVIRONMENT}' environment: "
+            f"{result.stderr.strip()}",
         )
     try:
         env = json.loads(result.stdout)
     except json.JSONDecodeError:
         return CheckResult(name, None, "Could not parse environment response")
 
-    reviewers = [
-        r["reviewer"].get("login") or r["reviewer"].get("slug")
+    entries = [
+        r
         for rule in env.get("protection_rules", [])
         if rule.get("type") == "required_reviewers"
         for r in rule.get("reviewers", [])
     ]
+    # A Team reviewer is unresolvable from here for the same reason a Team
+    # bypass actor is: the bot may be a member, and this module never vouches
+    # for membership it cannot see. Any approval the team could give, the bot
+    # might be giving itself.
+    if any(r.get("type") == "Team" for r in entries):
+        return CheckResult(
+            name,
+            None,
+            f"Environment '{TEND_MANUAL_ENVIRONMENT}' requires approval from a "
+            "team, whose membership is not visible here — confirm the bot is "
+            "not in it, or name individual reviewers.",
+        )
+    reviewers = [r["reviewer"]["login"] for r in entries]
     if not reviewers:
         return CheckResult(
             name,
@@ -667,13 +701,26 @@ def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
     )
 
 
-def admitted_refs(default_branch: str, protected_branches: list[str]) -> list[str]:
-    """The refs the tend environment may admit: every one the bot cannot write.
+def admitted_refs(results: list[CheckResult]) -> list[str]:
+    """The refs the environment may admit, read off the branch-protection runs.
 
-    That is the default branch and the protected branches, both covered by the
-    merge-restriction checks.
+    Every admitted ref must be one the bot cannot write, so the admitted set is
+    exactly the branches whose protection check *passed* — not the branches the
+    config names. A configured branch that does not exist yet answers 404, which
+    the protection check reports as unverified; admitting it would name a ref the
+    bot can then create, and the merge restriction gates `update`, not
+    `creation`, so nothing would stop it carrying a workflow that reads the
+    secrets. Deriving both the check and the fix from one list also keeps them
+    from disagreeing about what the policy should say.
     """
-    return [default_branch, *(b for b in protected_branches if b != default_branch)]
+    prefix = "branch-protection:"
+    return list(
+        dict.fromkeys(
+            r.name[len(prefix) :]
+            for r in results
+            if r.name.startswith(prefix) and r.passed is True
+        )
+    )
 
 
 def fix_environment(repo: str, admitted: list[str]) -> CheckResult:
@@ -834,14 +881,12 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     # closes. The allowlist check therefore flags them as unexpected.
     allowed = set(cfg.allowed_repo_secrets)
 
-    admitted = admitted_refs(default_branch, cfg.protected_branches)
-
     results = [check_branch_protection(repo, default_branch, cfg.bot_name)]
     for branch in cfg.protected_branches:
         if branch != default_branch:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
-    results.append(check_environment(repo, admitted))
+    results.append(check_environment(repo, admitted_refs(results)))
     results.append(check_manual_environment(repo, cfg.bot_name))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness == "claude":
