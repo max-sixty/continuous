@@ -38,9 +38,11 @@ generated workflow files succeeds through the proxy) but **does not**
 need `delete_repo` — the recipe never deletes the test repo; it resets
 in place.
 
-Run steps in order. The self-heal (§2) precedes the verification
-steps so they always exercise current workflows. If §2, §4, §5, or §6
-fails, jump to §7 (reset), then §8 (report).
+Run steps in order. The self-heal (§2) precedes the verification steps so
+they always exercise current workflows. Any step failing jumps to §7
+(reset), then §8 (report) — including §1, whose reseed failure leaves the
+fixture unable to run anything, and which reports without needing the
+reset since it created nothing.
 
 ## 1. Bootstrap (first run only) and reseed (every run)
 
@@ -140,11 +142,12 @@ disables nightly so this is its only regeneration path) — push the
 regenerated files to `main` rather than failing. Assertions: `init`
 succeeds against the committed config, and is idempotent.
 
-This runs before the verification steps because §1 keeps the fixture's
-secrets in its `tend` environment: workflows a release ago, which don't
-name the environment, would be refused those secrets and every
-verification below would fail on stale files the same run is about to
-replace.
+This runs before the verification steps so they exercise the workflows
+this run just wrote, rather than the ones a release ago that it is about
+to replace. It also orders the fixture's own migration: §1 keeps its
+repo-level secret copies until the regenerated workflows name the `tend`
+environment, so the deletion only becomes possible after this step has
+run at least once against a released generator that emits it.
 
 ```bash
 WORK=$(mktemp -d)
@@ -311,21 +314,34 @@ rm -rf "$WORK"
 ## 6. Verify tend-mention (review events)
 
 Submit a comment review on the §5 PR that mentions the bot, and assert
-the bot replied. A review the bot leaves on its own PR is deliberately
-actionable — its reviewer role speaking — so the single bot identity can
-drive the full chain: review submitted → tend-mention → reply. On
-current tend the chain includes the secretless relay hop (the review
-event re-posted as a `repository_dispatch`), but the reply is the
-assertion either way; the individual legs are visible in the run list
-when this fails.
+the bot replied to *that* review. A review the bot leaves on its own PR is
+deliberately actionable — its reviewer role speaking — so the single bot
+identity can drive the full chain: review submitted → tend-mention →
+reply. On current tend the chain includes the secretless relay hop (the
+review event re-posted as a `repository_dispatch`), but the reply is the
+assertion either way; the individual legs are visible in the run list when
+this fails.
+
+The assertion is a nonce the reply must quote, not "a bot comment appeared
+after this timestamp". §5's own `tend-review` usually posts a COMMENTED
+review, which is itself an actionable review event: it starts a second
+tend-mention run whose reply lands in the same window and would satisfy a
+timestamp-only check with the mention path completely broken.
 
 ```bash
+# Self-contained: after §3's reset the only open PR is §5's, so §6 does
+# not depend on a variable set in an earlier block.
+PR=$(gh pr list --repo tend-agent/tend-integration --state open \
+  --json number,title \
+  --jq '[.[] | select(.title | startswith("integration-test review"))][0].number')
+[ -n "$PR" ] || { echo "tend-mention: no integration-test PR open"; exit 1; }
+NONCE="mention-$(date -u +%Y%m%d-%H%M%S)"
+
 PREV_RUN=$(gh run list --repo tend-agent/tend-integration \
   --workflow tend-mention --limit 1 \
   --json databaseId --jq '.[0].databaseId // empty')
-REVIEW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 gh pr review "$PR" --repo tend-agent/tend-integration --comment \
-  --body "@tend-agent integration test: reply to this review with a one-line acknowledgement."
+  --body "@tend-agent integration test: post a PR comment quoting this token verbatim: $NONCE"
 
 # A new tend-mention run registering distinguishes "trigger never fired"
 # from "fired but no reply" when the reply assertion below fails.
@@ -340,18 +356,21 @@ done
 { [ -n "$RUN_ID" ] && [ "$RUN_ID" != "$PREV_RUN" ]; } \
   || { echo "tend-mention: workflow run never registered"; exit 1; }
 
-# The reply is the end-to-end assertion: event → (relay → dispatch →)
-# verify → handle → comment.
+# The nonce is the end-to-end assertion: event → (relay → dispatch →)
+# verify → handle → reply. Reviews count as well as comments, so a reply
+# posted as a review still passes.
 REPLIES=0
 for _ in $(seq 1 60); do
-  REPLIES=$(gh pr view "$PR" --repo tend-agent/tend-integration --json comments \
-    --jq "[.comments[] | select(.author.login == \"tend-agent\"
-                                and .createdAt > \"$REVIEW_TS\")] | length")
+  REPLIES=$(gh pr view "$PR" --repo tend-agent/tend-integration \
+    --json comments,reviews \
+    --jq "[(.comments[], .reviews[])
+           | select(.author.login == \"tend-agent\" and (.body | contains(\"$NONCE\")))]
+          | length")
   [ "$REPLIES" -ge 1 ] && break
   sleep 10
 done
 [ "$REPLIES" -ge 1 ] \
-  || { echo "tend-mention: no bot reply to the review on PR #$PR"; exit 1; }
+  || { echo "tend-mention: no bot reply quoting $NONCE on PR #$PR"; exit 1; }
 ```
 
 ## 7. Reset (always — even on failure)
@@ -380,7 +399,7 @@ done
 
 ## 8. Report failure
 
-If any of §2, §4–§6 failed, open a labeled issue in `max-sixty/tend`. The
+If any step failed, open a labeled issue in `max-sixty/tend`. The
 label is created on demand so the first failure works without prior
 setup.
 

@@ -474,16 +474,16 @@ If the account doesn't exist:
 This step and step 8 store their secrets in the `tend` GitHub
 Environment — a repo-level secret is readable by any workflow the repo
 runs, including one pushed to a branch, and the environment's deployment
-policy is what closes that. Create it first (idempotent; add a policy
-entry per additional ref in `protected_branches`):
+policy is what closes that. `tend check --fix` owns the environment's
+shape (it creates it and admits exactly the default branch and each
+`protected_branches` entry), so create it with:
 
 ```bash
-DEFAULT_BRANCH=$(gh api "repos/$REPO" --jq .default_branch)
-gh api -X PUT "repos/$REPO/environments/tend" --input - \
-  <<< '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
-gh api -X POST "repos/$REPO/environments/tend/deployment-branch-policies" \
-  -f "name=$DEFAULT_BRANCH" -f type=branch
+uvx tend@latest check --fix
 ```
+
+It exits non-zero here, reporting the secrets this step and step 8 are
+about to set. Read its `environment` line: that is the one that must pass.
 
 A repo-level copy of an operational secret (from a pre-environment
 install) can't be read back — GitHub secrets are write-only — so mint the

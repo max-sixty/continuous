@@ -207,12 +207,17 @@ configured correctly, and `--fix` creates either. See
 `docs/security-model.md` for the full threat model. Alternative models
 (GitHub App, triage+fork) are in `TODO.md`.
 
-This repo's own workflows sit behind the same gate, including the
-hand-maintained ones the generator never touches. `claude-smoke` is the
-exception the gate can't cover — dispatching it on a feature branch is its
-purpose, and that ref is one the bot can push — so its secrets live in a
-second environment, `tend-manual`, protected by a required reviewer rather
-than a branch policy: each run waits for a maintainer's approval.
+The environment half is still being adopted: the workflows name it, but a
+repo is protected only once its secrets are in the environment and the
+repo-level copies are deleted, which is per-repo work `TODO.md` tracks.
+Until then a repo runs on its repo-level secrets with its old exposure.
+
+This repo's own workflows name it too, including the hand-maintained ones
+the generator never touches. `claude-smoke` is the exception the gate
+can't cover — dispatching it on a feature branch is its purpose, and that
+ref is one the bot can push — so its secrets belong in a second
+environment, `tend-manual`, protected by a required reviewer rather than a
+branch policy: each run waits for a maintainer's approval.
 
 ## Concurrency and filtering
 

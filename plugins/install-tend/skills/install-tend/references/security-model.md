@@ -58,22 +58,21 @@ policy is set, the secrets are in the environment, and the repo-level
 copies are deleted.
 
 Deploy and publish workflows declare their own Environments whose
-policies list the admin-gated refs (the default branch and/or all tags).
-Release secrets live in those environments, not at repo level. A leaked bot token can push a non-default branch, but it
-cannot push to the default branch and cannot push any tag, so no
-bot-pushed ref matches an admin-gated policy entry. The deploy job is
-rejected before it can read the secret. No admin operation → no
-admin-gated ref → no environment access → no secret.
+policies list the admin-gated refs (the default branch and/or all tags),
+and their release secrets live there rather than at repo level. A leaked
+bot token can push a non-default branch, but no ref it can push matches
+such a policy, so the deploy job is rejected before it reads the secret:
+no admin operation → no admin-gated ref → no environment access → no
+secret.
 
-That guarantee assumes the privileged workflow is reachable only by
-updating an admin-gated ref: trigger on `push: tags:` (release) or
-`push: branches: [<default-branch>]` (continuous deploy). Other triggers
-(`workflow_dispatch`, `release: published`, `deployment`, `schedule`,
-chained dispatches) can be initiated by a write-scoped bot against an
-allowed ref, so the env policy alone does not gate them. Workflows
-keeping those triggers need trigger-specific containment, typically
-required reviewers on the Environment, before release or deploy secrets
-are migrated there.
+That holds only for a workflow whose sole path to invocation is updating
+an admin-gated ref (`push: tags:`, or `push:` on the default branch).
+Triggers a write-scoped bot can fire itself — `workflow_dispatch`,
+`release: published`, `deployment`, `schedule`, chained dispatches — need
+containment of their own, typically required reviewers on the
+Environment. The canonical treatment, including which triggers were
+probed rather than inferred, is the source repo's `docs/security-model.md`
+linked above; install does not configure release secrets.
 
 The composite action refuses to start if the default branch is unprotected.
 

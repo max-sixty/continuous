@@ -85,20 +85,24 @@ the environment does: the pushed workflow's run carries the branch's own
 ref, and the job naming the environment fails with zero steps executed
 (observed on a live probe).
 
-Where each trigger runs, observed on live probes — GitHub's "runs in the
-context of the default branch" sentence for review events refers to which
-workflow *file* runs, not to `GITHUB_REF`:
+Where each trigger runs. A ✓ row was observed on a live probe; the rest
+carry the ref of the family they belong to and were not probed
+individually. GitHub's "runs in the context of the default branch"
+sentence for review events refers to which workflow *file* runs, not to
+`GITHUB_REF` — which is why the review rows had to be measured rather than
+read off the docs:
 
-| Trigger | `GITHUB_REF` | `tend` gate |
-|---|---|---|
-| `issues`, `issue_comment`, `schedule`, `workflow_run`, `repository_dispatch` | default branch | passes |
-| `pull_request_target` | default branch | passes |
-| `push` to a feature branch | that branch | refused |
-| same-repo `pull_request` | `refs/pull/N/merge` | refused |
-| `pull_request_review`, `pull_request_review_comment` | `refs/pull/N/merge` | refused |
+| Trigger | `GITHUB_REF` | `tend` gate | |
+|---|---|---|---|
+| `issue_comment`, `repository_dispatch` | default branch | passes | ✓ |
+| `issues`, `schedule`, `workflow_run` | default branch | passes | |
+| `pull_request_target` | default branch | passes | ✓ |
+| `push` to a feature branch | that branch | refused | ✓ |
+| same-repo `pull_request` | `refs/pull/N/merge` | refused | |
+| `pull_request_review`, `pull_request_review_comment` | `refs/pull/N/merge` | refused | ✓ |
 
-The last row is the one legitimate tenant on a refused ref: tend-mention
-answers review submissions and inline review comments. The merge ref can
+Only one workflow legitimately needs a refused ref: tend-mention answers
+review submissions and inline review comments. The merge ref can
 never be admitted, because a same-repo `pull_request` run executes the PR
 head's own workflow files on that same ref — admitting it would hand a
 pushed workflow the secrets back. So tend-mention re-enters those events
@@ -117,9 +121,10 @@ The relay stops at the repository boundary. A review event on a *fork* PR
 does start a run, on the merge ref and from the PR head's own workflow
 files, but that run's token is read-only: its `POST /repos/…/dispatches`
 returns 403 (probed). So a fork PR's reviews reach the bot only through the
-notifications poll, minutes later rather than seconds — the cost of the
-same property that makes the relay safe, since a fork run that could ring
-the doorbell would be a fork run that could write to the base repo.
+notifications poll, minutes later rather than seconds. That is the cost of
+the property the relay depends on: a fork run that could start a
+secret-bearing run in the base repo would be a fork run with write access
+to it.
 
 *Release secrets* (registry tokens, signing keys) use the same mechanism in
 adopter-owned environments whose policies list the default branch and/or
