@@ -107,7 +107,8 @@ never be admitted, because a same-repo `pull_request` run executes the PR
 head's own workflow files on that same ref — admitting it would hand a
 pushed workflow the secrets back. So tend-mention re-enters those events
 instead: a secretless `relay` job (only the workflow-scoped `GITHUB_TOKEN`,
-`contents: read`) receives the review event and re-posts it as a
+`contents: write`, which is what the dispatch POST requires — `read` is
+refused 403, probed) receives the review event and re-posts it as a
 `repository_dispatch` carrying identifiers only (`{kind, pr, id}`). The
 dispatch run carries the default branch, passes the gate, and its verify
 job re-reads the review or comment from the API before applying the

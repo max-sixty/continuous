@@ -64,10 +64,17 @@ jobs:
        github.event_name == 'pull_request_review_comment') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    # No secrets here, and `contents: read` is all the dispatch POST needs ?
-    # verified against the API rather than assumed.
+    # No secrets here. `contents: write` is what the dispatch POST needs, and
+    # is the whole of what this token can do ? probed both ways on a live
+    # repo: an otherwise identical same-repo run declaring `contents: read`
+    # is refused with 403, so a narrower token would leave every review
+    # mention unanswered rather than merely unprivileged. It grants nobody a
+    # new capability: only someone who can already push a branch can open the
+    # same-repo PR whose workflow file this is, and they could declare any
+    # permissions they liked in it. The merge restriction is what bounds that,
+    # here as everywhere.
     permissions:
-      contents: read
+      contents: write
     steps:
       # Identifiers only: `verify` re-reads the review or comment from the
       # API, so the words the bot weighs and acts on are the ones GitHub

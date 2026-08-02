@@ -474,7 +474,11 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
         "the relay must stay outside the secrets' environment — naming it "
         "would block the very refs it exists to accept"
     )
-    assert relay["permissions"] == {"contents": "read"}
+    # `contents: write` is what POST /dispatches requires — probed: an
+    # identical same-repo run with `contents: read` is refused 403, which
+    # would leave every review mention unanswered. Pinned as the whole set,
+    # so a scope added here has to be argued for.
+    assert relay["permissions"] == {"contents": "write"}
     # Identifiers only: verify re-reads the review from the API, so nothing
     # judged downstream comes from the forgeable dispatch payload.
     relay_run = relay["steps"][-1]["run"]

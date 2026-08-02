@@ -301,10 +301,19 @@ def _make_completed(
 
 def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
-    url = args[1]
-    # No reviewer-gated environment, which the API reports as a 404.
-    if url.endswith("environments/tend-manual"):
-        return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
+    url = next(a for a in args if a.startswith("repos/") or a.startswith("orgs/"))
+    # Only the ref-gated environment exists, holding the operational secrets.
+    if url.endswith("/environments"):
+        return _make_completed("tend\n")
+    if url.endswith("/secrets") and "/environments/" in url:
+        names = (
+            ["TEND_BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+            if url.endswith("tend/secrets")
+            else []
+        )
+        if any(a.startswith("[.secrets") for a in args):
+            return _make_completed(json.dumps(names))
+        return _make_completed("\n".join(names) + "\n")
     if url == "repos/owner/repo" and ".default_branch" in args:
         return _make_completed("main\n")
     if "rules/branches" in url:
@@ -350,7 +359,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
             )
         )
     if url.endswith("deployment-branch-policies"):
-        return _make_completed('["main"]\n')
+        return _make_completed("main\n")
     if url.endswith("environments/tend"):
         return _make_completed(
             json.dumps(
@@ -384,7 +393,7 @@ def test_check_full_pipeline_with_mocked_gh(
     ):
         result = CliRunner().invoke(main, ["check", "--repo", "owner/repo"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "FAIL" not in result.output
     # branch-protection + bot-permission + environment + manual-environment
     # + secrets + claude-auth + allowlist = 7

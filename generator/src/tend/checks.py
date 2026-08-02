@@ -16,7 +16,7 @@ import subprocess
 from dataclasses import dataclass
 
 from tend.config import Config
-from tend.workflows import TEND_ENVIRONMENT, TEND_MANUAL_ENVIRONMENT
+from tend.workflows import TEND_ENVIRONMENT
 
 
 # GitHub's base repository role IDs, as they appear in a ruleset's
@@ -431,18 +431,18 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
             "protected_branches, so the admitted set is the one tend verifies.",
         )
 
+    # `--paginate`: a stale policy set is exactly the case that can exceed one
+    # page, and an unread tail is one this check would report as absent.
     listed = _gh(
         "api",
+        "--paginate",
         f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
         "--jq",
-        "[.branch_policies[].name]",
+        ".branch_policies[].name",
     )
     if listed is None or listed.returncode != 0:
         return CheckResult(name, None, "Could not list deployment branch policies")
-    try:
-        names = set(json.loads(listed.stdout))
-    except json.JSONDecodeError:
-        return CheckResult(name, None, "Could not parse branch policy response")
+    names = set(listed.stdout.split())
 
     # The admitted set must match exactly, in both directions. An extra ref is
     # one tend does not verify the bot is kept off; a missing one refuses every
@@ -473,79 +473,109 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
     )
 
 
-def check_manual_environment(repo: str, bot_name: str) -> CheckResult:
-    """The reviewer-gated environment, where a repo declares one.
+def _reviewer_gate(env: dict, bot_name: str) -> str | None:
+    """Why this environment's reviewer gate does not hold, or None if it does.
 
-    A branch policy gates refs, so it cannot gate a `workflow_dispatch` the
-    bot fires on a ref it chose. The substitute is a required reviewer, and it
-    only holds while the reviewer list is non-empty and excludes the bot —
-    otherwise the environment is a repo-level secret wearing a gate. Absent
-    means the repo runs no such workflow, which is the common case.
+    A Team reviewer is unresolvable from here for the same reason a Team bypass
+    actor is (see BYPASS_ACTOR_TYPES_ABOVE_BOT): the bot may be a member, so any
+    approval the team could give, the bot might be giving itself.
     """
-    name = "manual-environment"
-    result = _gh("api", f"repos/{repo}/environments/{TEND_MANUAL_ENVIRONMENT}")
-    if result is None:
-        return CheckResult(name, None, "gh CLI not found")
-    if result.returncode != 0:
-        # Only a 404 means "no such environment". A 403 or a 500 looks
-        # identical at the exit code, and passing on those would clear a
-        # reviewer-less environment holding live secrets whenever one GET
-        # happens to fail.
-        if "404" in result.stderr or "Not Found" in result.stderr:
-            return CheckResult(
-                name, True, f"No '{TEND_MANUAL_ENVIRONMENT}' environment (not required)"
-            )
-        return CheckResult(
-            name,
-            None,
-            f"Could not read the '{TEND_MANUAL_ENVIRONMENT}' environment: "
-            f"{result.stderr.strip()}",
-        )
-    try:
-        env = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return CheckResult(name, None, "Could not parse environment response")
-
     entries = [
         r
         for rule in env.get("protection_rules", [])
         if rule.get("type") == "required_reviewers"
         for r in rule.get("reviewers", [])
     ]
-    # A Team reviewer is unresolvable from here for the same reason a Team
-    # bypass actor is: the bot may be a member, and this module never vouches
-    # for membership it cannot see. Any approval the team could give, the bot
-    # might be giving itself.
+    if not entries:
+        return "has no required reviewers"
     if any(r.get("type") == "Team" for r in entries):
-        return CheckResult(
-            name,
-            None,
-            f"Environment '{TEND_MANUAL_ENVIRONMENT}' requires approval from a "
-            "team, whose membership is not visible here — confirm the bot is "
-            "not in it, or name individual reviewers.",
+        return (
+            "requires approval from a team, whose membership is not visible here"
+            f" — confirm '{bot_name}' is not in it, or name individual reviewers"
         )
+    # GitHub logins are case-insensitive and the config takes whatever case the
+    # maintainer typed, so casefolded equality is the identity test.
     reviewers = [r["reviewer"]["login"] for r in entries]
-    if not reviewers:
+    if bot_name.casefold() in {login.casefold() for login in reviewers}:
+        return f"lists the bot ('{bot_name}') as a reviewer, so it approves its own run"
+    return None
+
+
+def check_secret_environments(repo: str, cfg: Config) -> CheckResult:
+    """Every environment holding an operational secret is gated somehow.
+
+    `tend` is gated by its branch policy, which `check_environment` verifies.
+    Any *other* environment holding the same secrets is reachable by a trigger
+    the branch policy cannot gate — a `workflow_dispatch` the bot fires on a ref
+    it chose — so its gate has to be a required reviewer instead.
+
+    Keyed on the property rather than on the name `tend-manual`, because a check
+    that reads one name passes when that environment is renamed, or when a
+    second one is stood up beside it. The name is a convention; the secrets are
+    the exposure.
+    """
+    name = "secret-environments"
+    operational = {
+        cfg.bot_token_secret,
+        cfg.claude_token_secret,
+        cfg.anthropic_api_key_secret,
+        cfg.openai_key_secret,
+    }
+
+    listed = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/environments",
+        "--jq",
+        ".environments[].name",
+    )
+    if listed is None:
+        return CheckResult(name, None, "gh CLI not found")
+    if listed.returncode != 0:
+        return CheckResult(
+            name, None, f"Could not list environments: {listed.stderr.strip()}"
+        )
+
+    ungated: list[str] = []
+    holders: list[str] = []
+    for env_name in listed.stdout.split():
+        secrets = _gh(
+            "api",
+            "--paginate",
+            f"repos/{repo}/environments/{env_name}/secrets",
+            "--jq",
+            ".secrets[].name",
+        )
+        if secrets is None or secrets.returncode != 0:
+            return CheckResult(
+                name,
+                None,
+                f"Could not list secrets in '{env_name}' (requires admin access)",
+            )
+        if not operational & set(secrets.stdout.split()):
+            continue
+        holders.append(env_name)
+        if env_name == TEND_ENVIRONMENT:
+            continue  # Gated by its branch policy; `environment` verifies that.
+        detail = _gh("api", f"repos/{repo}/environments/{env_name}")
+        if detail is None or detail.returncode != 0:
+            return CheckResult(name, None, f"Could not read environment '{env_name}'")
+        reason = _reviewer_gate(json.loads(detail.stdout), cfg.bot_name)
+        if reason:
+            ungated.append(f"'{env_name}' {reason}")
+
+    if ungated:
         return CheckResult(
             name,
             False,
-            f"Environment '{TEND_MANUAL_ENVIRONMENT}' has no required reviewers, so "
-            "a workflow the bot dispatches on a branch it pushed reads its secrets "
-            "unattended. Add a reviewer in Settings > Environments.",
+            "An environment holding the operational secrets is reachable without a "
+            f"human: {'; '.join(ungated)}. Only '{TEND_ENVIRONMENT}' is gated by refs; "
+            "anything else needs a required reviewer that is not the bot.",
         )
-    if bot_name in reviewers:
-        return CheckResult(
-            name,
-            False,
-            f"Environment '{TEND_MANUAL_ENVIRONMENT}' lists the bot "
-            f"('{bot_name}') as a required reviewer, so it can approve its own "
-            "run. Remove it; the reviewer is what a human approval means here.",
-        )
+    if not holders:
+        return CheckResult(name, True, "No environment holds the operational secrets")
     return CheckResult(
-        name,
-        True,
-        f"Environment '{TEND_MANUAL_ENVIRONMENT}' requires approval from "
-        f"{', '.join(sorted(reviewers))}",
+        name, True, f"Secret-holding environments are gated: {', '.join(holders)}"
     )
 
 
@@ -758,12 +788,18 @@ def fix_environment(repo: str, admitted: list[str]) -> CheckResult:
 
     listed = _gh(
         "api",
+        "--paginate",
         f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
+        "--jq",
+        '.branch_policies[] | "\(.name) \(.id)"',
     )
     if listed is None or listed.returncode != 0:
         return CheckResult(name, None, "Could not list deployment branch policies")
-    policies = json.loads(listed.stdout)["branch_policies"]
-    existing = {p["name"]: p["id"] for p in policies}
+    existing = dict(
+        (line.split()[0], line.split()[1])
+        for line in listed.stdout.splitlines()
+        if line
+    )
 
     for branch in admitted:
         if branch in existing:
@@ -887,7 +923,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
     results.append(check_environment(repo, admitted_refs(results)))
-    results.append(check_manual_environment(repo, cfg.bot_name))
+    results.append(check_secret_environments(repo, cfg))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness == "claude":
         results.append(check_claude_auth(repo, cfg))

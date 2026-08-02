@@ -11,9 +11,8 @@ import pytest
 from click.testing import CliRunner
 
 from tend.checks import (
-    admitted_refs,
     check_environment,
-    check_manual_environment,
+    check_secret_environments,
     fix_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
@@ -31,6 +30,7 @@ from tend.checks import (
 )
 from tend.cli import main
 from tend.config import Config
+from tend.workflows import TEND_ENVIRONMENT
 
 
 def _config(
@@ -843,11 +843,18 @@ def _gh_all_pass(*admitted: str):
     admitted = admitted or ("main",)
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        url = args[1]
-        # The common adopter shape: no reviewer-gated environment, which the
-        # API reports as 404 rather than a bare failure.
-        if url.endswith("environments/tend-manual"):
-            return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
+        url = _url(args)
+        # The common adopter shape: only the ref-gated environment exists.
+        if url.endswith("/environments"):
+            return _make_completed(f"{TEND_ENVIRONMENT}\n")
+        if url.endswith("/secrets") and "/environments/" in url:
+            # Two callers read this path with different `--jq` shapes: the
+            # membership check wants a JSON array, the environment sweep one
+            # name per line. The fake answers whichever was asked for.
+            names = ["T1", "T2"] if url.endswith(f"{TEND_ENVIRONMENT}/secrets") else []
+            if any(a.startswith("[.secrets") for a in args):
+                return _make_completed(json.dumps(names))
+            return _make_completed("\n".join(names) + "\n")
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -864,7 +871,7 @@ def _gh_all_pass(*admitted: str):
             # A correctly configured repo admits every ref it protects, so the
             # all-pass fake answers with the config's own set rather than a fixed
             # list — the check demands the two match exactly.
-            return _make_completed(json.dumps(list(admitted)))
+            return _make_completed("\n".join(admitted) + "\n")
         if url.endswith("environments/tend"):
             return _make_completed(
                 json.dumps(
@@ -1220,11 +1227,18 @@ def test_init_prints_check_reminder(
 # ---------------------------------------------------------------------------
 
 
-def _env_gh(env_body: str | None, policies: str = '["main"]\n"'):
+def _url(args: tuple[str, ...]) -> str:
+    """The API path in a `_gh` call, wherever flags put it."""
+    return next(a for a in args if a.startswith("repos/") or a.startswith("orgs/"))
+
+
+def _env_gh(env_body: str | None, policies: str = "main"):
+    """`policies` is the newline-joined branch-policy names the API returns."""
+
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        url = args[1]
+        url = _url(args)
         if url.endswith("deployment-branch-policies"):
-            return _make_completed(policies.rstrip('"'))
+            return _make_completed(policies + "\n")
         if url.endswith("environments/tend"):
             if env_body is None:
                 return _make_completed(returncode=1)
@@ -1279,9 +1293,7 @@ def test_environment_extra_admitted_branch_fails() -> None:
             }
         }
     )
-    with patch(
-        "tend.checks._gh", side_effect=_env_gh(body, policies='["main","staging"]\n"')
-    ):
+    with patch("tend.checks._gh", side_effect=_env_gh(body, policies="main\nstaging")):
         result = check_environment("owner/repo", ["main"])
     assert result.passed is False
     assert "staging" in result.message
@@ -1296,9 +1308,7 @@ def test_environment_admitting_only_verified_refs_passes() -> None:
             }
         }
     )
-    with patch(
-        "tend.checks._gh", side_effect=_env_gh(body, policies='["main","release"]\n"')
-    ):
+    with patch("tend.checks._gh", side_effect=_env_gh(body, policies="main\nrelease")):
         result = check_environment("owner/repo", ["main", "release"])
     assert result.passed is True
 
@@ -1314,143 +1324,123 @@ def test_environment_missing_admitted_ref_fails() -> None:
             }
         }
     )
-    with patch("tend.checks._gh", side_effect=_env_gh(body, policies='["main"]\n"')):
+    with patch("tend.checks._gh", side_effect=_env_gh(body, policies="main")):
         result = check_environment("owner/repo", ["main", "release"])
     assert result.passed is False
     assert "does not admit release" in result.message
 
 
-def _manual_env_gh(body: str | None):
-    """A `_gh` fake answering the tend-manual environment lookup."""
+def _secret_env_gh(environments: dict[str, tuple[list[str], dict]]):
+    """A `_gh` fake serving the calls `check_secret_environments` makes:
+    the environment list, each environment's secret names, and its detail."""
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        if body is None:
-            return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
-        return _make_completed(body)
+        url = args[-3] if "--jq" in args else args[-1]
+        if url.endswith("/environments"):
+            return _make_completed("\n".join(environments) + "\n")
+        for env_name, (secrets, detail) in environments.items():
+            if url.endswith(f"/environments/{env_name}/secrets"):
+                return _make_completed("\n".join(secrets) + "\n")
+            if url.endswith(f"/environments/{env_name}"):
+                return _make_completed(json.dumps(detail))
+        return _make_completed(returncode=1)
 
     return fake
 
 
-def _reviewer_rule(*logins: str) -> str:
-    return json.dumps(
-        {
-            "protection_rules": [
-                {
-                    "type": "required_reviewers",
-                    "reviewers": [
-                        {"type": "User", "reviewer": {"login": login}}
-                        for login in logins
-                    ],
-                }
-            ]
-        }
-    )
+def _reviewers(*entries: tuple[str, str]) -> dict:
+    return {
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "reviewers": [
+                    {"type": kind, "reviewer": {"login": who, "slug": who}}
+                    for kind, who in entries
+                ],
+            }
+        ]
+    }
 
 
-def test_admitted_refs_excludes_unverified_branches() -> None:
-    """A branch whose protection could not be verified — it 404s because it
-    does not exist yet — must not be admitted. Admitting it names a ref the bot
-    can then create, and the merge restriction gates `update`, not `creation`,
-    so a workflow pushed on that new branch would read the secrets."""
-    results = [
-        CheckResult("branch-protection:main", True, ""),
-        CheckResult("branch-protection:release", None, "API error: HTTP 404"),
-        CheckResult("branch-protection:staging", False, "NOT protected"),
-        CheckResult("bot-permission", True, ""),
-    ]
-    assert admitted_refs(results) == ["main"]
-
-
-def test_unverified_protected_branch_is_not_demanded(tmp_path: Path) -> None:
-    """End to end: configuring a protected branch that does not exist yet must
-    not make the check demand a policy entry for it — `--fix` would comply, and
-    the bot could then mint the ref."""
-
-    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        if args[1].endswith("branches/release"):
-            return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
-        return _gh_all_pass()(*args, **kwargs)
-
-    with (
-        patch("shutil.which", return_value="/usr/bin/gh"),
-        patch("tend.checks._gh", side_effect=fake),
-    ):
-        results = run_all_checks(
-            _config(protected_branches=["release"]), repo="owner/repo"
-        )
-    env = next(r for r in results if r.name == "environment")
-    assert env.passed is True, env.message
-    assert "release" not in env.message
-
-
-def test_manual_environment_absent_passes() -> None:
-    """Most repos run no dispatch-triggered workflow, so no environment is
-    the common case rather than a misconfiguration."""
-    with patch("tend.checks._gh", side_effect=_manual_env_gh(None)):
-        result = check_manual_environment("owner/repo", "bot")
+def test_secret_environments_none_holding_secrets_passes() -> None:
+    """Before the migration nothing holds them, and an environment holding no
+    operational secret has nothing to gate."""
+    fake = _secret_env_gh({"tend": ([], {}), "github-pages": (["PAGES"], {})})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config())
     assert result.passed is True
 
 
-def test_manual_environment_unreadable_does_not_pass() -> None:
-    """A 403 or a 500 looks like absence at the exit code. Passing on those
-    would clear a reviewer-less environment holding live secrets whenever one
-    request fails."""
-
-    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        return _make_completed(stderr="HTTP 403: Forbidden", returncode=1)
-
+def test_secret_environments_tend_is_gated_by_its_policy() -> None:
+    """`tend` earns its pass from the branch policy the `environment` check
+    verifies, so holding the secrets there is not a finding."""
+    fake = _secret_env_gh({"tend": (["T1", "T2"], {})})
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_manual_environment("owner/repo", "bot")
-    assert result.passed is None
-    assert "Could not read" in result.message
+        result = check_secret_environments("owner/repo", _config())
+    assert result.passed is True
+    assert "tend" in result.message
 
 
-def test_manual_environment_team_reviewer_is_unverifiable() -> None:
-    """Team membership is invisible here, so a team reviewer might be the bot
-    approving itself — the same reason a Team bypass actor is unresolvable."""
-    body = json.dumps(
-        {
-            "protection_rules": [
-                {
-                    "type": "required_reviewers",
-                    "reviewers": [
-                        {"type": "Team", "reviewer": {"slug": "maintainers"}}
-                    ],
-                }
-            ]
-        }
-    )
-    with patch("tend.checks._gh", side_effect=_manual_env_gh(body)):
-        result = check_manual_environment("owner/repo", "bot")
-    assert result.passed is None
-    assert "team" in result.message
-
-
-def test_manual_environment_without_reviewers_fails() -> None:
-    """Reviewers are the whole protection: this environment has no branch
-    policy, so without them its secrets are repo-level with extra steps."""
-    body = json.dumps({"protection_rules": [{"type": "wait_timer", "wait_timer": 5}]})
-    with patch("tend.checks._gh", side_effect=_manual_env_gh(body)):
-        result = check_manual_environment("owner/repo", "bot")
+def test_secret_environments_flags_an_ungated_holder() -> None:
+    """Any environment other than `tend` is reachable by a trigger no branch
+    policy gates, so without a reviewer its secrets are ungated."""
+    fake = _secret_env_gh({"tend-manual": (["T1"], {"protection_rules": []})})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config())
     assert result.passed is False
     assert "no required reviewers" in result.message
 
 
-def test_manual_environment_with_bot_reviewer_fails() -> None:
-    """A bot that can approve its own run is not a human approval."""
-    with patch("tend.checks._gh", side_effect=_manual_env_gh(_reviewer_rule("bot"))):
-        result = check_manual_environment("owner/repo", "bot")
+def test_secret_environments_is_keyed_on_secrets_not_on_the_name() -> None:
+    """The gate must not depend on the name `tend-manual`: renaming the
+    environment, or standing a second one beside it, must still be checked."""
+    fake = _secret_env_gh({"smoke-secrets": (["T2"], {"protection_rules": []})})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config())
     assert result.passed is False
-    assert "as a required reviewer" in result.message
+    assert "smoke-secrets" in result.message
 
 
-def test_manual_environment_with_human_reviewer_passes() -> None:
-    with patch(
-        "tend.checks._gh", side_effect=_manual_env_gh(_reviewer_rule("maintainer"))
-    ):
-        result = check_manual_environment("owner/repo", "bot")
+def test_secret_environments_accepts_a_human_reviewer() -> None:
+    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("User", "maintainer")))})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config())
     assert result.passed is True
-    assert "maintainer" in result.message
+
+
+def test_secret_environments_rejects_the_bot_as_reviewer() -> None:
+    """Case-insensitively: GitHub logins are, and the config takes whatever
+    case the maintainer typed."""
+    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("User", "Bot")))})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config(bot_name="bot"))
+    assert result.passed is False
+    assert "approves its own run" in result.message
+
+
+def test_secret_environments_team_reviewer_is_unverifiable() -> None:
+    """Team membership is invisible here, so the bot may be in it — the same
+    stance the ruleset check takes on a Team bypass actor."""
+    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("Team", "maints")))})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config())
+    assert result.passed is False
+    assert "team" in result.message
+
+
+def test_secret_environments_unreadable_does_not_pass() -> None:
+    """A 403 listing secrets must not read as 'holds none' — that would clear
+    an ungated environment whenever the request failed."""
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        url = args[-3] if "--jq" in args else args[-1]
+        if url.endswith("/environments"):
+            return _make_completed("tend-manual\n")
+        return _make_completed(stderr="HTTP 403", returncode=1)
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config())
+    assert result.passed is None
 
 
 def test_fix_environment_reconciles_the_admitted_set() -> None:
@@ -1462,17 +1452,8 @@ def test_fix_environment_reconciles_the_admitted_set() -> None:
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         calls.append((args, kwargs))
-        if args[-1].endswith("deployment-branch-policies"):
-            return _make_completed(
-                json.dumps(
-                    {
-                        "branch_policies": [
-                            {"name": "main", "id": 1},
-                            {"name": "stale", "id": 7},
-                        ]
-                    }
-                )
-            )
+        if _url(args).endswith("deployment-branch-policies"):
+            return _make_completed("main 1\nstale 7\n")
         return _make_completed("{}")
 
     with patch("tend.checks._gh", side_effect=fake):
@@ -1515,10 +1496,8 @@ def test_fix_environment_surfaces_a_failed_delete() -> None:
     a failed delete must not report success."""
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        if args[-1].endswith("deployment-branch-policies"):
-            return _make_completed(
-                json.dumps({"branch_policies": [{"name": "stale", "id": 7}]})
-            )
+        if _url(args).endswith("deployment-branch-policies"):
+            return _make_completed("stale 7\n")
         if "DELETE" in args:
             return _make_completed(stderr="HTTP 422", returncode=1)
         return _make_completed("{}")
