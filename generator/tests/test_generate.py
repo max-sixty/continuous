@@ -427,6 +427,24 @@ def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
     assert steps[pr_idx]["with"]["clean"] is False
 
 
+def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
+    """The base checkout is setup's, so it renders only alongside setup.
+
+    With nothing to run against the base tree, a second full-history clone is
+    pure overhead. `clean` goes with it — the action consults it only when it
+    finds an existing repo, which a lone checkout never does.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    steps = data["jobs"]["review"]["steps"]
+
+    checkouts = [s for s in steps if s.get("uses") == "actions/checkout@v7"]
+    assert len(checkouts) == 1
+    assert checkouts[0]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
+    assert "clean" not in checkouts[0]["with"]
+
+
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
     """`raw` was removed in favor of structured steps — the error message
     must point users at the two supported paths so they can migrate."""
