@@ -1,7 +1,6 @@
 {# The action ref pins to the generator's own release tag. Every harness ships
-   from this repo under a harness-named path (claude/, claude-interactive/,
-   codex/); release tags are
-   immutable per docs/security-model.md, so the pin is a stable supply-chain
+   from this repo under a harness-named path (claude/, codex/); release tags
+   are immutable per docs/security-model.md, so the pin is a stable supply-chain
    anchor. Consumers move forward via the nightly `uvx tend@latest init` regen
    pulling a newer generator, which restamps a newer tag as a reviewable diff
    in their own repo. `version("tend")` only resolves to an existing tag when
@@ -18,8 +17,6 @@
 {% macro agent_step(cfg, prompt_body, if_condition='') %}
 {% if cfg.harness == 'claude' %}
       - uses: max-sixty/tend/claude@<<tend_version>>
-{% elif cfg.harness == 'claude-interactive' %}
-      - uses: max-sixty/tend/claude-interactive@<<tend_version>>
 {% else %}
       - uses: max-sixty/tend/codex@<<tend_version>>
 {% endif %}
@@ -28,7 +25,7 @@
 {% endif %}
         with:
           github_token: ${{ secrets.<<cfg.bot_token_secret>> }}
-{% if cfg.harness in ('claude', 'claude-interactive') %}
+{% if cfg.harness == 'claude' %}
           claude_code_oauth_token: ${{ secrets.<<cfg.claude_token_secret>> }}
           anthropic_api_key: ${{ secrets.<<cfg.anthropic_api_key_secret>> }}
 {% else %}
@@ -39,7 +36,7 @@
 {% endif %}
           bot_name: <<cfg.bot_name>>
           model: <<cfg.model>>
-{% if cfg.harness in ('claude', 'claude-interactive') %}
+{% if cfg.harness == 'claude' %}
 {% if cfg.sandbox_path %}
           sandbox_path: |
 {% for dir in cfg.sandbox_path %}

@@ -4,11 +4,9 @@ description: >-
   reviews PRs, triages issues, fixes CI. Runs the official `claude` binary
   in headless print mode (`claude -p`) as a separate, non-sudo sandbox user
   behind a local credential-injecting proxy: the bot PAT and the Anthropic
-  credential live only in the proxy, never in the agent's environment. This
-  is tend's default, recommended Claude harness. `claude-interactive/action.yaml`
-  is a PTY-supervised variant of the same binary; inputs mirror this action
-  for swap-in parity, and the two share the proxy machinery under the
-  top-level `proxy/` and the step scripts under `shared/steps/`.
+  credential live only in the proxy, never in the agent's environment. The
+  proxy machinery lives under the top-level `proxy/` and the cross-harness
+  step bodies under `shared/steps/`.
 
 inputs:
   github_token:
@@ -177,8 +175,8 @@ runs:
     #     gets a dummy in the matching scheme so `claude` emits the right
     #     headers, and the proxy swaps in the real secret. So even the model
     #     auth never reaches the agent's env or disk.
-    # The proxy machinery is shared with claude-interactive/action.yaml and
-    # lives at the top-level proxy/ — reused in place, not duplicated.
+    # The proxy machinery lives at the top-level proxy/, shared with the
+    # codex harness's step scripts under shared/steps/.
     # ACTION_PATH points at the repo root so setup-sandbox.sh's
     # `${ACTION_PATH}/proxy/inject_credentials.py` resolves.
     # See ../proxy/setup-sandbox.sh and ../proxy/inject_credentials.py.

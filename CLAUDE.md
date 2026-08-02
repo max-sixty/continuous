@@ -32,23 +32,6 @@ Four pieces:
      binary headless (`claude -p`) as a non-sudo sandbox user behind the
      credential-injecting proxy; completion is the process exit code.
      Inputs in `claude/action.yaml`.
-   - `max-sixty/tend/claude-interactive@X.Y.Z` (Claude interactive) — runs the
-     same `claude` binary under a PTY supervisor (`script(1)`) with a
-     Stop-hook sentinel. Inputs mirror `claude/action.yaml` for swap-in
-     parity. Inputs in `claude-interactive/action.yaml`.
-
-     Both Claude harnesses run the same binary behind the shared proxy
-     (machinery under the top-level `proxy/`) and share their preflight/setup
-     step bodies as scripts under `shared/steps/`; they differ only in how
-     completion is supervised — headless `-p` exit code vs the PTY Stop-hook
-     sentinel. `claude` is the default and recommended path (simpler, no
-     PTY). `claude-interactive` is kept in case the paused 2026-06-15
-     metering resumes, since it covered `claude -p` but not interactive
-     sessions. While it stays paused the two bill identically and nothing
-     else distinguishes them, so it is supported but undocumented: the
-     generator accepts `harness: claude-interactive`, and the adopter-facing
-     docs (README, `tend.example.yaml`, install-tend, security model) leave
-     it out.
    - `max-sixty/tend/codex@X.Y.Z` (Codex) — installs `@openai/codex` and
      shells out to `codex exec`. Skills are staged on disk and an
      `AGENTS.md` in `$CODEX_HOME` teaches Codex to resolve
@@ -58,17 +41,22 @@ Four pieces:
    All actions resolve the bot's numeric ID at runtime, run security and
    rate-limit preflight, and upload session logs. The actions don't know
    or care about triggers, checkout, or project setup.
+
+   Removed: `claude-interactive`, a PTY-supervised variant of the same binary
+   that existed only to dodge the 2026-06-15 Agent SDK metering (which covered
+   `claude -p` but not interactive sessions). Anthropic paused that change and
+   the default harness now runs the binary rather than the SDK, so nothing
+   selected it. Restore from `036f9c4` if the metering resumes.
 3. **Generator** (`uvx tend@latest init`) — stamps workflow files into
    the adopter's `.github/workflows/` from `.config/tend.yaml`. Picks the
    right action ref and secret names per `harness`. Generation is
    idempotent — running `init` again overwrites all files from the
    current config.
 4. **Config** (`.config/tend.yaml`) — inputs to the generator. Overrides
-   from defaults only. `harness: claude | claude-interactive | codex`
-   selects the harness (default `claude`). A per-workflow `harness:`
-   override (and matching `model:`) lets an adopter trial a different
-   harness on one workflow at a time. All workflows are enabled by
-   default.
+   from defaults only. `harness: claude | codex` selects the harness
+   (default `claude`). A per-workflow `harness:` override (and matching
+   `model:`) lets an adopter trial a different harness on one workflow at a
+   time. All workflows are enabled by default.
 
 Generated workflows are standalone — full `steps:` jobs, not
 `workflow_call`. The generator owns the entire file. Project setup (build
@@ -90,8 +78,6 @@ tend/
 │       └── scripts/      # Helper scripts (survey, run listing)
 ├── claude/
 │   └── action.yaml       # Claude harness composite action (default, headless)
-├── claude-interactive/
-│   └── action.yaml       # Claude interactive harness (PTY-supervised binary)
 ├── codex/
 │   ├── action.yaml       # Codex harness composite action
 │   └── agents-tail.md    # AGENTS.md appendix for Codex

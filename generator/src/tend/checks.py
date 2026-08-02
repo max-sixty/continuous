@@ -15,7 +15,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-from tend.config import CLAUDE_FAMILY_HARNESSES, Config
+from tend.config import Config
 
 
 # GitHub's base repository role IDs, as they appear in a ruleset's
@@ -572,7 +572,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     # separate check below so the message can name the relevant secret.
     engine_auth_secrets = (
         [cfg.claude_token_secret, cfg.anthropic_api_key_secret]
-        if cfg.harness in CLAUDE_FAMILY_HARNESSES
+        if cfg.harness == "claude"
         else [cfg.openai_key_secret]
     )
     required_secrets = [cfg.bot_token_secret]
@@ -587,7 +587,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
     results.append(check_secrets(repo, required_secrets))
-    if cfg.harness in CLAUDE_FAMILY_HARNESSES:
+    if cfg.harness == "claude":
         results.append(check_claude_auth(repo, cfg))
     else:
         results.append(check_codex_auth(repo, cfg))

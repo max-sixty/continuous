@@ -83,13 +83,11 @@ for row in "${ROWS[@]}"; do
   RUNDIR="$WORKDIR/$RUN_ID"
   mkdir -p "$RUNDIR"
 
-  # Two artifact prefixes: the default `claude` action uploads
-  # `claude-session-logs-X`, the `claude-interactive` action uploads
-  # `claude-interactive-session-logs-X`. A consumer repo may have both in
-  # flight during a harness migration, so we accept either.
+  # Claude runs only: the `claude` action uploads `claude-session-logs-X`.
+  # Runs on the codex harness upload `codex-session-logs-X` and are skipped
+  # by the pattern below, so a codex-only repo reports zero.
   if ! gh run download "$RUN_ID" "${repo_args[@]}" \
       --pattern 'claude-session-logs*' \
-      --pattern 'claude-interactive-session-logs*' \
       --dir "$RUNDIR" 2>/dev/null; then
     continue
   fi

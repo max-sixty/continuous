@@ -996,25 +996,6 @@ def test_claude_engine_omits_codex_auth_check() -> None:
     assert not any(r.name == "codex-auth" for r in results)
 
 
-def test_claude_interactive_runs_claude_auth_check() -> None:
-    """claude-interactive is a sibling of claude; it should run claude-auth,
-    not codex-auth, and treat CLAUDE_CODE_OAUTH_TOKEN as allowed (not 'extra')."""
-    with (
-        patch("shutil.which", return_value="/usr/bin/gh"),
-        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
-    ):
-        results = run_all_checks(
-            _config(harness="claude-interactive"), repo="owner/repo"
-        )
-    assert any(r.name == "claude-auth" for r in results)
-    assert not any(r.name == "codex-auth" for r in results)
-    # secret-allowlist must not flag the Claude OAuth token as extra
-    allowlist = [r for r in results if r.name == "repo-secret-allowlist"]
-    assert allowlist and allowlist[0].passed is True, (
-        f"allowlist failed unexpectedly: {allowlist[0].message if allowlist else 'missing'}"
-    )
-
-
 def test_claude_engine_passes_with_oauth_token() -> None:
     """Engine=claude with the OAuth token secret set passes claude-auth."""
     # _fake_gh_all_pass returns ["T1","T2"] — T2 is claude_token_secret.

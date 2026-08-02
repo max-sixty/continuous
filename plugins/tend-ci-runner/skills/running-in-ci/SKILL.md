@@ -500,14 +500,13 @@ A prior run's session log holds the investigation behind its posted comments: th
 
 Only issue/PR-triggered Claude runs are stamped, so scheduled, ci-fix (`workflow_run`), and Codex runs aren't recallable this way.
 
-Every run on a thread names its log the same (one name per harness), so the API's exact-match `name` filter returns the whole thread in one call per harness. Newest first, within the 30-day retention window:
+Every run on a thread names its log the same, so the API's exact-match `name` filter returns the whole thread in one call. Newest first, within the 30-day retention window:
 
 ```bash
 NUM=<issue/PR number you're handling>
-for prefix in claude-session-logs claude-interactive-session-logs; do
-  gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=${prefix}-n${NUM}&per_page=100" \
-    --jq '.artifacts[] | select(.expired == false) | {run_id: .workflow_run.id, created_at}'
-done | jq -s 'sort_by(.created_at) | reverse'
+gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=claude-session-logs-n${NUM}&per_page=100" \
+  --jq '.artifacts[] | select(.expired == false) | {run_id: .workflow_run.id, created_at}' \
+  | jq -s 'sort_by(.created_at) | reverse'
 ```
 
 Download a chosen run's log and parse it with the recipes in `/install-tend:debug-tend-run` (`references/claude-logs.md`):

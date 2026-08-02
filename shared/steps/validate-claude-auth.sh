@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fail fast unless a Claude credential is configured. Shared by the two Claude
-# harness actions (claude/, claude-interactive/).
+# harness action (claude/).
 #
 # Secrets arrive via env (not argv/interpolation) so their values never land in
 # a rendered step script on disk.
