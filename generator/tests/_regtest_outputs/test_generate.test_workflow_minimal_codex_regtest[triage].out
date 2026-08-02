@@ -19,6 +19,7 @@ jobs:
   triage:
     if: contains(github.event.issue.labels.*.name, 'tend-outage') == false
     runs-on: ubuntu-24.04
+    environment: tend
     permissions:
       contents: write
       pull-requests: write

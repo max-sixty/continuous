@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from tend.checks import (
+    check_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
     ROLE_ID_WRITE,
@@ -846,8 +847,26 @@ def _fake_gh_all_pass(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         return _make_completed("true\n")
     if "collaborators" in url:
         return _make_completed(_permission_response("write"))
-    if "secrets" in url:
+    if url.endswith("deployment-branch-policies"):
+        return _make_completed('["main"]\n')
+    if url.endswith("environments/tend"):
+        return _make_completed(
+            json.dumps(
+                {
+                    "deployment_branch_policy": {
+                        "protected_branches": False,
+                        "custom_branch_policies": True,
+                    }
+                }
+            )
+        )
+    # Endpoint-specific on purpose: the operational secrets live in the
+    # environment and must be absent from repo level, so a fake that answered
+    # both the same way would let a check read the wrong one and still pass.
+    if "environments/tend/secrets" in url:
         return _make_completed('["T1","T2"]\n')
+    if "secrets" in url:
+        return _make_completed("[]\n")
     return _make_completed(returncode=1)
 
 
@@ -861,16 +880,34 @@ def test_run_all_checks_with_explicit_repo() -> None:
     assert all(r.passed is True for r in results)
 
 
-def test_run_all_checks_allowlist_includes_bot_secrets() -> None:
-    """Allowlist automatically includes bot_token and claude_token secrets."""
+def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
+    """A repo-level copy of an operational secret defeats the environment.
+
+    Any workflow the bot can push reads a repo-level secret without naming the
+    environment, so a leftover copy gives back exactly what the deployment
+    branch policy denies — and it is invisible otherwise, because everything
+    keeps working. The allowlist is what surfaces it: the operational names are
+    deliberately not in the allowed set.
+    """
+
+    def gh_with_repo_level_copy(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        url = args[1]
+        if "environments/tend/secrets" not in url and url.endswith("actions/secrets"):
+            return _make_completed('["T1"]\n')
+        return _fake_gh_all_pass(*args, **kwargs)
+
     with (
         patch("shutil.which", return_value="/usr/bin/gh"),
-        patch("tend.checks._gh", side_effect=_fake_gh_all_pass),
+        patch("tend.checks._gh", side_effect=gh_with_repo_level_copy),
     ):
         results = run_all_checks(_config(), repo="owner/repo")
-    allowlist_check = [r for r in results if r.name == "repo-secret-allowlist"]
-    assert len(allowlist_check) == 1
-    assert allowlist_check[0].passed is True
+    allowlist = [r for r in results if r.name == "repo-secret-allowlist"]
+    assert len(allowlist) == 1
+    assert allowlist[0].passed is False, (
+        "a repo-level copy of the bot token must be flagged — it is readable "
+        "from any branch the bot can push"
+    )
+    assert "T1" in allowlist[0].message
 
 
 def test_run_all_checks_allowlist_catches_unexpected() -> None:
@@ -916,7 +953,7 @@ def test_run_all_checks_with_protected_branches() -> None:
             repo="owner/repo",
         )
     # default + v1 + v2 + bot-permission + secrets + claude-auth + allowlist = 7
-    assert len(results) == 7
+    assert len(results) == 8
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 3
     assert {r.name for r in bp_results} == {
@@ -1099,7 +1136,7 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             repo="owner/repo",
         )
     # main (deduped) + v1 + bot-permission + secrets + claude-auth + allowlist = 6
-    assert len(results) == 6
+    assert len(results) == 7
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 2
     assert {r.name for r in bp_results} == {
@@ -1170,3 +1207,96 @@ def test_init_prints_check_reminder(
     result = CliRunner().invoke(main, ["init"])
     assert result.exit_code == 0
     assert "tend check" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Environment gate
+#
+# The environment is the mechanism, not a nicety: a job naming it runs only
+# from a ref in its deployment branch policy, which is what refuses a workflow
+# pushed to a feature branch before its first step. Each way the policy can be
+# too generous is a way the secrets come back.
+# ---------------------------------------------------------------------------
+
+
+def _env_gh(env_body: str | None, policies: str = '["main"]\n"'):
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        url = args[1]
+        if url.endswith("deployment-branch-policies"):
+            return _make_completed(policies.rstrip('"'))
+        if url.endswith("environments/tend"):
+            if env_body is None:
+                return _make_completed(returncode=1)
+            return _make_completed(env_body)
+        return _make_completed(returncode=1)
+
+    return fake
+
+
+def test_environment_missing_fails() -> None:
+    with patch("tend.checks._gh", side_effect=_env_gh(None)):
+        result = check_environment("owner/repo", ["main"])
+    assert result.passed is False
+    assert "not found" in result.message
+
+
+def test_environment_without_branch_policy_fails() -> None:
+    """No policy means every ref reaches the secrets, including a bot branch."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_env_gh(json.dumps({"deployment_branch_policy": None})),
+    ):
+        result = check_environment("owner/repo", ["main"])
+    assert result.passed is False
+    assert "no deployment branch policy" in result.message
+
+
+def test_environment_protected_branches_policy_fails() -> None:
+    """`protected_branches` keys on whether a ruleset covers the branch, not on
+    who may push it, so a branch the bot can push can still be admitted."""
+    body = json.dumps(
+        {
+            "deployment_branch_policy": {
+                "protected_branches": True,
+                "custom_branch_policies": False,
+            }
+        }
+    )
+    with patch("tend.checks._gh", side_effect=_env_gh(body)):
+        result = check_environment("owner/repo", ["main"])
+    assert result.passed is False
+    assert "all protected branches" in result.message
+
+
+def test_environment_extra_admitted_branch_fails() -> None:
+    """A ref tend does not verify the bot is kept off must not be admitted."""
+    body = json.dumps(
+        {
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            }
+        }
+    )
+    with patch(
+        "tend.checks._gh", side_effect=_env_gh(body, policies='["main","staging"]\n"')
+    ):
+        result = check_environment("owner/repo", ["main"])
+    assert result.passed is False
+    assert "staging" in result.message
+
+
+def test_environment_admitting_only_verified_refs_passes() -> None:
+    body = json.dumps(
+        {
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            }
+        }
+    )
+    with patch(
+        "tend.checks._gh", side_effect=_env_gh(body, policies='["main","release"]\n"')
+    ):
+        result = check_environment("owner/repo", ["main", "release"])
+    assert result.passed is True

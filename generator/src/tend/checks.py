@@ -16,6 +16,7 @@ import subprocess
 from dataclasses import dataclass
 
 from tend.config import CLAUDE_FAMILY_HARNESSES, Config
+from tend.workflows import TEND_ENVIRONMENT
 
 
 # GitHub's base repository role IDs, as they appear in a ruleset's
@@ -343,20 +344,128 @@ def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
     )
 
 
-def check_secrets(repo: str, expected: list[str]) -> CheckResult:
-    """Check that required secrets exist (repo-level, then org-level fallback)."""
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
+# The operational secrets live in a deployment-gated environment rather than at
+# repo level, so every "is the secret set?" check reads them from there. A copy
+# left at repo level defeats the gate entirely — any workflow can read it
+# without naming the environment — and that is what `check_repo_secret_allowlist`
+# now catches, since the operational names are no longer in its allowed set.
+def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
+    """Secret names in the tend environment. Returns (names, error message)."""
+    result = _gh(
+        "api",
+        f"repos/{repo}/environments/{TEND_ENVIRONMENT}/secrets",
+        "--jq",
+        "[.secrets[].name]",
+    )
     if result is None:
-        return CheckResult("secrets", None, "gh CLI not found")
+        return None, "gh CLI not found"
+    if result.returncode != 0:
+        return None, (
+            f"Could not list secrets in the '{TEND_ENVIRONMENT}' environment "
+            "(missing environment, or requires admin access). "
+            "See the environment check below for how to create it."
+        )
+    try:
+        return set(json.loads(result.stdout)), ""
+    except json.JSONDecodeError:
+        return None, "Could not parse environment secrets response"
+
+
+def check_environment(repo: str, admitted: list[str]) -> CheckResult:
+    """The environment exists and admits only the refs the bot cannot write.
+
+    This is the whole mechanism: a job naming the environment runs only from a
+    ref in its deployment branch policy, so a workflow pushed to a feature
+    branch is refused before its first step. A policy that admits anything the
+    bot can push gives the secrets back.
+    """
+    name = "environment"
+    result = _gh("api", f"repos/{repo}/environments/{TEND_ENVIRONMENT}")
+    if result is None:
+        return CheckResult(name, None, "gh CLI not found")
     if result.returncode != 0:
         return CheckResult(
-            "secrets", None, "Could not list secrets (may require admin access)"
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' not found. The operational "
+            "secrets must live in it, gated to admin-only refs, or a workflow "
+            "pushed to any branch can read them:\n"
+            f"  gh api -X PUT repos/{repo}/environments/{TEND_ENVIRONMENT} "
+            '--input - <<< \'{"deployment_branch_policy":'
+            '{"protected_branches":false,"custom_branch_policies":true}}\'\n'
+            f"  gh api -X POST repos/{repo}/environments/{TEND_ENVIRONMENT}"
+            "/deployment-branch-policies --input - <<< "
+            f'\'{{"name":"{admitted[0]}","type":"branch"}}\'\n'
+            "Then move each secret into the environment and delete the "
+            "repo-level copy.",
+        )
+    try:
+        env = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return CheckResult(name, None, "Could not parse environment response")
+
+    policy = env.get("deployment_branch_policy")
+    if not policy:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' has no deployment branch policy, "
+            "so every ref reaches its secrets — including a branch the bot pushes.",
+        )
+    if policy.get("protected_branches"):
+        # "Protected branches" keys on whether a ruleset covers the branch, not
+        # on who may push it, so a branch the bot can push while a ruleset
+        # merely requires reviews would be admitted. Only a named list is
+        # verifiable from here.
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' admits all protected branches. "
+            "Use a custom branch policy naming the default branch and any "
+            "protected_branches, so the admitted set is the one tend verifies.",
         )
 
+    listed = _gh(
+        "api",
+        f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
+        "--jq",
+        "[.branch_policies[].name]",
+    )
+    if listed is None or listed.returncode != 0:
+        return CheckResult(name, None, "Could not list deployment branch policies")
     try:
-        secret_names = set(json.loads(result.stdout))
+        names = set(json.loads(listed.stdout))
     except json.JSONDecodeError:
-        return CheckResult("secrets", None, "Could not parse secrets response")
+        return CheckResult(name, None, "Could not parse branch policy response")
+
+    extra = names - set(admitted)
+    if extra:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' admits {', '.join(sorted(extra))}, "
+            "which tend does not verify the bot is kept off. Restrict the policy "
+            f"to: {', '.join(admitted)}.",
+        )
+    if not names:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' admits no refs — every tend "
+            "workflow will be refused before its first step.",
+        )
+    return CheckResult(
+        name,
+        True,
+        f"Environment '{TEND_ENVIRONMENT}' admits only {', '.join(sorted(names))}",
+    )
+
+
+def check_secrets(repo: str, expected: list[str]) -> CheckResult:
+    """Check that required secrets exist (repo-level, then org-level fallback)."""
+    secret_names, err = _env_secret_names(repo)
+    if secret_names is None:
+        return CheckResult("secrets", None, err)
 
     missing = [s for s in expected if s not in secret_names]
 
@@ -566,26 +675,30 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
             )
         ]
 
-    # Engine-specific auth secret(s). Claude accepts one of two candidates
-    # (OAuth token or API key); Codex takes only the API key (subscription
-    # auth.json is incompatible with concurrent workflows). Verified in a
-    # separate check below so the message can name the relevant secret.
-    engine_auth_secrets = (
-        [cfg.claude_token_secret, cfg.anthropic_api_key_secret]
-        if cfg.harness in CLAUDE_FAMILY_HARNESSES
-        else [cfg.openai_key_secret]
-    )
+    # The engine-specific auth secret is verified by check_claude_auth /
+    # check_codex_auth below, which name the relevant one in their message.
     required_secrets = [cfg.bot_token_secret]
 
-    allowed = {cfg.bot_token_secret, *engine_auth_secrets} | set(
-        cfg.allowed_repo_secrets
-    )
+    # The operational secrets are deliberately absent from `allowed`: they
+    # belong to the environment, and a copy left at repo level is readable by
+    # any workflow the bot can push, which is exactly the hole the environment
+    # closes. The allowlist check therefore flags them as unexpected.
+    allowed = set(cfg.allowed_repo_secrets)
+
+    # Every ref the environment may admit is one the bot cannot write: the
+    # default branch and the protected branches, both covered by the merge
+    # restriction checks above.
+    admitted = [
+        default_branch,
+        *(b for b in cfg.protected_branches if b != default_branch),
+    ]
 
     results = [check_branch_protection(repo, default_branch, cfg.bot_name)]
     for branch in cfg.protected_branches:
         if branch != default_branch:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
+    results.append(check_environment(repo, admitted))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness in CLAUDE_FAMILY_HARNESSES:
         results.append(check_claude_auth(repo, cfg))
@@ -600,17 +713,9 @@ def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
     both being absent is the failure mode. Both being set is fine; the
     action prefers the OAuth token.
     """
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
-    if result is None:
-        return CheckResult("claude-auth", None, "gh CLI not found")
-    if result.returncode != 0:
-        return CheckResult(
-            "claude-auth", None, "Could not list secrets (may require admin access)"
-        )
-    try:
-        names = set(json.loads(result.stdout))
-    except json.JSONDecodeError:
-        return CheckResult("claude-auth", None, "Could not parse secrets response")
+    names, err = _env_secret_names(repo)
+    if names is None:
+        return CheckResult("claude-auth", None, err)
     has_oauth = cfg.claude_token_secret in names
     has_key = cfg.anthropic_api_key_secret in names
     if has_oauth or has_key:
@@ -626,7 +731,7 @@ def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
         "claude-auth",
         False,
         f"Claude harness selected but neither {cfg.claude_token_secret} nor "
-        f"{cfg.anthropic_api_key_secret} is set as a repo secret.",
+        f"{cfg.anthropic_api_key_secret} is set in the '{TEND_ENVIRONMENT}' environment.",
     )
 
 
@@ -634,17 +739,9 @@ def check_codex_auth(repo: str, cfg: Config) -> CheckResult:
     """Codex needs OPENAI_API_KEY — absence is the failure mode. The
     subscription auth.json path is not supported.
     """
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
-    if result is None:
-        return CheckResult("codex-auth", None, "gh CLI not found")
-    if result.returncode != 0:
-        return CheckResult(
-            "codex-auth", None, "Could not list secrets (may require admin access)"
-        )
-    try:
-        names = set(json.loads(result.stdout))
-    except json.JSONDecodeError:
-        return CheckResult("codex-auth", None, "Could not parse secrets response")
+    names, err = _env_secret_names(repo)
+    if names is None:
+        return CheckResult("codex-auth", None, err)
     if cfg.openai_key_secret in names:
         return CheckResult(
             "codex-auth",

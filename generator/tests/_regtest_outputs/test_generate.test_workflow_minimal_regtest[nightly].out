@@ -15,6 +15,7 @@ on:
 jobs:
   nightly:
     runs-on: ubuntu-24.04
+    environment: tend
     permissions:
       contents: write
       pull-requests: write

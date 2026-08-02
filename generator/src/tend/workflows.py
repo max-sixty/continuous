@@ -69,9 +69,20 @@ HEADER = f"""\
 # happen upstream in the tend-ci-runner plugin.
 """
 
+# The GitHub Environment holding the operational secrets (bot token, harness
+# token). Its deployment branch policy admits only admin-gated refs, so a job
+# that names it runs solely from those refs — a workflow pushed to a feature
+# branch is refused before its first step, which is what stops a hijacked
+# session reading the secrets out of a run it wrote. Every job carrying a
+# secret names it; jobs that carry none must not, or they lose the refs the
+# policy excludes for nothing. Not configurable: the name is an implementation
+# detail of that guarantee, and `tend check` creates and verifies it.
+TEND_ENVIRONMENT = "tend"
+
 # Available to every template without being passed to render().
 _JINJA.globals["header"] = HEADER
 _JINJA.globals["tend_version"] = _TEND_VERSION
+_JINJA.globals["tend_environment"] = TEND_ENVIRONMENT
 
 
 # Register every macro defined in `macros.yaml.j2` as a Jinja global so
@@ -216,6 +227,21 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     eff = _effective_cfg(cfg, wf)
     content = _MENTION_TMPL.render(cfg=eff, setup=_setup_yaml(eff))
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
+
+
+_MENTION_RELAY_TMPL = _JINJA.get_template("mention-relay.yaml.j2")
+
+
+def generate_mention_relay(cfg: Config) -> GeneratedWorkflow:
+    """The secretless half of mention: review events in, `repository_dispatch` out.
+
+    Rendered from mention's own effective config so the bot name and fork guard
+    match the workflow it feeds.
+    """
+    wf = cfg.workflows.get("mention", WorkflowConfig())
+    eff = _effective_cfg(cfg, wf)
+    content = _MENTION_RELAY_TMPL.render(cfg=eff)
+    return GeneratedWorkflow(filename="tend-mention-relay.yaml", content=content)
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +512,7 @@ jobs:
 GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
     "review": generate_review,
     "mention": generate_mention,
+    "mention-relay": generate_mention_relay,
     "triage": generate_triage,
     "ci-fix": generate_ci_fix,
     "nightly": lambda cfg: _generate_scheduled(cfg, "nightly"),
@@ -509,6 +536,13 @@ def generate_all(
     for name, gen_fn in GENERATORS.items():
         wf_cfg = cfg.workflows.get(name, WorkflowConfig())
         if not wf_cfg.enabled:
+            continue
+        # The relay has no purpose without the workflow it dispatches to, and
+        # is configured through that workflow's entry rather than its own.
+        if (
+            name == "mention-relay"
+            and not cfg.workflows.get("mention", WorkflowConfig()).enabled
+        ):
             continue
         if name == "ci-fix" and wf_cfg.watched_workflows is None:
             click.echo(

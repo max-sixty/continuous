@@ -6,7 +6,7 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
-from tests import _yaml as yaml
+from tests import agent_workflows, _yaml as yaml
 from click import ClickException
 
 from tend.config import Config
@@ -125,7 +125,7 @@ def test_model_unknown_rejected(tmp_path: Path) -> None:
 def test_model_appears_in_generated_workflows(tmp_path: Path) -> None:
     path = _write_config(tmp_path, "bot_name: my-bot\nmodel: opus\n")
     cfg = Config.load(path)
-    for wf in generate_all(cfg):
+    for wf in agent_workflows(cfg):
         assert "model: opus" in wf.content, f"{wf.filename} missing model"
 
 
@@ -429,7 +429,7 @@ def test_duplicate_setup_steps_accepted(tmp_path: Path) -> None:
     assert cfg.setup[0].fields == {"uses": "./.github/actions/setup"}
     assert cfg.setup[1].fields == {"uses": "./.github/actions/setup"}
     # Both duplicates appear in generated YAML
-    workflows = generate_all(cfg)
+    workflows = agent_workflows(cfg)
     for wf in workflows:
         count = wf.content.count("./.github/actions/setup")
         assert count == 2, f"{wf.filename} has {count} setup steps, expected 2"
@@ -587,7 +587,7 @@ def test_setup_steps_preserves_order(tmp_path: Path) -> None:
     assert cfg.setup[1].fields == {"run": "echo middle"}
     assert cfg.setup[2].fields == {"uses": "./.github/actions/setup-cache"}
     # Verify order in generated YAML
-    workflows = generate_all(cfg)
+    workflows = agent_workflows(cfg)
     for wf in workflows:
         node_pos = wf.content.index("setup-node")
         middle_pos = wf.content.index("echo middle")

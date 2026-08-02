@@ -12,50 +12,45 @@ on:
     types: [edited]
   issue_comment:
     types: [created, edited]
-  # Works for same-repo PRs only; secrets unavailable on fork PRs (no _target variant exists)
-  pull_request_review:
-    types: [submitted]
-  # `created` is intentionally absent. Modern GitHub fires *both*
-  # pull_request_review and pull_request_review_comment for every newly-created
-  # inline comment (the standalone POST /pulls/PR/comments endpoint, the
-  # /replies endpoint, the "Add single comment" UI button, and reviews
-  # submitted with inline comments ? all empirically verified). Subscribing to
-  # `created` would produce a duplicate workflow run that collides on the
-  # tend-mention-handle-PR concurrency group, with the loser cancelled and
-  # posted as a CANCELLED check_run on the PR head SHA ? which renders the
-  # PR's statusCheckRollup as FAILURE even though the bot did its job from the
-  # sibling run. Edits have no sibling event (review submissions don't fire on
-  # edits), so we still need to listen for `edited` to catch edit-to-summon
-  # ("@bot" added to an existing comment after the fact).
-  pull_request_review_comment:
-    types: [edited]
+  # Review submissions and inline comments arrive here as a dispatch from
+  # tend-mention-relay, not as their own events: they carry
+  # `refs/pull/N/merge`, which the secrets' environment does not admit. The
+  # relay holds no secrets, so it can take that ref, and it has already decided
+  # the bot should respond ? `client_payload` names the PR and the review or
+  # comment to read.
+  repository_dispatch:
+    types: [tend-mention-review]
 
 jobs:
   verify:
-    # Filter out fork PRs for review events ? secrets are unavailable there
-    # (no _target variant exists). The notifications workflow polls for these.
     # Skip comments on `tend-outage` issues: the action's Report-failure step
     # auto-comments on those when Claude invocation fails, and without this
     # guard those comments re-trigger tend-mention during a persistent outage
     # (e.g. Anthropic 401), producing a self-sustaining ~1 run/minute loop
     # until the outage clears. The prompt's self-loop guard can't help here
     # because the model never executes ? the action fails before Claude starts.
+    # A relayed review arrives already judged, so it needs no filter here.
     if: |
+      github.event_name == 'repository_dispatch' ||
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@test-bot')) ||
       (github.event_name == 'issue_comment' &&
-        !contains(github.event.issue.labels.*.name, 'tend-outage')) ||
-      (github.event_name == 'pull_request_review_comment' &&
-        github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'pull_request_review' &&
-        github.event.pull_request.head.repo.full_name == github.repository)
+        !contains(github.event.issue.labels.*.name, 'tend-outage'))
     runs-on: ubuntu-24.04
+    environment: tend
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
     steps:
       - name: Verify bot engagement
         id: check
         run: |
+          # tend-mention-relay already ran these heuristics against the review
+          # payload this dispatch stands for, and only dispatched on a yes.
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # Mentions always run
           if [ "$EVENT_NAME" = "issues" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
@@ -70,16 +65,11 @@ jobs:
           # then exits silently ? pure waste. There is no legitimate
           # self-summons: a bot comment that quotes a prior @-mention would
           # re-match the mention check below and escape an after-placed guard,
-          # so this runs *before* the mention check. Covers issue_comment and
-          # pull_request_review_comment (both carry comment.user.login). Fires
-          # on, e.g., the monthly tracking-issue rollover where the bot posts
-          # evidence-gist links on its own issue. Scoped to comments on
-          # purpose: the pull_request_review *submission* event is deliberately
-          # left out, since a review the bot leaves on its own PR is its
-          # reviewer role (the prompt is told to action it), not a self-loop.
-          # The only self-review skip is the terminal empty-body APPROVED gate
-          # below.
-          if { [ "$EVENT_NAME" = "issue_comment" ] || [ "$EVENT_NAME" = "pull_request_review_comment" ]; } \
+          # so this runs *before* the mention check. Fires on, e.g., the
+          # monthly tracking-issue rollover where the bot posts evidence-gist
+          # links on its own issue. The review events have their own copy of
+          # this guard in tend-mention-relay, where their payload lives.
+          if [ "$EVENT_NAME" = "issue_comment" ] \
              && [ "$COMMENT_AUTHOR" = "test-bot" ]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -103,59 +93,26 @@ jobs:
             exit 0
           fi
 
-          # The bot's own empty-body APPROVED review is terminal ? nothing to
-          # act on. The engagement heuristic below counts this very review
-          # (BOT_REVIEWS > 0) and would spin up a no-op session. Gate on three
-          # things, not just author: review *state* (an approval is terminal; a
-          # bot CHANGES_REQUESTED/COMMENTED review keeps actionable signal) and
-          # an empty *body* (an approval carrying nits in its body may warrant
-          # follow-up changes, so let it fire). Together these preserve #166's
-          # actionable bot self-reviews. review.state arrives lowercase in the
-          # webhook payload (REST returns uppercase), hence "approved".
-          # COMMENT_BODY holds review.body for a pull_request_review event.
-          if [ "$EVENT_NAME" = "pull_request_review" ] \
-             && [ "$REVIEW_AUTHOR" = "test-bot" ] \
-             && [ "$REVIEW_STATE" = "approved" ] \
-             && [ -z "$COMMENT_BODY" ]; then
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # Non-mention: check bot engagement. Only issue_comment reaches
+          # here ? `issues` and a relayed review both returned above.
+          ISSUE_NUMBER="$ISSUE_OR_PR_NUMBER"
 
-          # pull_request_review payloads include review.body (checked above)
-          # but NOT the bodies of inline comments attached to the review.
-          # Fetch them so a first-contact @-mention inside an inline comment
-          # is detected on PRs where the bot has no prior engagement.
-          if [ "$EVENT_NAME" = "pull_request_review" ] && [ -n "$REVIEW_ID" ]; then
-            if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$EVENT_PR_NUMBER/reviews/$REVIEW_ID/comments" \
-                 --jq '.[].body' | grep -qF '@test-bot'; then
-              echo "should_run=true" >> "$GITHUB_OUTPUT"
-              exit 0
+          if [ -z "$PR_URL" ]; then
+            if [ "$ISSUE_AUTHOR" = "test-bot" ]; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
             fi
-          fi
-
-          # Non-mention: check bot engagement
-          if [ "$EVENT_NAME" = "issue_comment" ]; then
-            ISSUE_NUMBER="$ISSUE_OR_PR_NUMBER"
-
-            if [ -z "$PR_URL" ]; then
-              if [ "$ISSUE_AUTHOR" = "test-bot" ]; then
-                echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
-              fi
-              if printf '%s\n' "$ISSUE_BODY" | grep -qF '@test-bot'; then
-                echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
-              fi
-              BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-                --jq '[.[] | select(.user.login == "test-bot")] | length')
-              if [ "$BOT_COMMENTS" -gt "0" ]; then
-                echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
-              fi
-              echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
+            if printf '%s\n' "$ISSUE_BODY" | grep -qF '@test-bot'; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
             fi
-
-            PR_NUMBER="$ISSUE_NUMBER"
-          else
-            PR_NUMBER="$EVENT_PR_NUMBER"
+            BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
+              --jq '[.[] | select(.user.login == "test-bot")] | length')
+            if [ "$BOT_COMMENTS" -gt "0" ]; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
+
+          PR_NUMBER="$ISSUE_NUMBER"
 
           PR_AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login')
           if [ "$PR_AUTHOR" = "test-bot" ]; then
@@ -178,17 +135,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
-          COMMENT_BODY: ${{ github.event.comment.body || github.event.review.body }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           COMMENT_AUTHOR_TYPE: ${{ github.event.comment.user.type }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_OR_PR_NUMBER: ${{ github.event.issue.number }}
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
           PR_URL: ${{ github.event.issue.pull_request.url }}
-          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
-          REVIEW_ID: ${{ github.event.review.id }}
-          REVIEW_AUTHOR: ${{ github.event.review.user.login }}
-          REVIEW_STATE: ${{ github.event.review.state }}
 
       - name: React to mention
         if: |
@@ -207,9 +160,10 @@ jobs:
     needs: verify
     if: needs.verify.outputs.should_run == 'true'
     concurrency:
-      group: ${{ github.workflow }}-handle-${{ github.event.issue.number || github.event.pull_request.number }}
+      group: ${{ github.workflow }}-handle-${{ github.event.issue.number || github.event.client_payload.pr }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
+    environment: tend
     permissions:
       contents: write
       pull-requests: write
@@ -226,8 +180,7 @@ jobs:
       - name: Check out PR branch
         if: |
           (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
-          github.event_name == 'pull_request_review_comment' ||
-          github.event_name == 'pull_request_review'
+          github.event_name == 'repository_dispatch'
         run: |
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
           if [ "$PR_STATE" = "OPEN" ]; then
@@ -237,7 +190,7 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
-          PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.client_payload.pr }}
 
       - name: Compute queue delay
         id: delay
@@ -249,7 +202,7 @@ jobs:
           event_epoch=$(date -d "$EVENT_TS" +%s)
           echo "seconds=$(( $(date +%s) - event_epoch ))" >> "$GITHUB_OUTPUT"
         env:
-          EVENT_TS: ${{ github.event.comment.updated_at || github.event.review.submitted_at || github.event.issue.updated_at }}
+          EVENT_TS: ${{ github.event.comment.updated_at || github.event.client_payload.ts || github.event.issue.updated_at }}
 
       - uses: max-sixty/tend/claude@X.Y.Z
         with:
@@ -267,14 +220,10 @@ jobs:
 
             ${{ github.event_name == 'issues'
               && format('An issue was updated with a mention of you ({0}). Read it and respond.', github.event.issue.html_url)
-              || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@test-bot')
-                && format('You were mentioned in an inline review comment on PR #{0} ({1}, comment ID {2}). Read the full context, then respond. If changes are requested, make them, commit, and push.', (github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number), github.event.comment.html_url, github.event.comment.id))
-              || (github.event_name == 'pull_request_review_comment'
-                && format('An inline review comment was posted on a PR where you previously participated (PR #{0}, {1}, comment ID {2}). Read the full context. Only respond if the comment is directed at you or requests changes.', (github.event_name == 'issue_comment' && github.event.issue.number || github.event.pull_request.number), github.event.comment.html_url, github.event.comment.id))
-              || (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@test-bot')
-                && format('A review was submitted on PR #{0} that mentions you ({1}, review ID {2}). Read the review and full context, then respond. If changes were requested, make them, commit, and push.', github.event.pull_request.number, github.event.review.html_url, github.event.review.id))
-              || (github.event_name == 'pull_request_review'
-                && format('A review was submitted on a PR where you previously participated (PR #{0}, {1}, review ID {2}). Read the review and full context. If it requests changes or asks questions, respond appropriately ? including when you authored the review: a review your review workflow left on your own PR is your reviewer role speaking, not a self-loop, so action it. Exit silently for a plain approval, a review with no actionable content, or one between other participants.', github.event.pull_request.number, github.event.review.html_url, github.event.review.id))
+              || (github.event_name == 'repository_dispatch' && github.event.client_payload.reason == 'mention'
+                && format('You were mentioned in a review or inline review comment on PR #{0} ({1}). Read it and the full context, then respond. If changes are requested, make them, commit, and push.', github.event.client_payload.pr, github.event.client_payload.url))
+              || (github.event_name == 'repository_dispatch'
+                && format('A review or inline review comment was posted on PR #{0} ({1}) where you previously participated. Read it and the full context. Respond if it is directed at you, requests changes, or asks a question ? including when it replies to a review you authored, since your review workflow speaking is your reviewer role, not a self-loop. Exit silently for a plain approval, one with no actionable content, or a conversation between other participants.', github.event.client_payload.pr, github.event.client_payload.url))
               || (contains(github.event.comment.body, '@test-bot')
                 && format('You were mentioned in a comment ({0}). Read the full context and respond. If changes are requested, make them, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({0}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between other participants, exit silently.', github.event.comment.html_url)

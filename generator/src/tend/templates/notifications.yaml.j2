@@ -8,6 +8,7 @@ on:
 jobs:
   notifications:
 <<fork_guard_if(cfg)>>    runs-on: ubuntu-24.04
+    environment: <<tend_environment>>
     permissions:
 <<permissions()>>
     steps:

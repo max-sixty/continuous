@@ -58,6 +58,7 @@ def test_init_creates_correct_files_with_valid_yaml(
     wf_dir = _workflow_dir(tmp_path)
     files = sorted(p.name for p in wf_dir.glob("tend-*.yaml"))
     assert files == [
+        "tend-mention-relay.yaml",
         "tend-mention.yaml",
         "tend-nightly.yaml",
         "tend-notifications.yaml",
@@ -71,10 +72,13 @@ def test_init_creates_correct_files_with_valid_yaml(
         data = yaml.safe_load(path.read_text())
         assert "name" in data, f"{path.name} missing 'name'"
         assert "jobs" in data, f"{path.name} missing 'jobs'"
-        # Every workflow references the tend composite action
-        assert f"max-sixty/tend/claude@{ACTION_VERSION}" in path.read_text(), (
-            f"{path.name} missing action reference"
-        )
+        # Every workflow that runs an agent pins the tend composite action.
+        # tend-mention-relay runs none — it converts the review events into a
+        # repository_dispatch and holds no secrets.
+        if path.name != "tend-mention-relay.yaml":
+            assert f"max-sixty/tend/claude@{ACTION_VERSION}" in path.read_text(), (
+                f"{path.name} missing action reference"
+            )
 
 
 def test_init_workflows_have_correct_triggers(
@@ -338,8 +342,24 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
                 }
             )
         )
-    if "secrets" in url:
+    if url.endswith("deployment-branch-policies"):
+        return _make_completed('["main"]\n')
+    if url.endswith("environments/tend"):
+        return _make_completed(
+            json.dumps(
+                {
+                    "deployment_branch_policy": {
+                        "protected_branches": False,
+                        "custom_branch_policies": True,
+                    }
+                }
+            )
+        )
+    # The operational secrets live in the environment; repo level must be bare.
+    if "environments/tend/secrets" in url:
         return _make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+    if "secrets" in url:
+        return _make_completed("[]\n")
     return _make_completed(returncode=1)
 
 
@@ -359,8 +379,9 @@ def test_check_full_pipeline_with_mocked_gh(
 
     assert result.exit_code == 0
     assert "FAIL" not in result.output
-    # branch-protection + bot-permission + secrets + claude-auth + allowlist = 5
-    assert result.output.count("PASS") == 5
+    # branch-protection + bot-permission + environment + secrets + claude-auth
+    # + allowlist = 6
+    assert result.output.count("PASS") == 6
 
 
 def test_check_full_pipeline_branch_not_protected(
@@ -414,7 +435,7 @@ def test_init_then_check_combined_flow(
     # Step 1: init
     init_result = runner.invoke(main, ["init"])
     assert init_result.exit_code == 0
-    assert "Generated 7 workflow files" in init_result.output
+    assert "Generated 8 workflow files" in init_result.output
     assert "tend check" in init_result.output  # reminder to run check
 
     # Step 2: check (mocked)
@@ -562,7 +583,7 @@ def test_init_with_install_test_generates_extra_file(
     wf_dir = _workflow_dir(tmp_path)
     files = sorted(p.name for p in wf_dir.glob("tend-*.yaml"))
     assert "tend-install-test.yaml" in files
-    assert len(files) == 8  # 7 standard + install-test
+    assert len(files) == 9  # 7 agent workflows + mention relay + install-test
 
 
 def test_init_without_flag_omits_install_test(
