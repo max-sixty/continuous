@@ -297,20 +297,20 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
     the policy excludes for nothing — and for the relay those refs are the
     whole point. `secrets.GITHUB_TOKEN` is workflow-scoped, not stored, so it
     doesn't count."""
+
+    def _strings(x: object) -> list[str]:
+        if isinstance(x, str):
+            return [x]
+        if isinstance(x, dict):
+            return [s for v in x.values() for s in _strings(v)]
+        if isinstance(x, list):
+            return [s for v in x for s in _strings(v)]
+        return []
+
     cfg = Config.load(_minimal_config(tmp_path))
     for wf in generate_all(cfg):
         data = yaml.safe_load(wf.content)
         for job_name, job in data["jobs"].items():
-
-            def _strings(x: object) -> list[str]:
-                if isinstance(x, str):
-                    return [x]
-                if isinstance(x, dict):
-                    return [s for v in x.values() for s in _strings(v)]
-                if isinstance(x, list):
-                    return [s for v in x for s in _strings(v)]
-                return []
-
             reads_secret = any(
                 ref != "secrets.GITHUB_TOKEN"
                 for s in _strings(job)
