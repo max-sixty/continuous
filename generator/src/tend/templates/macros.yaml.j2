@@ -90,17 +90,22 @@
 {% if cfg.repo_owner %}github.repository_owner == '<<cfg.repo_owner|replace("'", "''")>>' && {% endif %}
 {%- endmacro %}
 
-{# Shared `actions/checkout@v7` step. `ref` defaults to the configured default
-   branch; pass `None` to omit (mention reuses the runner's default checkout
-   ref), or any GHA expression for review's pr_ref dispatch. `if_condition`
+{# Shared `actions/checkout@v7` step. Omitting `ref` takes the event's own ref,
+   which under `pull_request_target` is the PR's base branch — what mention and
+   review's first checkout both want. Callers needing a specific tree pass one:
+   the configured default branch, or review's pr_ref dispatch. `if_condition`
    gates the step (used by notifications' skip_condition).
 
    `allow_unsafe_pr_checkout` opts into checkout's fork-PR guard: v7 refuses to
    check out a fork's `refs/pull/N/{merge,head}` under `pull_request_target`
    (the "pwn request" guard) unless this input is set. Only review feeds a fork
    ref straight to the action, so only it sets this; mention checks out the base
-   repo then `gh pr checkout`s, never handing the action a fork ref. #}
-{% macro checkout(cfg, ref=None, if_condition='', allow_unsafe_pr_checkout=False) %}
+   repo then `gh pr checkout`s, never handing the action a fork ref.
+
+   `clean=False` drops checkout's `git clean -ffdx && git reset --hard`, which
+   would otherwise delete what an earlier step wrote into the workspace. Review
+   sets it on its second checkout, where `setup:` has already run. #}
+{% macro checkout(cfg, ref=None, if_condition='', allow_unsafe_pr_checkout=False, clean=True) %}
       - uses: actions/checkout@v7
 {% if if_condition %}
         if: <<if_condition>>
@@ -111,6 +116,9 @@
 {% endif %}
 {% if allow_unsafe_pr_checkout %}
           allow-unsafe-pr-checkout: true
+{% endif %}
+{% if not clean %}
+          clean: false
 {% endif %}
           fetch-depth: 0
           fetch-tags: true

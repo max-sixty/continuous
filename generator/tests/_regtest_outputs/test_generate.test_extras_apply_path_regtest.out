@@ -25,6 +25,15 @@ jobs:
       issues: write
       packages: read
     steps:
+      # Two checkouts: `setup:` runs against the base tree, and the PR's own
+      # tree lands after it. Setup executes as the runner user, outside the
+      # containment the harness builds for the contributor's code.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.TEND_BOT_TOKEN }}
+
       # GitHub only materializes refs/pull/N/merge for mergeable PRs ? on
       # conflicting PRs it 404s and every downstream step cascades as skipped.
       # Probe first and fall back to /head so review always runs; on fallback
@@ -46,6 +55,7 @@ jobs:
         with:
           ref: ${{ steps.pr_ref.outputs.ref }}
           allow-unsafe-pr-checkout: true
+          clean: false
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}

@@ -15,6 +15,11 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
+      # Two checkouts: `setup:` runs against the base tree, and the PR's own
+      # tree lands after it. Setup executes as the runner user, outside the
+      # containment the harness builds for the contributor's code.
+<<checkout(cfg)>>
+<<setup>>
       # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
       # conflicting PRs it 404s and every downstream step cascades as skipped.
       # Probe first and fall back to /head so review always runs; on fallback
@@ -32,6 +37,6 @@ jobs:
             echo "ref=refs/pull/$PR/head" >> "$GITHUB_OUTPUT"
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
-<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True)>>
-<<setup>>
+<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True, clean=False)>>
+
 <<agent_step(cfg, prompt_body)>>

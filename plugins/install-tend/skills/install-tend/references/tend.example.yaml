@@ -106,6 +106,12 @@ bot_name: my-project-bot
 # composite action (`.github/actions/tend-setup/action.yaml`) and reference
 # it from one entry with `uses`.
 #
+# Setup runs against reviewed code — the default branch, or in `tend-review`
+# the PR's base branch, checked out before the PR's own tree lands. Project
+# setup that must see the PR's manifests (installing its dependencies) goes in
+# `sandbox_setup:` below, which runs inside the Claude harness's sandbox. Under
+# codex there is no such lever; the agent installs what it needs itself.
+#
 # `tend-notifications` injects an `if:` guard on every step so setup is
 # skipped when the pre-check finds no work. A user-supplied `if:` is passed
 # through unchanged (with a generation-time warning) — your condition wins.
@@ -184,11 +190,13 @@ bot_name: my-project-bot
 #
 # - `sandbox_setup`: shell commands run as the sandbox user after the toolchain
 #   and plugins install and before the agent runs, with the workspace as cwd.
-#   For on-disk effects (installing a tool, warming a cache); env-only tweaks
-#   don't persist across the command's shell — use sandbox_path/sandbox_env:
+#   The workspace holds the PR's tree by then, so this is where installing the
+#   project's dependencies belongs (`uv sync`, `npm ci`), alongside other
+#   on-disk effects like warming a cache. Env-only tweaks don't persist across
+#   the command's shell — use sandbox_path/sandbox_env:
 #
 #     sandbox_setup:
-#       - rustup component add clippy
+#       - uv sync
 #
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.
