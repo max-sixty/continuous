@@ -298,7 +298,9 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
     whole point. `secrets.GITHUB_TOKEN` is workflow-scoped, not stored, so it
     doesn't count. install-test is included: it runs on `pull_request`, whose
     merge ref the policy refuses, so it may neither read a secret nor name
-    the environment."""
+    the environment. ci-fix is enabled here so the corpus is every workflow:
+    without `watched_workflows` the generator skips it, and a skipped
+    workflow is one this invariant silently stops covering."""
 
     def _strings(x: object) -> list[str]:
         if isinstance(x, str):
@@ -309,8 +311,14 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
             return [s for v in x for s in _strings(v)]
         return []
 
-    cfg = Config.load(_minimal_config(tmp_path))
-    for wf in generate_all(cfg, with_install_test=True):
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path, 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+        )
+    )
+    generated = generate_all(cfg, with_install_test=True)
+    assert "tend-ci-fix.yaml" in {wf.filename for wf in generated}
+    for wf in generated:
         data = yaml.safe_load(wf.content)
         for job_name, job in data["jobs"].items():
             reads_secret = any(

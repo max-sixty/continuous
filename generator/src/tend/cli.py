@@ -185,6 +185,16 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         click.echo("Could not detect repo — pass --repo to fix.")
         raise SystemExit(1)
 
+    # Every fix is written in terms of the default branch, and guessing it
+    # wrong writes a ref the bot can create: a `main` guessed for a `master`
+    # repo is outside the merge restriction, so the environment would admit a
+    # branch the bot can push. The checks just resolved it, so a failure here
+    # is a transient one to surface, not to paper over.
+    default_branch = detect_default_branch(repo)
+    if default_branch is None:
+        click.echo(f"Could not detect the default branch for {repo} — not fixing.")
+        raise SystemExit(1)
+
     fixed_any = False
     bp_fixable = [
         r
@@ -198,7 +208,6 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         click.echo(
             f"Creating 'Merge access' ruleset — only admins can merge ({branches_desc})..."
         )
-        default_branch = detect_default_branch(repo) or "main"
         fix_result = fix_branch_protection(repo, default_branch, cfg.protected_branches)
         _print_check_results([fix_result])
         if fix_result.passed:
@@ -207,7 +216,6 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
     if any(r.name == "environment" for r in failures):
         click.echo()
         click.echo("Configuring the 'tend' environment...")
-        default_branch = detect_default_branch(repo) or "main"
         fix_result = fix_environment(
             repo, admitted_refs(default_branch, cfg.protected_branches)
         )

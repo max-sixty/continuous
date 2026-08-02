@@ -363,7 +363,7 @@ def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
         return None, (
             f"Could not list secrets in the '{TEND_ENVIRONMENT}' environment "
             "(missing environment, or requires admin access). "
-            "See the environment check below for how to create it."
+            "See the environment check above for how to create it."
         )
     try:
         return set(json.loads(result.stdout)), ""
@@ -434,6 +434,10 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
     except json.JSONDecodeError:
         return CheckResult(name, None, "Could not parse branch policy response")
 
+    # The admitted set must match exactly, in both directions. An extra ref is
+    # one tend does not verify the bot is kept off; a missing one refuses every
+    # workflow triggered on it, which fails closed and so is invisible unless
+    # the check that owns the setup says so.
     extra = names - set(admitted)
     if extra:
         return CheckResult(
@@ -443,12 +447,14 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
             "which tend does not verify the bot is kept off. Restrict the policy "
             f"to: {', '.join(admitted)}.",
         )
-    if not names:
+    missing = set(admitted) - names
+    if missing:
         return CheckResult(
             name,
             False,
-            f"Environment '{TEND_ENVIRONMENT}' admits no refs — every tend "
-            "workflow will be refused before its first step.",
+            f"Environment '{TEND_ENVIRONMENT}' does not admit "
+            f"{', '.join(sorted(missing))}, so every tend workflow triggered on "
+            "those refs is refused before its first step. Run `tend check --fix`.",
         )
     return CheckResult(
         name,
@@ -837,5 +843,5 @@ def check_codex_auth(repo: str, cfg: Config) -> CheckResult:
         "codex-auth",
         False,
         f"Codex harness selected but {cfg.openai_key_secret} "
-        "is not set as a repo secret.",
+        f"is not set in the '{TEND_ENVIRONMENT}' environment.",
     )
