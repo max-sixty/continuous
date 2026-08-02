@@ -52,11 +52,13 @@ jobs:
   # heuristics here.
   relay:
     # Fork PRs are excluded to hold long-standing behaviour: the notifications
-    # poll covers them, and routing them through the relay would newly wake a
-    # secret-bearing run on a review body written by anyone, bypassing the
-    # author-association tiers that path applies. Widening this is a separate
-    # decision. A dispatched run fails the event check, so the relay cannot
-    # re-enter itself.
+    # poll covers them, and it applies author-association tiers that this path
+    # does not. What the filter buys is that no fork head is checked out into a
+    # secret-bearing run; it is not an authorship gate, since a mention from
+    # any user with read access already wakes `handle` on a same-repo PR.
+    # Widening this is a separate decision, and moot while a fork run's token
+    # is refused the dispatch POST (403, probed). A dispatched run fails the
+    # event check, so the relay cannot re-enter itself.
     if: |
       (github.event_name == 'pull_request_review' ||
        github.event_name == 'pull_request_review_comment') &&
@@ -135,7 +137,11 @@ jobs:
                 REVIEW_STATE=$(echo "$REVIEW" | jq -r '.state | ascii_downcase')
                 COMMENT_BODY=$(echo "$REVIEW" | jq -r '.body // ""')
                 echo "url=$(echo "$REVIEW" | jq -r '.html_url')" >> "$GITHUB_OUTPUT"
-                echo "ts=$(echo "$REVIEW" | jq -r '.submitted_at')" >> "$GITHUB_OUTPUT"
+                # A review without `submitted_at` (a PENDING one, which only a
+                # forged dispatch can name) would otherwise write the string
+                # `null`, which handle's `date -d` rejects ? failing the job
+                # red where the empty-value guard would have skipped it.
+                echo "ts=$(echo "$REVIEW" | jq -r '.submitted_at // empty')" >> "$GITHUB_OUTPUT"
                 ;;
               pull_request_review_comment)
                 if ! COMMENT=$(gh api "repos/$GITHUB_REPOSITORY/pulls/comments/$PAYLOAD_ID"); then

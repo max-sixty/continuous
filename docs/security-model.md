@@ -137,8 +137,12 @@ Other triggers (`workflow_dispatch`, `release: published`, `deployment`,
 `schedule`, chained dispatches) can be initiated by a write-scoped bot
 against an allowed ref, so the env policy alone does not gate *when* they
 fire; workflows keeping those triggers need trigger-specific containment
-(typically required reviewers on the Environment) before release or deploy
-secrets are migrated there. OIDC-to-cloud deploys have no GitHub-stored
+before release or deploy secrets are migrated there. Tend's convention for
+one is a second environment, `tend-manual`, holding the same secrets behind
+a required reviewer instead of a branch policy, so each run waits for a
+human. `tend check` verifies it wherever a repo declares one — reviewers
+present, and the bot not among them, since a bot that can approve its own
+run makes the wait a formality. OIDC-to-cloud deploys have no GitHub-stored
 secret to gate; there, the Environment plus the cloud provider's trust
 policy is the only control.
 

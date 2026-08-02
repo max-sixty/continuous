@@ -12,6 +12,7 @@ from click.testing import CliRunner
 
 from tend.checks import (
     check_environment,
+    check_manual_environment,
     fix_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
@@ -964,9 +965,9 @@ def test_run_all_checks_with_protected_branches() -> None:
             _config(protected_branches=["v1", "v2"]),
             repo="owner/repo",
         )
-    # default + v1 + v2 + bot-permission + environment + secrets + claude-auth
-    # + allowlist = 8
-    assert len(results) == 8
+    # default + v1 + v2 + bot-permission + environment + manual-environment
+    # + secrets + claude-auth + allowlist = 9
+    assert len(results) == 9
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 3
     assert {r.name for r in bp_results} == {
@@ -1129,9 +1130,9 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             _config(protected_branches=["main", "v1"]),
             repo="owner/repo",
         )
-    # main (deduped) + v1 + bot-permission + environment + secrets + claude-auth
-    # + allowlist = 7
-    assert len(results) == 7
+    # main (deduped) + v1 + bot-permission + environment + manual-environment
+    # + secrets + claude-auth + allowlist = 8
+    assert len(results) == 8
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 2
     assert {r.name for r in bp_results} == {
@@ -1312,6 +1313,68 @@ def test_environment_missing_admitted_ref_fails() -> None:
         result = check_environment("owner/repo", ["main", "release"])
     assert result.passed is False
     assert "does not admit release" in result.message
+
+
+def _manual_env_gh(body: str | None):
+    """A `_gh` fake answering the tend-manual environment lookup."""
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        if body is None:
+            return _make_completed(returncode=1)
+        return _make_completed(body)
+
+    return fake
+
+
+def _reviewer_rule(*logins: str) -> str:
+    return json.dumps(
+        {
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "reviewers": [
+                        {"type": "User", "reviewer": {"login": login}}
+                        for login in logins
+                    ],
+                }
+            ]
+        }
+    )
+
+
+def test_manual_environment_absent_passes() -> None:
+    """Most repos run no dispatch-triggered workflow, so no environment is
+    the common case rather than a misconfiguration."""
+    with patch("tend.checks._gh", side_effect=_manual_env_gh(None)):
+        result = check_manual_environment("owner/repo", "bot")
+    assert result.passed is True
+
+
+def test_manual_environment_without_reviewers_fails() -> None:
+    """Reviewers are the whole protection: this environment has no branch
+    policy, so without them its secrets are repo-level with extra steps."""
+    body = json.dumps({"protection_rules": [{"type": "wait_timer", "wait_timer": 5}]})
+    with patch("tend.checks._gh", side_effect=_manual_env_gh(body)):
+        result = check_manual_environment("owner/repo", "bot")
+    assert result.passed is False
+    assert "no required reviewers" in result.message
+
+
+def test_manual_environment_with_bot_reviewer_fails() -> None:
+    """A bot that can approve its own run is not a human approval."""
+    with patch("tend.checks._gh", side_effect=_manual_env_gh(_reviewer_rule("bot"))):
+        result = check_manual_environment("owner/repo", "bot")
+    assert result.passed is False
+    assert "as a required reviewer" in result.message
+
+
+def test_manual_environment_with_human_reviewer_passes() -> None:
+    with patch(
+        "tend.checks._gh", side_effect=_manual_env_gh(_reviewer_rule("maintainer"))
+    ):
+        result = check_manual_environment("owner/repo", "bot")
+    assert result.passed is True
+    assert "maintainer" in result.message
 
 
 def test_fix_environment_reconciles_the_admitted_set() -> None:

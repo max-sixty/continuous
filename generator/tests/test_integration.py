@@ -383,9 +383,9 @@ def test_check_full_pipeline_with_mocked_gh(
 
     assert result.exit_code == 0
     assert "FAIL" not in result.output
-    # branch-protection + bot-permission + environment + secrets + claude-auth
-    # + allowlist = 6
-    assert result.output.count("PASS") == 6
+    # branch-protection + bot-permission + environment + manual-environment
+    # + secrets + claude-auth + allowlist = 7
+    assert result.output.count("PASS") == 7
 
 
 def test_check_full_pipeline_branch_not_protected(

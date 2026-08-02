@@ -72,7 +72,9 @@ jobs:
     # them). So its secrets live in `tend-manual`, whose protection is a
     # required reviewer instead of a ref policy: each run waits for a
     # maintainer's approval, which the dispatching maintainer gives in the
-    # run page. A branch pushed to exfiltrate the secrets stalls there.
+    # run page. A branch pushed to exfiltrate the secrets stalls there — but
+    # only while that reviewer list is non-empty and excludes the bot, which
+    # `tend check`'s manual-environment check is what holds.
     environment: tend-manual
     timeout-minutes: 15
     steps:

@@ -16,7 +16,7 @@ import subprocess
 from dataclasses import dataclass
 
 from tend.config import Config
-from tend.workflows import TEND_ENVIRONMENT
+from tend.workflows import TEND_ENVIRONMENT, TEND_MANUAL_ENVIRONMENT
 
 
 # GitHub's base repository role IDs, as they appear in a ruleset's
@@ -463,6 +463,58 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
     )
 
 
+def check_manual_environment(repo: str, bot_name: str) -> CheckResult:
+    """The reviewer-gated environment, where a repo declares one.
+
+    A branch policy gates refs, so it cannot gate a `workflow_dispatch` the
+    bot fires on a ref it chose. The substitute is a required reviewer, and it
+    only holds while the reviewer list is non-empty and excludes the bot —
+    otherwise the environment is a repo-level secret wearing a gate. Absent
+    means the repo runs no such workflow, which is the common case.
+    """
+    name = "manual-environment"
+    result = _gh("api", f"repos/{repo}/environments/{TEND_MANUAL_ENVIRONMENT}")
+    if result is None:
+        return CheckResult(name, None, "gh CLI not found")
+    if result.returncode != 0:
+        return CheckResult(
+            name, True, f"No '{TEND_MANUAL_ENVIRONMENT}' environment (not required)"
+        )
+    try:
+        env = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return CheckResult(name, None, "Could not parse environment response")
+
+    reviewers = [
+        r["reviewer"].get("login") or r["reviewer"].get("slug")
+        for rule in env.get("protection_rules", [])
+        if rule.get("type") == "required_reviewers"
+        for r in rule.get("reviewers", [])
+    ]
+    if not reviewers:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_MANUAL_ENVIRONMENT}' has no required reviewers, so "
+            "a workflow the bot dispatches on a branch it pushed reads its secrets "
+            "unattended. Add a reviewer in Settings > Environments.",
+        )
+    if bot_name in reviewers:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_MANUAL_ENVIRONMENT}' lists the bot "
+            f"('{bot_name}') as a required reviewer, so it can approve its own "
+            "run. Remove it; the reviewer is what a human approval means here.",
+        )
+    return CheckResult(
+        name,
+        True,
+        f"Environment '{TEND_MANUAL_ENVIRONMENT}' requires approval from "
+        f"{', '.join(sorted(reviewers))}",
+    )
+
+
 def check_secrets(repo: str, expected: list[str]) -> CheckResult:
     """Check that required secrets exist in the environment, then org-level.
 
@@ -790,6 +842,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
     results.append(check_environment(repo, admitted))
+    results.append(check_manual_environment(repo, cfg.bot_name))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness == "claude":
         results.append(check_claude_auth(repo, cfg))

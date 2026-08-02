@@ -32,7 +32,9 @@ after 0.1.13 ships.
 
 `max-sixty/tend` also needs `TEND_BOT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`
 copied into `tend-manual` (the required-reviewer environment `claude-smoke`
-uses), since a branch dispatch can never reach `tend`.
+uses), since a branch dispatch can never reach `tend`. That environment
+already exists with a reviewer, and `tend check`'s manual-environment check
+keeps it that way.
 
 ## Cut tend over to harness = "codex" (post-release)
 
