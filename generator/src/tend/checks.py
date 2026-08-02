@@ -389,15 +389,9 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
             False,
             f"Environment '{TEND_ENVIRONMENT}' not found. The operational "
             "secrets must live in it, gated to admin-only refs, or a workflow "
-            "pushed to any branch can read them:\n"
-            f"  gh api -X PUT repos/{repo}/environments/{TEND_ENVIRONMENT} "
-            '--input - <<< \'{"deployment_branch_policy":'
-            '{"protected_branches":false,"custom_branch_policies":true}}\'\n'
-            f"  gh api -X POST repos/{repo}/environments/{TEND_ENVIRONMENT}"
-            "/deployment-branch-policies --input - <<< "
-            f'\'{{"name":"{admitted[0]}","type":"branch"}}\'\n'
-            "Then move each secret into the environment and delete the "
-            "repo-level copy.",
+            "pushed to any branch can read them. Run `tend check --fix` to "
+            f"create it admitting {', '.join(admitted)}, then move each secret "
+            "into it and delete the repo-level copy.",
         )
     try:
         env = json.loads(result.stdout)
@@ -464,7 +458,12 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
 
 
 def check_secrets(repo: str, expected: list[str]) -> CheckResult:
-    """Check that required secrets exist (repo-level, then org-level fallback)."""
+    """Check that required secrets exist in the environment, then org-level.
+
+    An org secret is not environment-gated, so finding one there is a pass on
+    availability alone; `check_repo_secret_allowlist` is what refuses a
+    repo-level copy.
+    """
     secret_names, err = _env_secret_names(repo)
     if secret_names is None:
         return CheckResult("secrets", None, err)
@@ -491,8 +490,9 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
 
     if missing:
         msg = (
-            f"Missing secrets: {', '.join(missing)}. "
-            "Add them in repo Settings > Secrets and variables > Actions."
+            f"Missing secrets: {', '.join(missing)}. Add each with "
+            f"`gh secret set <NAME> --repo {repo} --env {TEND_ENVIRONMENT}` — "
+            "a repo-level copy is readable by any workflow the bot pushes."
         )
         if org_forbidden:
             msg += (
