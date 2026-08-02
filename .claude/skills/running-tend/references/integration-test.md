@@ -357,20 +357,23 @@ done
   || { echo "tend-mention: workflow run never registered"; exit 1; }
 
 # The nonce is the end-to-end assertion: event → (relay → dispatch →)
-# verify → handle → reply. Reviews count as well as comments, so a reply
-# posted as a review still passes.
+# verify → handle → reply. Comments only, deliberately: the seeding review
+# above is itself authored by the bot and contains the nonce, so counting
+# reviews counts the prompt and passes with the whole path broken. Asking
+# for a comment and asserting on comments keeps the two apart without
+# comparing ids across APIs — `gh pr view` reports a review's GraphQL node
+# id, the REST list a numeric one, and they never match.
 REPLIES=0
 for _ in $(seq 1 60); do
-  REPLIES=$(gh pr view "$PR" --repo tend-agent/tend-integration \
-    --json comments,reviews \
-    --jq "[(.comments[], .reviews[])
+  REPLIES=$(gh pr view "$PR" --repo tend-agent/tend-integration --json comments \
+    --jq "[.comments[]
            | select(.author.login == \"tend-agent\" and (.body | contains(\"$NONCE\")))]
           | length")
   [ "$REPLIES" -ge 1 ] && break
   sleep 10
 done
 [ "$REPLIES" -ge 1 ] \
-  || { echo "tend-mention: no bot reply quoting $NONCE on PR #$PR"; exit 1; }
+  || { echo "tend-mention: no bot comment quoting $NONCE on PR #$PR"; exit 1; }
 ```
 
 ## 7. Reset (always — even on failure)
