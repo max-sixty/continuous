@@ -12,6 +12,7 @@ from click.testing import CliRunner
 
 from tend.checks import (
     check_environment,
+    fix_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
     ROLE_ID_WRITE,
@@ -1281,3 +1282,32 @@ def test_environment_admitting_only_verified_refs_passes() -> None:
     ):
         result = check_environment("owner/repo", ["main", "release"])
     assert result.passed is True
+
+
+def test_fix_environment_reconciles_the_admitted_set() -> None:
+    """The fix leaves exactly the admitted refs — a ref left over from an
+    earlier config is a ref the bot may be able to push."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[-1].endswith("deployment-branch-policies"):
+            return _make_completed(
+                json.dumps({"branch_policies": [{"name": "stale", "id": 7}]})
+            )
+        return _make_completed("{}")
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = fix_environment("owner/repo", ["main", "release"])
+
+    assert result.passed is True
+    added = {
+        arg.split("=", 1)[1]
+        for call in calls
+        for arg in call
+        if arg.startswith("name=")
+    }
+    assert added == {"main", "release"}
+    assert any(
+        "DELETE" in a and a[-1].endswith("deployment-branch-policies/7") for a in calls
+    )
