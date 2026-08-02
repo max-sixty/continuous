@@ -1,8 +1,8 @@
 # Weekly integration test
 
 Drives a real issue and a real PR against a persistent test repo, asserts
-`tend-triage` and `tend-review` ran end-to-end, and resets the repo for
-the next week.
+`tend-triage`, `tend-review`, and `tend-mention` ran end-to-end, and
+resets the repo for the next week.
 
 ## Safety — read first
 
@@ -38,8 +38,8 @@ generated workflow files succeeds through the proxy) but **does not**
 need `delete_repo` — the recipe never deletes the test repo; it resets
 in place.
 
-Run steps in order. If §3, §4, or §5 fails, jump to §6 (reset), then §7
-(report).
+Run steps in order. If §3, §4, §4b, or §5 fails, jump to §6 (reset),
+then §7 (report).
 
 ## 1. Bootstrap (first run only) and reseed (every run)
 
@@ -68,7 +68,6 @@ if ! gh repo view tend-agent/tend-integration --json name >/dev/null 2>&1; then
 bot_name: tend-agent
 harness: claude
 workflows:
-  mention: false
   notifications: false
   ci-fix: false
   nightly: false
@@ -271,6 +270,52 @@ ARTIFACTS=$(gh api "repos/tend-agent/tend-integration/actions/runs/$RUN_ID/artif
 
 cd - >/dev/null
 rm -rf "$WORK"
+```
+
+## 4b. Verify tend-mention (review events)
+
+Submit a comment review on the §4 PR that mentions the bot, and assert
+the bot replied. A review the bot leaves on its own PR is deliberately
+actionable — its reviewer role speaking — so the single bot identity can
+drive the full chain: review submitted → tend-mention → reply. On
+current tend the chain includes the secretless relay hop (the review
+event re-posted as a `repository_dispatch`), but the reply is the
+assertion either way; the individual legs are visible in the run list
+when this fails.
+
+```bash
+PREV_RUN=$(gh run list --repo tend-agent/tend-integration \
+  --workflow tend-mention --limit 1 \
+  --json databaseId --jq '.[0].databaseId // empty')
+REVIEW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+gh pr review "$PR" --repo tend-agent/tend-integration --comment \
+  --body "@tend-agent integration test: reply to this review with a one-line acknowledgement."
+
+# A new tend-mention run registering distinguishes "trigger never fired"
+# from "fired but no reply" when the reply assertion below fails.
+RUN_ID=""
+for _ in $(seq 1 24); do
+  RUN_ID=$(gh run list --repo tend-agent/tend-integration \
+    --workflow tend-mention --limit 1 \
+    --json databaseId --jq '.[0].databaseId // empty')
+  [ -n "$RUN_ID" ] && [ "$RUN_ID" != "$PREV_RUN" ] && break
+  sleep 5
+done
+{ [ -n "$RUN_ID" ] && [ "$RUN_ID" != "$PREV_RUN" ]; } \
+  || { echo "tend-mention: workflow run never registered"; exit 1; }
+
+# The reply is the end-to-end assertion: event → (relay → dispatch →)
+# verify → handle → comment.
+REPLIES=0
+for _ in $(seq 1 60); do
+  REPLIES=$(gh pr view "$PR" --repo tend-agent/tend-integration --json comments \
+    --jq "[.comments[] | select(.author.login == \"tend-agent\"
+                                and .createdAt > \"$REVIEW_TS\")] | length")
+  [ "$REPLIES" -ge 1 ] && break
+  sleep 10
+done
+[ "$REPLIES" -ge 1 ] \
+  || { echo "tend-mention: no bot reply to the review on PR #$PR"; exit 1; }
 ```
 
 ## 5. Verify the generator (self-healing)
