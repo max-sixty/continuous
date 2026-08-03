@@ -131,12 +131,12 @@ Scale depth to the change. A docs-only PR or a mechanical rename needs a skim fo
 
 Check the project's CLAUDE.md for language-specific review criteria and conventions. Load any project-specific review skill if available.
 
-Review the diff two ways at once: the manual checks below, plus one independent automated pass run as a subagent. Spawn a `general-purpose` subagent (the `Task` tool, which the Claude review harness allowlists) briefed to review the PR's merged tree for correctness bugs and quality cleanups and to *return* its findings — not to post anything itself. A fresh subagent context is an uncorrelated signal, the same reason a second reviewer catches what the first missed. Scale its depth to how core the change is, the same way you scale the manual depth above:
+Review the diff two ways at once: the manual checks below, plus a `/tend-ci-runner:code-review` pass over the PR's merged tree. That skill is a structured second pass — correctness and cleanup angles, then a verify pass — and it returns findings rather than posting anything. Scale its depth to how core the change is, the same way you scale the manual depth above:
 
-- Peripheral or mechanical (docs, config, dependency bumps, test-only): a quick correctness skim.
-- The project's core logic: a deep trace of the changed paths.
+- Peripheral or mechanical (docs, config, dependency bumps, test-only): tell it the change is peripheral, so it runs the short angle set in one pass.
+- The project's core logic: tell it the change is core, so it fans the angles out and sweeps for gaps.
 
-What counts as core is repo-specific; let the project's own guidance (CLAUDE.md, a repo review skill) or your judgment decide. Both passes feed one verdict: fold the subagent's findings into the review you submit in step 5. The subagent only reports back — it never posts a review, comment, or commit of its own, so the dedup and single-review path is preserved. The Codex harness has no subagent tool; skip the second pass there.
+What counts as core is repo-specific; let the project's own guidance (CLAUDE.md, a repo review skill) or your judgment decide. Both passes feed one verdict: fold its findings into the review you submit in step 5. It only reports back — it never posts a review, comment, or commit of its own, so the dedup and single-review path is preserved.
 
 **Code quality:**
 
