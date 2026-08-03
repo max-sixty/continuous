@@ -3,25 +3,38 @@
 Deferred work and unimplemented options. Each entry should justify the cost
 of building it if revisited.
 
-## Move the operational secrets into the `tend` environment (post-merge)
+## Finish moving the operational secrets into the `tend` environment
 
-The environment gate is inert until each adopter's secrets actually live in
-the environment and the repo-level copies are gone, and that half can only
-happen once the workflows naming the environment are on the default branch.
-Deleting a repo-level copy earlier breaks every run in between.
+The gate closes on a repo only when the repo-level copy is gone, since a job
+naming an environment still reads repo-level secrets. Every adopter now has
+the environment, admitting only `main`, with `TEND_BOT_TOKEN` in it, and every
+generated workflow names it. What remains:
 
-Per repo (`max-sixty/tend`, `max-sixty/worktrunk`, `PRQL/prql`,
-`max-sixty/cargo-affected`, `numbagg/numbagg`), after its regenerated
-workflows land:
+1. **The model credential, every repo.** `CLAUDE_CODE_OAUTH_TOKEN` can't be
+   read back and isn't stored anywhere locally, so it has to be pasted or
+   re-minted with `claude setup-token`:
+   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <repo> --env tend`, then
+   `gh secret delete CLAUDE_CODE_OAUTH_TOKEN --repo <repo>`. Only the
+   generated workflows read it, and all of them name the environment, so
+   nothing else breaks. `max-sixty/tend` needs it in `tend-manual` too — the
+   required-reviewer environment `claude-smoke` uses, since a branch dispatch
+   can never reach `tend`.
+2. **`max-sixty/worktrunk` and `PRQL/prql` keep a repo-level
+   `TEND_BOT_TOKEN`,** because hand-maintained workflows read it outside the
+   generated set: worktrunk's `benchmarks`, `nightly` and `release`, and
+   prql's `pull-request-target`, `release` and `tests`. Most run on
+   `pull_request`, `pull_request_target` or `release`, whose refs a
+   `main`-only deployment-branch policy can never admit, so naming the
+   environment would deny them the secret rather than gate it. Each needs a
+   decision of its own: drop to `GITHUB_TOKEN` where the bot identity isn't
+   load-bearing, split the privileged half behind a dispatch the way
+   `tend-mention`'s relay does, or accept the repo-level copy and allowlist it
+   in `secrets.allowed` with the reason. Until then `repo-secret-allowlist`
+   fails on both, correctly.
 
-1. `uvx tend@latest check --fix` — creates the environment and its
-   branch policy. (Already done for `max-sixty/tend` and
-   `tend-agent/tend-integration`.)
-2. Re-mint each operational secret into it — the old values can't be read
-   back:
-   `gh secret set <NAME> --repo <repo> --env tend`
-3. Delete the repo-level copies: `gh secret delete <NAME> --repo <repo>`
-4. `uvx tend@latest check` — every line PASS.
+`numbagg/numbagg` and `max-sixty/cargo-affected` are done bar the model
+credential. cargo-affected also carries a repo-level `BOT_TOKEN` no workflow
+references — a leftover, deletable once confirmed unused outside Actions.
 
 The check also sweeps every *other* secret-holding environment (release
 environments included), so a repo with a pre-existing publish environment
@@ -31,18 +44,10 @@ entries needing the admin-only all-tags ruleset the install recipe's §3
 creates. That failure is the check doing its job; gate the environment
 rather than allowlisting around it.
 
-`tend-agent/tend-integration` is the exception: its `integration-secrets`
-reseed does steps 2–3 on its own. Step 3 waits for the fixture's workflows
-to name the environment, which happens a release later than the generator
-change — the fixture regenerates with the published `tend`, not this
-checkout — so the fixture completes its own migration on the first weekly
-after 0.1.13 ships.
-
-`max-sixty/tend` also needs `TEND_BOT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`
-copied into `tend-manual` (the required-reviewer environment `claude-smoke`
-uses), since a branch dispatch can never reach `tend`. That environment
-already exists with a reviewer, and `tend check`'s manual-environment check
-keeps it that way.
+`tend-agent/tend-integration` migrates itself: its `integration-secrets`
+reseed writes both secrets into the environment and deletes the repo-level
+copies once the fixture's workflows name it. The fixture regenerates with the
+published `tend`, so this completes on the first weekly after 0.1.13.
 
 ## Cut tend over to harness = "codex" (post-release)
 
