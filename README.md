@@ -129,15 +129,18 @@ custom roles, and org-level rulesets are all accounted for) and refuses to
 start unless the answer is no. `tend check` verifies the setup;
 `tend check --fix` creates the ruleset.
 
-**Environment-gated secrets** — the bot token and model auth live in the
-repo's `tend` GitHub Environment, whose deployment policy admits only the
-refs `tend check` confirmed the merge restriction covers: the default
-branch and any `protected_branches` that exist and are protected. A workflow pushed to any other branch is refused
-those secrets before its first step, so write access to the repo does not
-imply secret access. `tend check` verifies the environment, its policy, and that
-no repo-level copies remain; `tend check --fix` creates the environment and
-sets its policy. Moving the secrets into it stays manual — their values
-can't be read back.
+**Environment-gated secrets** — a workflow the bot can cause to run reads
+no secrets: not the bot token, not the model auth, not a release token.
+The bot token and model auth live in the repo's `tend` GitHub Environment,
+whose deployment policy admits only the refs `tend check` confirmed the
+merge restriction covers, so a workflow pushed to any other branch is
+refused them before its first step. The same check sweeps every other
+secret-holding environment (release tokens included) for a gate the bot
+cannot pass — a non-bot required reviewer, or a policy naming only
+verified refs — and flags any repo-level secret not explicitly listed in
+`secrets.allowed`, where the operational names are refused outright.
+`tend check --fix` creates the environment and sets its policy; moving the
+secrets into it stays manual — their values can't be read back.
 
 **Credential isolation** — the Claude harness runs the agent as a separate
 non-sudo user and keeps the bot token and Anthropic credential in a local

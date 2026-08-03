@@ -64,7 +64,10 @@ and their release secrets live there rather than at repo level. A leaked
 bot token can push a non-default branch, but no ref it can push matches
 such a policy, so the deploy job is rejected before it reads the secret:
 no admin operation → no admin-gated ref → no environment access → no
-secret.
+secret. `tend check` sweeps every secret-holding environment — release
+and operational alike — and fails on any it cannot confirm gated by a
+non-bot reviewer or a policy of verified refs, so the chain is checked
+rather than assumed.
 
 That holds only for a workflow whose sole path to invocation is updating
 an admin-gated ref (`push: tags:`, or `push:` on the default branch).

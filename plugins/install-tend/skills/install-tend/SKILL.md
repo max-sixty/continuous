@@ -117,7 +117,11 @@ place. Classify each remaining secret and act now — don't defer:
   merge. Don't allowlist them. Migrate each to a GitHub Environment whose
   deployment policy pins to the admin-gated refs from §3 (the default
   branch and/or all tags). The bot can reach neither ref class, so it
-  cannot reach the secret.
+  cannot reach the secret. `tend check` sweeps every secret-holding
+  environment and fails on any it cannot confirm gated — no reviewer and
+  no policy, an unverified branch entry, or tag entries without §3's
+  all-tags ruleset — so a half-migrated environment surfaces on the next
+  check rather than passing silently.
 
   Migrate the secret: recreate it on the Environment, delete the
   repo-level copy (confirm via `AskUserQuestion` first), and set

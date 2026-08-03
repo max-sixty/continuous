@@ -1383,15 +1383,28 @@ def test_unverified_protected_branch_is_not_demanded() -> None:
     assert "release" not in env.message
 
 
-def _secret_env_gh(environments: dict[str, tuple[list[str], dict]]):
-    """A `_gh` fake serving the calls `check_secret_environments` makes:
-    the environment list, each environment's secret names, and its detail."""
+def _secret_env_gh(
+    environments: dict[str, tuple[list[str], dict, str]],
+    tag_rulesets: dict[str, dict] | None = None,
+):
+    """A `_gh` fake serving the calls `check_secret_environments` makes: the
+    environment list; per environment its secret names, detail, and
+    deployment-branch-policy lines (`"<type> <name>"` per line); and the tag
+    rulesets (id → detail) the tag gate reads when a policy admits tags."""
+    tag_rulesets = tag_rulesets or {}
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         url = args[-3] if "--jq" in args else args[-1]
         if url.endswith("/environments"):
             return _make_completed("\n".join(environments) + "\n")
-        for env_name, (secrets, detail) in environments.items():
+        if url.endswith("/rulesets"):
+            return _make_completed("\n".join(tag_rulesets) + "\n")
+        for ruleset_id, detail in tag_rulesets.items():
+            if url.endswith(f"/rulesets/{ruleset_id}"):
+                return _make_completed(json.dumps(detail))
+        for env_name, (secrets, detail, policies) in environments.items():
+            if url.endswith(f"/environments/{env_name}/deployment-branch-policies"):
+                return _make_completed(policies + "\n")
             if url.endswith(f"/environments/{env_name}/secrets"):
                 return _make_completed("\n".join(secrets) + "\n")
             if url.endswith(f"/environments/{env_name}"):
@@ -1415,31 +1428,57 @@ def _reviewers(*entries: tuple[str, str]) -> dict:
     }
 
 
+_ADMIN_TAG_RULESET = {
+    "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+    "rules": [{"type": "creation"}, {"type": "update"}],
+    "bypass_actors": [_role_actor(ROLE_ID_ADMIN)],
+}
+
+# An environment detail whose policy is the custom named-list mode; the list
+# itself is served by the deployment-branch-policies endpoint.
+_CUSTOM_POLICY = {
+    "deployment_branch_policy": {
+        "protected_branches": False,
+        "custom_branch_policies": True,
+    }
+}
+
+
 def test_secret_environments_none_holding_secrets_passes() -> None:
-    """Before the migration nothing holds them, and an environment holding no
-    operational secret has nothing to gate."""
-    fake = _secret_env_gh({"tend": ([], {}), "github-pages": (["PAGES"], {})})
+    """Before the migration nothing holds any secret, and an environment
+    holding none has nothing to gate."""
+    fake = _secret_env_gh({"tend": ([], {}, ""), "github-pages": ([], {}, "")})
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config())
+        result = check_secret_environments("owner/repo", _config(), ["main"])
     assert result.passed is True
+
+
+def test_secret_environments_covers_release_secrets() -> None:
+    """The sweep is every secret, not the operational names: an ungated
+    environment holding only a release token is readable by a workflow the
+    bot pushes naming it, which is the same exposure with a different key."""
+    fake = _secret_env_gh({"pypi": (["PYPI_TOKEN"], {}, "")})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False
+    assert "pypi" in result.message
 
 
 def test_secret_environments_tend_is_gated_by_its_policy() -> None:
     """`tend` earns its pass from the branch policy the `environment` check
     verifies, so holding the secrets there is not a finding."""
-    fake = _secret_env_gh({"tend": (["T1", "T2"], {})})
+    fake = _secret_env_gh({"tend": (["T1", "T2"], {}, "")})
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config())
+        result = check_secret_environments("owner/repo", _config(), ["main"])
     assert result.passed is True
     assert "tend" in result.message
 
 
 def test_secret_environments_flags_an_ungated_holder() -> None:
-    """Any environment other than `tend` is reachable by a trigger no branch
-    policy gates, so without a reviewer its secrets are ungated."""
-    fake = _secret_env_gh({"tend-manual": (["T1"], {"protection_rules": []})})
+    """No reviewer and no policy leaves the secrets on every ref."""
+    fake = _secret_env_gh({"tend-manual": (["T1"], {"protection_rules": []}, "")})
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config())
+        result = check_secret_environments("owner/repo", _config(), ["main"])
     assert result.passed is False
     assert "no required reviewers" in result.message
 
@@ -1447,26 +1486,30 @@ def test_secret_environments_flags_an_ungated_holder() -> None:
 def test_secret_environments_is_keyed_on_secrets_not_on_the_name() -> None:
     """The gate must not depend on the name `tend-manual`: renaming the
     environment, or standing a second one beside it, must still be checked."""
-    fake = _secret_env_gh({"smoke-secrets": (["T2"], {"protection_rules": []})})
+    fake = _secret_env_gh({"smoke-secrets": (["T2"], {"protection_rules": []}, "")})
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config())
+        result = check_secret_environments("owner/repo", _config(), ["main"])
     assert result.passed is False
     assert "smoke-secrets" in result.message
 
 
 def test_secret_environments_accepts_a_human_reviewer() -> None:
-    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("User", "maintainer")))})
+    fake = _secret_env_gh(
+        {"tend-manual": (["T1"], _reviewers(("User", "maintainer")), "")}
+    )
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config())
+        result = check_secret_environments("owner/repo", _config(), ["main"])
     assert result.passed is True
 
 
 def test_secret_environments_rejects_the_bot_as_reviewer() -> None:
     """Case-insensitively: GitHub logins are, and the config takes whatever
     case the maintainer typed."""
-    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("User", "Bot")))})
+    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("User", "Bot")), "")})
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config(bot_name="bot"))
+        result = check_secret_environments(
+            "owner/repo", _config(bot_name="bot"), ["main"]
+        )
     assert result.passed is False
     assert "approves its own run" in result.message
 
@@ -1474,11 +1517,70 @@ def test_secret_environments_rejects_the_bot_as_reviewer() -> None:
 def test_secret_environments_team_reviewer_is_unverifiable() -> None:
     """Team membership is invisible here, so the bot may be in it — the same
     stance the ruleset check takes on a Team bypass actor."""
-    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("Team", "maints")))})
+    fake = _secret_env_gh({"tend-manual": (["T1"], _reviewers(("Team", "maints")), "")})
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config())
+        result = check_secret_environments("owner/repo", _config(), ["main"])
     assert result.passed is False
     assert "team" in result.message
+
+
+def test_secret_environments_accepts_a_verified_branch_policy() -> None:
+    """A reviewer is one gate; a policy admitting only verified refs is the
+    other — a deploy environment pinned to the default branch needs no human."""
+    fake = _secret_env_gh({"deploy": (["DEPLOY_KEY"], _CUSTOM_POLICY, "branch main")})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config(), ["main"])
+    assert result.passed is True
+
+
+def test_secret_environments_rejects_an_unverified_branch_policy() -> None:
+    """A policy entry naming a ref outside the verified set is one the bot may
+    be able to write — including a pattern, which cannot be verified at all."""
+    fake = _secret_env_gh(
+        {"deploy": (["DEPLOY_KEY"], _CUSTOM_POLICY, "branch staging")}
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False
+    assert "staging" in result.message
+
+
+def test_secret_environments_accepts_tags_under_an_admin_ruleset() -> None:
+    """A release environment must admit tags to run on tag pushes; that is a
+    gate only while an all-tags ruleset keeps the bot from minting one."""
+    fake = _secret_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": _ADMIN_TAG_RULESET},
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config(), ["main"])
+    assert result.passed is True, result.message
+
+
+def test_secret_environments_rejects_tags_without_a_ruleset() -> None:
+    """With no admin-gated all-tags ruleset, a tag entry admits a ref the bot
+    can create, workflow file and all."""
+    fake = _secret_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")}
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False
+    assert "admits tags" in result.message
+
+
+def test_secret_environments_bot_bypassable_tag_ruleset_does_not_gate() -> None:
+    """A tag ruleset whose bypass list includes a write-level role is one the
+    bot walks through, so it must not credit the tag entries."""
+    bypassable = dict(_ADMIN_TAG_RULESET, bypass_actors=[_role_actor(ROLE_ID_WRITE)])
+    fake = _secret_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "tag v*")},
+        tag_rulesets={"7": bypassable},
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secret_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False
+    assert "admits tags" in result.message
 
 
 def test_secret_environments_unreadable_does_not_pass() -> None:
@@ -1492,7 +1594,7 @@ def test_secret_environments_unreadable_does_not_pass() -> None:
         return _make_completed(stderr="HTTP 403", returncode=1)
 
     with patch("tend.checks._gh", side_effect=fake):
-        result = check_secret_environments("owner/repo", _config())
+        result = check_secret_environments("owner/repo", _config(), ["main"])
     assert result.passed is None
 
 

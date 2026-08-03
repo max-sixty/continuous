@@ -49,28 +49,63 @@ each.
 
 ## What we do
 
-There are two load-bearing boundaries, one per path code can take.
+Two load-bearing boundaries:
 
-**Merge restriction** covers code that reaches the default branch through a
-merge. A GitHub ruleset (or branch protection) prevents the bot from merging
-to protected branches (the default branch plus any in `protected_branches`)
-regardless of review status. The composite action's preflight verifies this
-as the bot itself: `current_user_can_bypass` on each applying ruleset is
-GitHub's own evaluation of the bot's standing — teams, custom roles, and
-org-level rulesets included — and the run aborts if the bot can bypass every
-restrict-updates ruleset, or if the branch is unprotected entirely.
+1. **The bot cannot land code.** A merge restriction keeps every protected
+   branch behind a human; where releases rely on tags, an all-tags ruleset
+   does the same for tags.
+2. **A run the bot can cause reads no secrets.** Every stored secret sits
+   behind a gate the bot cannot pass, or is explicitly allowlisted in the
+   tend config as accepted repo-level exposure.
 
-**Environment-gated secrets** covers what a run can read. A job that names
-a GitHub Environment runs only if the run's `GITHUB_REF` matches the
-environment's deployment branch policy; otherwise the job is refused before
-its first step, and the environment's secrets are released only to jobs
-that name it. Pinning the policy to refs only admins can move therefore
-decides secret access by ref. The bot has write, so it can move neither the
-default branch (merge restriction) nor any tag (tag ruleset), and managing
-environments — the policy and the secrets inside — requires admin, which
-the bot also lacks.
+`tend check` fails until both hold, so a passing check *is* the claim. The
+rest of this section is the mechanism behind the second sentence; the first
+is the merge restriction below.
 
-Tend applies this to both secret classes.
+**Merge restriction.** A GitHub ruleset (or branch protection) prevents the
+bot from merging to protected branches (the default branch plus any in
+`protected_branches`) regardless of review status. The composite action's
+preflight verifies this as the bot itself: `current_user_can_bypass` on
+each applying ruleset is GitHub's own evaluation of the bot's standing —
+teams, custom roles, and org-level rulesets included — and the run aborts
+if the bot can bypass every restrict-updates ruleset, or if the branch is
+unprotected entirely.
+
+**Environment-gated secrets.** A job that names a GitHub Environment runs
+only if the run's `GITHUB_REF` matches the environment's deployment branch
+policy; otherwise the job is refused before its first step, and the
+environment's secrets are released only to jobs that name it. Pinning the
+policy to refs only admins can move therefore decides secret access by
+ref. The bot has write, so it can move neither the default branch (merge
+restriction) nor any tag (tag ruleset), and managing environments — the
+policy and the secrets inside — requires admin, which the bot also lacks.
+
+The claim in sentence 2 is the conjunction of three checks, each keyed on
+where a secret can live:
+
+- *Every secret-holding environment is gated* (`secret-environments`): a
+  required reviewer who is not the bot, or a deployment policy naming only
+  verified refs — branches the same run confirmed the bot cannot write,
+  or tags under an admin-only all-tags ruleset. This covers release
+  tokens exactly as it covers tend's own secrets, keyed on holding
+  secrets rather than on any environment name.
+- *No repo-level secret outside the allowlist* (`repo-secret-allowlist`):
+  a repo-level secret is readable by any workflow the repo runs, so each
+  one must be a deliberate `secrets.allowed` entry — and the operational
+  names are refused there at config load, so no one config line can
+  reopen the gate. Org-level secrets are swept into the same check
+  best-effort: they cannot be environment-gated at all, and listing them
+  needs `admin:org`, the one place the claim rests on the token the
+  maintainer ran `tend check` with.
+- *The operational secrets actually live in the gated environment*
+  (`environment`, `secrets`): the `tend` policy admits exactly the
+  verified branches, and the bot PAT and harness auth are present there
+  rather than anywhere flatter.
+
+What a pushed workflow holds, then, is only what GitHub gives every run:
+its ephemeral `GITHUB_TOKEN`, at whatever permissions the file declares —
+bounded by the same rulesets (it cannot merge or tag), unable to read any
+secret value back through the API, and expiring with the job.
 
 *Operational secrets* — the bot PAT and the harness auth — live in the
 `tend` environment, whose policy names the default branch and any
@@ -143,21 +178,28 @@ to it.
 adopter-owned environments whose policies list the default branch and/or
 all tags (a tag-target ruleset gates `creation` and `update` with
 admin-only bypass; `update` is what force-push of an existing tag fires, so
-it must be blocked alongside `creation`). The chain holds for workflows
-whose only path to invocation is updating one of those refs: trigger on
-`push: tags:` (release) or `push: branches: [main]` (continuous deploy).
-Other triggers (`workflow_dispatch`, `release: published`, `deployment`,
-`schedule`, chained dispatches) can be initiated by a write-scoped bot
-against an allowed ref, so the env policy alone does not gate *when* they
-fire; workflows keeping those triggers need trigger-specific containment
-before release or deploy secrets are migrated there. Tend's convention for
-one is a second environment, `tend-manual`, holding the same secrets behind
-a required reviewer instead of a branch policy, so each run waits for a
-human. `tend check` verifies it wherever a repo declares one — reviewers
-present, and the bot not among them, since a bot that can approve its own
-run makes the wait a formality. OIDC-to-cloud deploys have no GitHub-stored
-secret to gate; there, the Environment plus the cloud provider's trust
-policy is the only control.
+it must be blocked alongside `creation`). The `secret-environments` check
+verifies every such environment, not only tend's: it fails on any
+secret-holding environment whose gate it cannot confirm — no reviewer and
+no policy, a policy naming an unverified branch or a pattern, or tag
+entries without that admin-only all-tags ruleset.
+
+The gate bounds what a run can *read*; it does not by itself bound *when*
+a reviewed workflow fires. A workflow reachable only by updating a gated
+ref (`push: tags:` for release, `push: branches: [main]` for continuous
+deploy) is fully chained: causing the run at all takes an admin action.
+Triggers a write-scoped bot can fire itself against an allowed ref
+(`workflow_dispatch`, `release: published`, `deployment`, `schedule`,
+chained dispatches) still run only reviewed workflow files with the
+secrets used as written — but firing a deploy is itself an outcome, so
+those workflows want a required reviewer. Tend's convention for one is a
+second environment, `tend-manual`, holding the same secrets behind a
+reviewer instead of a branch policy, so each run waits for a human; the
+same sweep verifies it, keyed on the secrets rather than the name, with
+the bot excluded from the reviewer list since a bot that can approve its
+own run makes the wait a formality. OIDC-to-cloud deploys have no
+GitHub-stored secret to gate; there, the Environment plus the cloud
+provider's trust policy is the only control.
 
 *Migration.* Environment secrets overlay repo-level ones, and a job naming
 an environment that does not yet exist auto-creates it with no policy and

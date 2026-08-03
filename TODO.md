@@ -23,6 +23,14 @@ workflows land:
 3. Delete the repo-level copies: `gh secret delete <NAME> --repo <repo>`
 4. `uvx tend@latest check` — every line PASS.
 
+The check also sweeps every *other* secret-holding environment (release
+environments included), so a repo with a pre-existing publish environment
+may fail here until that environment is gated: a required reviewer that
+is not the bot, or a policy naming only verified branches — with tag
+entries needing the admin-only all-tags ruleset the install recipe's §3
+creates. That failure is the check doing its job; gate the environment
+rather than allowlisting around it.
+
 `tend-agent/tend-integration` is the exception: its `integration-secrets`
 reseed does steps 2–3 on its own. Step 3 waits for the fixture's workflows
 to name the environment, which happens a release later than the generator

@@ -509,16 +509,37 @@ class Config:
                 'e.g. allowed: ["CODECOV_TOKEN"]'
             )
 
+        bot_token_secret = secrets.get("bot_token", "TEND_BOT_TOKEN")
+        claude_token_secret = secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN")
+        anthropic_api_key_secret = secrets.get("anthropic_api_key", "ANTHROPIC_API_KEY")
+        openai_key_secret = secrets.get("openai_key", "OPENAI_API_KEY")
+        # The allowlist is the one deliberate exception to "no repo-level
+        # secrets", for tokens whose exposure the maintainer accepts. The
+        # operational secrets are never that: allowlisting one would let a
+        # repo-level copy pass `tend check`, handing any workflow the bot
+        # pushes exactly what the environment gate denies.
+        blessed = {
+            bot_token_secret,
+            claude_token_secret,
+            anthropic_api_key_secret,
+            openai_key_secret,
+        } & set(allowed)
+        if blessed:
+            raise click.ClickException(
+                f"secrets.allowed must not include {', '.join(sorted(blessed))}: "
+                "the operational secrets live in the 'tend' environment, and "
+                "allowlisting a repo-level copy would let any workflow the bot "
+                "pushes read it."
+            )
+
         return cls(
             bot_name=bot_name,
             default_branch="main",
             protected_branches=protected_branches,
-            bot_token_secret=secrets.get("bot_token", "TEND_BOT_TOKEN"),
-            claude_token_secret=secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN"),
-            anthropic_api_key_secret=secrets.get(
-                "anthropic_api_key", "ANTHROPIC_API_KEY"
-            ),
-            openai_key_secret=secrets.get("openai_key", "OPENAI_API_KEY"),
+            bot_token_secret=bot_token_secret,
+            claude_token_secret=claude_token_secret,
+            anthropic_api_key_secret=anthropic_api_key_secret,
+            openai_key_secret=openai_key_secret,
             harness=harness,
             model=model,
             effort=effort,

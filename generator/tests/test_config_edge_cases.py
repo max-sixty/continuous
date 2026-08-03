@@ -703,6 +703,24 @@ def test_allowed_secrets_string_rejected(tmp_path: Path) -> None:
         Config.load(path)
 
 
+def test_allowed_secrets_refuses_operational_names(tmp_path: Path) -> None:
+    """Allowlisting an operational secret would let a repo-level copy pass
+    `tend check` — one config line quietly re-opening what the environment
+    gate closes — so the config is refused at the edge. The check applies to
+    the resolved names, so a renamed bot token is caught under its rename."""
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        secrets:
+          bot_token: MY_BOT_PAT
+          allowed: ["CODECOV_TOKEN", "MY_BOT_PAT"]
+    """),
+    )
+    with pytest.raises(ClickException, match="MY_BOT_PAT"):
+        Config.load(path)
+
+
 # ---------------------------------------------------------------------------
 # YAML-specific: legacy TOML file fails with a clear error
 # ---------------------------------------------------------------------------
