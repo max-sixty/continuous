@@ -224,11 +224,12 @@ runs:
         TEND_SANDBOX_ENV: ${{ inputs.sandbox_env }}
       run: bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
 
-    # Install the agent toolchain (uv + the claude binary) into the sandbox
-    # user's home. SANDBOX/AGENT_HOME come from setup-sandbox.sh via $GITHUB_ENV.
-    - name: Install agent toolchain (sandbox)
+    # Install the claude binary into the sandbox user's home. Nothing else —
+    # a language toolchain here would shadow the adopter's on the sandbox PATH.
+    # SANDBOX/AGENT_HOME come from setup-sandbox.sh via $GITHUB_ENV.
+    - name: Install claude binary (sandbox)
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/install-agent-toolchain.sh"
+      run: bash "${{ github.action_path }}/../shared/steps/install-claude-binary.sh"
       env:
         CLAUDE_VERSION: ${{ inputs.claude_version }}
 
