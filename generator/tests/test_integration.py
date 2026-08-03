@@ -71,7 +71,6 @@ def test_init_creates_correct_files_with_valid_yaml(
         data = yaml.safe_load(path.read_text())
         assert "name" in data, f"{path.name} missing 'name'"
         assert "jobs" in data, f"{path.name} missing 'jobs'"
-        # Every workflow references the tend composite action
         assert f"max-sixty/tend/claude@{ACTION_VERSION}" in path.read_text(), (
             f"{path.name} missing action reference"
         )
@@ -119,11 +118,20 @@ def test_init_workflows_have_required_permissions(
     _run_init()
 
     wf_dir = _workflow_dir(tmp_path)
+    checked = 0
     for path in wf_dir.glob("tend-*.yaml"):
         data = yaml.safe_load(path.read_text())
         for job_name, job in data["jobs"].items():
-            if "permissions" not in job:
-                continue  # mention's verify job has no permissions block
+            # The invariant binds the jobs that run the agent; mention's
+            # verify job has no permissions block, and its relay job requests
+            # only the contents: write its dispatch POST needs — no secrets,
+            # no agent.
+            if not any(
+                s.get("uses", "").startswith("max-sixty/tend/")
+                for s in job.get("steps", [])
+            ):
+                continue
+            checked += 1
             perms = job["permissions"]
             assert perms.get("contents") == "write", (
                 f"{path.name}:{job_name} missing contents:write"
@@ -134,6 +142,7 @@ def test_init_workflows_have_required_permissions(
             assert perms.get("id-token") == "write", (
                 f"{path.name}:{job_name} missing id-token:write"
             )
+    assert checked == 7, "every workflow must contribute one agent job"
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +302,19 @@ def _make_completed(
 
 def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
-    url = args[1]
+    url = next(a for a in args if a.startswith("repos/") or a.startswith("orgs/"))
+    # Only the ref-gated environment exists, holding the operational secrets.
+    if url.endswith("/environments"):
+        return _make_completed("tend\n")
+    if url.endswith("/secrets") and "/environments/" in url:
+        names = (
+            ["TEND_BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+            if url.endswith("tend/secrets")
+            else []
+        )
+        if any(a.startswith("[.secrets") for a in args):
+            return _make_completed(json.dumps(names))
+        return _make_completed("\n".join(names) + "\n")
     if url == "repos/owner/repo" and ".default_branch" in args:
         return _make_completed("main\n")
     if "rules/branches" in url:
@@ -338,8 +359,24 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
                 }
             )
         )
+    if url.endswith("deployment-branch-policies"):
+        return _make_completed('{"name": "main"}\n')
+    if url.endswith("environments/tend"):
+        return _make_completed(
+            json.dumps(
+                {
+                    "deployment_branch_policy": {
+                        "protected_branches": False,
+                        "custom_branch_policies": True,
+                    }
+                }
+            )
+        )
+    # Repo and org level answer bare — the environment-secrets branch above is
+    # deliberately the only place the operational names appear, so a check
+    # reading the wrong level cannot pass by accident.
     if "secrets" in url:
-        return _make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+        return _make_completed("[]\n")
     return _make_completed(returncode=1)
 
 
@@ -357,10 +394,11 @@ def test_check_full_pipeline_with_mocked_gh(
     ):
         result = CliRunner().invoke(main, ["check", "--repo", "owner/repo"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "FAIL" not in result.output
-    # branch-protection + bot-permission + secrets + claude-auth + allowlist = 5
-    assert result.output.count("PASS") == 5
+    # branch-protection + bot-permission + environment + secret-environments
+    # + secrets + claude-auth + allowlist = 7
+    assert result.output.count("PASS") == 7
 
 
 def test_check_full_pipeline_branch_not_protected(
@@ -562,7 +600,7 @@ def test_init_with_install_test_generates_extra_file(
     wf_dir = _workflow_dir(tmp_path)
     files = sorted(p.name for p in wf_dir.glob("tend-*.yaml"))
     assert "tend-install-test.yaml" in files
-    assert len(files) == 8  # 7 standard + install-test
+    assert len(files) == 8  # 7 agent workflows + install-test
 
 
 def test_init_without_flag_omits_install_test(
@@ -681,8 +719,11 @@ def test_init_dry_run_previews_cleanup(
 def test_install_test_workflow_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The install-test workflow has the expected trigger, fork-PR skip,
-    secret-existence check, and generator-drift check."""
+    """The install-test workflow has the expected trigger, fork-PR skip, and
+    generator-drift check — and reads no secrets. It runs on `pull_request`,
+    whose merge ref the `tend` environment's policy refuses, so the secrets
+    are unreachable from here by design; `tend check` (run by the installer
+    with admin credentials) is what verifies them."""
     _write_config(tmp_path, "bot_name: test-bot")
     monkeypatch.chdir(tmp_path)
     _run_init(["--with-install-test"])
@@ -701,11 +742,7 @@ def test_install_test_workflow_shape(
     job = data["jobs"]["install-test"]
     assert "head.repo.full_name == github.repository" in job["if"]
     assert job["permissions"] == {"contents": "read"}
-
-    # Default Claude secret names appear in the env block.
-    assert "secrets.TEND_BOT_TOKEN" in content
-    assert "CLAUDE_CODE_OAUTH_TOKEN" in content
-    assert "ANTHROPIC_API_KEY" in content
+    assert "secrets." not in content
 
     # Generator-drift step regenerates with the same flag to keep output stable.
     # Version is pinned from the committed header (not `@latest`) so a release
@@ -720,42 +757,6 @@ def test_install_test_workflow_shape(
     assert "git remote set-head" not in content
     assert "gh api" in content and ".default_branch" in content
     assert "git symbolic-ref" in content
-
-
-def test_install_test_workflow_codex_secrets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Codex harness wires Codex-specific secret names into the workflow."""
-    _write_config(tmp_path, "bot_name: test-bot\nharness: codex\n")
-    monkeypatch.chdir(tmp_path)
-    _run_init(["--with-install-test"])
-
-    content = (_workflow_dir(tmp_path) / "tend-install-test.yaml").read_text()
-    assert "OPENAI_API_KEY" in content
-    assert "CODEX_AUTH_JSON" not in content
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in content
-
-
-def test_install_test_workflow_honors_secret_overrides(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Custom bot/harness secret names from config flow into the workflow."""
-    _write_config(
-        tmp_path,
-        dedent("""\
-            bot_name: test-bot
-            secrets:
-              bot_token: GH_BOT_TOKEN
-              claude_token: MY_OAUTH
-        """),
-    )
-    monkeypatch.chdir(tmp_path)
-    _run_init(["--with-install-test"])
-
-    content = (_workflow_dir(tmp_path) / "tend-install-test.yaml").read_text()
-    assert "secrets.GH_BOT_TOKEN" in content
-    assert "secrets.MY_OAUTH" in content
-    assert "secrets.TEND_BOT_TOKEN" not in content
 
 
 def test_init_bot_name_in_workflow_content(

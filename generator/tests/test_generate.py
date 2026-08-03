@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from textwrap import dedent
 
@@ -14,8 +15,8 @@ from click.testing import CliRunner
 from tend.cli import main
 from tend.config import Config
 from tend.workflows import (
-    GENERATORS,
     _deep_merge,
+    GENERATORS,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -302,6 +303,60 @@ def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:
         )
 
 
+def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
+    """A job names the environment exactly when it reads an operational secret.
+
+    The environment's deployment branch policy is what keeps a pushed workflow
+    from reading the secrets out of its own run, so a secret-bearing job that
+    forgets to name it reopens that hole. The converse matters too: a job
+    holding no secret (mention's relay) must not name it, or it loses the refs
+    the policy excludes for nothing — and for the relay those refs are the
+    whole point. `secrets.GITHUB_TOKEN` is workflow-scoped, not stored, so it
+    doesn't count. install-test is included: it runs on `pull_request`, whose
+    merge ref the policy refuses, so it may neither read a secret nor name
+    the environment. ci-fix is enabled here so the corpus is every workflow:
+    without `watched_workflows` the generator skips it, and a skipped
+    workflow is one this invariant silently stops covering."""
+
+    def _strings(x: object) -> list[str]:
+        if isinstance(x, str):
+            return [x]
+        if isinstance(x, dict):
+            return [s for v in x.values() for s in _strings(v)]
+        if isinstance(x, list):
+            return [s for v in x for s in _strings(v)]
+        return []
+
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path, 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+        )
+    )
+    generated = generate_all(cfg, with_install_test=True)
+    # Assert the corpus is *every* workflow, not that one name is present:
+    # the next generator with a config precondition would otherwise drop out
+    # of this invariant as silently as ci-fix did.
+    assert {wf.filename for wf in generated} == {
+        f"tend-{name}.yaml" for name in GENERATORS
+    } | {"tend-install-test.yaml"}
+    for wf in generated:
+        data = yaml.safe_load(wf.content)
+        for job_name, job in data["jobs"].items():
+            reads_secret = any(
+                ref != "secrets.GITHUB_TOKEN"
+                for s in _strings(job)
+                for ref in re.findall(r"secrets\.[A-Za-z0-9_]+", s)
+            )
+            assert (job.get("environment") == "tend") == reads_secret, (
+                f"{wf.filename}:{job_name} "
+                + (
+                    "reads an operational secret without naming the environment"
+                    if reads_secret
+                    else "names the environment but holds no secret"
+                )
+            )
+
+
 def test_custom_prompt(tmp_path: Path) -> None:
     extra = dedent("""\
         workflows:
@@ -460,42 +515,72 @@ def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
 
 
 def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
-    """pull_request_review (submitted) must be covered by tend-mention so the bot
-    responds when a reviewer submits a formal review on an engaged PR."""
+    """A submitted review must still reach the bot on an engaged PR — via the
+    secretless relay job, which re-enters the event as a repository_dispatch so
+    the run holding the secrets carries a ref their environment admits."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
     data = yaml.safe_load(mention.content)
 
-    # Event trigger present
-    assert "pull_request_review" in data["on"], (
-        "tend-mention must listen for pull_request_review events"
-    )
+    # The review events' own runs carry refs/pull/N/merge, which the secrets'
+    # environment does not admit, so they may reach only the relay job.
     assert data["on"]["pull_request_review"] == {"types": ["submitted"]}
+    assert data["on"]["repository_dispatch"] == {"types": ["tend-mention-review"]}
+    relay = data["jobs"]["relay"]
+    assert "pull_request_review" in relay["if"]
+    # The relay holds no secrets, so it is where the fork filter now lives.
+    assert "pull_request.head.repo.full_name" in relay["if"]
+    assert "environment" not in relay, (
+        "the relay must stay outside the secrets' environment — naming it "
+        "would block the very refs it exists to accept"
+    )
+    # `contents: write` is what POST /dispatches requires — probed: an
+    # identical same-repo run with `contents: read` is refused 403, which
+    # would leave every review mention unanswered. Pinned as the whole set,
+    # so a scope added here has to be argued for.
+    assert relay["permissions"] == {"contents": "write"}
+    # Identifiers only: verify re-reads the review from the API, so nothing
+    # judged downstream comes from the forgeable dispatch payload.
+    relay_run = relay["steps"][-1]["run"]
+    assert "client_payload[kind]" in relay_run
+    assert "client_payload[pr]" in relay_run
+    assert "client_payload[id]" in relay_run
+    assert "client_payload[url]" not in relay_run
 
-    # Verify job filters out fork PRs for review events — secrets are
-    # unavailable there. The notifications workflow polls for these.
+    # The secret-bearing jobs must not run on the review events themselves.
     verify_if = data["jobs"]["verify"]["if"]
-    assert "pull_request_review" in verify_if
-    assert "issue_comment" in verify_if
-    assert "pull_request.head.repo.full_name" in verify_if
+    assert "repository_dispatch" in verify_if
+    assert "pull_request_review" not in verify_if
+
+    # A dispatch is judged against the API record, not waved through: the
+    # check script resolves {kind, pr, id} and rejects what it can't confirm.
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    assert "/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID" in check_step["run"]
+    assert "/pulls/comments/$PAYLOAD_ID" in check_step["run"]
 
     # Handle job checks out PR branch for this event
     handle_steps = data["jobs"]["handle"]["steps"]
     checkout_step = next(
         s for s in handle_steps if s.get("name") == "Check out PR branch"
     )
-    assert "pull_request_review" in checkout_step["if"]
+    assert "repository_dispatch" in checkout_step["if"]
 
-    # Prompt includes review-specific branches
+    # Prompt keeps the review-kind and mention/participation branches apart,
+    # keyed on the payload's kind and verify's judged reason — never on a
+    # reason the payload itself claims.
     tend_step = next(
         s
         for s in handle_steps
         if s.get("uses", "").startswith("max-sixty/tend/claude@")
     )
     prompt = tend_step["with"]["prompt"]
-    assert "github.event.review.html_url" in prompt
-    assert "github.event.review.body" in prompt
+    assert "needs.verify.outputs.reason == 'mention'" in prompt
+    assert "needs.verify.outputs.url" in prompt
+    assert "client_payload.kind == 'pull_request_review'" in prompt
+    assert "client_payload.reason" not in prompt
 
 
 def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
@@ -520,7 +605,7 @@ def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
     data = yaml.safe_load(mention.content)
     assert data["on"]["pull_request_review_comment"] == {"types": ["edited"]}, (
         "pull_request_review_comment must subscribe to ['edited'] only — see "
-        "the trigger comment in generate_mention for the dedup rationale"
+        "the trigger comment in the mention template for the dedup rationale"
     )
 
 
@@ -549,10 +634,10 @@ def test_mention_verify_detects_inline_mentions_on_review(tmp_path: Path) -> Non
         s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
 
-    # The fetch must target the specific review's inline comments by review_id
-    assert "/reviews/$REVIEW_ID/comments" in check_step["run"], (
-        "verify must fetch inline comments for pull_request_review events via "
-        "the /pulls/{n}/reviews/{review_id}/comments endpoint"
+    # The fetch must target the specific review's inline comments by id
+    assert "/reviews/$PAYLOAD_ID/comments" in check_step["run"], (
+        "verify must fetch inline comments for pull_request_review dispatches "
+        "via the /pulls/{n}/reviews/{review_id}/comments endpoint"
     )
     # And grep their bodies for the bot mention (test-bot is the bot_name in
     # _minimal_config). grep -qF means fixed-string, quiet — same shape as the
@@ -561,17 +646,15 @@ def test_mention_verify_detects_inline_mentions_on_review(tmp_path: Path) -> Non
         "verify must grep the fetched inline comment bodies for the bot mention"
     )
 
-    # The fetch must be gated on event_name == 'pull_request_review' so it
-    # doesn't fire for issue_comment / issues / pull_request_review_comment.
-    assert '[ "$EVENT_NAME" = "pull_request_review" ]' in check_step["run"], (
+    # The fetch must be gated on the review kind so it doesn't fire for
+    # issue_comment / issues / pull_request_review_comment.
+    assert '[ "$KIND" = "pull_request_review" ]' in check_step["run"], (
         "the inline-mention fetch must only run for pull_request_review events"
     )
 
-    # REVIEW_ID env var must be wired from the event payload
-    assert check_step["env"]["REVIEW_ID"] == "${{ github.event.review.id }}", (
-        "REVIEW_ID env var must be set from github.event.review.id so the "
-        "fetch can target the right review"
-    )
+    # The ids must be wired from the dispatch payload
+    assert check_step["env"]["PAYLOAD_ID"] == "${{ github.event.client_payload.id }}"
+    assert check_step["env"]["PAYLOAD_PR"] == "${{ github.event.client_payload.pr }}"
 
 
 def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> None:
@@ -655,13 +738,14 @@ def test_mention_verify_skips_self_authored_comments(tmp_path: Path) -> None:
         "itself — its User-type account is missed by the Bot-type check"
     )
 
-    # The guard must cover both comment event types that take the engagement
-    # path: issue_comment and pull_request_review_comment (subscribed for
-    # `edited`), both of which carry github.event.comment.user.login.
-    assert '"$EVENT_NAME" = "issue_comment"' in run
-    assert '"$EVENT_NAME" = "pull_request_review_comment"' in run, (
-        "self-authored guard must also cover pull_request_review_comment — it "
-        "takes the same engagement-heuristic path"
+    # The guard must cover both comment kinds that take the engagement path:
+    # issue_comment (COMMENT_AUTHOR from the event) and
+    # pull_request_review_comment (COMMENT_AUTHOR resolved from the relayed
+    # dispatch's API fetch).
+    assert '"$KIND" = "issue_comment"' in run
+    assert '"$KIND" = "pull_request_review_comment"' in run, (
+        "the self-authored guard must cover relayed inline comments — they "
+        "take the same engagement-heuristic path"
     )
 
     # The self-authored guard must run *before* the @-mention check: a bot
@@ -795,19 +879,18 @@ def test_mention_skips_bot_approved_review(tmp_path: Path) -> None:
         s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
     script = check_step["run"]
-    # Gate on the (lowercase, per the webhook payload) approved state and an
-    # empty review body, so only no-op approvals are skipped.
-    assert "REVIEW_STATE" in script
-    assert "approved" in script
+    # Gate on the approved state and an empty review body, so only no-op
+    # approvals are skipped. The record comes from REST, which reports the
+    # state uppercase, so the resolution step must normalize it before the
+    # gate compares against "approved".
+    assert '[ "$REVIEW_STATE" = "approved" ]' in script
+    assert ".state | ascii_downcase" in script
     assert '[ -z "$COMMENT_BODY" ]' in script
     # The skip must precede the BOT_REVIEWS heuristic query that would
     # otherwise count the just-submitted review and return should_run=true.
-    assert script.index("REVIEW_STATE") < script.index("BOT_REVIEWS=$(")
-    # REVIEW_STATE/REVIEW_AUTHOR must be wired into the env block;
-    # COMMENT_BODY (review.body for a review event) is already present.
-    env = check_step["env"]
-    assert "REVIEW_STATE" in env
-    assert "REVIEW_AUTHOR" in env
+    assert script.index('[ "$REVIEW_STATE" = "approved" ]') < script.index(
+        "BOT_REVIEWS=$("
+    )
 
 
 def test_mention_self_comment_skip_spares_review_submissions(
@@ -839,25 +922,25 @@ def test_mention_self_comment_skip_spares_review_submissions(
     # Isolate the self-authored-comment guard, from its opening condition to the
     # @-mention check that follows it.
     guard = run[
-        run.index('if { [ "$EVENT_NAME" = "issue_comment"') : run.index(
+        run.index('if { [ "$KIND" = "issue_comment" ]') : run.index(
             "grep -qF '@test-bot'"
         )
     ]
-    # The skip keys on the bot as commenter over the two comment events; the
-    # review *submission* event (a bare pull_request_review equality, distinct
+    # The skip keys on the bot as commenter over the two comment kinds; the
+    # review *submission* kind (a bare pull_request_review equality, distinct
     # from pull_request_review_comment) is deliberately absent, so a bot
     # self-review is never short-circuited here.
     assert '[ "$COMMENT_AUTHOR" = "test-bot" ]' in guard
-    assert '[ "$EVENT_NAME" = "pull_request_review_comment" ]' in guard
-    assert '[ "$EVENT_NAME" = "pull_request_review" ]' not in guard, (
+    assert '[ "$KIND" = "pull_request_review_comment" ]' in guard
+    assert '[ "$KIND" = "pull_request_review" ]' not in guard, (
         "self-authored-comment skip must not extend to the pull_request_review "
-        "submission event — a bot self-review is actionable reviewer signal"
+        "submission kind — a bot self-review is actionable reviewer signal"
     )
 
     # The sole author-keyed skip for a review submission is the terminal
     # empty-body APPROVED gate; a COMMENTED / non-empty-body bot self-review
     # falls through to the actionable PR_AUTHOR == bot short-circuit.
-    review_skip = run[run.index('[ "$EVENT_NAME" = "pull_request_review" ]') :]
+    review_skip = run[run.index('[ "$KIND" = "pull_request_review" ]') :]
     assert '[ "$REVIEW_STATE" = "approved" ]' in review_skip
     assert '[ -z "$COMMENT_BODY" ]' in review_skip
     assert '[ "$PR_AUTHOR" = "test-bot" ]' in run, (

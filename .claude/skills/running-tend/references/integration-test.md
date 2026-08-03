@@ -1,8 +1,8 @@
 # Weekly integration test
 
 Drives a real issue and a real PR against a persistent test repo, asserts
-`tend-triage` and `tend-review` ran end-to-end, and resets the repo for
-the next week.
+`tend-triage`, `tend-review`, and `tend-mention` ran end-to-end, and
+resets the repo for the next week.
 
 ## Safety — read first
 
@@ -30,16 +30,19 @@ never pipe `$GITHUB_TOKEN` or `$CLAUDE_CODE_OAUTH_TOKEN` into
 `gh secret set`. The exported value is the placeholder (or empty), and
 the receiving repo's auth breaks. The fixture's secrets are owned by
 the `integration-secrets` workflow in `max-sixty/tend`, which copies
-this repo's real secrets to the fixture, outside the sandbox. §1
-dispatches it every run.
+this repo's real secrets into the fixture's `tend` environment (creating
+it if missing), outside the sandbox. §1 dispatches it every run.
 
-The bot PAT carries the `workflow` scope (so §5's self-heal push of
+The bot PAT carries the `workflow` scope (so §2's self-heal push of
 generated workflow files succeeds through the proxy) but **does not**
 need `delete_repo` — the recipe never deletes the test repo; it resets
 in place.
 
-Run steps in order. If §3, §4, or §5 fails, jump to §6 (reset), then §7
-(report).
+Run steps in order. The self-heal (§2) precedes the verification steps so
+they always exercise current workflows. Any step failing jumps to §7
+(reset), then §8 (report) — including §1, whose reseed failure leaves the
+fixture unable to run anything, and which reports without needing the
+reset since it created nothing.
 
 ## 1. Bootstrap (first run only) and reseed (every run)
 
@@ -68,7 +71,6 @@ if ! gh repo view tend-agent/tend-integration --json name >/dev/null 2>&1; then
 bot_name: tend-agent
 harness: claude
 workflows:
-  mention: false
   notifications: false
   ci-fix: false
   nightly: false
@@ -132,7 +134,43 @@ done
 [ "$conclusion" = "success" ] || { echo "integration-secrets: $status/$conclusion"; exit 1; }
 ```
 
-## 2. Reset to a known-clean state
+## 2. Verify the generator (self-healing)
+
+Re-run the generator against the committed config. A diff is expected
+after every tend release (the version pin moves, and the fixture
+disables nightly so this is its only regeneration path) — push the
+regenerated files to `main` rather than failing. Assertions: `init`
+succeeds against the committed config, and is idempotent.
+
+This runs before the verification steps so they exercise the workflows
+this run just wrote, rather than the ones a release ago that it is about
+to replace. It also orders the fixture's own migration: §1 keeps its
+repo-level secret copies until the regenerated workflows name the `tend`
+environment, so the deletion only becomes possible after this step has
+run at least once against a released generator that emits it.
+
+```bash
+WORK=$(mktemp -d)
+gh repo clone tend-agent/tend-integration "$WORK"
+cd "$WORK"
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
+if [ -n "$(git status --porcelain)" ]; then
+  git config user.email "tend-agent@users.noreply.github.com"
+  git config user.name "tend-agent"
+  gh auth setup-git
+  git add .
+  git commit -m "chore: regenerate tend workflows (weekly integration self-heal)"
+  git push origin main \
+    || { echo "tend-integration: push to main failed; fixture not updated"; exit 1; }
+fi
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
+[ -z "$(git status --porcelain)" ] \
+  || { echo "tend-integration: init not idempotent: $(git status --porcelain)"; exit 1; }
+cd - >/dev/null
+rm -rf "$WORK"
+```
+
+## 3. Reset to a known-clean state
 
 Close any leftover issues/PRs from prior runs, delete any leftover
 branches. `main` is never touched.
@@ -158,7 +196,7 @@ for b in $(gh api repos/tend-agent/tend-integration/branches \
 done
 ```
 
-## 3. Verify tend-triage
+## 4. Verify tend-triage
 
 Open a fresh test issue, wait for `tend-triage` to register and finish,
 assert the bot commented.
@@ -200,7 +238,7 @@ COMMENTS=$(gh issue view "$ISSUE" --repo tend-agent/tend-integration \
 [ "$COMMENTS" -ge 1 ] || { echo "tend-triage: no bot comment on issue #$ISSUE"; exit 1; }
 ```
 
-## 4. Verify tend-review
+## 5. Verify tend-review
 
 Clone, create a branch with a trivial README edit, open a PR, wait for
 `tend-review` to register and finish, assert the action invoked the
@@ -273,38 +311,74 @@ cd - >/dev/null
 rm -rf "$WORK"
 ```
 
-## 5. Verify the generator (self-healing)
+## 6. Verify tend-mention (review events)
 
-Re-run the generator against the committed config. A diff is expected
-after every tend release (the version pin moves, and the fixture
-disables nightly so this is its only regeneration path) — push the
-regenerated files to `main` rather than failing. Assertions: `init`
-succeeds against the committed config, and is idempotent.
+Submit a comment review on the §5 PR that mentions the bot, and assert
+the bot replied to *that* review. A review the bot leaves on its own PR is
+deliberately actionable — its reviewer role speaking — so the single bot
+identity can drive the full chain: review submitted → tend-mention →
+reply. On current tend the chain includes the secretless relay hop (the
+review event re-posted as a `repository_dispatch`), but the reply is the
+assertion either way; the individual legs are visible in the run list when
+this fails.
+
+The assertion is a nonce the reply must quote, not "a bot comment appeared
+after this timestamp". §5's own `tend-review` usually posts a COMMENTED
+review, which is itself an actionable review event: it starts a second
+tend-mention run whose reply lands in the same window and would satisfy a
+timestamp-only check with the mention path completely broken.
 
 ```bash
-WORK=$(mktemp -d)
-gh repo clone tend-agent/tend-integration "$WORK"
-cd "$WORK"
-"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
-if [ -n "$(git status --porcelain)" ]; then
-  git config user.email "tend-agent@users.noreply.github.com"
-  git config user.name "tend-agent"
-  gh auth setup-git
-  git add .
-  git commit -m "chore: regenerate tend workflows (weekly integration self-heal)"
-  git push origin main \
-    || { echo "tend-integration: push to main failed; fixture not updated"; exit 1; }
-fi
-"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
-[ -z "$(git status --porcelain)" ] \
-  || { echo "tend-integration: init not idempotent: $(git status --porcelain)"; exit 1; }
-cd - >/dev/null
-rm -rf "$WORK"
+# Self-contained: after §3's reset the only open PR is §5's, so §6 does
+# not depend on a variable set in an earlier block.
+PR=$(gh pr list --repo tend-agent/tend-integration --state open \
+  --json number,title \
+  --jq '[.[] | select(.title | startswith("integration-test review"))][0].number')
+[ -n "$PR" ] || { echo "tend-mention: no integration-test PR open"; exit 1; }
+NONCE="mention-$(date -u +%Y%m%d-%H%M%S)"
+
+PREV_RUN=$(gh run list --repo tend-agent/tend-integration \
+  --workflow tend-mention --limit 1 \
+  --json databaseId --jq '.[0].databaseId // empty')
+gh pr review "$PR" --repo tend-agent/tend-integration --comment \
+  --body "@tend-agent integration test: post a PR comment quoting this token verbatim: $NONCE"
+
+# A new tend-mention run registering distinguishes "trigger never fired"
+# from "fired but no reply" when the reply assertion below fails.
+RUN_ID=""
+for _ in $(seq 1 24); do
+  RUN_ID=$(gh run list --repo tend-agent/tend-integration \
+    --workflow tend-mention --limit 1 \
+    --json databaseId --jq '.[0].databaseId // empty')
+  [ -n "$RUN_ID" ] && [ "$RUN_ID" != "$PREV_RUN" ] && break
+  sleep 5
+done
+{ [ -n "$RUN_ID" ] && [ "$RUN_ID" != "$PREV_RUN" ]; } \
+  || { echo "tend-mention: workflow run never registered"; exit 1; }
+
+# The nonce is the end-to-end assertion: event → (relay → dispatch →)
+# verify → handle → reply. Comments only, deliberately: the seeding review
+# above is itself authored by the bot and contains the nonce, so counting
+# reviews counts the prompt and passes with the whole path broken. Asking
+# for a comment and asserting on comments keeps the two apart without
+# comparing ids across APIs — `gh pr view` reports a review's GraphQL node
+# id, the REST list a numeric one, and they never match.
+REPLIES=0
+for _ in $(seq 1 60); do
+  REPLIES=$(gh pr view "$PR" --repo tend-agent/tend-integration --json comments \
+    --jq "[.comments[]
+           | select(.author.login == \"tend-agent\" and (.body | contains(\"$NONCE\")))]
+          | length")
+  [ "$REPLIES" -ge 1 ] && break
+  sleep 10
+done
+[ "$REPLIES" -ge 1 ] \
+  || { echo "tend-mention: no bot comment quoting $NONCE on PR #$PR"; exit 1; }
 ```
 
-## 6. Reset (always — even on failure)
+## 7. Reset (always — even on failure)
 
-Same as §2; run again to close anything created in §3/§4.
+Same as §3; run again to close anything created in §4/§5/§6.
 
 ```bash
 for n in $(gh issue list --repo tend-agent/tend-integration \
@@ -326,9 +400,9 @@ for b in $(gh api repos/tend-agent/tend-integration/branches \
 done
 ```
 
-## 7. Report failure
+## 8. Report failure
 
-If any of §3–§5 failed, open a labeled issue in `max-sixty/tend`. The
+If any step failed, open a labeled issue in `max-sixty/tend`. The
 label is created on demand so the first failure works without prior
 setup.
 
@@ -358,4 +432,4 @@ gh issue create --repo max-sixty/tend \
 ````
 
 Include the test repo's failing workflow run URL in the body when
-relevant (capture it during §3/§4 before §6's reset moves on).
+relevant (capture it during §4–§6 before §7's reset moves on).

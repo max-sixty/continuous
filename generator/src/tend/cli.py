@@ -9,10 +9,12 @@ import click
 
 from tend.checks import (
     CheckResult,
+    admitted_refs,
     detect_canonical_owner,
     detect_default_branch,
     detect_repo,
     fix_branch_protection,
+    fix_environment,
     run_all_checks,
 )
 from tend.config import Config
@@ -183,6 +185,16 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         click.echo("Could not detect repo — pass --repo to fix.")
         raise SystemExit(1)
 
+    # Every fix is written in terms of the default branch, and guessing it
+    # wrong writes a ref the bot can create: a `main` guessed for a `master`
+    # repo is outside the merge restriction, so the environment would admit a
+    # branch the bot can push. The checks just resolved it, so a failure here
+    # is a transient one to surface, not to paper over.
+    default_branch = detect_default_branch(repo)
+    if default_branch is None:
+        click.echo(f"Could not detect the default branch for {repo} — not fixing.")
+        raise SystemExit(1)
+
     fixed_any = False
     bp_fixable = [
         r
@@ -196,8 +208,25 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         click.echo(
             f"Creating 'Merge access' ruleset — only admins can merge ({branches_desc})..."
         )
-        default_branch = detect_default_branch(repo) or "main"
         fix_result = fix_branch_protection(repo, default_branch, cfg.protected_branches)
+        _print_check_results([fix_result])
+        if fix_result.passed:
+            fixed_any = True
+            # The environment's admitted set is read off the branch-protection
+            # results, which the ruleset just changed. Re-read them, or the
+            # policy would be written from the pre-fix picture — for a repo
+            # whose only failure was the missing ruleset, an empty one.
+            results = run_all_checks(cfg, repo)
+            failures = [r for r in results if r.passed is False]
+
+    if any(r.name == "environment" for r in failures):
+        click.echo()
+        click.echo("Configuring the 'tend' environment...")
+        # Read off the same run's branch-protection results, so the policy the
+        # fix writes is the set the check just demanded — never a ref whose
+        # protection this run could not verify. An empty set can't reach here:
+        # the check reports unknown rather than failure when nothing verified.
+        fix_result = fix_environment(repo, admitted_refs(results))
         _print_check_results([fix_result])
         if fix_result.passed:
             fixed_any = True
