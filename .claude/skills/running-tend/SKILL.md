@@ -145,6 +145,11 @@ the whole list.
 
 ## Weekly: bump pinned versions
 
+Title each PR `chore: bump <name> to <version>`; the uv-plus-mitmproxy PR names
+both.
+
+### Action inputs
+
 | Pin | File | Rule |
 |---|---|---|
 | `claude_version` | `claude/action.yaml` | track latest |
@@ -160,9 +165,6 @@ yq '.inputs.mitmproxy_version.default' claude/action.yaml
 curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
 ```
 
-Title each PR `chore: bump <input> to <version>`, naming both inputs when uv
-rides along.
-
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
 target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
 between the two versions for anything touching the agent paths (first-run
@@ -176,6 +178,33 @@ addon-related in its CHANGELOG against the `mitmdump` flags in
 only launches that mitmproxy and CI smokes the two together, so it needs no
 release stream of its own; move both in one PR, at whatever uv is latest then
 (`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
+
+### `uses:` refs
+
+```bash
+git grep -hoE 'uses: [^ ./][^ @]*@[^ ]+' -- ':!generator/tests' ':!*.md' \
+  | sed 's/uses: //' | grep -v '^max-sixty/tend/' | sort -u \
+  | while IFS='@' read -r action pin; do
+      latest=$(gh api "repos/$action/releases/latest" --jq .tag_name 2>/dev/null) \
+        || { printf '%-30s %-9s -> no releases; read its tags\n' "$action" "$pin"; continue; }
+      case "$pin" in "$latest" | "${latest%%.*}") continue ;; esac
+      printf '%-30s %-9s -> %s\n' "$action" "$pin" "$latest"
+    done
+```
+
+An action listed twice is pinned at two majors: refs move when someone needs a
+behavior from one of them, never in a sweep. `git grep` each drifted action for
+its call sites, then split the PRs by who runs the result.
+
+- **Ships to adopters** — `generator/src/tend/templates/` and `workflows.py`
+  render into adopters' workflow files; `claude/action.yaml` and
+  `codex/action.yaml` run in every adopter's job from the next release. One PR
+  per action, its body naming what changed across the majors it crosses.
+- **Ours alone** — the hand-maintained `.github/workflows/` files and
+  `.config/tend.yaml`. One PR for the lot.
+
+The generated `tend-*.yaml` show up in that grep too; their refs come from the
+templates and from `.config/tend.yaml`'s `setup:`, which is where they move.
 
 ## Weekly: integration test
 
