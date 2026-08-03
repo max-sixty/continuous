@@ -24,8 +24,8 @@ Work through the angles below. Each surfaces candidates with `file`, `line`, a o
 
 Scale the fan-out to the change, the same way the caller scales its own depth:
 
-- **Peripheral or mechanical** (docs, config, dependency bumps, test-only): angles A–C plus the cleanup angles, in one pass, in this context. Up to 4 candidates each.
-- **Core logic**: every angle, one subagent per angle where a subagent tool is available (`Task`/`Agent`), up to 6 candidates each. If no subagent tool is available, work through every angle yourself, in sequence, in one pass — do not skip angles for lack of fan-out.
+- **Peripheral or mechanical** (docs, config, dependency bumps, test-only): angles A–C plus the cleanup and conventions angles, in one pass, in this context. Up to 4 candidates each.
+- **Core logic**: every angle, up to 6 candidates each. Work through them yourself, in sequence, in one pass — that's the default. Fan out one subagent per angle (`Task`/`Agent`) only where this session permits subagent use; the Claude harness allowlists the tool but its system prompt limits it to user-requested calls. Either way, don't skip angles for lack of fan-out.
 
 Don't let one angle's conclusions suppress another's: if two angles flag the same line for different reasons, record both. Pass every candidate with a nameable failure scenario through to Phase 2 — finders that silently drop half-believed candidates bypass the verify step and are the dominant cause of misses.
 
@@ -73,7 +73,7 @@ Cleanup, altitude, and conventions candidates use the same `file`/`line`/`summar
 
 ## Phase 2 — Dedup and verify
 
-Dedup candidates that point at the same line and mechanism, keeping the one with the most concrete failure scenario. Then verify each remaining candidate against the diff and the relevant files — one subagent verifier per candidate where a subagent tool is available, otherwise yourself, in this context. Each candidate gets exactly one of:
+Dedup candidates that point at the same line and mechanism, keeping the one with the most concrete failure scenario. Then verify each remaining candidate against the diff and the relevant files — yourself, in this context, by default; one subagent verifier per candidate only where this session permits subagent use. Each candidate gets exactly one of:
 
 - **CONFIRMED** — you can name the inputs/state that trigger it and the wrong output or crash. Quote the line.
 - **PLAUSIBLE** — mechanism is real, trigger is uncertain (timing, env, config). State what would confirm it.
@@ -93,4 +93,4 @@ On a core-logic change, take one more pass as a fresh reviewer holding the verif
 
 Return the findings to the caller as a list of at most 10 (at most 4 for a peripheral change), ranked most-severe first, each with `file`, `line`, `summary`, `failure_scenario`, and its verdict. If nothing survives verification, say so in one line. Don't call the `ReportFindings` tool and don't publish an artifact — the caller owns the output.
 
-Say which mode ran (fanned-out angles with a subagent verify, or a single inline pass) so whoever reads the review isn't misled about what actually ran.
+Tell the caller which mode ran (fanned-out angles with a subagent verify, or a single inline pass) so it can weigh the findings — context for the caller, not content for the review it posts.
