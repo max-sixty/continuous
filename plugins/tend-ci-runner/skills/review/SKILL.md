@@ -225,11 +225,11 @@ The state check matters because the maintainer may close (or another path may me
 
 **Before APPROVE specifically**, also peek the current check rollup on `HEAD_SHA`. If any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal.
 
-Reduce the rollup to the **latest entry per check name** before reading it. When a concurrency-cancelled run is replaced, GitHub keeps *both* check runs on the commit, so an un-deduped scan reports the superseded `FAILURE` alongside the replacement's `SUCCESS` — and keeps reporting it forever.
+Reduce the rollup to the **latest entry per check name and workflow** before reading it. When a concurrency-cancelled run is replaced, GitHub keeps *both* check runs on the commit, so an un-deduped scan reports the superseded `FAILURE` alongside the replacement's `SUCCESS` — and keeps reporting it forever. Key on `workflowName` as well as the name: two workflows can register the same check name, and collapsing those into one entry would hide a genuine red behind an unrelated green.
 
 ```bash
 ROLLUP=$(gh pr view <number> --json statusCheckRollup \
-  --jq '[.statusCheckRollup[]] | group_by(.name // .context) | map(max_by(.startedAt))')
+  --jq '[.statusCheckRollup[]] | group_by([.name // .context, .workflowName]) | map(max_by(.startedAt))')
 
 FAILED=$(jq -r '[.[]
          | select((.conclusion // .state) == "FAILURE")
@@ -244,22 +244,26 @@ PENDING=$(jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
 
 **Don't treat a mid-flight rollup as settled.** A `FAILURE` co-existing with checks still in flight (`$PENDING > 0`) is often a *stale cancellation-cascade* artifact, not a real failure: when several events fire near-simultaneously (e.g. Dependabot opening a PR), the `tests` concurrency group cancels all but the latest, and a cancelled contributor makes an `if: always()` merge-gate omnibus (like PRQL's `check-ok-to-merge`) resolve to conclusion `FAILURE` — *not* `cancelled`, so it slips past the post-approve cancellation awareness below and reads as red. A fresh replacement run is already in flight and will re-register the omnibus. So decide on the **settled** rollup:
 
-- **`$FAILED` set and `$PENDING > 0`** — the rollup hasn't settled. Foreground-poll until non-own checks are terminal (the Step 6 / `running-in-ci` CI-monitoring loop), then re-peek `$FAILED`. Judge the settled state, not the mid-flight snapshot — a stale cancellation-cascade `FAILURE` drops out of `$FAILED` once the replacement omnibus registers, but *only* via the latest-per-name reduction above; the superseded check run itself never leaves the commit.
+- **`$FAILED` set and `$PENDING > 0`** — the rollup hasn't settled. Foreground-poll until non-own checks are terminal (the Step 6 / `running-in-ci` CI-monitoring loop), then re-peek `$FAILED`. Judge the settled state, not the mid-flight snapshot — a stale cancellation-cascade `FAILURE` drops out of `$FAILED` once the replacement omnibus registers, but *only* via the reduction above; the superseded check run itself never leaves the commit.
 - **`$FAILED` set and the poll cap expired with `$PENDING > 0`** — settlement is out of reach this session; a release or nightly matrix routinely outlasts the cap. Decide on **provenance**, not on settlement: resolve each remaining `FAILURE` to its run and read that run's own conclusion.
 
   ```bash
   for url in $(jq -r '.[] | select((.conclusion // .state) == "FAILURE")
                      | .detailsUrl // .targetUrl // empty' <<<"$ROLLUP"); do
     RUN=$(sed -nE 's#.*/actions/runs/([0-9]+).*#\1#p' <<<"$url")
-    [ -n "$RUN" ] && gh run view "$RUN" --json conclusion --jq '.conclusion'
+    if [ -n "$RUN" ]; then
+      gh run view "$RUN" --json conclusion --jq '.conclusion'
+    else
+      echo "unresolved: $url"   # third-party status context, not an Actions run
+    fi
   done
   ```
 
-  Every one `cancelled` — the red is superseded, so APPROVE and name the still-unverified checks in the body. Any one a real `failure` — take the terminal-red branch below. Don't leave this to improvisation: the same stale red must not draw an APPROVE on one PR and a withheld approval on the next.
+  Every one `cancelled` — the red is superseded, so APPROVE and name the still-unverified checks in the body. `cancelled` is the only conclusion that earns an approval here: a real `failure`, an empty conclusion (the run is still going, so the job failed on its own merits), or an unresolvable URL (a third-party status context like `codecov/patch`, never an Actions run) all take the terminal-red branch below. Don't leave this to improvisation: the same stale red must not draw an APPROVE on one PR and a withheld approval on the next.
 - **`$FAILED` set and `$PENDING == 0`** — genuine terminal red. Skip the close-out (`exit 0`). But if **no prior substantive bot review** stands on this PR, don't exit fully silent or leave only a `+1` reaction — a clean external-dependency bump then carries zero review signal. Post a brief COMMENT recording the diff assessment and why approval is held (e.g. "Diff is a correct, mechanical dependency bump; holding APPROVE because `check-ok-to-merge` is red."). Any earlier substantive review (e.g. a COMMENT with inline suggestions) already stands as the active verdict — leave it.
 - **`$FAILED` empty** — proceed with APPROVE.
 
-Step 6's "approve, foreground-poll CI, dismiss if a check fails" pattern only recovers while the session is still alive — the job timeout or a poll cap can leave a post-approve failure undismissed and the PR carrying a misleading APPROVED state. A synchronous pre-APPROVE peek catches the case where the failure is already in the rollup — including non-required checks like `codecov/patch` that an overlay treats as a merge gate. Reducing to the latest entry per name — and, when the cap expires first, checking each `FAILURE`'s run conclusion — is what keeps a superseded red from being mistaken for a real one.
+Step 6's "approve, foreground-poll CI, dismiss if a check fails" pattern only recovers while the session is still alive — the job timeout or a poll cap can leave a post-approve failure undismissed and the PR carrying a misleading APPROVED state. A synchronous pre-APPROVE peek catches the case where the failure is already in the rollup — including non-required checks like `codecov/patch` that an overlay treats as a merge gate. Reducing to the latest entry per name and workflow — and, when the cap expires first, checking each `FAILURE`'s run conclusion — is what keeps a superseded red from being mistaken for a real one.
 
 Post at most one review per run. Give a verdict (**approve** or **comment**, never "request changes") when this run has something to say: a new diff-grounded finding, or an approval because the last open concern is now resolved. If the dedup rule above left nothing new and a prior unresolved bot thread still stands, post nothing; the earlier review remains the active verdict. Use `gh pr review` for reviews, not `gh pr comment`. Note: `--comment` requires a non-empty body — if there's nothing to say and no prior concern stands, use the approve-with-empty-body pattern.
 
