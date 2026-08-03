@@ -129,15 +129,17 @@ custom roles, and org-level rulesets are all accounted for) and refuses to
 start unless the answer is no. `tend check` verifies the setup;
 `tend check --fix` creates the ruleset.
 
-**Environment-gated secrets** — a workflow the bot can cause to run reads
-no secrets: not the bot token, not the model auth, not a release token.
-The bot token and model auth live in the repo's `tend` GitHub Environment,
-whose deployment policy admits only the refs `tend check` confirmed the
-merge restriction covers, so a workflow pushed to any other branch is
-refused them before its first step. The same check sweeps every other
-secret-holding environment (release tokens included) for a gate the bot
-cannot pass — a non-bot required reviewer, or a policy naming only
-verified refs — and flags any repo-level secret not explicitly listed in
+**Environment-gated credentials** — a workflow the bot can cause to run
+reaches no credential: not the bot token, not the model auth, not a release
+token or a trusted-publishing identity. The bot token and model auth live in
+the repo's `tend` GitHub Environment, whose deployment policy admits only
+the refs `tend check` confirmed the merge restriction covers, so a workflow
+pushed to any other branch is refused them before its first step. The same
+check sweeps every other credential-holding environment — one that stores a
+secret, or that a job requesting `id-token: write` deploys to — for a gate
+the bot cannot pass: a non-bot required reviewer, or a policy naming only
+verified refs that no workflow reaches on a trigger the bot both fires and
+steers. It flags any repo-level secret not explicitly listed in
 `secrets.allowed`, where the operational names are refused outright.
 `tend check --fix` creates the environment and sets its policy; moving the
 secrets into it stays manual — their values can't be read back.
