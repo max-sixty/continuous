@@ -462,9 +462,9 @@ runs:
               # your session limit · resets 8:30am (UTC)"). Surface that last
               # assistant text so the annotation names the cause (session limit
               # vs auth failure vs server error) instead of a generic "see the
-              # artifact". report-failure.sh's enrichment then carries the
-              # annotation into the tend-outage issue for free, so a maintainer
-              # can triage without downloading logs and writing jq.
+              # artifact". The nightly enrich-tend-outage-issues.sh pass then
+              # carries the annotation into the tend-outage issue for free, so a
+              # maintainer can triage without downloading logs and writing jq.
               REASON=$(jq -r '
                 select(.type == "assistant") | .message.content[]?
                 | select(.type == "text") | .text
