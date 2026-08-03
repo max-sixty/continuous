@@ -23,7 +23,8 @@ generated workflow names it. What remains:
    differ.
 
    Jobs running at `refs/heads/main` are admitted by the policy as it stands,
-   so `environment: tend` is the whole change: worktrunk's benchmark gist
+   so adding `environment: {name: tend, deployment: false}` is the whole
+   change: worktrunk's benchmark gist
    append and its two create-issue-on-failure jobs, prql's
    `update-rust-toolchain` (all four `schedule`-only, and already `if`-gated
    to it) and prql's backport. A `pull_request_target` run reports

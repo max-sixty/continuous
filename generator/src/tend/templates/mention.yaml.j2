@@ -119,7 +119,7 @@ jobs:
       (github.event_name == 'issue_comment' &&
         !contains(github.event.issue.labels.*.name, 'tend-outage'))
     runs-on: ubuntu-24.04
-    environment: <<tend_environment>>
+<<environment()>>
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       reason: ${{ steps.check.outputs.reason }}
@@ -348,7 +348,7 @@ jobs:
       group: ${{ github.workflow }}-handle-${{ github.event.issue.number || github.event.client_payload.pr }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    environment: <<tend_environment>>
+<<environment()>>
     permissions:
 <<permissions()>>
     steps:

@@ -115,8 +115,12 @@ secret value back through the API, and expiring with the job.
 *Operational secrets* — the bot PAT and the harness auth — live in the
 `tend` environment, whose policy names the default branch and any
 `protected_branches`. Every generated job that reads a secret carries
-`environment: tend`; jobs that hold none (mention's relay, below) must not,
-since naming it would cost them the refs the policy excludes. This closes
+`environment: {name: tend, deployment: false}`; jobs that hold none
+(mention's relay, below) must not, since naming it would cost them the refs
+the policy excludes. `deployment: false` keeps GitHub from filing a
+deployment record for a job that deploys nothing — under
+`pull_request_target` those land on the pull request itself, one line per
+push — and leaves the policy check untouched. This closes
 the classic no-merge exfiltration: a write-scoped actor (a leaked PAT, or a
 hijacked session that can push a branch) commits a workflow that prints the
 secrets and reads them from its own run. Branch protection never touched

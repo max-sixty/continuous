@@ -347,13 +347,20 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
                 for s in _strings(job)
                 for ref in re.findall(r"secrets\.[A-Za-z0-9_]+", s)
             )
-            assert (job.get("environment") == "tend") == reads_secret, (
-                f"{wf.filename}:{job_name} "
-                + (
-                    "reads an operational secret without naming the environment"
-                    if reads_secret
-                    else "names the environment but holds no secret"
-                )
+            # `deployment: false` is part of the asserted shape, not just the
+            # name: dropping it leaves the gate working and costs only a
+            # deployment record per run, which GitHub posts as a "<bot>
+            # deployed to tend" line on every PR the run belongs to. Nothing
+            # else would fail, so this is where it gets caught.
+            names_environment = job.get("environment") == {
+                "name": "tend",
+                "deployment": False,
+            }
+            assert names_environment == reads_secret, f"{wf.filename}:{job_name} " + (
+                "reads an operational secret without naming the environment "
+                "as `{name: tend, deployment: false}`"
+                if reads_secret
+                else "names the environment but holds no secret"
             )
 
 

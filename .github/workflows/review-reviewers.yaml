@@ -19,7 +19,9 @@ jobs:
   # issues (one per matrix leg that lost the find-or-create race).
   init-tracking:
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       issues: write
     steps:
@@ -56,7 +58,9 @@ jobs:
           - max-sixty/worktrunk
           - numbagg/numbagg
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
