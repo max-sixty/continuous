@@ -31,8 +31,12 @@ generated workflow names it. What remains:
    environment is not what gates that job.
 
    worktrunk's release jobs run on a tag *push*, which is not bot-steerable,
-   and its all-tags ruleset is admin-gated, so a tag entry on the `tend`
-   policy gates them. Winget and homebrew move in too, and the repo-level copy
+   and its all-tags ruleset is admin-gated — but the tag entry does not go on
+   the `tend` policy, whose shape `check_environment` pins to exactly the
+   protected branches and whose `--fix` deletes anything else. They get a
+   second environment (say `release`) whose policy admits the release tag
+   pattern, the shape `check_credential_environments` already credits under
+   that ruleset. Winget and homebrew move in too, and the repo-level copy
    goes with no new credential.
 
    prql's release jobs run on `release`, which is bot-steerable: creating a
