@@ -184,7 +184,11 @@ functionally identical.
 Each adopter creates a GitHub bot account and a classic PAT (`public_repo`
 for public repos, `repo` for private) plus `workflow`, `notifications`,
 `write:discussion`, `gist`, `user`. The PAT and a Claude OAuth token are
-stored as repo secrets. The `gist` scope supports bot-owned secret gists
+stored as secrets in the repo's `tend` GitHub Environment, whose deployment
+branch policy admits only the branches `tend check` confirmed the bot
+cannot write — the default branch and any `protected_branches` that exist
+and are protected. A workflow the bot pushes to any other ref is refused
+them before its first step. The `gist` scope supports bot-owned secret gists
 used by `review-reviewers` as a per-month structured evidence store
 (avoids the 65 KB comment-body limit). The `user` scope lets `install-tend`
 set the bot's profile bio (`PATCH /user`) so the account's authorization
@@ -195,12 +199,25 @@ public repo the user can access. Fine-grained PATs allow per-category
 scoping but don't support outside collaborators ([GitHub roadmap
 #601](https://github.com/github/roadmap/issues/601), not shipped).
 
-**Current privilege model: write + branch protection.** The bot has write
-access; a merge restriction (ruleset or branch protection) is the primary
-security boundary — without it the bot can merge its own PRs. `tend check`
-verifies this is configured correctly. See `docs/security-model.md` for the
-full threat model. Alternative models (GitHub App, triage+fork) are in
-`TODO.md`.
+**Current privilege model: write + branch protection + environment gate.**
+The bot has write access; a merge restriction (ruleset or branch
+protection) is the primary security boundary — without it the bot can merge
+its own PRs — and the `tend` environment keeps the operational secrets out
+of any run the bot can cause on its own. `tend check` verifies both are
+configured correctly, and `--fix` creates either. See
+`docs/security-model.md` for the full threat model. Alternative models
+(GitHub App, triage+fork) are in `TODO.md`.
+
+The environment half is still being adopted: a repo is protected only once
+its secrets are in the environment and the repo-level copies are deleted —
+per-repo work `TODO.md` tracks. Until then it runs with its old exposure.
+
+This repo's own workflows name it too, including the hand-maintained ones
+the generator never touches. `claude-smoke` is the exception the gate
+can't cover — dispatching it on a feature branch is its purpose, and that
+ref is one the bot can push — so its secrets belong in a second
+environment, `tend-manual`, protected by a required reviewer rather than a
+branch policy: each run waits for a maintainer's approval.
 
 ## Concurrency and filtering
 
@@ -218,6 +235,7 @@ Concurrency groups:
 | Workflow | Group key | Cancel-in-progress |
 |---|---|---|
 | review | `workflow-PR#` | yes — new push invalidates a review |
+| mention/relay | none | stateless — secretless job that re-posts review events as a `repository_dispatch` |
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
 | triage | `workflow-issue#` | yes — latest comment wins |

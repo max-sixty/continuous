@@ -42,31 +42,48 @@ human approval) can layer additional rulesets and environment protection
 rules on top; install-tend packages the simplest configuration that holds
 the chain.
 
-Deploy and publish workflows declare a GitHub Environment whose
-`deployment_branch_policy` lists only those admin-gated refs (the default
-branch and/or all tags). Release secrets live in those environments, not
-at repo level. A leaked bot token can push a non-default branch, but it
-cannot push to the default branch and cannot push any tag, so no
-bot-pushed ref matches an admin-gated policy entry. The deploy job is
-rejected before it can read the secret. No admin operation → no
-admin-gated ref → no environment access → no secret.
+Secrets chain to the same refs through GitHub Environments: a job that
+names an environment runs only if the run's ref matches the environment's
+`deployment_branch_policy`, and only such jobs receive its secrets.
 
-That guarantee assumes the privileged workflow is reachable only by
-updating an admin-gated ref: trigger on `push: tags:` (release) or
-`push: branches: [<default-branch>]` (continuous deploy). A write-scoped
-bot can fire `release: published` (creating a release against an existing
-tag takes no tag operation), `repository_dispatch`, or a
-`workflow_dispatch` carrying inputs, and in each case it chooses the
-run's payload, so the env policy alone does not gate them. Workflows
-keeping such a trigger need required reviewers on the Environment before
-release or deploy secrets are migrated there.
+Tend's own operational secrets — the bot token and harness auth — live in
+the `tend` environment (step 7 creates it), whose policy names only the
+branches `tend check` confirmed the bot cannot write — the default branch
+and any `protected_branches` that exist and are protected. Every generated secret-bearing job
+names it, so a workflow the bot pushes to a branch is refused the secrets
+before its first step: write access does not imply secret access.
+Environment secrets overlay repo-level ones, and a job naming a
+missing environment still runs, so an unfinished migration degrades to
+repo-level exposure rather than breakage; `tend check` fails until the
+policy is set, the secrets are in the environment, and the repo-level
+copies are deleted.
 
-An OIDC publish (PyPI or npm trusted publishing, a cloud role) stores no
-secret, so the Environment is the whole gate: a job holding
-`id-token: write` outside one mints a token with no environment claim,
-from any branch the bot can push, which a trust policy that pins the
-repository but not the ref accepts. `tend check` reports both this and an
-environment whose ref policy is missing or too wide.
+Deploy and publish workflows declare their own Environments whose
+policies list the admin-gated refs (the default branch and/or all tags),
+and their release secrets live there rather than at repo level. A leaked
+bot token can push a non-default branch, but no ref it can push matches
+such a policy, so the deploy job is rejected before it reads the secret:
+no admin operation → no admin-gated ref → no environment access → no
+secret. `tend check` sweeps every credential-holding environment — release
+and operational alike — and fails on any it cannot confirm gated by a
+non-bot reviewer or a policy of verified refs, so the chain is checked
+rather than assumed. A credential is a stored secret or the OIDC token a
+job requesting `id-token: write` mints in the environment's name, so a
+trusted-publishing repo that stores nothing is swept the same way.
+
+That holds only for a workflow whose sole path to invocation is updating
+an admin-gated ref (`push: tags:`, or `push:` on the default branch).
+Three triggers let a write-scoped bot supply the run's payload as well as
+fire it, at a ref the policy already admits: `release: published`
+(creating a release against an existing tag takes no tag operation),
+`repository_dispatch`, and a `workflow_dispatch` carrying inputs. Those
+need a required reviewer on the Environment, which holds regardless of
+ref. A job requesting `id-token: write` outside any environment has no
+gate at all — the token carries no environment claim, and the bot can
+mint it from a branch it pushes. The canonical treatment, including which
+triggers were probed rather than inferred, is the source repo's
+`docs/security-model.md` linked above; install does not configure release
+secrets.
 
 The composite action refuses to start if the default branch is unprotected.
 
@@ -77,7 +94,7 @@ in depth.
 
 | Token | Lifetime | If leaked, attacker can... | ...but cannot |
 |-------|----------|----------------------------|---------------|
-| Bot token (PAT) | Long-lived | Push to unprotected branches, create PRs, impersonate the bot, indefinitely | Merge PRs (merge restriction), push to the default branch, access release secrets (environment-protected) |
+| Bot token (PAT) | Long-lived | Push to unprotected branches, create PRs, impersonate the bot, indefinitely | Merge PRs (merge restriction), push to the default branch, read any environment-gated secret — operational or release — from a workflow it pushes |
 | Bot token (App) | ~1 hour | Same as PAT, until the token expires | Same, plus auto-expiry |
 | Claude OAuth | Long-lived | Run Claude sessions billed to the account | Access GitHub |
 | `OPENAI_API_KEY` | Until revoked | Run Codex/OpenAI calls billed to the account | Access GitHub |
@@ -148,7 +165,7 @@ dir's `hosts.yml` via `--insecure-storage`. Two hazards drive this:
   too, as `x-access-token`.
 
 The plaintext copy adds no exposure: the same token is already stored
-server-side as the repo secret, and the dir is readable only by the
+server-side as an Actions secret, and the dir is readable only by the
 maintainer's user. The dir is the bot's durable store, not install
 scratch — scope audits and reinstalls read it to skip a fresh device
 flow — so it outlives the install.

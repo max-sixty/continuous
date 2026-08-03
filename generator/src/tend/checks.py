@@ -1,9 +1,11 @@
 """Security checks for tend setup.
 
-Verifies the repository has the security prerequisites described in
-docs/security-model.md: branch protection on configured branches, bot
-permission level, required secrets, and the release chain (environment
-ref policies plus the tag ruleset that backs them).
+Verifies the two boundaries docs/security-model.md claims: the bot cannot
+land code (branch protection on configured branches, bot permission level),
+and a run the bot can cause reaches no credential (the `tend` environment's
+deployment branch policy, every other credential-holding environment's gate,
+the operational secrets living in the environment, and no repo-level secret
+outside the allowlist).
 
 Uses the `gh` CLI for GitHub API access. Checks degrade gracefully when
 gh is unavailable or the token lacks permission. Everything read here is
@@ -13,17 +15,18 @@ the same answers a maintainer does.
 
 from __future__ import annotations
 
-import fnmatch
 import io
 import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from functools import cache
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from tend.config import Config
+from tend.workflows import TEND_ENVIRONMENT
 
 
 # GitHub's base repository role IDs, as they appear in a ruleset's
@@ -49,29 +52,24 @@ BYPASS_ROLE_IDS = frozenset({ROLE_ID_MAINTAIN, ROLE_ID_ADMIN})
 # the ruleset, so the bot can't be ruled out.
 BYPASS_ACTOR_TYPES_ABOVE_BOT = frozenset({"OrganizationAdmin", "EnterpriseOwner"})
 
-# Triggers a write-scoped actor can both fire *and* steer — it decides not
-# only that the run happens but what the run publishes. A ref policy does not
-# gate these, because the actor fires them at a ref the policy already allows;
-# only a required reviewer does. Verified against live GitHub with a
+# Triggers a write-scoped actor can both fire *and* steer — it decides not only
+# that the run happens but what the run publishes. A deployment branch policy
+# does not gate these, because the actor fires them at a ref the policy already
+# admits; only a required reviewer does. Verified against live GitHub with a
 # write-access (non-admin, non-bypass) collaborator:
 #
 #   - `release`: creating a release against an *existing* tag takes no tag
-#     operation, so a tag ruleset does not stop it — and the release's body
-#     and uploaded assets are the actor's own.
+#     operation, so a tag ruleset does not stop it — and the release's body and
+#     uploaded assets are the actor's own.
 #   - `repository_dispatch`: the actor supplies `client_payload` wholesale.
 #   - `workflow_dispatch` *with inputs* (added per workflow, not listed here):
 #     the actor supplies the inputs.
 #
 # A `workflow_dispatch` with no inputs is deliberately absent, as are `push`,
 # `create`, `pull_request`, `workflow_run`, `deployment` and `schedule`: each
-# runs code fixed by the ref, so against an admin-gated ref the worst the
-# actor achieves is re-publishing what an admin already published.
+# runs code fixed by the ref, so against an admin-gated ref the worst the actor
+# achieves is re-publishing what an admin already published.
 BOT_STEERABLE_TRIGGERS = frozenset({"release", "repository_dispatch"})
-
-# Ruleset ref patterns that cover every tag in the repository. `~ALL` is
-# GitHub's own name for it; the glob forms are what an adopter may have
-# typed instead.
-ALL_TAGS_PATTERNS = frozenset({"~ALL", "**", "refs/tags/*", "refs/tags/**"})
 
 
 @dataclass
@@ -97,26 +95,6 @@ def _gh(
             input=input,
         )
     except subprocess.TimeoutExpired:
-        return None
-
-
-def _gh_json_lines(path: str, jq: str) -> list | None:
-    """List every page of a `gh api` endpoint, one jq result per line.
-
-    `--paginate` with `--jq` emits each page's results in turn, so a repo with
-    more environments, rulesets, or secrets than fit on one page is read whole
-    rather than silently cut off at the first 30. `jq` must yield objects —
-    gh prints a bare string unquoted, which is not parseable JSON.
-
-    Returns None when the call fails, and an empty list when it returns
-    nothing.
-    """
-    result = _gh("api", "--paginate", path, "--jq", jq)
-    if result is None or result.returncode != 0:
-        return None
-    try:
-        return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-    except (json.JSONDecodeError, ValueError):
         return None
 
 
@@ -257,41 +235,14 @@ def _user_id(login: str) -> int | None:
         return None
 
 
-def _ruleset_blocks_bot(repo: str, ruleset_id: int, bot_name: str) -> bool | None:
-    """Whether a ruleset's bypass list keeps a write-access bot out.
+def _bypass_actors_above_bot(actors: list[dict] | None, bot_name: str) -> bool | None:
+    """Whether every bypass actor in a ruleset outranks a write-access bot.
 
-    The repo-scoped endpoint serves organization- and enterprise-sourced
-    rulesets too, so any applying ruleset can be fetched here.
-
-    Returns True if every bypass actor outranks the bot, False if one of them
-    is the bot itself or a role at write or below, None if the ruleset can't be
-    verified: unreadable, a bypass list GitHub withholds (only ruleset admins
-    see `bypass_actors`), or a principal this can't resolve (a team, app, or
-    deploy key).
+    Returns False if one of them is the bot itself or a role at write or
+    below, None when the list is withheld (only ruleset admins see
+    `bypass_actors`) or names a principal this can't resolve (a team, app,
+    or deploy key). An empty list is True — nobody bypasses at all.
     """
-    return _bypass_list_blocks_bot(_ruleset_detail(repo, ruleset_id), bot_name)
-
-
-def _ruleset_detail(repo: str, ruleset_id: int) -> dict | None:
-    """One ruleset with its rules, conditions, and bypass list."""
-    result = _gh("api", f"repos/{repo}/rulesets/{ruleset_id}")
-    if result is None or result.returncode != 0:
-        return None
-    try:
-        data = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _bypass_list_blocks_bot(ruleset: dict | None, bot_name: str) -> bool | None:
-    """Whether a fetched ruleset's `bypass_actors` keeps a write-access bot out.
-
-    See `_ruleset_blocks_bot` for the tri-state contract.
-    """
-    if ruleset is None:
-        return None
-    actors = ruleset.get("bypass_actors")
     if actors is None:
         return None
     # A user exemption is decidable: the bot's login resolves to the id the
@@ -315,6 +266,69 @@ def _bypass_list_blocks_bot(ruleset: dict | None, bot_name: str) -> bool | None:
         elif actor_type not in BYPASS_ACTOR_TYPES_ABOVE_BOT:
             unresolved = True
     return None if unresolved else True
+
+
+def _ruleset_blocks_bot(repo: str, ruleset_id: int, bot_name: str) -> bool | None:
+    """Whether a ruleset's bypass list keeps a write-access bot out.
+
+    The repo-scoped endpoint serves organization- and enterprise-sourced
+    rulesets too, so any applying ruleset can be fetched here. None when the
+    ruleset is unreadable or its bypass list unverifiable.
+    """
+    result = _gh("api", f"repos/{repo}/rulesets/{ruleset_id}")
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return _bypass_actors_above_bot(data.get("bypass_actors"), bot_name)
+
+
+def _tags_admin_gated(repo: str, bot_name: str) -> bool | None:
+    """Whether an active all-tags ruleset keeps a write-access bot off every tag.
+
+    True when a tag-target ruleset covers `~ALL` tags with nothing excluded,
+    restricts `creation` and `update` (force-pushing an existing tag fires
+    `update`), and every bypass actor outranks write — the shape install-tend's
+    ref-protection step creates. Narrower patterns are not credited: deciding
+    whether a pattern set covers an environment policy's tag entries would
+    re-implement GitHub's matcher, and the recipe's rule is all-tags on
+    purpose.
+    """
+    listed = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/rulesets",
+        "--jq",
+        '.[] | select(.target == "tag" and .enforcement == "active") | .id',
+    )
+    if listed is None or listed.returncode != 0:
+        return None
+
+    unresolved = False
+    for ruleset_id in listed.stdout.split():
+        result = _gh("api", f"repos/{repo}/rulesets/{ruleset_id}")
+        if result is None or result.returncode != 0:
+            unresolved = True
+            continue
+        try:
+            data = json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            unresolved = True
+            continue
+        ref_name = data.get("conditions", {}).get("ref_name", {})
+        if ref_name.get("include") != ["~ALL"] or ref_name.get("exclude"):
+            continue
+        if not {"creation", "update"} <= {r.get("type") for r in data.get("rules", [])}:
+            continue
+        verdict = _bypass_actors_above_bot(data.get("bypass_actors"), bot_name)
+        if verdict is True:
+            return True
+        unresolved = unresolved or verdict is None
+    return None if unresolved else False
 
 
 def _has_restrict_updates_ruleset(repo: str, branch: str, bot_name: str) -> bool | None:
@@ -407,129 +421,146 @@ def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
     )
 
 
-def check_secrets(repo: str, expected: list[str]) -> CheckResult:
-    """Check that required secrets exist (repo-level, then org-level fallback)."""
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
-    if result is None:
-        return CheckResult("secrets", None, "gh CLI not found")
-    if result.returncode != 0:
-        return CheckResult(
-            "secrets", None, "Could not list secrets (may require admin access)"
-        )
-
-    try:
-        secret_names = set(json.loads(result.stdout))
-    except json.JSONDecodeError:
-        return CheckResult("secrets", None, "Could not parse secrets response")
-
-    missing = [s for s in expected if s not in secret_names]
-
-    # Try org secrets for anything not found at repo level.
-    org_forbidden = False
-    if missing:
-        org = repo.split("/")[0] if "/" in repo else None
-        if org:
-            org_secrets, org_forbidden = _list_org_secrets(org)
-            if org_secrets is not None:
-                still_missing = [s for s in missing if s not in org_secrets]
-                found_at_org = [s for s in missing if s in org_secrets]
-                if found_at_org and not still_missing:
-                    return CheckResult(
-                        "secrets",
-                        True,
-                        f"Required secrets present (org-level: {', '.join(found_at_org)})",
-                    )
-                if found_at_org:
-                    missing = still_missing
-
-    if missing:
-        msg = (
-            f"Missing secrets: {', '.join(missing)}. "
-            "Add them in repo Settings > Secrets and variables > Actions."
-        )
-        if org_forbidden:
-            msg += (
-                "\nNote: Could not check org-level secrets (HTTP 403). "
-                "If these secrets are set at the org level, grant the "
-                "admin:org scope: gh auth refresh -h github.com -s admin:org"
-            )
-        return CheckResult("secrets", False, msg)
-    return CheckResult(
-        "secrets", True, f"Required secrets present: {', '.join(expected)}"
+# The operational secrets live in a deployment-gated environment rather than at
+# repo level, so every "is the secret set?" check reads them from there. A copy
+# left at repo level defeats the gate entirely — any workflow can read it
+# without naming the environment — and that is what `check_repo_secret_allowlist`
+# now catches, since the operational names are no longer in its allowed set.
+def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
+    """Secret names in the tend environment. Returns (names, error message)."""
+    result = _gh(
+        "api",
+        f"repos/{repo}/environments/{TEND_ENVIRONMENT}/secrets",
+        "--jq",
+        "[.secrets[].name]",
     )
-
-
-def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:
-    """List org-level secret names. Returns (secrets, permission_denied)."""
-    result = _gh("api", f"orgs/{org}/actions/secrets", "--jq", "[.secrets[].name]")
     if result is None:
-        return None, False
+        return None, "gh CLI not found"
     if result.returncode != 0:
-        forbidden = "HTTP 403" in result.stderr
-        return None, forbidden
-    try:
-        return set(json.loads(result.stdout)), False
-    except (json.JSONDecodeError, TypeError):
-        return None, False
-
-
-def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
-    """Check that secrets available to workflows are in the allowlist.
-
-    Checks repo-level secrets (always) and org-level secrets (best-effort).
-    Any secret not in the allowlist is flagged — this catches release secrets
-    (registry tokens, signing keys) that should be in a protected GitHub
-    Environment instead.
-    """
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
-    if result is None:
-        return CheckResult("repo-secret-allowlist", None, "gh CLI not found")
-    if result.returncode != 0:
-        return CheckResult(
-            "repo-secret-allowlist",
-            None,
-            "Could not list secrets (may require admin access)",
+        return None, (
+            f"Could not list secrets in the '{TEND_ENVIRONMENT}' environment "
+            "(missing environment, or requires admin access). "
+            "See the environment check above for how to create it."
         )
-
     try:
-        repo_secrets = set(json.loads(result.stdout))
+        return set(json.loads(result.stdout)), ""
     except json.JSONDecodeError:
+        return None, "Could not parse environment secrets response"
+
+
+def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
+    """An environment's deployment branch policies, or None if unlistable.
+
+    `--paginate`: a stale policy set is exactly the case that can exceed one
+    page, and an unread tail is one a caller would treat as absent.
+    """
+    listed = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/environments/{env_name}/deployment-branch-policies",
+        "--jq",
+        ".branch_policies[]",
+    )
+    if listed is None or listed.returncode != 0:
+        return None
+    try:
+        return [json.loads(line) for line in listed.stdout.splitlines() if line]
+    except json.JSONDecodeError:
+        return None
+
+
+def check_environment(repo: str, admitted: list[str]) -> CheckResult:
+    """The environment exists and admits only the refs the bot cannot write.
+
+    This is the whole mechanism: a job naming the environment runs only from a
+    ref in its deployment branch policy, so a workflow pushed to a feature
+    branch is refused before its first step. A policy that admits anything the
+    bot can push gives the secrets back.
+    """
+    name = "environment"
+    if not admitted:
+        # No branch was verified unwritable, so there is no ref the policy
+        # could name. Whatever this environment says, the branch-protection
+        # failure above is the thing to fix.
         return CheckResult(
-            "repo-secret-allowlist", None, "Could not parse secrets response"
+            name,
+            None,
+            "No branch verified as protected, so the admitted set is unknown — "
+            "fix branch protection first.",
         )
-
-    # Best-effort: include org-level secrets (also available to workflows).
-    org = repo.split("/")[0] if "/" in repo else None
-    org_secrets: set[str] = set()
-    org_forbidden = False
-    if org:
-        fetched, org_forbidden = _list_org_secrets(org)
-        if fetched is not None:
-            org_secrets = fetched
-
-    unexpected_repo = sorted(repo_secrets - allowed)
-    unexpected_org = sorted(org_secrets - allowed - repo_secrets)
-
-    if unexpected_repo or unexpected_org:
-        parts = []
-        if unexpected_repo:
-            parts.append(f"repo-level: {', '.join(unexpected_repo)}")
-        if unexpected_org:
-            parts.append(f"org-level: {', '.join(unexpected_org)}")
+    result = _gh("api", f"repos/{repo}/environments/{TEND_ENVIRONMENT}")
+    if result is None:
+        return CheckResult(name, None, "gh CLI not found")
+    if result.returncode != 0:
         return CheckResult(
-            "repo-secret-allowlist",
+            name,
             False,
-            f"Unexpected secrets ({'; '.join(parts)}). "
-            "These are available to all workflows, including those triggered "
-            "by PRs. Move release secrets to a protected environment. "
-            "If intentionally available, add to secrets.allowed "
-            "in .config/tend.yaml. See docs/security-model.md.",
+            f"Environment '{TEND_ENVIRONMENT}' not found. The operational "
+            "secrets must live in it, gated to admin-only refs, or a workflow "
+            "pushed to any branch can read them. Run `tend check --fix` to "
+            f"create it admitting {', '.join(admitted)}, then move each secret "
+            "into it and delete the repo-level copy.",
+        )
+    try:
+        env = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return CheckResult(name, None, "Could not parse environment response")
+
+    policy = env.get("deployment_branch_policy")
+    if not policy:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' has no deployment branch policy, "
+            "so every ref reaches its secrets — including a branch the bot pushes.",
+        )
+    if policy.get("protected_branches"):
+        # "Protected branches" keys on whether a rule covers the branch, not on
+        # who may push it. Probed: under this mode a branch whose only
+        # protection was `required_linear_history` — which blocks no push —
+        # accepted a plain push and then read an environment secret, while an
+        # unprotected branch was refused with zero steps. Only a named list is
+        # verifiable from here.
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' admits all protected branches. "
+            "Use a custom branch policy naming the default branch and any "
+            "protected_branches, so the admitted set is the one tend verifies.",
         )
 
-    msg = "All secrets available to workflows are in allowlist"
-    if org_forbidden:
-        msg += " (could not check org-level — grant admin:org scope to verify)"
-    return CheckResult("repo-secret-allowlist", True, msg)
+    policies = _branch_policies(repo, TEND_ENVIRONMENT)
+    if policies is None:
+        return CheckResult(name, None, "Could not list deployment branch policies")
+    names = {p["name"] for p in policies}
+
+    # The admitted set must match exactly, in both directions. An extra ref is
+    # one tend does not verify the bot is kept off; a missing one refuses every
+    # workflow triggered on it, which fails closed and so is invisible unless
+    # the check that owns the setup says so.
+    extra = names - set(admitted)
+    if extra:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' admits {', '.join(sorted(extra))}, "
+            "which tend does not verify the bot is kept off. Restrict the policy "
+            f"to: {', '.join(admitted)}.",
+        )
+    missing = set(admitted) - names
+    if missing:
+        return CheckResult(
+            name,
+            False,
+            f"Environment '{TEND_ENVIRONMENT}' does not admit "
+            f"{', '.join(sorted(missing))}, so every tend workflow triggered on "
+            "those refs is refused before its first step. Run `tend check --fix`.",
+        )
+    return CheckResult(
+        name,
+        True,
+        f"Environment '{TEND_ENVIRONMENT}' admits only {', '.join(sorted(names))}",
+    )
 
 
 _WORKFLOWS_QUERY = """
@@ -591,7 +622,7 @@ def _fetch_workflow_files(repo: str) -> dict[str, str | None] | None:
 
 @dataclass(frozen=True)
 class _WorkflowFacts:
-    """What one workflow file says about the repo's release surface."""
+    """What one workflow file says about the repo's credential surface."""
 
     path: str
     steerable: frozenset[str]  # bot-steerable triggers it carries
@@ -615,10 +646,9 @@ def _permissions_grant_oidc(permissions: object) -> bool:
 def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     """Read one workflow's triggers, environments, and OIDC use.
 
-    Anything the parse cannot decide (an unparsable file, an environment
-    named by an expression) lands in `unresolved` rather than being silently
-    dropped — a release path tend cannot see is not a release path tend can
-    call safe.
+    Anything the parse cannot decide (an unparsable file, an environment named
+    by an expression) lands in `unresolved` rather than being silently dropped
+    — a path tend cannot see is not a path tend can call gated.
     """
     unparsable = (f"{path} could not be parsed as a workflow",)
     empty = frozenset[str]()
@@ -707,9 +737,9 @@ def _effective_triggers(
 
     A reusable workflow's own `on:` says only that it is callable; what can
     start it is whatever starts its callers. Callers within the repo are
-    followed to a fixpoint. A reusable workflow with no caller here is
-    returned as unreached — its callers may live in another repo, which this
-    cannot enumerate.
+    followed to a fixpoint. A reusable workflow with no caller here is returned
+    as unreached — its callers may live in another repo, which this cannot
+    enumerate.
     """
     resolved = {path: f.steerable for path, f in facts.items()}
     callers: dict[str, set[str]] = {path: set() for path in facts}
@@ -742,7 +772,7 @@ def _effective_triggers(
 
 @dataclass(frozen=True)
 class _ReleaseSurface:
-    """The repo's publish-capable surface, as read from its workflows."""
+    """The repo's credential-spending surface, as read from its workflows."""
 
     env_steerable: dict[str, frozenset[str]]
     oidc_environments: frozenset[str]
@@ -751,7 +781,21 @@ class _ReleaseSurface:
     unresolved: tuple[str, ...]
 
 
-def _release_surface(files: dict[str, str | None]) -> _ReleaseSurface:
+def _release_surface(files: dict[str, str | None] | None) -> _ReleaseSurface:
+    """Read the workflows into the facts the environment gates need.
+
+    An unreadable tree yields an empty surface that says so, rather than no
+    surface at all: the environment gates below still verify, and only the
+    parts that need the workflows report themselves unread.
+    """
+    if files is None:
+        return _ReleaseSurface(
+            {},
+            frozenset(),
+            (),
+            (".github/workflows could not be read from the default branch",),
+        )
+
     facts: dict[str, _WorkflowFacts] = {}
     unresolved: list[str] = []
     for path, text in sorted(files.items()):
@@ -784,282 +828,323 @@ def _release_surface(files: dict[str, str | None]) -> _ReleaseSurface:
     )
 
 
-def _pattern_covers(outer: str, inner: str) -> bool:
-    """Whether every ref matching `inner` also matches `outer`.
+def _reviewer_gate(env: dict, bot_name: str) -> str | None:
+    """Why this environment's reviewer gate does not hold, or None if it does.
 
-    Both sides are GitHub ref patterns in `refs/tags/…` form, except that
-    `outer` may be GitHub's `~ALL`. `fnmatch`'s `*` spans `/` where GitHub's
-    does not, so an `inner` reaching across path segments is only covered by
-    an `outer` that reaches as far.
+    A Team reviewer is unresolvable from here for the same reason a Team bypass
+    actor is (see BYPASS_ACTOR_TYPES_ABOVE_BOT): the bot may be a member, so any
+    approval the team could give, the bot might be giving itself.
     """
-    if "**" in inner and "**" not in outer and outer != "~ALL":
-        return False
-    if outer in ALL_TAGS_PATTERNS:
-        return True
-    return fnmatch.fnmatchcase(inner, outer)
-
-
-def _tag_pattern_gated(repo: str, pattern: str, bot_name: str) -> bool | None:
-    """Whether tag rulesets stop the bot creating or moving tags matching `pattern`.
-
-    Both `creation` and `update` must be restricted: `creation` blocks a fresh
-    tag, `update` blocks re-pointing one an admin already pushed. They may come
-    from different rulesets — several apply at once, and GitHub's own migration
-    off tag protections split them that way.
-
-    Returns True when both are gated, False when either is definitively not,
-    None when a ruleset that might supply one could not be verified.
-    """
-    rulesets = _gh_json_lines(
-        f"repos/{repo}/rulesets", ".[] | {id, target, enforcement}"
-    )
-    if rulesets is None:
-        return None
-
-    active_tag_rulesets = [
-        rs
-        for rs in rulesets
-        if rs.get("target") == "tag"
-        and rs.get("enforcement") == "active"
-        and rs.get("id") is not None
+    entries = [
+        r
+        for rule in env.get("protection_rules", [])
+        if rule.get("type") == "required_reviewers"
+        for r in rule.get("reviewers", [])
     ]
-    fetched = [_ruleset_detail(repo, rs["id"]) for rs in active_tag_rulesets]
-    details = [d for d in fetched if d is not None]
-    # An unreadable ruleset only matters where nothing readable supplies the
-    # rule: there, "absent" can't be told from "not visible here".
-    unreadable = len(details) != len(fetched)
-
-    inner = f"refs/tags/{pattern}"
-    unresolved = unreadable
-    for rule_type in ("creation", "update"):
-        gated = False
-        for detail in details:
-            if rule_type not in {r.get("type") for r in detail.get("rules", [])}:
-                continue
-            include = ((detail.get("conditions") or {}).get("ref_name") or {}).get(
-                "include", []
-            )
-            if not any(_pattern_covers(o, inner) for o in include):
-                continue
-            verdict = _bypass_list_blocks_bot(detail, bot_name)
-            if verdict is True:
-                gated = True
-                break
-            unresolved = unresolved or verdict is None
-        if not gated:
-            return None if unresolved else False
-    return True
+    if not entries:
+        return "has no required reviewers"
+    if any(r.get("type") == "Team" for r in entries):
+        return (
+            "requires approval from a team, whose membership is not visible here"
+            f" — confirm '{bot_name}' is not in it, or name individual reviewers"
+        )
+    # GitHub logins are case-insensitive and the config takes whatever case the
+    # maintainer typed, so casefolded equality is the identity test.
+    reviewers = [r["reviewer"]["login"] for r in entries]
+    if bot_name.casefold() in {login.casefold() for login in reviewers}:
+        return f"lists the bot ('{bot_name}') as a reviewer, so it approves its own run"
+    return None
 
 
-def _required_reviewers_exclude_bot(environment: dict, bot_name: str) -> bool:
-    """Whether a human other than the bot must approve deployments here.
-
-    Required reviewers gate every trigger, ref-independent, so they are the
-    one control that covers `release: published` and a steerable
-    `workflow_dispatch`. Naming the bot among them hands it its own approval.
-    """
-    for rule in environment.get("protection_rules", []):
-        if rule.get("type") != "required_reviewers":
-            continue
-        reviewers = rule.get("reviewers", [])
-        logins = {
-            (r.get("reviewer") or {}).get("login")
-            for r in reviewers
-            if r.get("type") == "User"
-        }
-        if reviewers and logins != {bot_name}:
-            return True
-    return False
-
-
-def _environment_holds_credential(
-    repo: str, env: str, mints_oidc: bool, allowed: set[str]
-) -> bool | None:
-    """Whether reaching this environment gets the bot something extra to spend.
-
-    An environment with no OIDC-minting job and no secret beyond the ones the
-    bot already holds at repo level is a deployment label: reaching it buys
-    nothing it does not have, so gating it is not tend's business. `allowed`
-    is the same allowlist `check_repo_secret_allowlist` uses — an adopter who
-    moves tend's own secrets into an environment is hardening, not exposing.
-
-    Secret *names* are readable at write access, so the nightly run sees the
-    same answer a maintainer does.
-    """
-    if mints_oidc:
-        return True
-    secrets = _gh_json_lines(
-        f"repos/{repo}/environments/{env}/secrets", ".secrets[] | {name}"
-    )
-    if secrets is None:
-        return None
-    return bool({s["name"] for s in secrets} - allowed)
-
-
-def _environment_ref_gaps(
+def _policy_gate(
     repo: str,
-    env: str,
-    environment: dict,
-    cfg: Config,
-    default_branch: str,
-) -> tuple[list[str], bool]:
-    """Which refs this environment admits that the bot can push.
+    env_name: str,
+    env: dict,
+    admitted: list[str],
+    tags_ok,
+    steerable: frozenset[str],
+) -> str | None:
+    """Why this environment's deployment policy does not gate the bot, or None.
 
-    Returns the gaps found and whether any part of the policy was
-    unverifiable.
+    A policy gates only when every entry names a ref verified out of the bot's
+    reach: a branch in `admitted`, or tags under an admin-only all-tags
+    ruleset (`tags_ok`, computed lazily since most repos have no tag entries).
+    A pattern entry is refused rather than matched — deciding what a pattern
+    covers would re-implement GitHub's matcher.
+
+    A ref-gated policy still loses to a trigger the bot fires and steers
+    itself (`steerable`), since the run starts from a ref the policy already
+    admits. Only the reviewer gate covers those.
     """
-    policy = environment.get("deployment_branch_policy")
-    if policy is None:
-        gap = (
-            f"environment '{env}' has no deployment branch policy, so every ref "
-            "deploys to it — including any branch or tag the bot pushes"
-        )
-        return [gap], False
+    policy = env.get("deployment_branch_policy")
+    if not policy:
+        return "has no deployment branch policy, so every ref reaches its secrets"
     if policy.get("protected_branches"):
-        # Verified against live GitHub: this setting rejects every tag, and
-        # admits only branches carrying a *classic* protection rule — a
-        # ruleset-protected branch is refused even though the branches API
-        # reports it protected. The residual (a second classic-protected
-        # branch the bot can push to) is in docs/security-model.md.
-        return [], False
-
-    entries = _gh_json_lines(
-        f"repos/{repo}/environments/{env}/deployment-branch-policies",
-        ".branch_policies[] | {name, type}",
-    )
-    if entries is None:
-        return [], True
-
-    admin_gated_branches = {default_branch, *cfg.protected_branches}
-    gaps: list[str] = []
-    unverified = False
-    for entry in entries:
-        pattern = entry.get("name", "")
-        if entry.get("type") == "tag":
-            verdict = _tag_pattern_gated(repo, pattern, cfg.bot_name)
-            if verdict is False:
-                gaps.append(
-                    f"environment '{env}' deploys from tag pattern '{pattern}', but no "
-                    "active tag ruleset the bot cannot bypass restricts `creation` and "
-                    "`update` over it — so the bot can push a matching tag"
+        return (
+            "admits all protected branches, which keys on a rule covering the "
+            "branch, not on who may push it"
+        )
+    policies = _branch_policies(repo, env_name)
+    if policies is None:
+        return "has a deployment branch policy this token cannot list"
+    for p in policies:
+        if p.get("type") == "tag":
+            if tags_ok() is not True:
+                return (
+                    "admits tags, and no active all-tags ruleset restricting "
+                    "creation and update to admins could be verified"
                 )
-            elif verdict is None:
-                unverified = True
-        elif pattern not in admin_gated_branches:
-            gaps.append(
-                f"environment '{env}' deploys from branch pattern '{pattern}', which is "
-                "not a branch the merge restriction covers — the bot can push it"
+        elif p["name"] not in admitted:
+            return (
+                f"admits '{p['name']}', which tend has not verified the bot "
+                "cannot write"
             )
-    return gaps, unverified
+    if steerable:
+        triggers = ", ".join(f"`{t}`" for t in sorted(steerable))
+        return (
+            f"admits only verified refs, but a workflow reaching it runs on "
+            f"{triggers}, which the bot fires and steers against a ref the "
+            "policy already admits"
+        )
+    return None
 
 
-def check_release_protection(
-    repo: str, cfg: Config, default_branch: str, allowed: set[str]
+def check_credential_environments(
+    repo: str, cfg: Config, admitted: list[str]
 ) -> CheckResult:
-    """Check that no write-scoped actor can reach a publish or deploy.
+    """Every environment holding a credential is gated against the bot.
 
-    The merge restriction covers code that reaches the default branch through
-    a merge. Nothing there touches the release path: a write-access bot can
-    push a tag, cut a release, or fire a dispatch, and any of those can run a
-    job holding a registry token or minting an OIDC identity. This verifies
-    the chain docs/security-model.md prescribes for that path.
+    A credential is released only to a job naming its environment, so the
+    environment's own gate is the whole question — for release tokens exactly
+    as for the operational secrets, which is what lets the security model
+    claim a run the bot can cause reaches no credential at all. A gate is a
+    required reviewer that is not the bot, or a deployment policy admitting
+    only refs verified out of the bot's reach and carrying no trigger the bot
+    can steer (`_policy_gate`); either suffices, since each alone stops the
+    bot causing a run that the environment feeds. `tend` itself is
+    `check_environment`'s job.
 
-    Two things carry a credential past the end of a run, and each is checked
-    where it lives:
+    An environment holds a credential when it stores a secret, or when a job
+    deploying to it requests `id-token: write` — trusted publishing (PyPI,
+    npm, a cloud role) stores no secret, and an environment sweep keyed on
+    stored secrets alone walks straight past the repos that publish. Keyed on
+    holding one rather than on any name, because a check that reads names
+    passes when an environment is renamed or a new one is stood up beside it.
 
-    - An **environment** (its secrets, or an OIDC claim naming it). It is safe
-      when required reviewers gate it, or when every ref its policy admits is
-      one the bot cannot push *and* no workflow reaching it carries a trigger
-      the bot can fire and steer on its own.
-    - **`id-token: write` outside any environment**, where the minted token
-      carries no environment claim and nothing gates the ref it comes from.
-
-    Repo- and org-level secrets are the third, and `check_repo_secret_allowlist`
-    already covers them.
+    `id-token: write` outside any environment is the ungated case of the same
+    thing: the minted token carries no environment claim, and nothing gates
+    the ref it comes from, so a trust policy pinning the repository but not
+    the ref accepts one the bot minted from a branch it pushed.
     """
-    name = "release-protection"
-    environments = _gh_json_lines(f"repos/{repo}/environments", ".environments[]")
-    if environments is None:
-        return CheckResult(name, None, "Could not list environments")
+    name = "credential-environments"
 
-    files = _fetch_workflow_files(repo)
-    if files is None:
+    listed = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/environments",
+        "--jq",
+        ".environments[].name",
+    )
+    if listed is None:
+        return CheckResult(name, None, "gh CLI not found")
+    if listed.returncode != 0:
         return CheckResult(
-            name, None, "Could not read .github/workflows from the default branch"
+            name, None, f"Could not list environments: {listed.stderr.strip()}"
         )
-    surface = _release_surface(files)
 
-    gaps: list[str] = []
-    unverified: list[str] = list(surface.unresolved)
-    gated_count = 0
+    surface = _release_surface(_fetch_workflow_files(repo))
+    tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
-    for environment in environments:
-        env = environment.get("name", "")
-        holds = _environment_holds_credential(
-            repo, env, env in surface.oidc_environments, allowed
+    ungated: list[str] = []
+    holders: list[str] = []
+    for env_name in listed.stdout.split():
+        secrets = _gh(
+            "api",
+            "--paginate",
+            f"repos/{repo}/environments/{env_name}/secrets",
+            "--jq",
+            ".secrets[].name",
         )
-        if holds is None:
-            unverified.append(f"could not list secrets for environment '{env}'")
-            continue
-        if not holds:
-            continue
-        if _required_reviewers_exclude_bot(environment, cfg.bot_name):
-            gated_count += 1
-            continue
-
-        ref_gaps, ref_unverified = _environment_ref_gaps(
-            repo, env, environment, cfg, default_branch
-        )
-        gaps.extend(ref_gaps)
-        if ref_unverified:
-            unverified.append(f"could not verify the ref policy of environment '{env}'")
-        if ref_gaps or ref_unverified:
-            continue
-
-        # Ref-gated, so the only way left in is a trigger the bot fires and
-        # steers itself against a ref the policy already allows.
-        steerable = sorted(surface.env_steerable.get(env, frozenset()))
-        if steerable:
-            gaps.append(
-                f"environment '{env}' restricts which refs deploy, but a workflow "
-                f"reaching it triggers on {', '.join(f'`{t}`' for t in steerable)}, "
-                "which the bot can fire, and steer, against an already-allowed ref — "
-                "add required reviewers to the environment"
+        if secrets is None or secrets.returncode != 0:
+            return CheckResult(
+                name,
+                None,
+                f"Could not list secrets in '{env_name}' (requires admin access)",
             )
-        else:
-            gated_count += 1
+        if not secrets.stdout.split() and env_name not in surface.oidc_environments:
+            continue
+        holders.append(env_name)
+        if env_name == TEND_ENVIRONMENT:
+            continue  # Gated by its branch policy; `environment` verifies that.
+        detail = _gh("api", f"repos/{repo}/environments/{env_name}")
+        if detail is None or detail.returncode != 0:
+            return CheckResult(name, None, f"Could not read environment '{env_name}'")
+        try:
+            env = json.loads(detail.stdout)
+        except json.JSONDecodeError:
+            return CheckResult(name, None, f"Could not parse environment '{env_name}'")
+        reviewer_reason = _reviewer_gate(env, cfg.bot_name)
+        if reviewer_reason is None:
+            continue
+        policy_reason = _policy_gate(
+            repo,
+            env_name,
+            env,
+            admitted,
+            tags_ok,
+            surface.env_steerable.get(env_name, frozenset()),
+        )
+        if policy_reason is None:
+            continue
+        ungated.append(f"'{env_name}' {reviewer_reason}, and {policy_reason}")
 
     if surface.ungated_oidc:
         jobs = ", ".join(f"{path}:{job}" for path, job in surface.ungated_oidc)
-        gaps.append(
-            f"{len(surface.ungated_oidc)} job(s) request `id-token: write` outside any "
-            "environment, so the OIDC token carries no environment claim and nothing "
-            "gates the ref it is minted from — the bot can mint the repository's OIDC "
-            f"identity from a branch it pushes ({jobs})"
+        ungated.append(
+            f"{len(surface.ungated_oidc)} job(s) request `id-token: write` outside "
+            f"any environment, so nothing gates the ref the token is minted from "
+            f"({jobs})"
         )
 
-    if gaps:
-        detail = "\n".join(f"          - {g}" for g in gaps)
+    if ungated:
         return CheckResult(
             name,
             False,
-            "A write-scoped bot token can reach a publish or deploy:\n"
-            f"{detail}\n"
-            "          See docs/security-model.md and the ref-protection recipe in "
-            "the install-tend skill.",
+            "A run the bot can cause reaches a credential: "
+            f"{'; '.join(ungated)}. Gate each environment with a required "
+            "reviewer that is not the bot, or a deployment policy naming only "
+            "verified refs (protected branches, or tags under an admin-only "
+            "all-tags ruleset); move an OIDC job into such an environment.",
         )
-    if unverified:
-        detail = "; ".join(sorted(set(unverified)))
-        return CheckResult(name, None, f"Could not verify the release path: {detail}")
-    if gated_count:
+    if surface.unresolved:
         return CheckResult(
             name,
-            True,
-            f"{gated_count} environment(s) holding a credential are gated against the bot",
+            None,
+            "Could not read the whole credential surface: "
+            f"{'; '.join(surface.unresolved)}",
         )
+    if not holders:
+        return CheckResult(name, True, "No environment holds a credential")
     return CheckResult(
-        name, True, "No environment or workflow holds a credential the bot could spend"
+        name, True, f"Credential-holding environments are gated: {', '.join(holders)}"
     )
+
+
+def check_secrets(repo: str, expected: list[str]) -> CheckResult:
+    """Check that required secrets exist in the environment.
+
+    An org-level copy is a failure here, not a stand-in: the environment
+    cannot gate an org secret, so any workflow the bot pushes reads it.
+    `check_repo_secret_allowlist` flags the same copy (best-effort), and a
+    pass on availability would sit beside that failure calling the same
+    secret fine — while every workflow keeps working, which is why the
+    failure names where the working copy lives.
+    """
+    secret_names, err = _env_secret_names(repo)
+    if secret_names is None:
+        return CheckResult("secrets", None, err)
+
+    missing = [s for s in expected if s not in secret_names]
+    if not missing:
+        return CheckResult(
+            "secrets", True, f"Required secrets present: {', '.join(expected)}"
+        )
+
+    org = repo.split("/")[0] if "/" in repo else None
+    org_secrets, org_forbidden = _list_org_secrets(org) if org else (None, False)
+    found_at_org = [s for s in missing if org_secrets and s in org_secrets]
+
+    msg = (
+        f"Missing from the '{TEND_ENVIRONMENT}' environment: {', '.join(missing)}. "
+        f"Add each with `gh secret set <NAME> --repo {repo} --env {TEND_ENVIRONMENT}` — "
+        "a repo-level copy is readable by any workflow the bot pushes."
+    )
+    if found_at_org:
+        msg += (
+            f"\n{', '.join(found_at_org)} exists at org level, so everything "
+            "keeps working — ungated, since the environment cannot cover an "
+            "org secret. Remove the org copy or unshare it from this repo."
+        )
+    if org_forbidden:
+        msg += (
+            "\nNote: Could not check for an org-level copy (HTTP 403), which "
+            "would keep workflows running ungated. Grant the admin:org scope "
+            "to check: gh auth refresh -h github.com -s admin:org"
+        )
+    return CheckResult("secrets", False, msg)
+
+
+def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:
+    """List org-level secret names. Returns (secrets, permission_denied)."""
+    result = _gh("api", f"orgs/{org}/actions/secrets", "--jq", "[.secrets[].name]")
+    if result is None:
+        return None, False
+    if result.returncode != 0:
+        forbidden = "HTTP 403" in result.stderr
+        return None, forbidden
+    try:
+        return set(json.loads(result.stdout)), False
+    except (json.JSONDecodeError, TypeError):
+        return None, False
+
+
+def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
+    """Check that secrets available to workflows are in the allowlist.
+
+    Checks repo-level secrets (always) and org-level secrets (best-effort).
+    Any secret not in the allowlist is flagged — this catches release secrets
+    (registry tokens, signing keys) that should be in a protected GitHub
+    Environment instead.
+    """
+    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
+    if result is None:
+        return CheckResult("repo-secret-allowlist", None, "gh CLI not found")
+    if result.returncode != 0:
+        return CheckResult(
+            "repo-secret-allowlist",
+            None,
+            "Could not list secrets (may require admin access)",
+        )
+
+    try:
+        repo_secrets = set(json.loads(result.stdout))
+    except json.JSONDecodeError:
+        return CheckResult(
+            "repo-secret-allowlist", None, "Could not parse secrets response"
+        )
+
+    # Best-effort: include org-level secrets (also available to workflows).
+    org = repo.split("/")[0] if "/" in repo else None
+    org_secrets: set[str] = set()
+    org_forbidden = False
+    if org:
+        fetched, org_forbidden = _list_org_secrets(org)
+        if fetched is not None:
+            org_secrets = fetched
+
+    unexpected_repo = sorted(repo_secrets - allowed)
+    unexpected_org = sorted(org_secrets - allowed - repo_secrets)
+
+    if unexpected_repo or unexpected_org:
+        parts = []
+        if unexpected_repo:
+            parts.append(f"repo-level: {', '.join(unexpected_repo)}")
+        if unexpected_org:
+            parts.append(f"org-level: {', '.join(unexpected_org)}")
+        return CheckResult(
+            "repo-secret-allowlist",
+            False,
+            f"Unexpected secrets ({'; '.join(parts)}). "
+            "These are available to all workflows, including those triggered "
+            "by PRs. Move release secrets to a protected environment. "
+            "If intentionally available, add to secrets.allowed "
+            "in .config/tend.yaml. See docs/security-model.md.",
+        )
+
+    msg = "All secrets available to workflows are in allowlist"
+    if org_forbidden:
+        msg += " (could not check org-level — grant admin:org scope to verify)"
+    return CheckResult("repo-secret-allowlist", True, msg)
 
 
 def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
@@ -1089,6 +1174,104 @@ def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
                 }
             ],
         }
+    )
+
+
+def admitted_refs(results: list[CheckResult]) -> list[str]:
+    """The refs the environment may admit, read off the branch-protection runs.
+
+    Every admitted ref must be one the bot cannot write, so the admitted set is
+    exactly the branches whose protection check *passed* — not the branches the
+    config names. A configured branch that does not exist yet answers 404, which
+    the protection check reports as unverified; admitting it would name a ref the
+    bot can then create, and the merge restriction gates `update`, not
+    `creation`, so nothing would stop it carrying a workflow that reads the
+    secrets. Deriving both the check and the fix from one list also keeps them
+    from disagreeing about what the policy should say.
+    """
+    prefix = "branch-protection:"
+    return list(
+        dict.fromkeys(
+            r.name[len(prefix) :]
+            for r in results
+            if r.name.startswith(prefix) and r.passed is True
+        )
+    )
+
+
+def fix_environment(repo: str, admitted: list[str]) -> CheckResult:
+    """Create the tend environment and set its branch policy to `admitted`.
+
+    PUT is create-or-update, so one call owns every environment failure:
+    missing, no policy, protected-branches mode. The reconcile below then
+    adds missing admitted refs and deletes extras. Secrets are not moved —
+    their values cannot be read back, so minting them into the environment
+    stays with the installer.
+    """
+    name = "environment"
+    result = _gh(
+        "api",
+        "-X",
+        "PUT",
+        f"repos/{repo}/environments/{TEND_ENVIRONMENT}",
+        "--input",
+        "-",
+        input=json.dumps(
+            {
+                "deployment_branch_policy": {
+                    "protected_branches": False,
+                    "custom_branch_policies": True,
+                }
+            }
+        ),
+    )
+    if result is None:
+        return CheckResult(name, None, "gh CLI not found")
+    if result.returncode != 0:
+        return CheckResult(
+            name, False, f"Failed to create environment: {result.stderr.strip()}"
+        )
+
+    policies = _branch_policies(repo, TEND_ENVIRONMENT)
+    if policies is None:
+        return CheckResult(name, None, "Could not list deployment branch policies")
+    existing = {p["name"]: p["id"] for p in policies}
+
+    for branch in admitted:
+        if branch in existing:
+            continue
+        created = _gh(
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
+            "-f",
+            f"name={branch}",
+            "-f",
+            "type=branch",
+        )
+        if created is None or created.returncode != 0:
+            stderr = created.stderr.strip() if created else "gh CLI not found"
+            return CheckResult(name, False, f"Failed to admit {branch}: {stderr}")
+    for branch, policy_id in existing.items():
+        if branch in admitted:
+            continue
+        deleted = _gh(
+            "api",
+            "-X",
+            "DELETE",
+            f"repos/{repo}/environments/{TEND_ENVIRONMENT}"
+            f"/deployment-branch-policies/{policy_id}",
+        )
+        if deleted is None or deleted.returncode != 0:
+            stderr = deleted.stderr.strip() if deleted else "gh CLI not found"
+            return CheckResult(name, False, f"Failed to remove {branch}: {stderr}")
+
+    return CheckResult(
+        name,
+        True,
+        f"Environment '{TEND_ENVIRONMENT}' admits only {', '.join(admitted)}. "
+        "Move each operational secret into it and delete the repo-level copy.",
     )
 
 
@@ -1160,33 +1343,30 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
             )
         ]
 
-    # Engine-specific auth secret(s). Claude accepts one of two candidates
-    # (OAuth token or API key); Codex takes only the API key (subscription
-    # auth.json is incompatible with concurrent workflows). Verified in a
-    # separate check below so the message can name the relevant secret.
-    engine_auth_secrets = (
-        [cfg.claude_token_secret, cfg.anthropic_api_key_secret]
-        if cfg.harness == "claude"
-        else [cfg.openai_key_secret]
-    )
+    # The engine-specific auth secret is verified by check_claude_auth /
+    # check_codex_auth below, which name the relevant one in their message.
     required_secrets = [cfg.bot_token_secret]
 
-    allowed = {cfg.bot_token_secret, *engine_auth_secrets} | set(
-        cfg.allowed_repo_secrets
-    )
+    # The operational secrets are deliberately absent from `allowed`: they
+    # belong to the environment, and a copy left at repo level is readable by
+    # any workflow the bot can push, which is exactly the hole the environment
+    # closes. The allowlist check therefore flags them as unexpected.
+    allowed = set(cfg.allowed_repo_secrets)
 
     results = [check_branch_protection(repo, default_branch, cfg.bot_name)]
     for branch in cfg.protected_branches:
         if branch != default_branch:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
+    admitted = admitted_refs(results)
+    results.append(check_environment(repo, admitted))
+    results.append(check_credential_environments(repo, cfg, admitted))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness == "claude":
         results.append(check_claude_auth(repo, cfg))
     else:
         results.append(check_codex_auth(repo, cfg))
     results.append(check_repo_secret_allowlist(repo, allowed))
-    results.append(check_release_protection(repo, cfg, default_branch, allowed))
     return results
 
 
@@ -1195,17 +1375,9 @@ def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
     both being absent is the failure mode. Both being set is fine; the
     action prefers the OAuth token.
     """
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
-    if result is None:
-        return CheckResult("claude-auth", None, "gh CLI not found")
-    if result.returncode != 0:
-        return CheckResult(
-            "claude-auth", None, "Could not list secrets (may require admin access)"
-        )
-    try:
-        names = set(json.loads(result.stdout))
-    except json.JSONDecodeError:
-        return CheckResult("claude-auth", None, "Could not parse secrets response")
+    names, err = _env_secret_names(repo)
+    if names is None:
+        return CheckResult("claude-auth", None, err)
     has_oauth = cfg.claude_token_secret in names
     has_key = cfg.anthropic_api_key_secret in names
     if has_oauth or has_key:
@@ -1221,7 +1393,7 @@ def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
         "claude-auth",
         False,
         f"Claude harness selected but neither {cfg.claude_token_secret} nor "
-        f"{cfg.anthropic_api_key_secret} is set as a repo secret.",
+        f"{cfg.anthropic_api_key_secret} is set in the '{TEND_ENVIRONMENT}' environment.",
     )
 
 
@@ -1229,17 +1401,9 @@ def check_codex_auth(repo: str, cfg: Config) -> CheckResult:
     """Codex needs OPENAI_API_KEY — absence is the failure mode. The
     subscription auth.json path is not supported.
     """
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
-    if result is None:
-        return CheckResult("codex-auth", None, "gh CLI not found")
-    if result.returncode != 0:
-        return CheckResult(
-            "codex-auth", None, "Could not list secrets (may require admin access)"
-        )
-    try:
-        names = set(json.loads(result.stdout))
-    except json.JSONDecodeError:
-        return CheckResult("codex-auth", None, "Could not parse secrets response")
+    names, err = _env_secret_names(repo)
+    if names is None:
+        return CheckResult("codex-auth", None, err)
     if cfg.openai_key_secret in names:
         return CheckResult(
             "codex-auth",
@@ -1250,5 +1414,5 @@ def check_codex_auth(repo: str, cfg: Config) -> CheckResult:
         "codex-auth",
         False,
         f"Codex harness selected but {cfg.openai_key_secret} "
-        "is not set as a repo secret.",
+        f"is not set in the '{TEND_ENVIRONMENT}' environment.",
     )

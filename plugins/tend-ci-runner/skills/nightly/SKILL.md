@@ -32,9 +32,9 @@ The script prints `key=value` lines. Act on `STATUS`:
 ## Step 2: Check tend configuration drift
 
 Run `tend check` to verify this repo's tend setup (branch protection, bot
-permission, secrets, secret allowlist, release protection). `tend-uvx.sh` is
-`uvx` backed by a tend-private uv — the agent's PATH carries the repo's own,
-which tend must not override:
+permission, and where credentials live). `tend-uvx.sh` is `uvx` backed by a
+tend-private uv — the agent's PATH carries the repo's own, which tend must not
+override:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest check 2>&1 | tee /tmp/tend-check.txt

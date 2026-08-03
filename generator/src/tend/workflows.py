@@ -69,9 +69,30 @@ HEADER = f"""\
 # happen upstream in the tend-ci-runner plugin.
 """
 
+# The GitHub Environment holding the operational secrets (bot token, harness
+# token). Its deployment branch policy admits only admin-gated refs, so a job
+# that names it runs solely from those refs — a workflow pushed to a feature
+# branch is refused before its first step, which is what stops a hijacked
+# session reading the secrets out of a run it wrote. Every job carrying a
+# secret names it; jobs that carry none must not, or they lose the refs the
+# policy excludes for nothing. Not configurable: the name is an implementation
+# detail of that guarantee, and `tend check` creates and verifies it.
+TEND_ENVIRONMENT = "tend"
+
+# The companion environment for a workflow whose trigger the branch policy
+# cannot gate — one a write-scoped actor fires itself, on a ref it chooses
+# (`workflow_dispatch` on a branch). Its protection is a required reviewer
+# instead: the run waits for a human, and the bot is not among them, so a
+# workflow pushed to exfiltrate the secrets stalls unapproved. No generated
+# workflow uses it; `tend check` verifies it wherever a repo declares one,
+# because a reviewer-less environment holding these secrets is the same hole
+# with an extra step.
+TEND_MANUAL_ENVIRONMENT = "tend-manual"
+
 # Available to every template without being passed to render().
 _JINJA.globals["header"] = HEADER
 _JINJA.globals["tend_version"] = _TEND_VERSION
+_JINJA.globals["tend_environment"] = TEND_ENVIRONMENT
 
 
 # Register every macro defined in `macros.yaml.j2` as a Jinja global so
@@ -396,26 +417,14 @@ def generate_install_test(cfg: Config) -> GeneratedWorkflow:
     runs `tend init` without the flag, and the init cleanup step removes
     any stale tend-*.yaml files.
 
-    Verifies what can be checked without admin token or harness invocation:
-    bot+harness secrets exist on the repo, and the committed workflow
-    files match what the generator would produce now. Harness auth is
-    exercised end-to-end by `tend-review` on the first post-merge PR.
+    Verifies the one thing checkable from a `pull_request` run: the
+    committed workflow files match what the generator would produce now.
+    The secrets live in the `tend` environment, which a `pull_request` run
+    cannot name (its merge ref is not in the policy) and whose contents
+    only an admin can list — `tend check`, run by the installer, is what
+    verifies them. Harness auth is exercised end-to-end by `tend-review`
+    on the first post-merge PR.
     """
-    bt_name = cfg.bot_token_secret
-    if cfg.harness == "claude":
-        harness_envs = (
-            f"          CLAUDE_OAUTH: ${{{{ secrets.{cfg.claude_token_secret} }}}}\n"
-            f"          ANTHROPIC_KEY: ${{{{ secrets.{cfg.anthropic_api_key_secret} }}}}"
-        )
-        harness_names = f"{cfg.claude_token_secret} or {cfg.anthropic_api_key_secret}"
-        harness_check = '"$CLAUDE_OAUTH$ANTHROPIC_KEY"'
-    else:
-        harness_envs = (
-            f"          OPENAI_KEY: ${{{{ secrets.{cfg.openai_key_secret} }}}}"
-        )
-        harness_names = cfg.openai_key_secret
-        harness_check = '"$OPENAI_KEY"'
-
     content = f"""\
 {HEADER}
 name: tend-install-test
@@ -427,7 +436,7 @@ on:
 
 jobs:
   install-test:
-    # Same-repo PRs only. Fork PRs don't carry secrets and the workflow
+    # Same-repo PRs only. Fork PRs are out of scope and the workflow
     # is short-lived (removed on the next nightly regen), so cross-fork
     # validation isn't worth special-casing.
     if: github.event.pull_request.head.repo.full_name == github.repository
@@ -437,20 +446,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
-      - name: Verify required secrets are set
-        env:
-          BOT_TOKEN: ${{{{ secrets.{bt_name} }}}}
-{harness_envs}
-        run: |
-          missing=""
-          [ -n "$BOT_TOKEN" ] || missing="$missing {bt_name}"
-          if [ -z {harness_check} ]; then
-            missing="$missing harness-auth(set {harness_names})"
-          fi
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repo secrets:$missing"
-            exit 1
-          fi
       - name: Verify generator output matches committed files
         env:
           GH_TOKEN: ${{{{ github.token }}}}

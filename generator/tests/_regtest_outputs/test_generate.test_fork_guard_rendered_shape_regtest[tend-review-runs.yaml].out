@@ -16,6 +16,7 @@ jobs:
   review-runs:
     if: github.repository_owner == 'test-owner'
     runs-on: ubuntu-24.04
+    environment: tend
     permissions:
       contents: write
       pull-requests: write

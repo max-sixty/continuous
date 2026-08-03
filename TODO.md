@@ -3,6 +3,47 @@
 Deferred work and unimplemented options. Each entry should justify the cost
 of building it if revisited.
 
+## Move the operational secrets into the `tend` environment (post-merge)
+
+The environment gate is inert until each adopter's secrets actually live in
+the environment and the repo-level copies are gone, and that half can only
+happen once the workflows naming the environment are on the default branch.
+Deleting a repo-level copy earlier breaks every run in between.
+
+Per repo (`max-sixty/tend`, `max-sixty/worktrunk`, `PRQL/prql`,
+`max-sixty/cargo-affected`, `numbagg/numbagg`), after its regenerated
+workflows land:
+
+1. `uvx tend@latest check --fix` — creates the environment and its
+   branch policy. (Already done for `max-sixty/tend` and
+   `tend-agent/tend-integration`.)
+2. Re-mint each operational secret into it — the old values can't be read
+   back:
+   `gh secret set <NAME> --repo <repo> --env tend`
+3. Delete the repo-level copies: `gh secret delete <NAME> --repo <repo>`
+4. `uvx tend@latest check` — every line PASS.
+
+The check also sweeps every *other* secret-holding environment (release
+environments included), so a repo with a pre-existing publish environment
+may fail here until that environment is gated: a required reviewer that
+is not the bot, or a policy naming only verified branches — with tag
+entries needing the admin-only all-tags ruleset the install recipe's §3
+creates. That failure is the check doing its job; gate the environment
+rather than allowlisting around it.
+
+`tend-agent/tend-integration` is the exception: its `integration-secrets`
+reseed does steps 2–3 on its own. Step 3 waits for the fixture's workflows
+to name the environment, which happens a release later than the generator
+change — the fixture regenerates with the published `tend`, not this
+checkout — so the fixture completes its own migration on the first weekly
+after 0.1.13 ships.
+
+`max-sixty/tend` also needs `TEND_BOT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`
+copied into `tend-manual` (the required-reviewer environment `claude-smoke`
+uses), since a branch dispatch can never reach `tend`. That environment
+already exists with a reviewer, and `tend check`'s manual-environment check
+keeps it that way.
+
 ## Cut tend over to harness = "codex" (post-release)
 
 The Codex harness landed but tend itself still runs on Claude. The cutover
@@ -126,47 +167,6 @@ Limitations: triage-level approvals don't satisfy required-review policies,
 and triage can't push to human PR branches — the bot posts review
 suggestions instead.
 
-## Environment-gating operational secrets: considered, rejected
-
-Moving `TEND_BOT_TOKEN` and the harness token into a `tend` GitHub Environment
-gated to the default branch was evaluated as a way to close the no-merge exfil
-path: a write-scoped actor (a hijacked session, attacker code in the sandbox, a
-leaked PAT) pushes `.github/workflows/exfil.yml` to a branch, or opens a
-same-repo `pull_request`, and reads the repo-level secret from that run without
-ever touching the proxy. It does not work, because GitHub evaluates an
-Environment's deployment branch policy against `GITHUB_REF`, and `tend-mention`'s
-legitimate review paths share their ref with the attack.
-
-Probe on `tend-agent/tend-integration` (current GitHub behavior, 2026-06), a job
-bound to an environment whose policy admits only the default branch:
-
-| Trigger | `GITHUB_REF` | Gate |
-|---|---|---|
-| `pull_request_target` | `refs/heads/main` | passes, `HAS_SECRET` |
-| `issue_comment`, `issues`, `schedule`, `workflow_run` | `refs/heads/main` | passes |
-| `push` to a feature branch | `refs/heads/<branch>` | blocked, 0 steps |
-| same-repo `pull_request` | `refs/pull/N/merge` | blocked |
-| `pull_request_review`, `pull_request_review_comment` | `refs/pull/N/merge` | **blocked, 0 steps** |
-
-(`pull_request_target`, `issue_comment`, both review events, and `push` were
-observed directly; the rest follow from the same default-ref vs merge-ref
-families.)
-
-The gate blocks the same-repo-PR exfil attempt, but also blocks mention's
-review-submission and inline-review-comment handling: those carry the same
-`refs/pull/N/merge` ref and a ref policy cannot tell them apart. There is no ref
-pattern that admits the review events without also admitting the attack. The
-"runs in the context of the default branch" docs sentence for review events
-refers to which workflow *file* runs, not `GITHUB_REF`.
-
-The precise gate keys on the workflow file's source ref, not the execution ref.
-That value exists as the OIDC `job_workflow_ref` claim, but no native mechanism
-releases a secret on it; it needs a token-minting service. That is the GitHub
-App route above, which also retires the durable-PAT-leak risk. Until then the
-operational tokens stay repo-level and `docs/security-model.md` records the
-accepted risk: repo write access implies secret access, as with any GitHub
-secret.
-
 ## Security hardening — deferred
 
 From the old `docs/security-model.md` "what we could do but don't" — none
@@ -185,24 +185,6 @@ implemented yet:
 - **Network isolation.** Self-hosted runners with outbound traffic
   restricted to GitHub and Anthropic API endpoints. Not viable on
   GitHub-hosted runners; significant infra overhead self-hosted.
-- **Bash sandbox to hide the model auth.** Setting
-  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` forces Claude Code's bubblewrap
-  sandbox on, which hides the model auth from the agent's Bash tool. The
-  fresh `/proc` mount blocks the `/proc/<harness-pid>/environ` read that
-  defeats naive env-scrubbing (a GHA probe found the OAuth token in 2
-  processes with the sandbox off, 0 with it on), and `denyRead` plus
-  Read-tool deny rules block credential files. Verified to work; the
-  reusable `settings.json` and probe live in #639. Blocked from shipping:
-  the same bwrap path corrupts `!` to `\!` in Bash commands (breaks `jq
-  !=`, `feat!:` titles), so both actions pin `=0`. Reproduced through
-  claude 2.1.159 and filed as anthropics/claude-code#64301; re-enable
-  once that lands. Superseded for both Claude harnesses: the credential
-  proxy injects the Anthropic secret for api.anthropic.com, so the agent's
-  env holds only a dummy and there is no model auth left to hide there. The
-  GitHub token is likewise isolated in both Claude harnesses via the proxy.
-  The **codex** harness still passes the model auth (an OpenAI key) and the
-  PAT directly, but it's a different engine with its own sandbox story (see
-  "Auth: GitHub App alternatives to PAT").
 - **Workflow dispatch isolation.** Split each workflow into an analysis
   job (`GITHUB_TOKEN` only, reads the diff, produces a plan) and a push
   job (bot token, separate workflow triggered by `workflow_run`). The bot
