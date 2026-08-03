@@ -54,7 +54,7 @@ inputs:
     description: >-
       Version of the `claude` binary to install via
       `https://claude.ai/install.sh`, pinned to a specific
-      claude-code release. Kept in step with the interactive harness's pin.
+      claude-code release.
   timeout_seconds:
     default: "21000"
     description: >-
@@ -68,7 +68,7 @@ inputs:
       instead of GitHub's own silent one. Short tasks finish well before
       the cap regardless.
   mitmproxy_version:
-    default: "12.2.1"
+    default: "12.2.3"
     description: >-
       Pinned `mitmproxy` version for the credential-injection proxy. Pinned
       so the uv download cache key is stable; bump to upgrade.

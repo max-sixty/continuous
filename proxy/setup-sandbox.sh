@@ -330,16 +330,34 @@ nohup "$UVX" --from "$MITMPROXY" mitmdump \
   --set confdir="$CONFDIR" \
   --allow-hosts '^((api\.|codeload\.|uploads\.)?github\.com|raw\.githubusercontent\.com|api\.anthropic\.com)(:[0-9]+)?$' \
   </dev/null >"${RUNNER_TEMP}/tend-proxy.log" 2>&1 &
-echo $! >"${RUNNER_TEMP}/tend-proxy.pid"
+PROXY_PID=$!
+echo "$PROXY_PID" >"${RUNNER_TEMP}/tend-proxy.pid"
 disown
 
-# Wait for the proxy to generate its CA (proof it's listening).
+# Wait for the proxy to accept a connection. The CA file is not the readiness
+# signal: mitmdump writes it before it binds the port and before it loads `-s`
+# scripts, so a port already in use, or an addon that raises on import, leaves
+# the CA behind and exits ~0.1s later. Waiting on the file and then sampling
+# the process is a race decided by how fast the addon imports, and losing it
+# means trusting the CA, logging "proxy up", and launching the agent against a
+# dead proxy — every authenticated call then fails with nothing to explain it.
+# The liveness check inside the loop stops early rather than burning 30s.
+PROXY_READY=
 for _ in $(seq 1 60); do
-  [ -f "${CONFDIR}/mitmproxy-ca-cert.pem" ] && break
+  kill -0 "$PROXY_PID" 2>/dev/null || break
+  if (exec 3<>"/dev/tcp/127.0.0.1/${PROXY_PORT}") 2>/dev/null; then
+    PROXY_READY=1
+    break
+  fi
   sleep 0.5
 done
+if [ -z "$PROXY_READY" ]; then
+  echo "::error::mitmdump never accepted a connection on ${PROXY_PORT}"
+  cat "${RUNNER_TEMP}/tend-proxy.log" || true
+  exit 1
+fi
 if [ ! -f "${CONFDIR}/mitmproxy-ca-cert.pem" ]; then
-  echo "::error::proxy CA not generated after 30s; mitmdump failed to start"
+  echo "::error::proxy CA not generated; mitmdump failed to start"
   cat "${RUNNER_TEMP}/tend-proxy.log" || true
   exit 1
 fi
