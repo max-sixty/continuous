@@ -124,7 +124,8 @@ def test_init_workflows_have_required_permissions(
         for job_name, job in data["jobs"].items():
             # The invariant binds the jobs that run the agent; mention's
             # verify job has no permissions block, and its relay job requests
-            # contents: read only — by design, it holds no secrets.
+            # only the contents: write its dispatch POST needs — no secrets,
+            # no agent.
             if not any(
                 s.get("uses", "").startswith("max-sixty/tend/")
                 for s in job.get("steps", [])
@@ -371,9 +372,9 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
                 }
             )
         )
-    # The operational secrets live in the environment; repo level must be bare.
-    if "environments/tend/secrets" in url:
-        return _make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+    # Repo and org level answer bare — the environment-secrets branch above is
+    # deliberately the only place the operational names appear, so a check
+    # reading the wrong level cannot pass by accident.
     if "secrets" in url:
         return _make_completed("[]\n")
     return _make_completed(returncode=1)
@@ -395,7 +396,7 @@ def test_check_full_pipeline_with_mocked_gh(
 
     assert result.exit_code == 0, result.output
     assert "FAIL" not in result.output
-    # branch-protection + bot-permission + environment + manual-environment
+    # branch-protection + bot-permission + environment + secret-environments
     # + secrets + claude-auth + allowlist = 7
     assert result.output.count("PASS") == 7
 

@@ -560,7 +560,11 @@ def check_secret_environments(repo: str, cfg: Config) -> CheckResult:
         detail = _gh("api", f"repos/{repo}/environments/{env_name}")
         if detail is None or detail.returncode != 0:
             return CheckResult(name, None, f"Could not read environment '{env_name}'")
-        reason = _reviewer_gate(json.loads(detail.stdout), cfg.bot_name)
+        try:
+            env = json.loads(detail.stdout)
+        except json.JSONDecodeError:
+            return CheckResult(name, None, f"Could not parse environment '{env_name}'")
+        reason = _reviewer_gate(env, cfg.bot_name)
         if reason:
             ungated.append(f"'{env_name}' {reason}")
 
@@ -580,52 +584,47 @@ def check_secret_environments(repo: str, cfg: Config) -> CheckResult:
 
 
 def check_secrets(repo: str, expected: list[str]) -> CheckResult:
-    """Check that required secrets exist in the environment, then org-level.
+    """Check that required secrets exist in the environment.
 
-    An org secret is not environment-gated, so finding one there is a pass on
-    availability alone; `check_repo_secret_allowlist` is what refuses a
-    repo-level copy.
+    An org-level copy is a failure here, not a stand-in: the environment
+    cannot gate an org secret, so any workflow the bot pushes reads it.
+    `check_repo_secret_allowlist` flags the same copy (best-effort), and a
+    pass on availability would sit beside that failure calling the same
+    secret fine — while every workflow keeps working, which is why the
+    failure names where the working copy lives.
     """
     secret_names, err = _env_secret_names(repo)
     if secret_names is None:
         return CheckResult("secrets", None, err)
 
     missing = [s for s in expected if s not in secret_names]
-
-    # Try org secrets for anything not found at repo level.
-    org_forbidden = False
-    if missing:
-        org = repo.split("/")[0] if "/" in repo else None
-        if org:
-            org_secrets, org_forbidden = _list_org_secrets(org)
-            if org_secrets is not None:
-                still_missing = [s for s in missing if s not in org_secrets]
-                found_at_org = [s for s in missing if s in org_secrets]
-                if found_at_org and not still_missing:
-                    return CheckResult(
-                        "secrets",
-                        True,
-                        f"Required secrets present (org-level: {', '.join(found_at_org)})",
-                    )
-                if found_at_org:
-                    missing = still_missing
-
-    if missing:
-        msg = (
-            f"Missing secrets: {', '.join(missing)}. Add each with "
-            f"`gh secret set <NAME> --repo {repo} --env {TEND_ENVIRONMENT}` — "
-            "a repo-level copy is readable by any workflow the bot pushes."
+    if not missing:
+        return CheckResult(
+            "secrets", True, f"Required secrets present: {', '.join(expected)}"
         )
-        if org_forbidden:
-            msg += (
-                "\nNote: Could not check org-level secrets (HTTP 403). "
-                "If these secrets are set at the org level, grant the "
-                "admin:org scope: gh auth refresh -h github.com -s admin:org"
-            )
-        return CheckResult("secrets", False, msg)
-    return CheckResult(
-        "secrets", True, f"Required secrets present: {', '.join(expected)}"
+
+    org = repo.split("/")[0] if "/" in repo else None
+    org_secrets, org_forbidden = _list_org_secrets(org) if org else (None, False)
+    found_at_org = [s for s in missing if org_secrets and s in org_secrets]
+
+    msg = (
+        f"Missing from the '{TEND_ENVIRONMENT}' environment: {', '.join(missing)}. "
+        f"Add each with `gh secret set <NAME> --repo {repo} --env {TEND_ENVIRONMENT}` — "
+        "a repo-level copy is readable by any workflow the bot pushes."
     )
+    if found_at_org:
+        msg += (
+            f"\n{', '.join(found_at_org)} exists at org level, so everything "
+            "keeps working — ungated, since the environment cannot cover an "
+            "org secret. Remove the org copy or unshare it from this repo."
+        )
+    if org_forbidden:
+        msg += (
+            "\nNote: Could not check for an org-level copy (HTTP 403), which "
+            "would keep workflows running ungated. Grant the admin:org scope "
+            "to check: gh auth refresh -h github.com -s admin:org"
+        )
+    return CheckResult("secrets", False, msg)
 
 
 def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:

@@ -96,10 +96,20 @@ read off the docs:
 |---|---|---|---|
 | `issue_comment`, `repository_dispatch` | default branch | passes | ✓ |
 | `issues`, `schedule`, `workflow_run` | default branch | passes | |
-| `pull_request_target` | default branch | passes | ✓ |
+| `pull_request_target` | PR base branch | passes for admitted bases | ✓ |
 | `push` to a feature branch | that branch | refused | ✓ |
 | same-repo `pull_request` | `refs/pull/N/merge` | refused | |
 | `pull_request_review`, `pull_request_review_comment` | `refs/pull/N/merge` | refused | ✓ |
+
+The `pull_request_target` refusal on other bases is itself load-bearing:
+that event runs the *base* ref's workflow file, so a PR targeting a
+bot-pushable branch would execute whatever tend-review.yaml that branch
+carries, with the secrets. The cost is that a stacked PR — one based on
+another PR's branch — gets no review until it retargets an admitted
+branch; the refused run fails visibly rather than skipping. (The probe
+observed the default-base case; the base-ref value is GitHub's documented
+`GITHUB_REF` for the event, and the refusal is the mechanism the `push`
+row measures.)
 
 Only one workflow legitimately needs a refused ref: tend-mention answers
 review submissions and inline review comments. The merge ref can

@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from tend.checks import (
+    admitted_refs,
     check_environment,
     check_secret_environments,
     fix_environment,
@@ -635,6 +636,24 @@ def test_secrets_missing_with_org_403_hint() -> None:
     assert "gh auth refresh" in result.message
 
 
+def test_secrets_org_level_copy_fails() -> None:
+    """An org-level copy must fail, not stand in for the environment: the
+    environment cannot gate an org secret, so any workflow the bot pushes
+    reads it — and every workflow keeps working, so the failure has to name
+    the copy or the exposure stays invisible."""
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        url = next(a for a in args if a.startswith(("repos/", "orgs/")))
+        if url.startswith("orgs/"):
+            return _make_completed('["TEND_BOT_TOKEN"]\n')
+        return _make_completed("[]\n")
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secrets("owner/repo", ["TEND_BOT_TOKEN"])
+    assert result.passed is False
+    assert "org level" in result.message
+
+
 def test_secrets_api_error() -> None:
     with patch(
         "tend.checks._gh", return_value=_make_completed(returncode=1, stderr="HTTP 403")
@@ -883,11 +902,9 @@ def _gh_all_pass(*admitted: str):
                     }
                 )
             )
-        # Endpoint-specific on purpose: the operational secrets live in the
-        # environment and must be absent from repo level, so a fake that answered
-        # both the same way would let a check read the wrong one and still pass.
-        if "environments/tend/secrets" in url:
-            return _make_completed('["T1","T2"]\n')
+        # Repo and org level answer bare — the environment-secrets branch above
+        # is deliberately the only place the operational names appear, so a
+        # check reading the wrong level cannot pass by accident.
         if "secrets" in url:
             return _make_completed("[]\n")
         return _make_completed(returncode=1)
@@ -977,7 +994,7 @@ def test_run_all_checks_with_protected_branches() -> None:
             _config(protected_branches=["v1", "v2"]),
             repo="owner/repo",
         )
-    # default + v1 + v2 + bot-permission + environment + manual-environment
+    # default + v1 + v2 + bot-permission + environment + secret-environments
     # + secrets + claude-auth + allowlist = 9
     assert len(results) == 9
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
@@ -1142,7 +1159,7 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             _config(protected_branches=["main", "v1"]),
             repo="owner/repo",
         )
-    # main (deduped) + v1 + bot-permission + environment + manual-environment
+    # main (deduped) + v1 + bot-permission + environment + secret-environments
     # + secrets + claude-auth + allowlist = 8
     assert len(results) == 8
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
@@ -1328,6 +1345,42 @@ def test_environment_missing_admitted_ref_fails() -> None:
         result = check_environment("owner/repo", ["main", "release"])
     assert result.passed is False
     assert "does not admit release" in result.message
+
+
+def test_admitted_refs_excludes_unverified_branches() -> None:
+    """A branch whose protection could not be verified — it 404s because it
+    does not exist yet — must not be admitted. Admitting it names a ref the bot
+    can then create, and the merge restriction gates `update`, not `creation`,
+    so a workflow pushed on that new branch would read the secrets."""
+    results = [
+        CheckResult("branch-protection:main", True, ""),
+        CheckResult("branch-protection:release", None, "API error: HTTP 404"),
+        CheckResult("branch-protection:staging", False, "NOT protected"),
+        CheckResult("bot-permission", True, ""),
+    ]
+    assert admitted_refs(results) == ["main"]
+
+
+def test_unverified_protected_branch_is_not_demanded() -> None:
+    """End to end: configuring a protected branch that does not exist yet must
+    not make the check demand a policy entry for it — `--fix` would comply, and
+    the bot could then mint the ref."""
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        if _url(args).endswith("branches/release"):
+            return _make_completed(stderr="gh: Not Found (HTTP 404)", returncode=1)
+        return _gh_all_pass()(*args, **kwargs)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=fake),
+    ):
+        results = run_all_checks(
+            _config(protected_branches=["release"]), repo="owner/repo"
+        )
+    env = next(r for r in results if r.name == "environment")
+    assert env.passed is True, env.message
+    assert "release" not in env.message
 
 
 def _secret_env_gh(environments: dict[str, tuple[list[str], dict]]):
