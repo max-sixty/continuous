@@ -54,10 +54,13 @@ if [ -n "$EXISTING" ]; then
   # each leg appends its own near-identical row and floods the issue (a 5-leg
   # matrix failing during an outage → 5 comments all citing the same run).
   # Skip if this run is already recorded — whether in the issue body (a leg of
-  # this same run seeded the issue) or in an existing comment.
+  # this same run seeded the issue) or in an existing comment. Match the full
+  # generated-row anchor, not the bare URL, so a human comment that merely
+  # mentions the run URL can't suppress the bot's own row (and so a longer run
+  # id that has this one as a prefix can't false-positive).
   if gh issue view "$EXISTING" --json body,comments \
       --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
-      | grep -qF "$RUN_URL"; then
+      | grep -qF "[workflow run](${RUN_URL})"; then
     echo "Run ${GITHUB_RUN_ID} already recorded on #${EXISTING} — skipping duplicate comment"
     exit 0
   fi
@@ -69,10 +72,12 @@ if [ -n "$EXISTING" ]; then
   # run — keep the earliest comment citing this RUN_URL, delete later dups.
   # Convergent, mirroring the issue reconcile below: every racing leg sorts the
   # same way and computes the same keeper, so deleting an already-deleted
-  # comment is a harmless 404.
+  # comment is a harmless 404. Select on the full generated-row anchor, not the
+  # bare URL, so only the bot's auto-generated rows are ever eligible for
+  # deletion (no human content is touched).
   sleep 5
   gh api "repos/${GITHUB_REPOSITORY}/issues/${EXISTING}/comments?per_page=100" \
-    --jq "[.[] | select(.body | contains(\"${RUN_URL}\"))] | sort_by(.created_at) | .[1:] | .[].id" \
+    --jq "[.[] | select(.body | contains(\"[workflow run](${RUN_URL})\"))] | sort_by(.created_at) | .[1:] | .[].id" \
     | while read -r DUP_ID; do
         [ -z "$DUP_ID" ] && continue
         gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${DUP_ID}" 2>/dev/null || true
