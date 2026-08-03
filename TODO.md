@@ -33,8 +33,7 @@ generated workflow names it. What remains:
    fails on both, correctly.
 
 `numbagg/numbagg` and `max-sixty/cargo-affected` are done bar the model
-credential. cargo-affected also carries a repo-level `BOT_TOKEN` no workflow
-references — a leftover, deletable once confirmed unused outside Actions.
+credential.
 
 The check also sweeps every *other* credential-holding environment — one
 that stores a secret, or that a job requesting `id-token: write` deploys
