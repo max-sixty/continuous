@@ -259,6 +259,17 @@ in shell; the path list and ordering mirror claude-code-action's
 overwritten, so review skills can optionally inspect what the PR changed without
 those files ever being executed.
 
+**Setup runs on reviewed code.** Adopter `setup:` steps execute as the runner
+user, which holds sudo and, until the sandbox setup strips it, the checkout
+PAT in `.git/config`. So every generated workflow checks out reviewed code
+before running them — the default branch, or in `tend-review` the PR's base
+branch — and lands the PR's tree only afterwards. A contributor's build
+backend, added dependencies, and local `uses: ./` actions therefore execute
+under the agent, inside the sandbox, rather than ahead of it. `sandbox_setup:`
+is the lever for project setup that must see the PR's own manifests. Codex
+adopters get the ordering without the containment, since that harness runs the
+agent on the runner.
+
 **Credential isolation (Claude harnesses).** The Claude harness actions run the
 agent as a separate non-sudo `tend-sandbox` user, sharing the proxy machinery
 under the top-level `proxy/`. Both the bot PAT and the Anthropic credential (OAuth token
@@ -271,11 +282,14 @@ secrets: a different UID with no sudo can't read the proxy's
 `.git/config` is stripped before the workspace is handed over, and the model
 auth is never written to the agent's env or disk. The injection allowlist is
 exact-match on the connection's real destination, so a request to a lookalike
-host gets no token. (`claude` is Node and ignores the system trust store, so it
-trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) The Codex harness
-(`codex/action.yaml`) still passes both the PAT and the model auth directly to
-the agent. The merge restriction and the environment gate remain the
-load-bearing boundaries regardless of harness.
+host gets no token. The proxy itself is launched by a pinned `uv` that tend
+installs into its own directory, off `$PATH`, so the process holding both
+credentials starts from a known binary rather than whatever an adopter's
+`setup:` happened to leave on the runner. (`claude` is Node and ignores the
+system trust store, so it trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) The
+Codex harness (`codex/action.yaml`) still passes both the PAT and the model
+auth directly to the agent. The merge restriction and the environment gate
+remain the load-bearing boundaries regardless of harness.
 
 **Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
 spike detection (today's volume vs 6-day baseline, scaled per repo) abort

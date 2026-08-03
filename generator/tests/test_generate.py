@@ -109,12 +109,27 @@ def test_sandbox_levers_rendered_for_claude(tmp_path: Path) -> None:
     assert with_block["sandbox_setup"].strip() == "rustup component add clippy"
 
 
+def _agent_step_inputs(content: str) -> list[set[str]]:
+    """The `with:` keys of each composite-action step in a generated workflow.
+
+    Structural rather than a substring search over the file, so workflow
+    comments naming a config key don't read as the input being threaded.
+    """
+    data = yaml.safe_load(content)
+    return [
+        set(step.get("with", {}))
+        for job in data["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("uses", "").startswith("max-sixty/tend/")
+    ]
+
+
 def test_sandbox_levers_absent_by_default(tmp_path: Path) -> None:
+    levers = {"sandbox_path", "sandbox_env", "sandbox_setup"}
     cfg = Config.load(_minimal_config(tmp_path))
     for wf in generate_all(cfg):
-        assert "sandbox_path:" not in wf.content
-        assert "sandbox_env:" not in wf.content
-        assert "sandbox_setup:" not in wf.content
+        for inputs in _agent_step_inputs(wf.content):
+            assert not levers & inputs
 
 
 def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
@@ -128,7 +143,8 @@ def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     for wf in generate_all(cfg):
-        assert "sandbox_path:" not in wf.content
+        for inputs in _agent_step_inputs(wf.content):
+            assert "sandbox_path" not in inputs
 
 
 def test_setup_uses_with_parameters_gets_if_guard(tmp_path: Path) -> None:
@@ -417,9 +433,7 @@ def test_review_probes_merge_ref_and_falls_back_to_head(tmp_path: Path) -> None:
     data = yaml.safe_load(workflows["tend-review.yaml"].content)
     steps = data["jobs"]["review"]["steps"]
     probe_idx = next(i for i, s in enumerate(steps) if s.get("id") == "pr_ref")
-    checkout_idx = next(
-        i for i, s in enumerate(steps) if s.get("uses") == "actions/checkout@v7"
-    )
+    checkout_idx = _pr_tree_checkout_idx(steps)
     assert probe_idx < checkout_idx
     probe = steps[probe_idx]
     assert "gh api" in probe["run"]
@@ -428,15 +442,62 @@ def test_review_probes_merge_ref_and_falls_back_to_head(tmp_path: Path) -> None:
     assert steps[checkout_idx]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
 
 
-def test_setup_after_checkout_in_review(tmp_path: Path) -> None:
-    """Setup steps must run after checkout, not before."""
+def _pr_tree_checkout_idx(steps: list[dict]) -> int:
+    """Index of review's second checkout — the one carrying the fork PR ref."""
+    return next(
+        i
+        for i, s in enumerate(steps)
+        if s.get("uses") == "actions/checkout@v7" and "ref" in s.get("with", {})
+    )
+
+
+def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
+    """Review checks out the base tree, runs `setup:`, then lands the PR tree.
+
+    `setup:` runs as the runner user, outside the sandbox the harness builds
+    and before it strips the checkout PAT from `.git/config`. Against the PR
+    tree it would execute a contributor's build backend, dependencies, and
+    local `uses: ./` actions with that access, which is the boundary the
+    sandbox exists to draw. The PR checkout keeps `clean: false` so it does
+    not delete what setup wrote into the workspace.
+    """
     extra = "setup:\n  - uses: ./.github/actions/my-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    review = workflows["tend-review.yaml"]
-    checkout_idx = review.content.index("actions/checkout@v7")
-    setup_idx = review.content.index("./.github/actions/my-setup")
-    assert setup_idx > checkout_idx, "Setup must come after checkout"
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    steps = data["jobs"]["review"]["steps"]
+
+    base_idx = next(
+        i for i, s in enumerate(steps) if s.get("uses") == "actions/checkout@v7"
+    )
+    setup_idx = next(
+        i for i, s in enumerate(steps) if s.get("uses") == "./.github/actions/my-setup"
+    )
+    pr_idx = _pr_tree_checkout_idx(steps)
+
+    assert base_idx < setup_idx < pr_idx
+    assert "ref" not in steps[base_idx].get("with", {}), (
+        "the pre-setup checkout must take the event's base ref, not a fork ref"
+    )
+    assert steps[pr_idx]["with"]["clean"] is False
+
+
+def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
+    """The base checkout is setup's, so it renders only alongside setup.
+
+    With nothing to run against the base tree, a second full-history clone is
+    pure overhead. `clean` goes with it — the action consults it only when it
+    finds an existing repo, which a lone checkout never does.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    steps = data["jobs"]["review"]["steps"]
+
+    checkouts = [s for s in steps if s.get("uses") == "actions/checkout@v7"]
+    assert len(checkouts) == 1
+    assert checkouts[0]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
+    assert "clean" not in checkouts[0]["with"]
 
 
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:

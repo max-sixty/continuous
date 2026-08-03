@@ -1,5 +1,10 @@
 {%- set prompt_body %}prompt: >-
             ${{ <<prompt_expr>> }}{%- endset -%}
+{#- The base checkout exists to give `setup:` a reviewed tree, so it renders
+    only alongside it. With no setup nothing runs between the checkouts, and a
+    lone PR checkout into an empty workspace never reaches `clean` — the
+    action only consults it on the existing-repo path. #}
+{%- set has_setup = setup != '' -%}
 <<header>>
 name: tend-review
 on:
@@ -16,6 +21,13 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
+{% if has_setup %}
+      # Two checkouts: `setup:` runs against the base tree, and the PR's own
+      # tree lands after it. Setup executes as the runner user, outside the
+      # containment the harness builds for the contributor's code.
+<<checkout(cfg)>>
+<<setup>>
+{% endif %}
       # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
       # conflicting PRs it 404s and every downstream step cascades as skipped.
       # Probe first and fall back to /head so review always runs; on fallback
@@ -33,6 +45,6 @@ jobs:
             echo "ref=refs/pull/$PR/head" >> "$GITHUB_OUTPUT"
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
-<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True)>>
-<<setup>>
+<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True, clean=not has_setup)>>
+
 <<agent_step(cfg, prompt_body)>>

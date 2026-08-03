@@ -110,10 +110,6 @@ runs:
           exit 1
         fi
 
-    - name: Ensure uv is available
-      shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/ensure-uv.sh"
-
     # Install the Codex CLI from npm. `@openai/codex` ships a prebuilt
     # per-platform binary, so this is ~3 s with no Rust toolchain. We pin
     # an explicit version (`codex_version`, default a `0.131.0-alpha.*`)
