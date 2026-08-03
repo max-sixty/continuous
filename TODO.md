@@ -185,24 +185,6 @@ implemented yet:
 - **Network isolation.** Self-hosted runners with outbound traffic
   restricted to GitHub and Anthropic API endpoints. Not viable on
   GitHub-hosted runners; significant infra overhead self-hosted.
-- **Bash sandbox to hide the model auth.** Setting
-  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` forces Claude Code's bubblewrap
-  sandbox on, which hides the model auth from the agent's Bash tool. The
-  fresh `/proc` mount blocks the `/proc/<harness-pid>/environ` read that
-  defeats naive env-scrubbing (a GHA probe found the OAuth token in 2
-  processes with the sandbox off, 0 with it on), and `denyRead` plus
-  Read-tool deny rules block credential files. Verified to work; the
-  reusable `settings.json` and probe live in #639. Blocked from shipping:
-  the same bwrap path corrupts `!` to `\!` in Bash commands (breaks `jq
-  !=`, `feat!:` titles), so both actions pin `=0`. Reproduced through
-  claude 2.1.159 and filed as anthropics/claude-code#64301; re-enable
-  once that lands. Superseded for both Claude harnesses: the credential
-  proxy injects the Anthropic secret for api.anthropic.com, so the agent's
-  env holds only a dummy and there is no model auth left to hide there. The
-  GitHub token is likewise isolated in both Claude harnesses via the proxy.
-  The **codex** harness still passes the model auth (an OpenAI key) and the
-  PAT directly, but it's a different engine with its own sandbox story (see
-  "Auth: GitHub App alternatives to PAT").
 - **Workflow dispatch isolation.** Split each workflow into an analysis
   job (`GITHUB_TOKEN` only, reads the diff, produces a plan) and a push
   job (bot token, separate workflow triggered by `workflow_run`). The bot

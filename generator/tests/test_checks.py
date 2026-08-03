@@ -890,7 +890,9 @@ def _gh_all_pass(*admitted: str):
             # A correctly configured repo admits every ref it protects, so the
             # all-pass fake answers with the config's own set rather than a fixed
             # list — the check demands the two match exactly.
-            return _make_completed("\n".join(admitted) + "\n")
+            return _make_completed(
+                "\n".join(json.dumps({"name": b}) for b in admitted) + "\n"
+            )
         if url.endswith("environments/tend"):
             return _make_completed(
                 json.dumps(
@@ -1255,7 +1257,9 @@ def _env_gh(env_body: str | None, policies: str = "main"):
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         url = _url(args)
         if url.endswith("deployment-branch-policies"):
-            return _make_completed(policies + "\n")
+            return _make_completed(
+                "\n".join(json.dumps({"name": n}) for n in policies.split()) + "\n"
+            )
         if url.endswith("environments/tend"):
             if env_body is None:
                 return _make_completed(returncode=1)
@@ -1404,7 +1408,12 @@ def _secret_env_gh(
                 return _make_completed(json.dumps(detail))
         for env_name, (secrets, detail, policies) in environments.items():
             if url.endswith(f"/environments/{env_name}/deployment-branch-policies"):
-                return _make_completed(policies + "\n")
+                entries = [
+                    dict(zip(("type", "name"), line.split(" ", 1)))
+                    for line in policies.splitlines()
+                    if line
+                ]
+                return _make_completed("\n".join(json.dumps(e) for e in entries) + "\n")
             if url.endswith(f"/environments/{env_name}/secrets"):
                 return _make_completed("\n".join(secrets) + "\n")
             if url.endswith(f"/environments/{env_name}"):
@@ -1608,7 +1617,9 @@ def test_fix_environment_reconciles_the_admitted_set() -> None:
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         calls.append((args, kwargs))
         if _url(args).endswith("deployment-branch-policies"):
-            return _make_completed("main 1\nstale 7\n")
+            return _make_completed(
+                '{"name": "main", "id": 1}\n{"name": "stale", "id": 7}\n'
+            )
         return _make_completed("{}")
 
     with patch("tend.checks._gh", side_effect=fake):
@@ -1652,7 +1663,7 @@ def test_fix_environment_surfaces_a_failed_delete() -> None:
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         if _url(args).endswith("deployment-branch-policies"):
-            return _make_completed("stale 7\n")
+            return _make_completed('{"name": "stale", "id": 7}\n')
         if "DELETE" in args:
             return _make_completed(stderr="HTTP 422", returncode=1)
         return _make_completed("{}")

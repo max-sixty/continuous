@@ -178,11 +178,8 @@ to it.
 adopter-owned environments whose policies list the default branch and/or
 all tags (a tag-target ruleset gates `creation` and `update` with
 admin-only bypass; `update` is what force-push of an existing tag fires, so
-it must be blocked alongside `creation`). The `secret-environments` check
-verifies every such environment, not only tend's: it fails on any
-secret-holding environment whose gate it cannot confirm — no reviewer and
-no policy, a policy naming an unverified branch or a pattern, or tag
-entries without that admin-only all-tags ruleset.
+it must be blocked alongside `creation`). The `secret-environments` sweep
+above verifies every such environment.
 
 The gate bounds what a run can *read*; it does not by itself bound *when*
 a reviewed workflow fires. A workflow reachable only by updating a gated
@@ -336,19 +333,13 @@ inside one retains everything the side-channel entry below describes.
 
 **Token exfiltration via side channels.** Log masking only catches exact
 string matches in stdout. An attacker who gets code execution can exfiltrate
-tokens via DNS queries, HTTP requests to an external server, or encoding
-tricks that bypass the log filter. On GitHub-hosted runners, there's no way
-to restrict outbound network access. For the model auth specifically,
-Claude Code's bubblewrap sandbox would remove it from the agent's Bash tool
-entirely: a probe confirmed the sandbox's fresh `/proc` mount and `denyRead`
-rules block reading the token from the environment, `/proc`, and credential
-files. It is not deployed because the same bwrap path corrupts `!` in Bash
-commands (anthropics/claude-code#64301). On both Claude harnesses this is now
-moot — the credential proxy keeps the real model auth out of the agent's env
-entirely, so there is nothing for bwrap to hide. The Codex harness still passes
-its model auth (an OpenAI key) directly, but runs with `sandbox:
-danger-full-access` by design (see "Claude executes attacker-controlled code"
-above). See the `TODO.md` entry and #639.
+what the run holds via DNS queries, HTTP requests to an external server, or
+encoding tricks that bypass the log filter; on GitHub-hosted runners there's
+no way to restrict outbound network access. On the Claude harnesses the
+credential isolation above keeps both real tokens out of the agent's reach,
+so they are not among what a hijacked session can send. The Codex harness
+passes its model auth (an OpenAI key) and the PAT directly, so there the
+channel carries both.
 
 **Long-lived PAT exposure.** A classic PAT is valid until revoked and grants
 access to every repo the bot account can reach. A single successful
@@ -366,5 +357,5 @@ prompts and skill instructions reduce this risk but can't eliminate it —
 Claude ultimately reasons about attacker-controlled text.
 
 Deferred hardening options (Haiku pre-screening, read-only fork PRs, network
-isolation, the Bash sandbox, workflow-dispatch isolation, GitHub App in
-place of PAT) live in `TODO.md`.
+isolation, workflow-dispatch isolation, GitHub App in place of PAT) live in
+`TODO.md`.

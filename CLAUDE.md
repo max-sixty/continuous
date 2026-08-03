@@ -208,10 +208,9 @@ configured correctly, and `--fix` creates either. See
 `docs/security-model.md` for the full threat model. Alternative models
 (GitHub App, triage+fork) are in `TODO.md`.
 
-The environment half is still being adopted: the workflows name it, but a
-repo is protected only once its secrets are in the environment and the
-repo-level copies are deleted, which is per-repo work `TODO.md` tracks.
-Until then a repo runs on its repo-level secrets with its old exposure.
+The environment half is still being adopted: a repo is protected only once
+its secrets are in the environment and the repo-level copies are deleted —
+per-repo work `TODO.md` tracks. Until then it runs with its old exposure.
 
 This repo's own workflows name it too, including the hand-maintained ones
 the generator never touches. `claude-smoke` is the exception the gate

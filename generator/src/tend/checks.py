@@ -1,8 +1,11 @@
 """Security checks for tend setup.
 
-Verifies the repository has the security prerequisites described in
-docs/security-model.md: branch protection on configured branches, bot
-permission level, and required secrets.
+Verifies the two boundaries docs/security-model.md claims: the bot cannot
+land code (branch protection on configured branches, bot permission level),
+and a run the bot can cause reads no secrets (the `tend` environment's
+deployment branch policy, every other secret-holding environment's gate,
+the operational secrets living in the environment, and no repo-level secret
+outside the allowlist).
 
 Uses the `gh` CLI for GitHub API access. Checks degrade gracefully when
 gh is unavailable or the token lacks permission.
@@ -14,6 +17,7 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from functools import cache
 
 from tend.config import Config
 from tend.workflows import TEND_ENVIRONMENT
@@ -419,6 +423,27 @@ def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
         return None, "Could not parse environment secrets response"
 
 
+def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
+    """An environment's deployment branch policies, or None if unlistable.
+
+    `--paginate`: a stale policy set is exactly the case that can exceed one
+    page, and an unread tail is one a caller would treat as absent.
+    """
+    listed = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/environments/{env_name}/deployment-branch-policies",
+        "--jq",
+        ".branch_policies[]",
+    )
+    if listed is None or listed.returncode != 0:
+        return None
+    try:
+        return [json.loads(line) for line in listed.stdout.splitlines() if line]
+    except json.JSONDecodeError:
+        return None
+
+
 def check_environment(repo: str, admitted: list[str]) -> CheckResult:
     """The environment exists and admits only the refs the bot cannot write.
 
@@ -479,18 +504,10 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
             "protected_branches, so the admitted set is the one tend verifies.",
         )
 
-    # `--paginate`: a stale policy set is exactly the case that can exceed one
-    # page, and an unread tail is one this check would report as absent.
-    listed = _gh(
-        "api",
-        "--paginate",
-        f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
-        "--jq",
-        ".branch_policies[].name",
-    )
-    if listed is None or listed.returncode != 0:
+    policies = _branch_policies(repo, TEND_ENVIRONMENT)
+    if policies is None:
         return CheckResult(name, None, "Could not list deployment branch policies")
-    names = set(listed.stdout.split())
+    names = {p["name"] for p in policies}
 
     # The admitted set must match exactly, in both directions. An extra ref is
     # one tend does not verify the bot is kept off; a missing one refuses every
@@ -568,27 +585,21 @@ def _policy_gate(
             "admits all protected branches, which keys on a rule covering the "
             "branch, not on who may push it"
         )
-    listed = _gh(
-        "api",
-        "--paginate",
-        f"repos/{repo}/environments/{env_name}/deployment-branch-policies",
-        "--jq",
-        '.branch_policies[] | "\\(.type // "branch") \\(.name)"',
-    )
-    if listed is None or listed.returncode != 0:
+    policies = _branch_policies(repo, env_name)
+    if policies is None:
         return "has a deployment branch policy this token cannot list"
-    for line in listed.stdout.splitlines():
-        if not line:
-            continue
-        kind, _, ref = line.partition(" ")
-        if kind == "tag":
+    for p in policies:
+        if p.get("type") == "tag":
             if tags_ok() is not True:
                 return (
                     "admits tags, and no active all-tags ruleset restricting "
                     "creation and update to admins could be verified"
                 )
-        elif ref not in admitted:
-            return f"admits '{ref}', which tend has not verified the bot cannot write"
+        elif p["name"] not in admitted:
+            return (
+                f"admits '{p['name']}', which tend has not verified the bot "
+                "cannot write"
+            )
     return None
 
 
@@ -626,13 +637,7 @@ def check_secret_environments(
             name, None, f"Could not list environments: {listed.stderr.strip()}"
         )
 
-    tag_verdict: bool | None | str = "unchecked"
-
-    def tags_ok() -> bool | None:
-        nonlocal tag_verdict
-        if tag_verdict == "unchecked":
-            tag_verdict = _tags_admin_gated(repo, cfg.bot_name)
-        return tag_verdict
+    tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
     ungated: list[str] = []
     holders: list[str] = []
@@ -889,20 +894,10 @@ def fix_environment(repo: str, admitted: list[str]) -> CheckResult:
             name, False, f"Failed to create environment: {result.stderr.strip()}"
         )
 
-    listed = _gh(
-        "api",
-        "--paginate",
-        f"repos/{repo}/environments/{TEND_ENVIRONMENT}/deployment-branch-policies",
-        "--jq",
-        '.branch_policies[] | "\(.name) \(.id)"',
-    )
-    if listed is None or listed.returncode != 0:
+    policies = _branch_policies(repo, TEND_ENVIRONMENT)
+    if policies is None:
         return CheckResult(name, None, "Could not list deployment branch policies")
-    existing = dict(
-        (line.split()[0], line.split()[1])
-        for line in listed.stdout.splitlines()
-        if line
-    )
+    existing = {p["name"]: p["id"] for p in policies}
 
     for branch in admitted:
         if branch in existing:
