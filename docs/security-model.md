@@ -219,8 +219,10 @@ the token's `sub` names it, and a relying party can require that claim. A
 job holding `id-token: write` outside any environment has no gate at all:
 the token carries no environment claim, and the bot can mint it from a
 branch it pushes, which any trust policy pinning the repository but not the
-ref accepts. The sweep reports both, and tend's own generated workflows
-request no `id-token`.
+ref accepts. The sweep covers both cases: an environment a job mints OIDC
+in holds a credential even with nothing stored in it, and a job minting one
+outside any environment is reported on its own. Tend's own generated
+workflows request no `id-token`.
 
 *Migration.* Environment secrets overlay repo-level ones, and a job naming
 an environment that does not yet exist auto-creates it with no policy and

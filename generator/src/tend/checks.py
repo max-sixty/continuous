@@ -771,7 +771,7 @@ def _effective_triggers(
 
 
 @dataclass(frozen=True)
-class _ReleaseSurface:
+class _CredentialSurface:
     """The repo's credential-spending surface, as read from its workflows."""
 
     env_steerable: dict[str, frozenset[str]]
@@ -781,7 +781,7 @@ class _ReleaseSurface:
     unresolved: tuple[str, ...]
 
 
-def _release_surface(files: dict[str, str | None] | None) -> _ReleaseSurface:
+def _credential_surface(files: dict[str, str | None] | None) -> _CredentialSurface:
     """Read the workflows into the facts the environment gates need.
 
     An unreadable tree yields an empty surface that says so, rather than no
@@ -789,7 +789,7 @@ def _release_surface(files: dict[str, str | None] | None) -> _ReleaseSurface:
     parts that need the workflows report themselves unread.
     """
     if files is None:
-        return _ReleaseSurface(
+        return _CredentialSurface(
             {},
             frozenset(),
             (),
@@ -820,7 +820,7 @@ def _release_surface(files: dict[str, str | None] | None) -> _ReleaseSurface:
                 f"{path} is only reachable via `workflow_call` from outside this repo"
             )
 
-    return _ReleaseSurface(
+    return _CredentialSurface(
         env_steerable={e: frozenset(t) for e, t in env_steerable.items()},
         oidc_environments=frozenset(oidc_environments),
         ungated_oidc=tuple(sorted(ungated_oidc)),
@@ -874,7 +874,11 @@ def _policy_gate(
 
     A ref-gated policy still loses to a trigger the bot fires and steers
     itself (`steerable`), since the run starts from a ref the policy already
-    admits. Only the reviewer gate covers those.
+    admits. Only the reviewer gate covers those. A workflow carrying such a
+    trigger counts even when an `if:` on the deploying job would skip that
+    event — reading the expression to decide otherwise is the same
+    re-implementation the pattern rule above declines, and the conservative
+    answer fails closed.
     """
     policy = env.get("deployment_branch_policy")
     if not policy:
@@ -952,7 +956,7 @@ def check_credential_environments(
             name, None, f"Could not list environments: {listed.stderr.strip()}"
         )
 
-    surface = _release_surface(_fetch_workflow_files(repo))
+    surface = _credential_surface(_fetch_workflow_files(repo))
     tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
     ungated: list[str] = []
@@ -1002,7 +1006,7 @@ def check_credential_environments(
         jobs = ", ".join(f"{path}:{job}" for path, job in surface.ungated_oidc)
         ungated.append(
             f"{len(surface.ungated_oidc)} job(s) request `id-token: write` outside "
-            f"any environment, so nothing gates the ref the token is minted from "
+            "any environment, so nothing gates the ref the token is minted from "
             f"({jobs})"
         )
 
