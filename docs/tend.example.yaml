@@ -168,11 +168,15 @@ bot_name: my-project-bot
 
 # ## Sandbox setup (Claude harness)
 #
-# `setup:` above runs as the RUNNER user, around the composite action — it
-# does not reach the agent's environment. The `claude` harness runs the
-# agent as a separate, non-sudo sandbox user with a fixed env allowlist, so
-# runner-side PATH/env changes don't carry in. These three
-# keys reach INSIDE that sandbox, before the agent launches:
+# `setup:` above runs as the RUNNER user, around the composite action. The
+# `claude` harness runs the agent as a separate, non-sudo sandbox user with a
+# fixed env allowlist, so env changes don't carry in, and a PATH entry carries
+# in only if the sandbox UID can reach what it points at: a tool in a system
+# location (`/opt/hostedtoolcache/...`, where the `setup-*` actions install)
+# does, one in the runner's own home does not. Tend installs no language
+# toolchain into the sandbox — whatever `setup:` puts somewhere reachable is
+# what the agent gets, at the version you pinned. These three keys reach INSIDE
+# that sandbox, before the agent launches:
 #
 # - `sandbox_path`: directories prepended to the sandbox PATH. A leading `~`
 #   expands to the sandbox home. This is the fix for a toolchain installed in

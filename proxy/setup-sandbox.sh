@@ -22,8 +22,10 @@
 # Inputs (env): TEND_GH_TOKEN (real PAT), TEND_ANTHROPIC_OAUTH_TOKEN and/or
 # TEND_ANTHROPIC_API_KEY (real Anthropic credential, injected for
 # api.anthropic.com), ACTION_PATH (this action's checkout), MITMPROXY_VERSION
-# (pinned mitmproxy version). GITHUB_WORKSPACE / RUNNER_TEMP / UV_CACHE_DIR come
-# from Actions. Optional adopter levers (from .config/tend.yaml): TEND_SANDBOX_PATH
+# (pinned mitmproxy version), TEND_UV_DIR (tend's own pinned uv, installed by
+# shared/steps/install-proxy-uv.sh). GITHUB_WORKSPACE / RUNNER_TEMP /
+# UV_CACHE_DIR come from Actions. Optional adopter levers (from
+# .config/tend.yaml): TEND_SANDBOX_PATH
 # (newline-separated dirs prepended to the sandbox PATH) and TEND_SANDBOX_ENV
 # (newline-separated NAME=VALUE pairs added to the agent env; reserved keys
 # rejected). TEND_SANDBOX_SETUP (commands) is consumed by the separate
@@ -308,8 +310,13 @@ chmod 700 "$CONFDIR"
 # the readiness wait below measures startup, not a cold dependency resolve.
 # Pinned + UV_CACHE_DIR (set by the action) point at the actions/cache-backed
 # dir, so this is a fast restore after the first run.
+# $TEND_UV_DIR holds tend's own pinned uv (shared/steps/install-proxy-uv.sh),
+# addressed absolutely rather than through PATH: the binary that launches the
+# credential-holding process is tend's, not whatever the adopter's `setup:`
+# left on PATH.
 MITMPROXY="mitmproxy==${MITMPROXY_VERSION}"
-uvx --from "$MITMPROXY" mitmdump --version >/dev/null
+UVX="${TEND_UV_DIR}/uvx"
+"$UVX" --from "$MITMPROXY" mitmdump --version >/dev/null
 log "starting proxy"
 # The --allow-hosts regex scopes which hosts mitmproxy TLS-intercepts. It must
 # cover every host the addon injects into — keep it in sync with the
@@ -317,7 +324,7 @@ log "starting proxy"
 # (which own the credential boundary). A host in those sets but missing here is
 # never intercepted, so its dummy is never swapped for the real secret and auth
 # fails with a 401.
-nohup uvx --from "$MITMPROXY" mitmdump \
+nohup "$UVX" --from "$MITMPROXY" mitmdump \
   -s "${ACTION_PATH}/proxy/inject_credentials.py" \
   --listen-host 127.0.0.1 --listen-port "$PROXY_PORT" \
   --set confdir="$CONFDIR" \

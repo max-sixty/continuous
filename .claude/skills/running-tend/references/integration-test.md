@@ -76,7 +76,7 @@ workflows:
   weekly: false
 EOF
 
-  uvx tend@latest init
+  "${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
   gh auth setup-git
   git add .
   git commit -m "chore: install tend (integration-test bootstrap)"
@@ -285,7 +285,7 @@ succeeds against the committed config, and is idempotent.
 WORK=$(mktemp -d)
 gh repo clone tend-agent/tend-integration "$WORK"
 cd "$WORK"
-uvx tend@latest init
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
 if [ -n "$(git status --porcelain)" ]; then
   git config user.email "tend-agent@users.noreply.github.com"
   git config user.name "tend-agent"
@@ -295,7 +295,7 @@ if [ -n "$(git status --porcelain)" ]; then
   git push origin main \
     || { echo "tend-integration: push to main failed; fixture not updated"; exit 1; }
 fi
-uvx tend@latest init
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
 [ -z "$(git status --porcelain)" ] \
   || { echo "tend-integration: init not idempotent: $(git status --porcelain)"; exit 1; }
 cd - >/dev/null

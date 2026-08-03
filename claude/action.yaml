@@ -72,6 +72,13 @@ inputs:
     description: >-
       Pinned `mitmproxy` version for the credential-injection proxy. Pinned
       so the uv download cache key is stable; bump to upgrade.
+  uv_version:
+    default: "0.12.1"
+    description: >-
+      Pinned `uv` version used to run the credential-injection proxy. Installed
+      into a tend-owned dir off $PATH, so it neither shadows nor is shadowed by
+      an adopter's own uv. The agent does not get this one; skills needing uv
+      install their own.
   sandbox_path:
     default: ""
     description: >-
@@ -136,9 +143,12 @@ runs:
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
 
-    - name: Ensure uv is available
+    - name: Install proxy uv
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/ensure-uv.sh"
+      run: bash "${{ github.action_path }}/../shared/steps/install-proxy-uv.sh"
+      env:
+        UV_VERSION: ${{ inputs.uv_version }}
+        TEND_UV_DIR: ${{ runner.temp }}/tend-uv
 
     # Restore PR-authored sensitive config (.claude, CLAUDE.md, …) from the
     # reviewed base branch to close the startup-RCE surface. Runs before the
@@ -184,8 +194,8 @@ runs:
     # plugins, and the run all execute as the sandbox user. Cache the proxy's
     # mitmproxy download (a sizeable dependency) in an isolated uv cache dir,
     # keyed on the pinned version. First run populates; every run after restores
-    # in seconds instead of a cold ~20s resolve. The agent's own uvx usage keeps
-    # its default cache, untouched.
+    # in seconds instead of a cold ~20s resolve. Scoped to the proxy's uv; a
+    # skill that installs its own uv gets that uv's default cache, untouched.
     - name: Cache mitmproxy
       uses: actions/cache@v4
       with:
@@ -206,6 +216,7 @@ runs:
         # resolves to the shared proxy addon at the top-level proxy/.
         ACTION_PATH: ${{ github.action_path }}/..
         MITMPROXY_VERSION: ${{ inputs.mitmproxy_version }}
+        TEND_UV_DIR: ${{ runner.temp }}/tend-uv
         UV_CACHE_DIR: ${{ runner.temp }}/tend-mitmproxy-uv
         # Adopter sandbox levers: PATH prepends and env additions, baked into
         # the agent env file. sandbox_setup (commands) runs in a later step.

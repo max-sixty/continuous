@@ -112,11 +112,14 @@ secrets: a different UID with no sudo can't read the proxy's
 `.git/config` is stripped before the workspace is handed over, and the model
 auth is never written to the agent's env or disk. The injection allowlist is
 exact-match on the connection's real destination, so a request to a lookalike
-host gets no token. (`claude` is Node and ignores the system trust store, so it
-trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) The Codex harness
-(`codex/action.yaml`) still passes both the PAT and the model auth directly to
-the agent. The merge restriction and `tend check` remain the load-bearing
-boundaries regardless of harness.
+host gets no token. The proxy itself is launched by a pinned `uv` that tend
+installs into its own directory, off `$PATH`, so the process holding both
+credentials starts from a known binary rather than whatever an adopter's
+`setup:` happened to leave on the runner. (`claude` is Node and ignores the
+system trust store, so it trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) The
+Codex harness (`codex/action.yaml`) still passes both the PAT and the model
+auth directly to the agent. The merge restriction and `tend check` remain the
+load-bearing boundaries regardless of harness.
 
 **Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
 spike detection (today's volume vs 6-day baseline, scaled per repo) abort
