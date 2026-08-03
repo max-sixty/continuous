@@ -49,8 +49,34 @@ sleep $((RANDOM % 30))
 EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
 
 if [ -n "$EXISTING" ]; then
+  # Per-run comment dedup. A matrix workflow invokes this script once per leg,
+  # every leg sharing one GITHUB_RUN_ID (and thus one RUN_URL). Without a guard
+  # each leg appends its own near-identical row and floods the issue (a 5-leg
+  # matrix failing during an outage → 5 comments all citing the same run).
+  # Skip if this run is already recorded — whether in the issue body (a leg of
+  # this same run seeded the issue) or in an existing comment.
+  if gh issue view "$EXISTING" --json body,comments \
+      --jq '.body + "\n" + ([.comments[].body] | join("\n"))' \
+      | grep -qF "$RUN_URL"; then
+    echo "Run ${GITHUB_RUN_ID} already recorded on #${EXISTING} — skipping duplicate comment"
+    exit 0
+  fi
   printf '%s\n' "$TABLE" > /tmp/comment.md
   gh issue comment "$EXISTING" -F /tmp/comment.md
+
+  # The check-then-act above still races across concurrently-jittered legs: two
+  # can both read no matching row before either posts. Reconcile to one row per
+  # run — keep the earliest comment citing this RUN_URL, delete later dups.
+  # Convergent, mirroring the issue reconcile below: every racing leg sorts the
+  # same way and computes the same keeper, so deleting an already-deleted
+  # comment is a harmless 404.
+  sleep 5
+  gh api "repos/${GITHUB_REPOSITORY}/issues/${EXISTING}/comments?per_page=100" \
+    --jq "[.[] | select(.body | contains(\"${RUN_URL}\"))] | sort_by(.created_at) | .[1:] | .[].id" \
+    | while read -r DUP_ID; do
+        [ -z "$DUP_ID" ] && continue
+        gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${DUP_ID}" 2>/dev/null || true
+      done
 else
   printf '%s\n\n%s\n\n%s\n' \
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
