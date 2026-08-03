@@ -138,25 +138,48 @@ signing keys) live in GitHub Environments whose `deployment_branch_policy`
 lists only admin-gated refs: the default branch (merge restriction) and
 all tags (a sibling tag-target ruleset that gates `creation` and `update`
 with admin-only bypass; `update` is what force-push of an existing tag
-fires, so it must be blocked alongside `creation`). The bot has write,
-which is below every role that can bypass, so it cannot push to the
-default branch and cannot push any tag, and therefore cannot reach any
-environment pinned to those refs. The chain holds for workflows whose
-only path to invocation is updating one of those refs: trigger on
-`push: tags:` (release) or
-`push: branches: [main]` (continuous deploy). Other triggers
-(`workflow_dispatch`, `release: published`, `deployment`, `schedule`,
-chained dispatches) can be initiated by a write-scoped bot against an
-allowed ref, so the env policy alone does not gate them; workflows
-keeping those triggers need trigger-specific containment (typically
-required reviewers on the Environment) before release or deploy secrets
-are migrated there. The chain inherits the merge restriction's
-assumption that the bot holds no role that can bypass; an admin session
-voids both the same way. `tend check` verifies both halves: the bot's
-role, and that every bypass actor on the merge ruleset outranks write.
+fires, so it must be blocked alongside `creation`). Tag rulesets are the
+only mechanism — GitHub sunset tag protection rules in 2024 — and their
+`creation` rule also refuses `POST /repos/{repo}/releases` when the named
+tag doesn't exist yet, so the Releases API is not a way around them. The
+bot has write, which is below every role that can bypass, so it cannot
+push to the default branch and cannot push any tag, and therefore cannot
+reach any environment pinned to those refs. The
+`deployment_branch_policy.protected_branches` setting is a coarser
+alternative: it rejects every tag and admits only branches carrying a
+*classic* protection rule, so a branch protected solely by a ruleset is
+refused — and a second classic-protected branch the bot can push to
+reaches the environment, which an explicit ref list rules out.
 
-OIDC-to-cloud deploys have no GitHub-stored secret to gate; there, the
-Environment plus the cloud provider's trust policy is the only control.
+The chain holds for workflows whose only path to invocation is updating
+one of those refs: trigger on `push: tags:` (release) or
+`push: branches: [main]` (continuous deploy). Triggers a write-scoped
+bot can fire *and steer* against an already-allowed ref escape it.
+`release: published` is one: creating a release against a tag that
+already exists takes no tag operation, and the release's body and assets
+are the bot's own. `repository_dispatch` and a `workflow_dispatch`
+carrying inputs are others — each lets the bot choose the run's payload.
+Workflows keeping such a trigger need required reviewers on the
+Environment, which gate every trigger regardless of ref, before release
+or deploy secrets move there. A `workflow_dispatch` without inputs is
+not in that class: the run is fixed by the ref, so the bot can only
+re-run what an admin already published.
+
+The chain inherits the merge restriction's assumption that the bot holds
+no role that can bypass; an admin session voids both the same way.
+`tend check` verifies the whole of it: the bot's role, that every bypass
+actor on the merge ruleset outranks write, and — for each environment
+holding a credential the bot doesn't already have — that its ref policy
+admits only admin-gated refs, that a tag entry is backed by a tag ruleset
+the bot cannot bypass, and that no workflow reaching it carries a
+steerable trigger.
+
+An OIDC deploy has no GitHub-stored secret to gate, so the Environment
+plus the relying party's trust policy is the only control. A job holding
+`id-token: write` outside any environment has neither: the token carries
+no environment claim, and the bot can mint it from a branch it pushes,
+which any trust policy that pins the repository but not the ref will
+accept. Tend's own generated workflows therefore request no `id-token`.
 
 Configuration recipe:
 `plugins/install-tend/skills/install-tend/references/security-model.md`.

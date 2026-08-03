@@ -162,7 +162,7 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 )
 @click.option("--fix", is_flag=True, help="Fix failing checks (creates rulesets, etc.)")
 def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
-    """Verify security prerequisites (branch protection, bot access, secrets)."""
+    """Verify security prerequisites: branch protection, access, secrets, releases."""
     cfg = Config.load(config_path)
     results = run_all_checks(cfg, repo)
 

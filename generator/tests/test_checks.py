@@ -16,9 +16,11 @@ from tend.checks import (
     ROLE_ID_WRITE,
     CheckResult,
     _has_restrict_updates_ruleset,
+    _pattern_covers,
     _restrict_updates_ruleset,
     check_bot_permission,
     check_branch_protection,
+    check_release_protection,
     check_repo_secret_allowlist,
     check_secrets,
     detect_canonical_owner,
@@ -833,9 +835,13 @@ _BRANCH_HAS_UPDATE_RULE = _make_branch_rules("update")
 
 def _fake_gh_all_pass(*args, **kwargs) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
-    url = args[1]
+    url = next(a for a in args[1:] if not a.startswith("-"))
     if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
         return _make_completed("main\n")
+    if url == "repos/owner/repo/environments":
+        return _make_completed("")  # --paginate --jq: no environments, no lines
+    if url == "graphql":
+        return _make_completed(json.dumps({"data": {"repository": {"object": None}}}))
     if "rules/branches" in url:
         return _make_completed(_BRANCH_HAS_UPDATE_RULE)
     if "/rulesets/" in url:
@@ -915,8 +921,9 @@ def test_run_all_checks_with_protected_branches() -> None:
             _config(protected_branches=["v1", "v2"]),
             repo="owner/repo",
         )
-    # default + v1 + v2 + bot-permission + secrets + claude-auth + allowlist = 7
-    assert len(results) == 7
+    # default + v1 + v2 + bot-permission + secrets + claude-auth + allowlist
+    # + release-protection = 8
+    assert len(results) == 8
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 3
     assert {r.name for r in bp_results} == {
@@ -1079,8 +1086,9 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             _config(protected_branches=["main", "v1"]),
             repo="owner/repo",
         )
-    # main (deduped) + v1 + bot-permission + secrets + claude-auth + allowlist = 6
-    assert len(results) == 6
+    # main (deduped) + v1 + bot-permission + secrets + claude-auth + allowlist
+    # + release-protection = 7
+    assert len(results) == 7
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 2
     assert {r.name for r in bp_results} == {
@@ -1151,3 +1159,614 @@ def test_init_prints_check_reminder(
     result = CliRunner().invoke(main, ["init"])
     assert result.exit_code == 0
     assert "tend check" in result.output
+
+
+# ---------------------------------------------------------------------------
+# check_release_protection
+# ---------------------------------------------------------------------------
+
+_RELEASE_WORKFLOW = """
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - run: echo publish
+"""
+
+
+def _tag_ruleset(
+    ruleset_id: int = 7,
+    *,
+    include: list[str] | None = None,
+    rules: tuple[str, ...] = ("creation", "update"),
+    bypass: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "id": ruleset_id,
+        "name": "Tag operations",
+        "target": "tag",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": include or ["~ALL"], "exclude": []}},
+        "rules": [{"type": r} for r in rules],
+        "bypass_actors": bypass if bypass is not None else [_role_actor(ROLE_ID_ADMIN)],
+    }
+
+
+def _gh_release(
+    *,
+    environments: list[dict[str, object]] | None = None,
+    env_secrets: dict[str, list[str]] | None = None,
+    policies: dict[str, list[dict[str, str]]] | None = None,
+    rulesets: list[dict[str, object]] | None = None,
+    unreadable_ruleset_ids: set[int] | None = None,
+    workflows: dict[str, str] | None = None,
+    fail: str | None = None,
+) -> object:
+    """Build a `_gh` fake serving every call `check_release_protection` makes.
+
+    `fail` names a URL fragment whose call should return returncode=1, so a
+    test can exercise one unreadable endpoint at a time.
+    """
+    environments = environments or []
+    env_secrets = env_secrets or {}
+    policies = policies or {}
+    rulesets = rulesets or []
+    workflows = workflows if workflows is not None else {}
+
+    def lines(items: list) -> subprocess.CompletedProcess[str]:
+        """`gh api --paginate --jq` output: one JSON result per line."""
+        return _make_completed("".join(json.dumps(i) + "\n" for i in items))
+
+    def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str] | None:
+        # The endpoint is the first positional after `api`; flags may precede it.
+        url = next(a for a in args[1:] if not a.startswith("-"))
+        if fail and fail in url:
+            return _make_completed(returncode=1)
+        if url == "graphql":
+            entries = [
+                {"name": n, "type": "blob", "object": {"text": t}}
+                for n, t in workflows.items()
+            ]
+            return _make_completed(
+                json.dumps({"data": {"repository": {"object": {"entries": entries}}}})
+            )
+        if url.endswith("/environments"):
+            return lines(environments)
+        if url.endswith("/secrets"):
+            env = url.split("/environments/")[1].split("/")[0]
+            return lines([{"name": n} for n in env_secrets.get(env, [])])
+        if url.endswith("/deployment-branch-policies"):
+            env = url.split("/environments/")[1].split("/")[0]
+            return lines(policies.get(env, []))
+        if "/rulesets/" in url:
+            wanted = int(url.rsplit("/", 1)[1])
+            if wanted in (unreadable_ruleset_ids or set()):
+                return _make_completed(returncode=1)
+            for rs in rulesets:
+                if rs["id"] == wanted:
+                    return _make_completed(json.dumps(rs))
+            return _make_completed(returncode=1)
+        if url.endswith("/rulesets"):
+            return lines(rulesets)
+        return _make_completed(returncode=1)
+
+    return fake
+
+
+def _release_check(fake: object, *, allowed: set[str] | None = None) -> CheckResult:
+    with patch("tend.checks._gh", side_effect=fake):
+        return check_release_protection(
+            "owner/repo", _config(), "main", allowed if allowed is not None else {"T1"}
+        )
+
+
+def test_release_protection_no_publish_surface_passes() -> None:
+    """A repo with no environments and no OIDC has nothing to gate — it must
+    not be told it is misconfigured."""
+    result = _release_check(_gh_release(workflows={"ci.yaml": "on: push\njobs: {}\n"}))
+    assert result.passed is True
+    assert "No environment or workflow" in result.message
+
+
+def test_release_protection_open_environment_fails() -> None:
+    """The reported gap: an environment with no deployment branch policy is
+    reachable from any ref a write-scoped bot can push."""
+    result = _release_check(
+        _gh_release(
+            environments=[
+                {
+                    "name": "pypi",
+                    "deployment_branch_policy": None,
+                    "protection_rules": [],
+                }
+            ],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is False
+    assert "environment 'pypi' has no deployment branch policy" in result.message
+
+
+def test_release_protection_environment_of_allowlisted_secrets_passes() -> None:
+    """Moving tend's own secrets into an environment is hardening; the
+    environment holds nothing the bot does not already have at repo level."""
+    result = _release_check(
+        _gh_release(
+            environments=[
+                {
+                    "name": "tend",
+                    "deployment_branch_policy": None,
+                    "protection_rules": [],
+                }
+            ],
+            env_secrets={"tend": ["T1"]},
+            workflows={"ci.yaml": "on: push\njobs: {}\n"},
+        )
+    )
+    assert result.passed is True
+
+
+def test_release_protection_required_reviewers_pass() -> None:
+    """Required reviewers gate every trigger, so they cover an open ref policy."""
+    result = _release_check(
+        _gh_release(
+            environments=[
+                {
+                    "name": "pypi",
+                    "deployment_branch_policy": None,
+                    "protection_rules": [
+                        {
+                            "type": "required_reviewers",
+                            "reviewers": [
+                                {"type": "User", "reviewer": {"login": "alice"}}
+                            ],
+                        }
+                    ],
+                }
+            ],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is True
+
+
+def test_release_protection_bot_as_sole_reviewer_fails() -> None:
+    """Naming the bot as the only required reviewer hands it its own approval."""
+    result = _release_check(
+        _gh_release(
+            environments=[
+                {
+                    "name": "pypi",
+                    "deployment_branch_policy": None,
+                    "protection_rules": [
+                        {
+                            "type": "required_reviewers",
+                            "reviewers": [
+                                {"type": "User", "reviewer": {"login": "bot"}}
+                            ],
+                        }
+                    ],
+                }
+            ],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is False
+
+
+def _tag_pinned_env() -> list[dict[str, object]]:
+    return [
+        {
+            "name": "pypi",
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
+            "protection_rules": [{"type": "branch_policy"}],
+        }
+    ]
+
+
+def test_release_protection_tag_policy_with_ruleset_passes() -> None:
+    """The prescribed chain: environment pinned to tags, tag ruleset gating
+    creation and update with bypass above write."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset()],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is True
+
+
+def test_release_protection_tag_policy_without_ruleset_fails() -> None:
+    """A tag-pinned environment with no tag ruleset is the escalation: the bot
+    pushes a matching tag and the release workflow runs."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is False
+    assert "tag pattern 'v*'" in result.message
+
+
+def test_release_protection_tag_ruleset_without_update_rule_fails() -> None:
+    """`creation` alone lets the bot re-point an admin-pushed tag."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset(rules=("creation",))],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is False
+
+
+def test_release_protection_tag_ruleset_bypassable_by_bot_fails() -> None:
+    """A write-role bypass actor defeats the ruleset — write is what the bot has."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset(bypass=[_role_actor(ROLE_ID_WRITE)])],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is False
+
+
+def test_release_protection_narrower_tag_ruleset_does_not_cover() -> None:
+    """A ruleset on `v*` does not gate a policy admitting every tag."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "*", "type": "tag"}]},
+            rulesets=[_tag_ruleset(include=["refs/tags/v*"])],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is False
+
+
+def test_release_protection_default_branch_policy_passes() -> None:
+    """A continuous-deploy environment pinned to the merge-restricted default
+    branch is gated; `check_branch_protection` verifies that branch itself."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "main", "type": "branch"}]},
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is True
+
+
+def test_release_protection_wildcard_branch_policy_fails() -> None:
+    """A branch glob admits branches the bot can create."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "release/*", "type": "branch"}]},
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is False
+    assert "branch pattern 'release/*'" in result.message
+
+
+def test_release_protection_protected_branches_policy_passes() -> None:
+    """`protected_branches: true` rejects every tag and admits only branches
+    carrying a classic protection rule."""
+    result = _release_check(
+        _gh_release(
+            environments=[
+                {
+                    "name": "pypi",
+                    "deployment_branch_policy": {
+                        "protected_branches": True,
+                        "custom_branch_policies": False,
+                    },
+                    "protection_rules": [{"type": "branch_policy"}],
+                }
+            ],
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is True
+
+
+def test_release_protection_steerable_trigger_on_gated_environment_fails() -> None:
+    """A tag ruleset does not stop the bot creating a release against a tag an
+    admin already pushed, and the release body and assets are the bot's."""
+    workflow = _RELEASE_WORKFLOW.replace(
+        'on:\n  push:\n    tags: ["v*"]\n', "on:\n  release:\n    types: [published]\n"
+    )
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset()],
+            workflows={"release.yaml": workflow},
+        )
+    )
+    assert result.passed is False
+    assert "`release`" in result.message
+
+
+def test_release_protection_input_free_dispatch_is_not_steerable() -> None:
+    """A `workflow_dispatch` with no inputs only re-runs code the ref fixes, so
+    against an admin-gated ref it republishes what an admin already published."""
+    workflow = _RELEASE_WORKFLOW.replace(
+        'on:\n  push:\n    tags: ["v*"]\n', "on:\n  workflow_dispatch:\n"
+    )
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset()],
+            workflows={"release.yaml": workflow},
+        )
+    )
+    assert result.passed is True
+
+
+def test_release_protection_dispatch_with_inputs_is_steerable() -> None:
+    workflow = _RELEASE_WORKFLOW.replace(
+        'on:\n  push:\n    tags: ["v*"]\n',
+        "on:\n  workflow_dispatch:\n    inputs:\n      version:\n        type: string\n",
+    )
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset()],
+            workflows={"release.yaml": workflow},
+        )
+    )
+    assert result.passed is False
+    assert "`workflow_dispatch`" in result.message
+
+
+def test_release_protection_oidc_outside_environment_fails() -> None:
+    """No environment means no environment claim and no ref gate — a relying
+    party that does not pin the ref accepts a token from any branch."""
+    workflow = """
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo publish
+"""
+    result = _release_check(_gh_release(workflows={"release.yaml": workflow}))
+    assert result.passed is False
+    assert "release.yaml:publish" in result.message
+
+
+def test_release_protection_job_permissions_replace_workflow_permissions() -> None:
+    """A job-level `permissions:` block replaces the workflow-level one, so a
+    job that omits id-token does not inherit it."""
+    workflow = """
+on: push
+permissions:
+  id-token: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: echo build
+"""
+    result = _release_check(_gh_release(workflows={"ci.yaml": workflow}))
+    assert result.passed is True
+
+
+def test_release_protection_reusable_workflow_inherits_caller_triggers() -> None:
+    """A reusable workflow's `on:` says only that it is callable; what starts
+    it is whatever starts its caller."""
+    caller = """
+on:
+  release:
+    types: [published]
+jobs:
+  call:
+    uses: ./.github/workflows/publish.yaml
+"""
+    callee = """
+on:
+  workflow_call:
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - run: echo publish
+"""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset()],
+            workflows={"release.yaml": caller, "publish.yaml": callee},
+        )
+    )
+    assert result.passed is False
+    assert "`release`" in result.message
+
+
+def test_release_protection_unreached_reusable_workflow_is_unverified() -> None:
+    """A reusable workflow with no caller in this repo may be called from
+    another — report that rather than calling the environment gated."""
+    callee = """
+on:
+  workflow_call:
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - run: echo publish
+"""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset()],
+            workflows={"publish.yaml": callee},
+        )
+    )
+    assert result.passed is None
+    assert "workflow_call" in result.message
+
+
+def test_release_protection_dynamic_environment_name_is_unverified() -> None:
+    workflow = """
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}
+    steps:
+      - run: echo publish
+"""
+    result = _release_check(_gh_release(workflows={"release.yaml": workflow}))
+    assert result.passed is None
+    assert "dynamically" in result.message
+
+
+def test_release_protection_unparsable_workflow_is_unverified() -> None:
+    result = _release_check(_gh_release(workflows={"bad.yaml": "on: [\n"}))
+    assert result.passed is None
+    assert "could not be parsed" in result.message
+
+
+def test_release_protection_environments_unreadable_skips() -> None:
+    result = _release_check(_gh_release(fail="/environments"))
+    assert result.passed is None
+    assert "Could not list environments" in result.message
+
+
+def test_release_protection_workflows_unreadable_skips() -> None:
+    result = _release_check(_gh_release(fail="graphql"))
+    assert result.passed is None
+    assert ".github/workflows" in result.message
+
+
+def test_release_protection_definite_gap_outranks_unverified() -> None:
+    """A gap tend can prove is reported even when something else was unreadable
+    — otherwise one broken endpoint would mask a live escalation."""
+    result = _release_check(
+        _gh_release(
+            environments=[
+                {
+                    "name": "pypi",
+                    "deployment_branch_policy": None,
+                    "protection_rules": [],
+                }
+            ],
+            workflows={"release.yaml": _RELEASE_WORKFLOW, "bad.yaml": "on: [\n"},
+        )
+    )
+    assert result.passed is False
+
+
+def test_pattern_covers() -> None:
+    assert _pattern_covers("~ALL", "refs/tags/v*")
+    assert _pattern_covers("refs/tags/v*", "refs/tags/v*")
+    assert _pattern_covers("refs/tags/*", "refs/tags/v1.0")
+    assert not _pattern_covers("refs/tags/v*", "refs/tags/*")
+    # fnmatch's `*` spans `/` where GitHub's does not, so a `**` inner pattern
+    # is only covered by an outer that reaches as far.
+    assert not _pattern_covers("refs/tags/*", "refs/tags/**")
+    assert _pattern_covers("~ALL", "refs/tags/**")
+
+
+def test_release_protection_unreadable_tag_ruleset_is_unverified() -> None:
+    """A tag ruleset whose detail is withheld might carry the missing rule, so
+    "absent" cannot be told from "not visible here"."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset(ruleset_id=11)],
+            unreadable_ruleset_ids={11},
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is None
+
+
+def test_release_protection_readable_ruleset_gates_despite_unreadable_sibling() -> None:
+    """One ruleset the bot cannot bypass is enough; an unreadable sibling does
+    not turn a proven gate into an unknown."""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset(ruleset_id=11), _tag_ruleset(ruleset_id=12)],
+            unreadable_ruleset_ids={12},
+            workflows={"release.yaml": _RELEASE_WORKFLOW},
+        )
+    )
+    assert result.passed is True
+
+
+def test_release_protection_reusable_caller_job_is_not_ungated_oidc() -> None:
+    """A caller job's `permissions:` only caps what the called workflow may
+    request; the environment is declared over there, and parsed there."""
+    caller = """
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  call:
+    uses: ./.github/workflows/publish.yaml
+    permissions:
+      id-token: write
+"""
+    callee = """
+on:
+  workflow_call:
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - run: echo publish
+"""
+    result = _release_check(
+        _gh_release(
+            environments=_tag_pinned_env(),
+            policies={"pypi": [{"name": "v*", "type": "tag"}]},
+            rulesets=[_tag_ruleset()],
+            workflows={"release.yaml": caller, "publish.yaml": callee},
+        )
+    )
+    assert result.passed is True

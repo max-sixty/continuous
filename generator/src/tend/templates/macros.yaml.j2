@@ -62,11 +62,16 @@
 {# Permissions block at column 6. `issues` defaults to True because every
    workflow except ci-fix needs it. The trailing inline conditional avoids
    the trim_blocks-eats-the-separator issue between `actions: read` and
-   `      issues: write` that arises with `{% if %}` on its own line. #}
+   `      issues: write` that arises with `{% if %}` on its own line.
+
+   No `id-token: write`: nothing in the harness actions requests an OIDC
+   token, and a job holding it can mint the repository's OIDC identity for
+   any relying party whose trust policy doesn't pin the workflow and ref.
+   An adopter whose `setup:` authenticates over OIDC re-adds it with a
+   `jobs.<name>.permissions` override. #}
 {% macro permissions(issues=True) %}
       contents: write
       pull-requests: write
-      id-token: write
       actions: read<<'\n      issues: write' if issues else ''>>
 {%- endmacro %}
 

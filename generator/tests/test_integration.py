@@ -112,8 +112,10 @@ def test_init_workflows_have_correct_triggers(
 def test_init_workflows_have_required_permissions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """All workflows must request contents:write, pull-requests:write, and
-    id-token:write for the tend action to function."""
+    """All workflows must request contents:write and pull-requests:write for
+    the tend action to function — and must not request id-token:write, which
+    nothing in the action chain uses and which would let the most exposed job
+    in the repo mint the repository's OIDC identity."""
     _write_config(tmp_path, "bot_name: test-bot")
     monkeypatch.chdir(tmp_path)
     _run_init()
@@ -131,8 +133,8 @@ def test_init_workflows_have_required_permissions(
             assert perms.get("pull-requests") == "write", (
                 f"{path.name}:{job_name} missing pull-requests:write"
             )
-            assert perms.get("id-token") == "write", (
-                f"{path.name}:{job_name} missing id-token:write"
+            assert "id-token" not in perms, (
+                f"{path.name}:{job_name} grants id-token, which tend does not use"
             )
 
 

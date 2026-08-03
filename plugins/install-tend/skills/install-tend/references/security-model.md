@@ -53,13 +53,20 @@ admin-gated ref → no environment access → no secret.
 
 That guarantee assumes the privileged workflow is reachable only by
 updating an admin-gated ref: trigger on `push: tags:` (release) or
-`push: branches: [<default-branch>]` (continuous deploy). Other triggers
-(`workflow_dispatch`, `release: published`, `deployment`, `schedule`,
-chained dispatches) can be initiated by a write-scoped bot against an
-allowed ref, so the env policy alone does not gate them. Workflows
-keeping those triggers need trigger-specific containment, typically
-required reviewers on the Environment, before release or deploy secrets
-are migrated there.
+`push: branches: [<default-branch>]` (continuous deploy). A write-scoped
+bot can fire `release: published` (creating a release against an existing
+tag takes no tag operation), `repository_dispatch`, or a
+`workflow_dispatch` carrying inputs, and in each case it chooses the
+run's payload, so the env policy alone does not gate them. Workflows
+keeping such a trigger need required reviewers on the Environment before
+release or deploy secrets are migrated there.
+
+An OIDC publish (PyPI or npm trusted publishing, a cloud role) stores no
+secret, so the Environment is the whole gate: a job holding
+`id-token: write` outside one mints a token with no environment claim,
+from any branch the bot can push, which a trust policy that pins the
+repository but not the ref accepts. `tend check` reports both this and an
+environment whose ref policy is missing or too wide.
 
 The composite action refuses to start if the default branch is unprotected.
 
