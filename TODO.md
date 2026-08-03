@@ -16,9 +16,7 @@ generated workflow names it. What remains:
    `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <repo> --env tend`, then
    `gh secret delete CLAUDE_CODE_OAUTH_TOKEN --repo <repo>`. Only the
    generated workflows read it, and all of them name the environment, so
-   nothing else breaks. `max-sixty/tend` needs it in `tend-manual` too — the
-   required-reviewer environment `claude-smoke` uses, since a branch dispatch
-   can never reach `tend`.
+   nothing else breaks.
 2. **`max-sixty/worktrunk` and `PRQL/prql` keep a repo-level
    `TEND_BOT_TOKEN`,** because hand-maintained workflows read it outside the
    generated set. What each needs follows from its trigger, and the two repos

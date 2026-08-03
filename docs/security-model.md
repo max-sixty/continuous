@@ -206,12 +206,12 @@ tag operation, and the release's body and assets are the bot's own),
 `workflow_dispatch` carrying inputs. A ref policy cannot gate these; only a
 required reviewer can, since it holds every trigger regardless of ref. The
 sweep therefore refuses a ref-gated environment that a workflow reaches on
-one of the three. Tend's convention for a reviewer gate is a second
-environment, `tend-manual`, holding the same secrets behind a reviewer
-instead of a branch policy, so each run waits for a human; the same sweep
-verifies it, keyed on the credential rather than the name, with the bot
-excluded from the reviewer list since a bot that can approve its own run
-makes the wait a formality.
+one of the three. A workflow that must run on one puts its secrets in a
+second environment behind a required reviewer instead of a branch policy,
+so each run waits for a human; the sweep verifies any such environment,
+keyed on the credential rather than the name, with the bot excluded from
+the reviewer list since a bot that can approve its own run makes the wait
+a formality.
 
 An OIDC publish or deploy (PyPI or npm trusted publishing, a cloud role)
 stores no secret, so the environment is the whole gate on GitHub's side —

@@ -79,16 +79,6 @@ HEADER = f"""\
 # detail of that guarantee, and `tend check` creates and verifies it.
 TEND_ENVIRONMENT = "tend"
 
-# The companion environment for a workflow whose trigger the branch policy
-# cannot gate — one a write-scoped actor fires itself, on a ref it chooses
-# (`workflow_dispatch` on a branch). Its protection is a required reviewer
-# instead: the run waits for a human, and the bot is not among them, so a
-# workflow pushed to exfiltrate the secrets stalls unapproved. No generated
-# workflow uses it; `tend check` verifies it wherever a repo declares one,
-# because a reviewer-less environment holding these secrets is the same hole
-# with an extra step.
-TEND_MANUAL_ENVIRONMENT = "tend-manual"
-
 # Available to every template without being passed to render().
 _JINJA.globals["header"] = HEADER
 _JINJA.globals["tend_version"] = _TEND_VERSION
