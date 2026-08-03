@@ -6,6 +6,32 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.13
+
+### Improved
+
+- **The operational secrets move into a gated `tend` deployment environment.** Generated workflows name `environment: tend`, so `TEND_BOT_TOKEN` and the model credential are released only to a job whose ref the environment's deployment-branch policy admits, where before any workflow on any branch could read them. `tend check` grows an `environment` check (the policy must admit exactly the branches whose protection passes) and a `secret-environments` check (any other secret-holding environment needs a gate of its own), and `check --fix` creates the environment. Migration is per repo and manual, since a secret can't be read back: `tend check --fix`, then `gh secret set <NAME> --repo <repo> --env tend` for each operational secret, then delete the repo-level copies. ([#810](https://github.com/max-sixty/tend/pull/810))
+- **`tend-mention` handles review events through a secretless relay.** A review or review-comment event runs on `refs/pull/N/merge`, a ref no branch policy can admit, so the triggered job now holds no secrets and re-posts only identifiers (`{kind, pr, id}`) as a `repository_dispatch`; the dispatched job re-reads the record from the API and applies the same engagement checks, so a forged dispatch gains nothing. ([#810](https://github.com/max-sixty/tend/pull/810))
+- **`tend check` verifies that the bot cannot bypass the merge restriction.** Each `update` rule is traced to its ruleset and every bypass actor must outrank write — unknown role IDs fail closed, and a `bypass_actors` list GitHub withholds reports as a skip rather than a pass. The bot's own level is read from the `permissions` booleans instead of the legacy `.permission` string, which reports a maintain-role collaborator as `"write"`, and the preflight step re-proves the restriction as the bot on every run via `current_user_can_bypass`. ([#795](https://github.com/max-sixty/tend/pull/795))
+- **The `claude-interactive` harness is removed**, leaving `claude` and `codex`. It existed to sidestep a metering change Anthropic paused and has not resumed, and the default `claude` harness now runs the same binary headless, so nothing selected it; `harness: claude-interactive` no longer validates. ([#804](https://github.com/max-sixty/tend/pull/804))
+
+### Fixed
+
+- **`tend-review` runs the adopter's `setup:` steps on the base tree, not the PR's.** Setup executes as the runner user, which holds sudo and the checkout PAT, so a fork's build backend or added dependencies ran with that access ahead of the sandbox; review now checks out the base tree, runs `setup:`, then lands the PR's tree with `clean: false`. Setup that must see the PR's own manifests belongs in `sandbox_setup:`. Adopters with no `setup:` generate byte-identical workflows. ([#806](https://github.com/max-sixty/tend/pull/806))
+- **tend's uv no longer shadows the adopter's.** The proxy gets a pinned uv (new `uv_version` input) installed into `$RUNNER_TEMP` and addressed absolutely, and the sandbox step installs the Claude binary alone; skills needing `uvx tend@...` go through a wrapper that installs into `$HOME/.tend-uv` on first use. Before this an unpinned uv landed ahead of every PATH entry derived from the runner, so the process holding the PAT and the model credential started from whatever version happened to be there. ([#807](https://github.com/max-sixty/tend/pull/807))
+- **The proxy readiness check waits for the port to accept a connection.** mitmdump writes its CA certificate before it binds the port and before it loads the addon, so the previous check could report the proxy up and launch the agent against a process that had already exited. ([#811](https://github.com/max-sixty/tend/pull/811))
+- **A mid-flight check rollup no longer holds back the bot's approval.** The pre-APPROVE guard now separates a settled red from a `FAILURE` alongside checks still in flight — a cancellation cascade makes an `if: always()` merge-gate check resolve to `FAILURE` rather than `cancelled` — and polls to settlement before deciding. On a genuine terminal red with no prior substantive review it posts a brief COMMENT recording why approval is held. ([#798](https://github.com/max-sixty/tend/pull/798))
+
+### Documentation
+
+- **Corrected stale `claude-code-action` attributions** in the integration-test recipe and the `running-in-ci` skill. ([#793](https://github.com/max-sixty/tend/pull/793))
+
+### Internal
+
+- `review-reviewers.yaml` runs the default `claude` harness on a current pin. It was the last caller of `claude-interactive` anywhere, left at `0.1.9` by a rollback that only regenerated the generated workflows. ([#803](https://github.com/max-sixty/tend/pull/803))
+- The weekly run gains a bump rule for the `mitmproxy_version` and `uv_version` pins, which dependabot can't reach (it updates `uses:` refs, never a `default:` under `inputs:`), and CI gains a `test-proxy` step that installs uv through `install-proxy-uv.sh` and starts mitmdump through `setup-sandbox.sh`. ([#811](https://github.com/max-sixty/tend/pull/811))
+- Two `review-reviewers` Non-issues entries: a silent `tend-review` on a clean draft PR, and the `tend-triage` no-op when the bot's own tracking issue is created. ([#787](https://github.com/max-sixty/tend/pull/787), [#802](https://github.com/max-sixty/tend/pull/802))
+
 ## 0.1.12
 
 ### Improved
