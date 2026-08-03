@@ -120,8 +120,10 @@ posting a comment.
 
 The relay stops at the repository boundary. A review event on a *fork* PR
 does start a run, on the merge ref and from the PR head's own workflow
-files, but that run's token is read-only: its `POST /repos/…/dispatches`
-returns 403 (probed). So a fork PR's reviews reach the bot only through the
+files, but that run's token is read-only whatever the file asks for: probed
+with `contents: write` declared, its `POST /repos/…/dispatches` still
+returns 403, where the same request from a same-repo run with the same
+permission succeeds. So a fork PR's reviews reach the bot only through the
 notifications poll, minutes later rather than seconds. That is the cost of
 the property the relay depends on: a fork run that could start a
 secret-bearing run in the base repo would be a fork run with write access
