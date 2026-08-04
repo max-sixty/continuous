@@ -908,6 +908,11 @@ def _policy_gate(
         return _Gap(
             "has a deployment branch policy this token cannot list", verified=False
         )
+    # An unverifiable entry is held, not returned: a later entry can name a ref
+    # confirmed out of the verified set, and that finding outranks this one —
+    # the precedence `check_credential_environments` already applies when both
+    # kinds arrive from different environments.
+    unverified: _Gap | None = None
     for p in policies:
         if p.get("type") == "tag":
             gated = tags_ok()
@@ -916,13 +921,13 @@ def _policy_gate(
                 # bot's own token reads a gating all-tags ruleset as
                 # unverifiable — the same configuration a maintainer's admin
                 # token confirms.
-                return _Gap(
+                unverified = _Gap(
                     "admits tags under a ruleset this token cannot verify: only "
                     "a repo admin reads a ruleset's bypass list, so re-run "
                     "`tend check` as an admin to settle it",
                     verified=False,
                 )
-            if gated is False:
+            elif gated is False:
                 return _Gap(
                     "admits tags, and no active all-tags ruleset restricting "
                     "creation and update to admins could be verified"
@@ -939,7 +944,7 @@ def _policy_gate(
             f"{triggers}, which the bot fires and steers against a ref the "
             "policy already admits"
         )
-    return None
+    return unverified
 
 
 def check_credential_environments(

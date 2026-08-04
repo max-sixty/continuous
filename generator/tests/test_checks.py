@@ -1627,6 +1627,23 @@ def test_credential_environments_withheld_bypass_list_is_unknown() -> None:
     assert "release" in result.message
 
 
+def test_credential_environments_confirmed_bad_ref_outranks_a_withheld_list() -> None:
+    """An entry naming an unverified ref is a finding the token did settle, so
+    it must not be downgraded to unknown by a tag entry it could not. The API
+    returns policy entries in creation order, so whichever comes first would
+    otherwise decide the verdict."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    for order in ("tag v*\nbranch staging", "branch staging\ntag v*"):
+        fake = _credential_env_gh(
+            {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, order)},
+            tag_rulesets={"7": withheld},
+        )
+        with patch("tend.checks._gh", side_effect=fake):
+            result = check_credential_environments("owner/repo", _config(), ["main"])
+        assert result.passed is False, f"{order}: {result.message}"
+        assert "staging" in result.message
+
+
 def test_credential_environments_bot_bypassable_tag_ruleset_does_not_gate() -> None:
     """A tag ruleset whose bypass list includes a write-level role is one the
     bot walks through, so it must not credit the tag entries."""
