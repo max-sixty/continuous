@@ -208,8 +208,9 @@ def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResul
             None,
             f"Branch '{branch}' is protected but could not verify that the bot "
             "cannot bypass its rulesets — either they aren't readable with this "
-            "token, or a bypass actor names a team, app, or deploy key whose "
-            "membership isn't resolvable here. Check the bypass list manually.",
+            "token, or a bypass actor names a principal tend cannot resolve: a "
+            "team, app, or deploy key, or any user if `bot_name` itself does not "
+            "resolve to an account. Check the bypass list manually.",
         )
 
     return CheckResult(
@@ -926,8 +927,9 @@ def _policy_gate(
                     "admits tags, and whether an all-tags ruleset gates them is "
                     "unverifiable with this token — either the rulesets aren't "
                     "readable, a bypass list is withheld (only a repo admin "
-                    "reads one), or a bypass actor names a team, app, or deploy "
-                    "key whose membership isn't resolvable here",
+                    "reads one), or a bypass actor names a principal tend "
+                    "cannot resolve: a team, app, or deploy key, or any user "
+                    "if `bot_name` itself does not resolve to an account",
                     verified=False,
                 )
             elif gated is False:
