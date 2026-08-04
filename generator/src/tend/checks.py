@@ -856,6 +856,21 @@ def _reviewer_gate(env: dict, bot_name: str) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class _Gap:
+    """Why a gate does not hold, and whether that verdict was verified.
+
+    `verified` is False when the token could not see enough to decide, which
+    is not the same finding as a gate confirmed absent: the module docstring's
+    invariant is that the nightly sees the answers a maintainer does, so where
+    it doesn't, the honest report is unknown. `check_branch_protection` takes
+    the same stance on an unreadable bypass list.
+    """
+
+    reason: str
+    verified: bool = True
+
+
 def _policy_gate(
     repo: str,
     env_name: str,
@@ -863,7 +878,7 @@ def _policy_gate(
     admitted: list[str],
     tags_ok,
     steerable: frozenset[str],
-) -> str | None:
+) -> _Gap | None:
     """Why this environment's deployment policy does not gate the bot, or None.
 
     A policy gates only when every entry names a ref verified out of the bot's
@@ -882,30 +897,44 @@ def _policy_gate(
     """
     policy = env.get("deployment_branch_policy")
     if not policy:
-        return "has no deployment branch policy, so every ref reaches its secrets"
+        return _Gap("has no deployment branch policy, so every ref reaches its secrets")
     if policy.get("protected_branches"):
-        return (
+        return _Gap(
             "admits all protected branches, which keys on a rule covering the "
             "branch, not on who may push it"
         )
     policies = _branch_policies(repo, env_name)
     if policies is None:
-        return "has a deployment branch policy this token cannot list"
+        return _Gap(
+            "has a deployment branch policy this token cannot list", verified=False
+        )
     for p in policies:
         if p.get("type") == "tag":
-            if tags_ok() is not True:
-                return (
+            gated = tags_ok()
+            if gated is None:
+                # GitHub serves `bypass_actors` only to a repo admin, so the
+                # bot's own token reads a gating all-tags ruleset as
+                # unverifiable — the same configuration a maintainer's admin
+                # token confirms.
+                return _Gap(
+                    "admits tags under a ruleset this token cannot verify: only "
+                    "a repo admin reads a ruleset's bypass list, so re-run "
+                    "`tend check` as an admin to settle it",
+                    verified=False,
+                )
+            if gated is False:
+                return _Gap(
                     "admits tags, and no active all-tags ruleset restricting "
                     "creation and update to admins could be verified"
                 )
         elif p["name"] not in admitted:
-            return (
+            return _Gap(
                 f"admits '{p['name']}', which tend has not verified the bot "
                 "cannot write"
             )
     if steerable:
         triggers = ", ".join(f"`{t}`" for t in sorted(steerable))
-        return (
+        return _Gap(
             f"admits only verified refs, but a workflow reaching it runs on "
             f"{triggers}, which the bot fires and steers against a ref the "
             "policy already admits"
@@ -960,6 +989,7 @@ def check_credential_environments(
     tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
     ungated: list[str] = []
+    unverified: list[str] = []
     holders: list[str] = []
     for env_name in listed.stdout.split():
         secrets = _gh(
@@ -990,7 +1020,7 @@ def check_credential_environments(
         reviewer_reason = _reviewer_gate(env, cfg.bot_name)
         if reviewer_reason is None:
             continue
-        policy_reason = _policy_gate(
+        gap = _policy_gate(
             repo,
             env_name,
             env,
@@ -998,9 +1028,10 @@ def check_credential_environments(
             tags_ok,
             surface.env_steerable.get(env_name, frozenset()),
         )
-        if policy_reason is None:
+        if gap is None:
             continue
-        ungated.append(f"'{env_name}' {reviewer_reason}, and {policy_reason}")
+        found = f"'{env_name}' {reviewer_reason}, and {gap.reason}"
+        (ungated if gap.verified else unverified).append(found)
 
     if surface.ungated_oidc:
         jobs = ", ".join(f"{path}:{job}" for path, job in surface.ungated_oidc)
@@ -1020,12 +1051,12 @@ def check_credential_environments(
             "verified refs (protected branches, or tags under an admin-only "
             "all-tags ruleset); move an OIDC job into such an environment.",
         )
-    if surface.unresolved:
+    if unverified or surface.unresolved:
         return CheckResult(
             name,
             None,
             "Could not read the whole credential surface: "
-            f"{'; '.join(surface.unresolved)}",
+            f"{'; '.join([*unverified, *surface.unresolved])}",
         )
     if not holders:
         return CheckResult(name, True, "No environment holds a credential")

@@ -1611,6 +1611,22 @@ def test_credential_environments_rejects_tags_without_a_ruleset() -> None:
     assert "admits tags" in result.message
 
 
+def test_credential_environments_withheld_bypass_list_is_unknown() -> None:
+    """GitHub omits `bypass_actors` below repo admin, so the bot's own token
+    reads the gating ruleset as unverifiable rather than absent. Calling that
+    a failure would fail the nightly on exactly the shape tend prescribes,
+    while a maintainer running the same check as admin sees it pass."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    fake = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is None, result.message
+    assert "release" in result.message
+
+
 def test_credential_environments_bot_bypassable_tag_ruleset_does_not_gate() -> None:
     """A tag ruleset whose bypass list includes a write-level role is one the
     bot walks through, so it must not credit the tag entries."""
