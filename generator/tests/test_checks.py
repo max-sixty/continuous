@@ -120,15 +120,21 @@ def _gh_ruleset(
     bypass_actors: list[dict[str, object]] | None,
     user_id: int | None = None,
     ruleset_json: str | None = None,
+    login: str | None = None,
 ) -> object:
     """Build a `_gh` fake serving the calls `_has_restrict_updates_ruleset` makes:
     `/rules/branches/<branch>` returns `rules`; `/rulesets/<id>` returns a ruleset
     with `bypass_actors` (or `ruleset_json` verbatim if given, or returncode=1 if
-    both are None); `users/<login>` returns `user_id` (or returncode=1 if None)."""
+    both are None); `users/<login>` returns `user_id` (or returncode=1 if None);
+    `user` returns `login` (or returncode=1 if None)."""
 
     def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str] | None:
         if "/rules/branches/" in args[1]:
             return _make_completed(rules)
+        if args[1] == "user":
+            if login is None:
+                return _make_completed(returncode=1)
+            return _make_completed(f"{login}\n")
         if args[1].startswith("users/"):
             if user_id is None:
                 return _make_completed(returncode=1)
@@ -342,15 +348,63 @@ def test_ruleset_bypass_list_not_visible() -> None:
     """GitHub omits `bypass_actors` below ruleset-admin → unverifiable, not empty.
 
     Reading the missing key as an empty list would report "nobody bypasses" —
-    a false pass for exactly the caller who can't see the danger.
+    a false pass for exactly the caller who can't see the danger. The
+    `current_user_can_bypass` answer here describes someone other than the bot,
+    so it settles nothing.
     """
     fake = _gh_ruleset(
         _make_branch_rules("update"),
         None,
         ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
+        login="a-maintainer",
     )
     with patch("tend.checks._gh", side_effect=fake):
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+
+
+def test_ruleset_bypass_list_withheld_but_token_is_the_bot() -> None:
+    """`current_user_can_bypass` answers for the requester, so when the requester
+    is the bot it settles the question the withheld list can't.
+
+    This is the common case, not a corner: `tend check` runs under the bot's own
+    write-scoped token, which is below ruleset-admin on every correctly
+    locked-down repo, so `bypass_actors` is absent from every ruleset it reads.
+    """
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
+        login="my-bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_ruleset_bypass_list_withheld_and_the_bot_can_bypass() -> None:
+    """The same field also turns an unverifiable into a definite finding: a bot
+    GitHub says is exempt walks through the rule, whoever else is on the list."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps({"current_user_can_bypass": "exempt"}),
+        login="my-bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+
+
+def test_ruleset_bypass_unknown_current_user_value_is_a_bypass() -> None:
+    """`never` is the only value that denies the bypass, so a mode added later
+    reads as one — the same fail-closed reading the action's preflight applies
+    to this field."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps({"current_user_can_bypass": "some_new_mode"}),
+        login="my-bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
 
 
 def test_only_non_update_rules() -> None:
@@ -1412,12 +1466,14 @@ def _credential_env_gh(
     tag_rulesets: dict[str, dict] | None = None,
     workflows: dict[str, str | None] | None = None,
     unreadable_workflows: bool = False,
+    login: str | None = None,
 ):
     """A `_gh` fake serving the calls `check_credential_environments` makes: the
     environment list; per environment its secret names, detail, and
     deployment-branch-policy lines (`"<type> <name>"` per line); the tag
-    rulesets (id → detail) the tag gate reads when a policy admits tags; and
-    the workflow tree the OIDC and trigger reads parse."""
+    rulesets (id → detail) the tag gate reads when a policy admits tags; the
+    authenticated login (`login`, unreadable when None); and the workflow tree
+    the OIDC and trigger reads parse."""
     tag_rulesets = tag_rulesets or {}
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -1426,6 +1482,10 @@ def _credential_env_gh(
                 return _make_completed(returncode=1)
             return _make_completed(_workflow_tree(workflows or {}))
         url = args[-3] if "--jq" in args else args[-1]
+        if url == "user":
+            if login is None:
+                return _make_completed(returncode=1)
+            return _make_completed(f"{login}\n")
         if url.endswith("/environments"):
             return _make_completed("\n".join(environments) + "\n")
         if url.endswith("/rulesets"):
@@ -1593,6 +1653,25 @@ def test_credential_environments_accepts_tags_under_an_admin_ruleset() -> None:
     fake = _credential_env_gh(
         {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
         tag_rulesets={"7": _ADMIN_TAG_RULESET},
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_accepts_tags_under_a_no_bypass_ruleset() -> None:
+    """The shape a locked-down consumer actually has: an all-tags ruleset with no
+    bypass at all, read by the bot's own token, which GitHub serves without a
+    `bypass_actors` key. Reported as a permanent false FAIL on a repo whose tags
+    the bot demonstrably cannot touch.
+    """
+    no_bypass = {
+        k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"
+    } | {"current_user_can_bypass": "never"}
+    fake = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": no_bypass},
+        login="bot",
     )
     with patch("tend.checks._gh", side_effect=fake):
         result = check_credential_environments("owner/repo", _config(), ["main"])

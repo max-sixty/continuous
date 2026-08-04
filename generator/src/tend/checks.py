@@ -52,6 +52,14 @@ BYPASS_ROLE_IDS = frozenset({ROLE_ID_MAINTAIN, ROLE_ID_ADMIN})
 # the ruleset, so the bot can't be ruled out.
 BYPASS_ACTOR_TYPES_ABOVE_BOT = frozenset({"OrganizationAdmin", "EnterpriseOwner"})
 
+# The one `current_user_can_bypass` value that grants the requester no bypass.
+# Every other value names a mode in which it bypasses — the docs list `always`
+# and `pull_requests_only`, live responses also return `exempt` — so reading
+# only `never` as blocked fails closed on a value added later. This is the
+# reading `shared/steps/security-preflight.sh` already applies to the same
+# field with the same token.
+CANNOT_BYPASS = "never"
+
 # Triggers a write-scoped actor can both fire *and* steer — it decides not only
 # that the run happens but what the run publishes. A deployment branch policy
 # does not gate these, because the actor fires them at a ref the policy already
@@ -268,6 +276,38 @@ def _bypass_actors_above_bot(actors: list[dict] | None, bot_name: str) -> bool |
     return None if unresolved else True
 
 
+def _authenticated_login() -> str | None:
+    """The login `gh` is authenticated as, or None when it can't be read."""
+    result = _gh("api", "user", "--jq", ".login")
+    if result is None or result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _ruleset_excludes_bot(data: dict, bot_name: str) -> bool | None:
+    """Whether a ruleset payload keeps a write-access bot out.
+
+    `bypass_actors` is the first signal, but GitHub serves it only to a ruleset
+    admin — and `tend check` runs under the bot's own write-scoped token, so on
+    a correctly locked-down repo the key is absent from every ruleset it reads,
+    whatever the list holds. Absent is therefore not empty: tend's own `--fix`
+    writes an admin bypass, and that ruleset reads back with no `bypass_actors`
+    key at all.
+
+    `current_user_can_bypass` closes that gap from the other side. It answers
+    for the requesting user only, which is exactly the actor in question
+    whenever the requester *is* the bot — and it accounts for team and app
+    membership the actor list leaves unresolvable.
+    """
+    verdict = _bypass_actors_above_bot(data.get("bypass_actors"), bot_name)
+    if verdict is not None:
+        return verdict
+    can_bypass = data.get("current_user_can_bypass")
+    if can_bypass is None or _authenticated_login() != bot_name:
+        return None
+    return can_bypass == CANNOT_BYPASS
+
+
 def _ruleset_blocks_bot(repo: str, ruleset_id: int, bot_name: str) -> bool | None:
     """Whether a ruleset's bypass list keeps a write-access bot out.
 
@@ -284,7 +324,7 @@ def _ruleset_blocks_bot(repo: str, ruleset_id: int, bot_name: str) -> bool | Non
         return None
     if not isinstance(data, dict):
         return None
-    return _bypass_actors_above_bot(data.get("bypass_actors"), bot_name)
+    return _ruleset_excludes_bot(data, bot_name)
 
 
 def _tags_admin_gated(repo: str, bot_name: str) -> bool | None:
@@ -292,8 +332,9 @@ def _tags_admin_gated(repo: str, bot_name: str) -> bool | None:
 
     True when a tag-target ruleset covers `~ALL` tags with nothing excluded,
     restricts `creation` and `update` (force-pushing an existing tag fires
-    `update`), and every bypass actor outranks write — the shape install-tend's
-    ref-protection step creates. Narrower patterns are not credited: deciding
+    `update`), and the bot is out of its bypass list (`_ruleset_excludes_bot`) —
+    the shape install-tend's ref-protection step creates, and also the stricter
+    no-bypass-at-all shape. Narrower patterns are not credited: deciding
     whether a pattern set covers an environment policy's tag entries would
     re-implement GitHub's matcher, and the recipe's rule is all-tags on
     purpose.
@@ -324,7 +365,7 @@ def _tags_admin_gated(repo: str, bot_name: str) -> bool | None:
             continue
         if not {"creation", "update"} <= {r.get("type") for r in data.get("rules", [])}:
             continue
-        verdict = _bypass_actors_above_bot(data.get("bypass_actors"), bot_name)
+        verdict = _ruleset_excludes_bot(data, bot_name)
         if verdict is True:
             return True
         unresolved = unresolved or verdict is None
