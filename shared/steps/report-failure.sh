@@ -16,16 +16,32 @@ LABEL="tend-outage"
 TITLE="Bot temporarily unavailable"
 RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-# Build a one-line reference to the triggering context
+# Build a one-line reference to the triggering context. This is the only
+# pointer back to the work the failure stranded, so every trigger that
+# carries one names it; `// empty` keeps a missing field out of the cell as
+# blank rather than the literal `null` jq would otherwise print.
 REF=""
 if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
-  PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
-  REF="#${PR_NUM}"
+  PR_NUM=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")
+  REF="${PR_NUM:+#${PR_NUM}}"
 elif [ "$GITHUB_EVENT_NAME" = "issues" ] || [ "$GITHUB_EVENT_NAME" = "issue_comment" ]; then
-  ISSUE_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
-  REF="#${ISSUE_NUM}"
+  ISSUE_NUM=$(jq -r '.issue.number // empty' "$GITHUB_EVENT_PATH")
+  REF="${ISSUE_NUM:+#${ISSUE_NUM}}"
+elif [ "$GITHUB_EVENT_NAME" = "repository_dispatch" ]; then
+  # tend-mention relays review events through a secretless job that re-posts
+  # them as a repository_dispatch, so the PR number arrives in the payload
+  # rather than in a `pull_request` object.
+  PR_NUM=$(jq -r '.client_payload.pr // empty' "$GITHUB_EVENT_PATH")
+  REF="${PR_NUM:+#${PR_NUM}}"
 elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
-  REF="CI fix for workflow run"
+  # Link the run being fixed — without its id there is no way back to the
+  # failure the ci-fix job was dispatched to handle.
+  UPSTREAM_ID=$(jq -r '.workflow_run.id // empty' "$GITHUB_EVENT_PATH")
+  if [ -n "$UPSTREAM_ID" ]; then
+    REF="CI fix for [run ${UPSTREAM_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${UPSTREAM_ID})"
+  else
+    REF="CI fix for workflow run"
+  fi
 fi
 
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
