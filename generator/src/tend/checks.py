@@ -242,7 +242,9 @@ def _bypass_actors_above_bot(actors: list[dict] | None, bot_name: str) -> bool |
     Returns False if one of them is the bot itself or a role at write or
     below, None when the list is withheld (only ruleset admins see
     `bypass_actors`) or names a principal this can't resolve (a team, app,
-    or deploy key). An empty list is True — nobody bypasses at all.
+    or deploy key, or any user once `bot_name` itself fails to resolve — the
+    ids have nothing to compare against). An empty list is True — nobody
+    bypasses at all.
     """
     if actors is None:
         return None
@@ -920,9 +922,10 @@ def _policy_gate(
             if gated is None:
                 # Every unread input lands here, not just a withheld bypass
                 # list: an unlistable `/rulesets`, a ruleset that won't fetch,
-                # and a bypass actor naming a team, app, or deploy key are all
-                # None. So the message names the set rather than prescribing
-                # the admin re-run that settles only one of them.
+                # a bypass actor naming a team, app, or deploy key, and a
+                # `User` actor left undecidable by an unresolvable `bot_name`
+                # are all None. So the message names the set rather than
+                # prescribing the admin re-run that settles only one of them.
                 unverified = _Gap(
                     "admits tags, and whether an all-tags ruleset gates them is "
                     "unverifiable with this token — either the rulesets aren't "
