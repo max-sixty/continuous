@@ -917,14 +917,17 @@ def _policy_gate(
         if p.get("type") == "tag":
             gated = tags_ok()
             if gated is None:
-                # GitHub serves `bypass_actors` only to a repo admin, so the
-                # bot's own token reads a gating all-tags ruleset as
-                # unverifiable — the same configuration a maintainer's admin
-                # token confirms.
+                # Every unread input lands here, not just a withheld bypass
+                # list: an unlistable `/rulesets`, a ruleset that won't fetch,
+                # and a bypass actor naming a team, app, or deploy key are all
+                # None. So the message names the set rather than prescribing
+                # the admin re-run that settles only one of them.
                 unverified = _Gap(
-                    "admits tags under a ruleset this token cannot verify: only "
-                    "a repo admin reads a ruleset's bypass list, so re-run "
-                    "`tend check` as an admin to settle it",
+                    "admits tags, and whether an all-tags ruleset gates them is "
+                    "unverifiable with this token — either the rulesets aren't "
+                    "readable, a bypass list is withheld (only a repo admin "
+                    "reads one), or a bypass actor names a team, app, or deploy "
+                    "key whose membership isn't resolvable here",
                     verified=False,
                 )
             elif gated is False:
@@ -939,10 +942,14 @@ def _policy_gate(
             )
     if steerable:
         triggers = ", ".join(f"`{t}`" for t in sorted(steerable))
+        # Not "admits only verified refs": a held `unverified` means one entry
+        # didn't settle. The ref list is beside the point here anyway — the bot
+        # picks the ref — so the message states the trigger, which holds either
+        # way, and this stays a verified finding.
         return _Gap(
-            f"admits only verified refs, but a workflow reaching it runs on "
-            f"{triggers}, which the bot fires and steers against a ref the "
-            "policy already admits"
+            f"is reached by a workflow running on {triggers}, which the bot "
+            "fires and steers against a ref the policy already admits, so its "
+            "ref list does not gate it"
         )
     return unverified
 

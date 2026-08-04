@@ -1644,6 +1644,26 @@ def test_credential_environments_confirmed_bad_ref_outranks_a_withheld_list() ->
         assert "staging" in result.message
 
 
+def test_credential_environments_unlistable_branch_policy_is_unknown() -> None:
+    """Listing the policy entries can fail on permission alone, and an unread
+    list is not a gate confirmed absent — the same reason a withheld bypass
+    list reports unknown."""
+    inner = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")}
+    )
+
+    def fake(*args, **kwargs):
+        url = args[-3] if "--jq" in args else args[-1]
+        if url.endswith("/deployment-branch-policies"):
+            return _make_completed(returncode=1)
+        return inner(*args, **kwargs)
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is None, result.message
+    assert "cannot list" in result.message
+
+
 def test_credential_environments_bot_bypassable_tag_ruleset_does_not_gate() -> None:
     """A tag ruleset whose bypass list includes a write-level role is one the
     bot walks through, so it must not credit the tag entries."""
@@ -1809,6 +1829,25 @@ def test_credential_environments_steerable_trigger_defeats_a_ref_policy() -> Non
         },
     )
     assert result.passed is False
+    assert "`release`" in result.message
+
+
+def test_credential_environments_steerable_trigger_outranks_an_unverified_tag() -> None:
+    """The trigger defeats the policy whichever way the tag entry would have
+    settled, so it is a finding the token did reach — it must not be held back
+    to unknown by the entry it could not."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+        workflows={
+            "release.yaml": (
+                "on:\n  release:\n    types: [published]\n"
+                "jobs:\n  publish:\n    environment: pypi\n"
+            )
+        },
+    )
+    assert result.passed is False, result.message
     assert "`release`" in result.message
 
 
