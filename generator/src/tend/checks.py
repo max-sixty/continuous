@@ -303,7 +303,12 @@ def _ruleset_excludes_bot(data: dict, bot_name: str) -> bool | None:
     if verdict is not None:
         return verdict
     can_bypass = data.get("current_user_can_bypass")
-    if can_bypass is None or _authenticated_login() != bot_name:
+    login = _authenticated_login()
+    # Casefolded: `bot_name` is hand-written in `.config/tend.yaml` while the
+    # API returns the canonical casing, and every other comparison of the two
+    # (`_reviewer_gate`, and the URL paths GitHub resolves case-insensitively)
+    # already tolerates the difference.
+    if can_bypass is None or login is None or login.casefold() != bot_name.casefold():
         return None
     return can_bypass == CANNOT_BYPASS
 

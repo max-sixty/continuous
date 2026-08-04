@@ -380,6 +380,20 @@ def test_ruleset_bypass_list_withheld_but_token_is_the_bot() -> None:
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
 
 
+def test_ruleset_bypass_list_withheld_login_case_differs() -> None:
+    """`bot_name` is hand-written in the config and GitHub returns the canonical
+    casing, so a case-only difference must still identify the same account —
+    otherwise the check silently reverts to the false FAIL."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
+        login="My-Bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
 def test_ruleset_bypass_list_withheld_and_the_bot_can_bypass() -> None:
     """The same field also turns an unverifiable into a definite finding: a bot
     GitHub says is exempt walks through the rule, whoever else is on the list."""
