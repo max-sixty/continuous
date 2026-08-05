@@ -281,11 +281,12 @@ jobs:
               # holds e.g. `100\n7`, the `-gt` below errors with `integer
               # expression expected`, and the failed test falls through to
               # should_run=false — the bot goes quiet on its most-engaged
-              # threads. A per-element stream paginates fine; `wc -l` does the
-              # reduction over the merged output.
+              # threads. Capture the stream and test it for emptiness — the
+              # bare substitution keeps a failing `gh api` fatal under GHA's
+              # default `bash -e`.
               BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-                --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id' | wc -l)
-              if [ "$BOT_COMMENTS" -gt "0" ]; then
+                --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id')
+              if [ -n "$BOT_COMMENTS" ]; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
               echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
@@ -302,17 +303,17 @@ jobs:
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          # Counted outside jq — see the note on the issue-comment count above.
+          # Captured, not counted — see the note on the issue-comment lookup above.
           BOT_REVIEWS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
-            --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id' | wc -l)
-          if [ "$BOT_REVIEWS" -gt "0" ]; then
+            --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id')
+          if [ -n "$BOT_REVIEWS" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id' | wc -l)
-          if [ "$BOT_COMMENTS" -gt "0" ]; then
+            --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id')
+          if [ -n "$BOT_COMMENTS" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
           fi

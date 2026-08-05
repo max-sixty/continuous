@@ -704,8 +704,10 @@ def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> No
     )
 
 
-def test_mention_verify_engagement_counts_reduce_outside_jq(tmp_path: Path) -> None:
-    """Engagement counts must not reduce inside a `--paginate`d `--jq`.
+def test_mention_verify_engagement_lookups_survive_pagination(
+    tmp_path: Path,
+) -> None:
+    """Engagement lookups must not reduce inside a `--paginate`d `--jq`.
 
     `gh api --paginate` applies `--jq` once per page, so `--jq '[...] | length'`
     emits one count per page instead of one overall. Past 100 records the
@@ -713,7 +715,12 @@ def test_mention_verify_engagement_counts_reduce_outside_jq(tmp_path: Path) -> N
     `integer expression expected` and returns 2, and the failed test falls
     through to should_run=false — the bot stops answering participants on
     exactly the threads where it has engaged the most, with nothing going red.
-    Keep the filter a per-element stream and reduce over the merged output."""
+
+    Keep the filter a per-element stream, capture it bare, and test it for
+    emptiness. Reducing the stream through a pipe (`| wc -l`) would fix the
+    count but move the substitution's exit status off `gh`, so under the step's
+    default `bash -e` a failed API call would read as "no engagement" on a green
+    job — the same silent-quiet failure, relocated."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     data = yaml.safe_load(workflows["tend-mention.yaml"].content)
@@ -732,9 +739,13 @@ def test_mention_verify_engagement_counts_reduce_outside_jq(tmp_path: Path) -> N
             f"reduction inside a --paginate'd --jq runs per page: {line.strip()}"
         )
 
-    assert run.count("| wc -l)") == 3, (
-        "the three engagement counts (issue comments, PR reviews, PR comments) "
-        "must reduce outside jq so pagination can't split the count"
+    assert run.count("| .id')") == 3, (
+        "the three engagement lookups (issue comments, PR reviews, PR comments) "
+        "must capture the raw stream, so a failing `gh api` still trips errexit"
+    )
+    assert '-gt "0" ]' not in run, (
+        "guard on an empty stream (`[ -n ... ]`) — a numeric comparison is what "
+        "a split count breaks"
     )
 
 
