@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import io
+import shlex
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -146,6 +147,29 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     return "\n" + textwrap.indent(buf.getvalue().rstrip(), "    ") + "\n"
 
 
+def _local_action_paths(cfg: Config) -> list[str]:
+    """Shell-quoted workspace paths of the local composites in `setup:`.
+
+    A `uses: ./path` resolves against the workspace, and the runner re-reads
+    the action file from that same path to dispatch the POST steps of the
+    actions nested inside the composite — matching it against the step list it
+    cached when the composite ran. Review and mention land the PR's tree over
+    that workspace between the two reads, so a PR that resizes or deletes the
+    file breaks cleanup (actions/runner#2816); the paths need restoring before
+    the POST chain walks. Empty when no step names a local action, which renders
+    the restore step away.
+    """
+    paths: list[str] = []
+    for step in cfg.setup:
+        uses = step.fields.get("uses")
+        if not isinstance(uses, str) or not uses.startswith("./"):
+            continue
+        path = uses.removeprefix("./").rstrip("/")
+        if path and shlex.quote(path) not in paths:
+            paths.append(shlex.quote(path))
+    return paths
+
+
 @dataclass
 class GeneratedWorkflow:
     filename: str
@@ -209,6 +233,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     content = _REVIEW_TMPL.render(
         cfg=eff,
         setup=_setup_yaml(eff),
+        local_actions=_local_action_paths(eff),
         prompt_expr=prompt_expr,
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
@@ -225,7 +250,11 @@ _MENTION_TMPL = _JINJA.get_template("mention.yaml.j2")
 def generate_mention(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("mention", WorkflowConfig())
     eff = _effective_cfg(cfg, wf)
-    content = _MENTION_TMPL.render(cfg=eff, setup=_setup_yaml(eff))
+    content = _MENTION_TMPL.render(
+        cfg=eff,
+        setup=_setup_yaml(eff),
+        local_actions=_local_action_paths(eff),
+    )
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
 
 

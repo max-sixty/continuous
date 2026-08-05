@@ -47,4 +47,4 @@ jobs:
           fi
 <<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True, clean=not has_setup)>>
 
-<<agent_step(cfg, prompt_body)>>
+<<agent_step(cfg, prompt_body)>><<restore_local_actions(local_actions)>>
