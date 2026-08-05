@@ -563,6 +563,60 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
     )
 
 
+def check_environment_deployments(repo: str) -> CheckResult:
+    """No job files a GitHub deployment for the operational-secret environment.
+
+    The environment is a secret scope rather than a deploy target, but GitHub
+    files a deployment for every job that names one, against whatever the run
+    belongs to — under `pull_request_target` that is the pull request itself,
+    so a single omission puts a "<bot> deployed to <env>" line on every push
+    to every PR. `deployment: false` is the only lever: the environment object
+    takes `wait_timer`, `prevent_self_review`, `reviewers` and
+    `deployment_branch_policy`, and nothing there suppresses the record.
+
+    Generated workflows take the block from one macro that a generator test
+    pins, so this is the same invariant for the workflows tend did not write —
+    a repo's own hand-maintained jobs, where the omission is invisible to
+    whoever makes it. The gate still holds and the secrets still arrive; the
+    only symptom is noise in someone else's timeline, which is why nothing
+    else catches it.
+    """
+    name = "environment-deployments"
+
+    files = _fetch_workflow_files(repo)
+    if files is None:
+        return CheckResult(
+            name, None, ".github/workflows could not be read from the default branch"
+        )
+    offenders = [
+        f"{path} job '{job_id}'"
+        for path, text in sorted(files.items())
+        if text is not None
+        for job_id in sorted(_parse_workflow(path, text).filed_deployments)
+    ]
+    if offenders:
+        return CheckResult(
+            name,
+            False,
+            f"Jobs name the '{TEND_ENVIRONMENT}' environment without "
+            f"`deployment: false`, so GitHub files a deployment record for "
+            f"every run and posts it on the pull request: {', '.join(offenders)}. "
+            "Add `deployment: false` beside the environment's `name:` — a "
+            "generated `tend-*.yaml` takes it from `uvx tend@latest init` "
+            "instead of a hand edit.",
+        )
+    unread = sorted(path for path, text in files.items() if text is None)
+    if unread:
+        return CheckResult(
+            name, None, f"Workflows could not be read: {', '.join(unread)}"
+        )
+    return CheckResult(
+        name,
+        True,
+        f"No job files a deployment for the '{TEND_ENVIRONMENT}' environment",
+    )
+
+
 _WORKFLOWS_QUERY = """
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -631,6 +685,7 @@ class _WorkflowFacts:
     environments: frozenset[str]  # environments its jobs deploy to
     oidc_environments: frozenset[str]  # …of those, ones a job mints OIDC in
     oidc_without_environment: frozenset[str]  # job ids minting OIDC ungated
+    filed_deployments: frozenset[str]  # job ids naming tend that file a record
     unresolved: tuple[str, ...]
 
 
@@ -656,11 +711,11 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
         data = YAML(typ="safe").load(io.StringIO(text))
     except (YAMLError, ValueError):
         return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, unparsable
+            path, empty, False, empty, empty, empty, empty, empty, unparsable
         )
     if not isinstance(data, dict):
         return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, unparsable
+            path, empty, False, empty, empty, empty, empty, empty, unparsable
         )
 
     # YAML 1.1 documents (`%YAML 1.1`) turn the `on:` key into the boolean
@@ -686,6 +741,7 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     environments: set[str] = set()
     oidc_environments: set[str] = set()
     oidc_without_environment: set[str] = set()
+    filed_deployments: set[str] = set()
     unresolved: list[str] = []
 
     for job_id, job in jobs.items():
@@ -702,9 +758,12 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
         permissions = job.get("permissions", workflow_permissions)
         oidc = _permissions_grant_oidc(permissions)
 
-        environment = job.get("environment")
-        if isinstance(environment, dict):
-            environment = environment.get("name")
+        declared = job.get("environment")
+        environment = declared
+        deployment = None
+        if isinstance(declared, dict):
+            environment = declared.get("name")
+            deployment = declared.get("deployment")
         if environment is None:
             if oidc:
                 oidc_without_environment.add(str(job_id))
@@ -715,6 +774,12 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
             )
             continue
         environments.add(environment)
+        # The operational-secret environment is a secret scope, so a job naming
+        # it deploys nothing and the record GitHub would file for it is pure
+        # noise on whatever the run belongs to. Only the shorthand and an
+        # explicit `deployment: true` file one; both are the same mistake.
+        if environment == TEND_ENVIRONMENT and deployment is not False:
+            filed_deployments.add(str(job_id))
         if oidc:
             oidc_environments.add(environment)
 
@@ -726,6 +791,7 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
         environments=frozenset(environments),
         oidc_environments=frozenset(oidc_environments),
         oidc_without_environment=frozenset(oidc_without_environment),
+        filed_deployments=frozenset(filed_deployments),
         unresolved=tuple(unresolved),
     )
 
@@ -1364,6 +1430,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     results.append(check_bot_permission(repo, cfg.bot_name))
     admitted = admitted_refs(results)
     results.append(check_environment(repo, admitted))
+    results.append(check_environment_deployments(repo))
     results.append(check_credential_environments(repo, cfg, admitted))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness == "claude":
