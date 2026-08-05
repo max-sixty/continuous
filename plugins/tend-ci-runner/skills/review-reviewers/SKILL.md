@@ -8,7 +8,7 @@ metadata:
 
 # Review Reviewers
 
-Analyze tend's CI behavior on the target repo over the past hour. Focus on **outcomes** — what the bot produced publicly and whether it was accepted — rather than internal session mechanics. Create PRs or issues on tend when outcomes reveal behavioral problems.
+Analyze tend's CI behavior on the target repo over the analysis window — the run list in Step 1 is anchored to the workflow's cron period, so take its span as the window rather than assuming any fixed number of hours. Focus on **outcomes** — what the bot produced publicly and whether it was accepted — rather than internal session mechanics. Create PRs or issues on tend when outcomes reveal behavioral problems.
 
 ## First steps
 
@@ -232,7 +232,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
 >   `gh -R $ARGUMENTS pr list --head <branch> --state all` → check bot reviews via
 >   `gh api repos/$ARGUMENTS/pulls/<pr>/reviews`
-> - `tend-notifications`: check for recent bot comments/issue-close events in the past hour
+> - `tend-notifications`: check for bot comments/issue-close events within the analysis window (this mapping has no run-scoped anchor, so it reconstructs outcomes from the window alone — use the window's actual span, not a fixed hour)
 > - `tend-mention`: map run to issue/PR from triggering comment, check for bot replies
 > - `tend-ci-fix`: map run → PR via `headBranch`, check for bot commits
 >

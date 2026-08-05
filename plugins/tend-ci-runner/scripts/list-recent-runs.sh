@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 # Lists recently completed tend CI runs.
 #
-# Fetches runs started in the past 3 hours, then filters to only those that
-# are completed and whose updatedAt falls within a 1-hour completion window.
-# This two-step approach is needed because `gh run list --created` filters
-# by *start* time, not *end* time — a run started 2h ago may have just
-# finished, and a run started 50min ago may still be running.
+# Fetches runs started since two hours before the completion window's floor,
+# then filters to only those that are completed and whose updatedAt falls
+# within that window. This two-step approach is needed because
+# `gh run list --created` filters by *start* time, not *end* time — a run
+# started 2h ago may have just finished, and a run started 50min ago may
+# still be running.
 #
-# Window anchor: when invoked under a scheduled workflow with a simple
-# hourly cron (`MM * * * *`), the completion window is anchored to the most
-# recent intended cron tick instead of `now`. Consecutive cycles then tile
-# exactly: [intended-1h, intended], then [intended, intended+1h]. Without
-# this, GHA scheduler delay (20-40 min during peak hours) shifts each
-# cycle's window relative to actual start time and drops runs that finished
-# in the slack between consecutive actual starts. When GHA *drops* a tick
-# entirely (not just delays it), the window's floor is instead pulled back to
-# the previous actual run's intended tick so the orphaned hour still gets
-# analyzed. For non-schedule events or non-hourly crons, falls back to a
-# now-anchored 1h window.
+# Window anchor: when invoked under a scheduled workflow with a fixed-period
+# cron — hourly (`MM * * * *`) or an every-N-hours step (`MM */N * * *`, N
+# dividing 24) — the completion window is anchored to the most recent intended
+# cron tick instead of `now`, and is one cron period wide. Consecutive cycles
+# then tile exactly: [intended-period, intended], then [intended,
+# intended+period]. Without this, GHA scheduler delay (20-40 min during peak
+# hours) shifts each cycle's window relative to actual start time and drops
+# runs that finished in the slack between consecutive actual starts. When GHA
+# *drops* a tick entirely (not just delays it), the window's floor is instead
+# pulled back to the previous actual run's intended tick so the orphaned period
+# still gets analyzed. For non-schedule events or cron shapes with no constant
+# period, falls back to a now-anchored 1h window.
 #
 # Environment variables:
 #   TARGET_REPO - Query a different repo (default: current repo)
@@ -125,7 +127,7 @@ if [ -n "$cron_minute" ]; then
   # default (intended - period), so this is a byte-identical no-op — still no
   # overlap between consecutive cycles. When a tick was dropped, it reaches
   # back to cover the orphaned period. Capped at 6h so a sustained outage can't
-  # create an unbounded window — one full period at hourly, and still two at
+  # create an unbounded window — six full periods at hourly, and still two at
   # the 3-hourly step, so a single dropped tick stays recoverable either way.
   # The analyzing workflow runs on the current repo, so this query omits
   # TARGET_REPO's -R.
