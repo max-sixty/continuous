@@ -321,8 +321,11 @@ for i in $(seq 1 9); do
 done
 
 echo "$R"
-if   [ "${FAILED:-0}" -gt 0 ];  then echo "red on $PINNED_SHA — diagnose the failures above"
-elif [ "${PENDING:-0}" -gt 0 ]; then echo "cap hit — still pending on $PINNED_SHA; report these as unverified, not as passing"
+# PENDING is tested first on purpose: the loop only breaks once PENDING is 0, so
+# a settled red still reports red, while a FAILURE that is still in flight at cap
+# expiry stays unverified rather than being judged as a real failure.
+if   [ "${PENDING:-0}" -gt 0 ]; then echo "cap hit — still pending on $PINNED_SHA; report these as unverified, not as passing"
+elif [ "${FAILED:-0}" -gt 0 ];  then echo "red on $PINNED_SHA — diagnose the failures above"
 elif [ -z "$R" ];               then echo "no rollup returned for $PINNED_SHA — unverified, not green"
 else                                 echo "green on $PINNED_SHA"
 fi
