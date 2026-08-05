@@ -293,7 +293,8 @@ rollup() {
       }
     }' -F owner="${GITHUB_REPOSITORY%/*}" -F name="${GITHUB_REPOSITORY#*/}" -F oid="$PINNED_SHA" \
   | jq -c --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
-      [(.data.repository.object.statusCheckRollup.contexts.nodes // [])[]
+      .data.repository.object.statusCheckRollup.contexts.nodes // empty
+      | [ .[]
        | select(((.detailsUrl // .targetUrl // "") | test($own)) | not)
        | select((.checkSuite.workflowRun.workflow.name // "") != $wf)]
       | {pending: [.[] | (.status // .state)
@@ -304,6 +305,9 @@ rollup() {
 for i in $(seq 1 9); do
   sleep 60
   R=$(rollup)
+  # No rollup came back at all — retry rather than fall through the tests below
+  # on empty strings, which neither continue nor break and blow the 600s cap.
+  [ -z "$R" ] && { PENDING=; FAILED=; continue; }
   read -r PENDING FAILED < <(jq -r '"\(.pending) \(.failed | length)"' <<<"$R")
   # Don't break early on a red: a FAILURE alongside in-flight checks is often a
   # stale cancellation-cascade artifact, and `review`'s pre-APPROVE path routes
@@ -311,6 +315,7 @@ for i in $(seq 1 9); do
   [ "$PENDING" -gt 0 ] && continue
   sleep 30
   R=$(rollup)
+  [ -z "$R" ] && { PENDING=; FAILED=; continue; }
   read -r PENDING FAILED < <(jq -r '"\(.pending) \(.failed | length)"' <<<"$R")
   [ "$PENDING" -eq 0 ] && break
 done
