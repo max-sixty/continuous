@@ -111,7 +111,14 @@ if [ -n "$cron_minute" ]; then
   # discards every hour the outage spanned and the next green run reports a
   # one-hour all-clear for a window nothing ever looked at. `--status` takes
   # conclusions as well as statuses, so the filter runs server-side and no scan
-  # depth is involved: an outage of any length can't bury the anchor. A
+  # depth is involved: an outage of any length can't bury the anchor.
+  #
+  # Scheduled runs only. A `workflow_dispatch` run has no `.schedule` in its
+  # event payload, so it took the non-cron branch and covered a now-anchored 1h
+  # window rather than a tiled one — anchoring on it would discard the rest of
+  # the gap, silently, which is the same class of hole as anchoring on a
+  # failure. Dispatching the workflow by hand to check on a fix mid-outage is
+  # the natural thing to do, and is exactly when that would bite. A
   # partially-failed matrix run counts as a failure here, which only ever widens
   # the window — overlap is re-offered work the caller dedups against its own
   # evidence log, where a gap is silently unanalyzed.
@@ -129,7 +136,7 @@ if [ -n "$cron_minute" ]; then
     # transient API error must not masquerade as "no successful run ever", which
     # would emit a confidently-worded warning naming a cause that didn't happen.
     if ! prev_start=$(gh_retry gh run list --workflow "$GITHUB_WORKFLOW" \
-      --status success --limit 5 --json databaseId,createdAt \
+      --status success --event schedule --limit 5 --json databaseId,createdAt \
       --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0}))] | .[0].createdAt // empty"); then
       echo "ERROR: 'gh run list' for the window anchor failed after retries — refusing to guess a floor that would read as a false all-clear" >&2
       exit 1
@@ -150,7 +157,7 @@ if [ -n "$cron_minute" ]; then
         [ "$prev_intended" -lt "$COMPLETED_AFTER" ] && COMPLETED_AFTER=$prev_intended
       fi
     else
-      echo "WARNING: no successful '$GITHUB_WORKFLOW' run found at all. Window floored at $floor_cap_iso; anything earlier is NOT in this list. Record a coverage gap, not an all-clear." >&2
+      echo "WARNING: no successful scheduled '$GITHUB_WORKFLOW' run found at all. Window floored at $floor_cap_iso; anything earlier is NOT in this list. Record a coverage gap, not an all-clear." >&2
       [ "$floor_cap" -lt "$COMPLETED_AFTER" ] && COMPLETED_AFTER=$floor_cap
     fi
   fi
