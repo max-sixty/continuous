@@ -305,7 +305,9 @@ for i in $(seq 1 9); do
   sleep 60
   R=$(rollup)
   read -r PENDING FAILED < <(jq -r '"\(.pending) \(.failed | length)"' <<<"$R")
-  [ "$FAILED" -gt 0 ] && break     # already red — stop waiting, go diagnose
+  # Don't break early on a red: a FAILURE alongside in-flight checks is often a
+  # stale cancellation-cascade artifact, and `review`'s pre-APPROVE path routes
+  # exactly that case back here to be waited out. Judge the settled rollup.
   [ "$PENDING" -gt 0 ] && continue
   sleep 30
   R=$(rollup)
@@ -314,9 +316,10 @@ for i in $(seq 1 9); do
 done
 
 echo "$R"
-if   [ "$FAILED" -gt 0 ];  then echo "red on $PINNED_SHA — diagnose the failures above"
-elif [ "$PENDING" -gt 0 ]; then echo "cap hit — still pending on $PINNED_SHA; report these as unverified, not as passing"
-else                            echo "green on $PINNED_SHA"
+if   [ "${FAILED:-0}" -gt 0 ];  then echo "red on $PINNED_SHA — diagnose the failures above"
+elif [ "${PENDING:-0}" -gt 0 ]; then echo "cap hit — still pending on $PINNED_SHA; report these as unverified, not as passing"
+elif [ -z "$R" ];               then echo "no rollup returned for $PINNED_SHA — unverified, not green"
+else                                 echo "green on $PINNED_SHA"
 fi
 HEAD_NOW=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
 [ "$HEAD_NOW" = "$PINNED_SHA" ] \
