@@ -25,7 +25,7 @@ printf '%s\\n' "$*" >> "$GH_CALLS"
 case "$2" in
   repos/*/actions/runs/*)
     [ -n "${FAIL_RUN_META:-}" ] && exit 1
-    echo "$RUN_STARTED_AT"
+    echo "$FAKE_RUN_STARTED_AT"
     ;;
   notifications)
     cat "$NOTIFICATIONS_JSON"
@@ -58,7 +58,10 @@ def gh_env(tmp_path: Path) -> dict[str, str]:
         "GITHUB_EVENT_PATH": str(event),
         "GITHUB_REPOSITORY": "owner/repo",
         "GITHUB_RUN_ID": "12345",
-        "RUN_STARTED_AT": "2026-01-02T00:00:00Z",
+        # Deliberately not `RUN_STARTED_AT`: the script assigns that name, and
+        # an inherited value would let the happy-path tests pass even if the
+        # fetched timestamp were never used.
+        "FAKE_RUN_STARTED_AT": "2026-01-02T00:00:00Z",
     }
 
 
