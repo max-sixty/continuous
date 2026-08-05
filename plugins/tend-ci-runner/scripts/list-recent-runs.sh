@@ -9,15 +9,16 @@
 #
 # Window anchor: when invoked under a scheduled workflow with a simple
 # hourly cron (`MM * * * *`), the completion window is anchored to the most
-# recent intended cron tick instead of `now`. Consecutive cycles then tile
-# exactly: [intended-1h, intended], then [intended, intended+1h]. Without
-# this, GHA scheduler delay (20-40 min during peak hours) shifts each
-# cycle's window relative to actual start time and drops runs that finished
-# in the slack between consecutive actual starts. When GHA *drops* a tick
-# entirely (not just delays it), the window's floor is instead pulled back to
-# the previous actual run's intended tick so the orphaned hour still gets
-# analyzed. For non-schedule events or non-hourly crons, falls back to a
-# now-anchored 1h window.
+# recent intended cron tick instead of `now`: the half-open interval
+# [intended-1h, intended). Consecutive cycles then tile exactly, the next
+# one covering [intended, intended+1h). Without this, GHA scheduler delay
+# (20-40 min during peak hours) shifts each cycle's window relative to
+# actual start time and drops runs that finished in the slack between
+# consecutive actual starts. When GHA *drops* a tick entirely (not just
+# delays it), the window's floor is instead pulled back to the previous
+# actual run's intended tick so the orphaned hour still gets analyzed. For
+# non-schedule events or non-hourly crons, falls back to a now-anchored 1h
+# window with no ceiling.
 #
 # Environment variables:
 #   TARGET_REPO - Query a different repo (default: current repo)
@@ -97,6 +98,16 @@ if [ -n "$cron_minute" ]; then
   # Default floor: one cron period back. Consecutive ticks tile exactly.
   COMPLETED_AFTER=$((intended - 3600))
 
+  # Ceiling: the tick itself, exclusive. The floor advances by exactly one
+  # period per cycle, so a window with no ceiling runs floor..now and is
+  # wider than a period by however late the scheduler was — and the next
+  # cycle, whose floor is this tick, lists that tail again. The caller pays a
+  # second full agent survey for runs it already analyzed, and scheduler delay
+  # against an hourly cron is routinely tens of minutes, so that share is
+  # large. Runs finishing after the tick aren't dropped: the next cycle's
+  # floor is exactly this tick, so they are the first thing it sees.
+  COMPLETED_BEFORE=$intended
+
   # Dropped-tick recovery. GHA doesn't only *delay* scheduled ticks, it also
   # *drops* them: a tick that fires zero times leaves that hour's completions
   # in the gap between the previous and next cycle's windows (the skipped-tick
@@ -134,6 +145,9 @@ if [ -n "$cron_minute" ]; then
 else
   CREATED_SINCE=$(date -d '3 hours ago' +%Y-%m-%dT%H:%M:%S)
   COMPLETED_AFTER=$(date -d '1 hour ago' +%s)
+  # No ceiling off the cron path: a now-anchored window has no next cycle to
+  # hand the tail to, and a hand-dispatched run is asking about right now.
+  COMPLETED_BEFORE=""
 fi
 
 all_runs="[]"
@@ -151,10 +165,14 @@ for wf in "${WORKFLOWS[@]}"; do
   all_runs=$(echo "$all_runs" "$runs" | jq -s 'add')
 done
 
-# Filter: drop in-progress (empty conclusion), keep only recently finished
-echo "$all_runs" | jq --argjson cutoff "$COMPLETED_AFTER" '
+# Filter: drop in-progress (empty conclusion), keep only runs that finished
+# inside the window — [cutoff, ceiling), half-open so consecutive cycles tile
+# without re-listing the boundary run. A null ceiling means unbounded.
+echo "$all_runs" | jq --argjson cutoff "$COMPLETED_AFTER" \
+  --argjson ceiling "${COMPLETED_BEFORE:-null}" '
   [ .[]
     | select(.conclusion != null and .conclusion != "")
     | select((.updatedAt | fromdateiso8601) >= $cutoff)
+    | select($ceiling == null or (.updatedAt | fromdateiso8601) < $ceiling)
   ]
 '
