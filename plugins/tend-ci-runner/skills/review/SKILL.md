@@ -228,9 +228,19 @@ read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json commits,state \
 [ "$CURRENT_HEAD" != "$HEAD_SHA" ] && echo "HEAD moved — skipping" && exit 0
 [ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
 
+# Same substantive-review filter as step 1, and for the same reason: a synthetic
+# reply container is anchored at whatever HEAD was when the reply posted, so one
+# left on the current HEAD would read as "already reviewed" and discard this run's
+# review at the last step, after all the work. Shell state doesn't carry between
+# tool calls, so re-derive $SUBSTANTIVE here.
 # NOTE: REST API uses .commit_id (not .commit.oid from gh pr view --json)
-ALREADY_POSTED=$(gh api "repos/$REPO/pulls/<number>/reviews" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\")] | last | .submitted_at // empty")
+SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
+  --jq '.[] | select(.in_reply_to_id == null) | .pull_request_review_id' | jq -s 'unique')
+ALREADY_POSTED=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+  | jq -rs --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" \
+    'add | [.[] | select(.user.login == $bot and .commit_id == $head)
+                | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
+         | last | .submitted_at // empty')
 [ -n "$ALREADY_POSTED" ] && echo "Already reviewed — skipping" && exit 0
 ```
 
@@ -316,8 +326,11 @@ GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when
 **Check which case you are in before deciding how to recover** — query for an orphan review on the current HEAD first, then branch on the result.
 
 ```bash
-ORPHAN_ID=$(gh api "repos/$REPO/pulls/<number>/reviews" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\")] | last | .id // empty")
+# The body-length test is what distinguishes an orphan from a synthetic reply
+# container sitting on the same HEAD: case (a) persists the body, a container
+# never has one. Without it, the PUT below would overwrite an unrelated reply.
+ORPHAN_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\" and (.body | length) > 0)] | last | .id // empty")
 ```
 
 Then, in either case, **move the failed inline comments into the review body** as fenced code blocks with file paths, and:
