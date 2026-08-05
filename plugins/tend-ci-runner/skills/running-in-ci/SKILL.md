@@ -222,8 +222,17 @@ After pushing, what to do depends on whether a red result creates a follow-up.
 ```bash
 # Foreground poll — invoke Bash without run_in_background.
 #
-# Poll statusCheckRollup — every check-run + status context on the commit.
-# Exit when all non-own items are terminal.
+# Poll the rollup — every check-run + status context — for the SHA you are
+# accountable for, and exit when all non-own items are terminal.
+#
+# Pin the SHA; don't poll the PR. `gh pr view --json statusCheckRollup`
+# describes the PR's *current head*, so any other actor pushing while the loop
+# sleeps silently retargets the gate: the loop starts waiting on the new
+# commit, exits when *those* checks settle, and the run reports another
+# commit's green as its own — while its own red went unnoticed and the gated
+# follow-up (fix the failure, dismiss the approval) never fired. Several tend
+# sessions live on one PR is routine, so a concurrent push is the normal case.
+# The same rollup queried by commit OID stays pinned.
 #
 # Why rollup, not `gh pr checks --required`:
 # `--required` only returns required contexts that are ALREADY registered on
@@ -243,8 +252,10 @@ After pushing, what to do depends on whether a red result creates a follow-up.
 #
 # Filter out the current run ($GITHUB_RUN_ID) — its own CheckRun is
 # IN_PROGRESS for the whole loop. Match on the run URL, not the check name:
-# `gh pr checks` shows the job name (e.g. "review"), which does not match
-# $GITHUB_WORKFLOW ("tend-review").
+# a CheckRun's `name` is the job name (e.g. "review"), which does not match
+# $GITHUB_WORKFLOW ("tend-review"). The workflow name lives one level up, on
+# checkSuite.workflowRun.workflow — which is why the query reaches for it
+# rather than comparing `name`.
 #
 # Also exclude same-workflow check runs ($GITHUB_WORKFLOW). When the current
 # session pushes a commit or replies to an inline review comment, GitHub
@@ -261,34 +272,56 @@ After pushing, what to do depends on whether a red result creates a follow-up.
 # required checks pending, branch out of date (`type: update` rulesets),
 # required reviews missing, or our own check still running — all produce
 # BLOCKED, indistinguishable without admin scope on branch protection.
-pending() {
-  gh pr view <number> --json statusCheckRollup \
-    | jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
-      [.statusCheckRollup[]
-       | select((.detailsUrl // .targetUrl // "") | test($own) | not)
-       | select((.workflowName // "") == $wf | not)
-       | (.status // .state)
-       | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING" or . == "REQUESTED" or . == "EXPECTED")
-      ] | length'
+
+# The SHA this run is accountable for: the commit you just pushed, or the
+# commit you approved (`HEAD_SHA` in a review session).
+PINNED_SHA=$(git rev-parse HEAD)
+
+rollup() {
+  gh api graphql -f query='
+    query($owner: String!, $name: String!, $oid: GitObjectID!) {
+      repository(owner: $owner, name: $name) {
+        object(oid: $oid) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes {
+          ... on CheckRun { name status conclusion detailsUrl
+                            checkSuite { workflowRun { workflow { name } } } }
+          ... on StatusContext { context state targetUrl }
+        } } } } }
+      }
+    }' -F owner="${GITHUB_REPOSITORY%/*}" -F name="${GITHUB_REPOSITORY#*/}" -F oid="$PINNED_SHA" \
+  | jq -c --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
+      [(.data.repository.object.statusCheckRollup.contexts.nodes // [])[]
+       | select(((.detailsUrl // .targetUrl // "") | test($own)) | not)
+       | select((.checkSuite.workflowRun.workflow.name // "") != $wf)]
+      | {pending: [.[] | (.status // .state)
+                   | select(IN("IN_PROGRESS","QUEUED","PENDING","WAITING","REQUESTED","EXPECTED"))] | length,
+         failed:  [.[] | select((.conclusion // .state) | IN("FAILURE","TIMED_OUT","ERROR"))
+                       | "\(.name // .context) \(.detailsUrl // .targetUrl // "")"]}'
 }
 for i in $(seq 1 9); do
   sleep 60
-  [ "$(pending)" -gt 0 ] && continue
+  R=$(rollup)
+  read -r PENDING FAILED < <(jq -r '"\(.pending) \(.failed | length)"' <<<"$R")
+  [ "$FAILED" -gt 0 ] && break     # already red — stop waiting, go diagnose
+  [ "$PENDING" -gt 0 ] && continue
   sleep 30
-  [ "$(pending)" -eq 0 ] || continue
-  gh pr checks <number>
-  exit 0
+  R=$(rollup)
+  read -r PENDING FAILED < <(jq -r '"\(.pending) \(.failed | length)"' <<<"$R")
+  [ "$PENDING" -eq 0 ] && break
 done
-echo "CI still running after 9 minutes"
-exit 1
+
+echo "$R"
+HEAD_NOW=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
+[ "$HEAD_NOW" = "$PINNED_SHA" ] \
+  || echo "branch advanced to $HEAD_NOW — the result above is still $PINNED_SHA's, which is what this run is accountable for"
 ```
 
 Invoke this Bash call with `timeout: 600000` (10 min). The default 2-min Bash timeout would kill the loop early; the 9-iteration cap is sized to fit inside the harness's 10-min Bash maximum, so a longer loop would auto-background and the gated follow-up wouldn't fire.
 
-1. Poll every 60 seconds (up to ~9 minutes) until all non-own check-runs on the commit are terminal. **Filter out the current run's URL (`/runs/$GITHUB_RUN_ID/`)** — the current workflow's own check is always pending while polling and must be excluded to avoid a deadlock. **Also filter same-workflow check runs (`$GITHUB_WORKFLOW`)** — sibling runs of the same workflow on the same PR are subject to concurrency rules (queueing or cancel-in-progress) and don't represent independent CI signals. The 30s grace re-check catches late-registering omnibus checks.
-2. If a required check fails, diagnose with `gh run view <run-id> --log-failed`, fix, commit, push, repeat.
+1. Poll every 60 seconds (up to ~9 minutes) until all non-own check-runs **on `$PINNED_SHA`** are terminal. **Filter out the current run's URL (`/runs/$GITHUB_RUN_ID/`)** — the current workflow's own check is always pending while polling and must be excluded to avoid a deadlock. **Also filter same-workflow check runs (`$GITHUB_WORKFLOW`)** — sibling runs of the same workflow on the same PR are subject to concurrency rules (queueing or cancel-in-progress) and don't represent independent CI signals. The 30s grace re-check catches late-registering omnibus checks.
+2. If a check fails, diagnose with `gh run view <run-id> --log-failed` (the run id is in the URL the loop printed), fix, commit, push, and re-poll against the **new** `$PINNED_SHA`.
 3. Once terminal, do the follow-up: ship a green fix, comment an unresolved failure, or dismiss your approval on red.
 4. If the cap hits with checks still running, comment the still-pending checks as unverified before ending — don't exit as if done.
+5. Report on `$PINNED_SHA`, never on the branch tip. If the branch advanced under you, that other commit's result is not evidence about yours — say the head moved and report what `$PINNED_SHA` did.
 
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
