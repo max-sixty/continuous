@@ -353,7 +353,7 @@ Search titles AND bodies for related keywords. Only comment on existing issues i
 
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
-- **PR** (default): Branch `hourly/review-$GITHUB_RUN_ID`, fix, commit, push, create with label `claude-behavior`. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
+- **PR** (default): Branch `review-reviewers/review-$GITHUB_RUN_ID`, fix, commit, push, create with label `claude-behavior`. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly. Include run ID, outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more findings, pick the highest-confidence ones and record the rest in the evidence gist.
