@@ -275,15 +275,14 @@ jobs:
               if printf '%s\n' "$ISSUE_BODY" | grep -qF '@<<cfg.bot_name>>'; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
-              # Count outside jq: `gh api --paginate` applies `--jq` once per
-              # page, so a reduction inside it (`| length`) emits one count per
-              # page rather than one overall. Past 100 comments the variable
-              # holds e.g. `100\n7`, the `-gt` below errors with `integer
-              # expression expected`, and the failed test falls through to
-              # should_run=false — the bot goes quiet on its most-engaged
-              # threads. Capture the stream and test it for emptiness — the
-              # bare substitution keeps a failing `gh api` fatal under GHA's
-              # default `bash -e`.
+              # Don't reduce inside jq: `gh api --paginate` applies `--jq` once
+              # per page, so `| length` emits one count per page rather than one
+              # overall. Past 100 comments the variable holds e.g. `100\n7`, a
+              # numeric test on it errors with `integer expression expected`,
+              # and the failed test falls through to should_run=false — the bot
+              # goes quiet on its most-engaged threads. Capture the per-element
+              # stream and test it for emptiness — the bare substitution also
+              # keeps a failing `gh api` fatal under GHA's default `bash -e`.
               BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
                 --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id')
               if [ -n "$BOT_COMMENTS" ]; then
