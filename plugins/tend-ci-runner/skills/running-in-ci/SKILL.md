@@ -273,9 +273,13 @@ After pushing, what to do depends on whether a red result creates a follow-up.
 # required reviews missing, or our own check still running — all produce
 # BLOCKED, indistinguishable without admin scope on branch protection.
 
-# The SHA this run is accountable for: the commit you just pushed, or the
-# commit you approved (`HEAD_SHA` in a review session).
-PINNED_SHA=$(git rev-parse HEAD)
+# The SHA this run is accountable for. Pick the derivation that matches your
+# session: after your own push it's the branch tip you pushed; in a review
+# session the checkout is `refs/pull/N/merge`, an ephemeral merge commit that
+# carries no rollup of its own, so `git rev-parse HEAD` would break the loop on
+# iteration 1 with a false green — pin the PR head instead.
+PINNED_SHA=$(git rev-parse HEAD)                                         # you pushed the commit
+# PINNED_SHA=$(gh pr view <number> --json headRefOid --jq '.headRefOid')  # you approved it
 
 rollup() {
   gh api graphql -f query='
@@ -294,7 +298,7 @@ rollup() {
        | select((.checkSuite.workflowRun.workflow.name // "") != $wf)]
       | {pending: [.[] | (.status // .state)
                    | select(IN("IN_PROGRESS","QUEUED","PENDING","WAITING","REQUESTED","EXPECTED"))] | length,
-         failed:  [.[] | select((.conclusion // .state) | IN("FAILURE","TIMED_OUT","ERROR"))
+         failed:  [.[] | select((.conclusion // .state) | IN("FAILURE","TIMED_OUT","ERROR","STARTUP_FAILURE","ACTION_REQUIRED"))
                        | "\(.name // .context) \(.detailsUrl // .targetUrl // "")"]}'
 }
 for i in $(seq 1 9); do
@@ -310,6 +314,10 @@ for i in $(seq 1 9); do
 done
 
 echo "$R"
+if   [ "$FAILED" -gt 0 ];  then echo "red on $PINNED_SHA — diagnose the failures above"
+elif [ "$PENDING" -gt 0 ]; then echo "cap hit — still pending on $PINNED_SHA; report these as unverified, not as passing"
+else                            echo "green on $PINNED_SHA"
+fi
 HEAD_NOW=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
 [ "$HEAD_NOW" = "$PINNED_SHA" ] \
   || echo "branch advanced to $HEAD_NOW — the result above is still $PINNED_SHA's, which is what this run is accountable for"
