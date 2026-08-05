@@ -242,6 +242,11 @@ jobs:
           # so a first-contact @-mention inside an inline comment is detected
           # on PRs where the bot has no prior engagement. One object per line,
           # so `--paginate` concatenates pages instead of reducing within one.
+          # Keep the `{body, in_reply_to_id}` construction: `in_reply_to_id` is
+          # an *optional* property, absent rather than null on a fresh comment,
+          # and building the object normalizes absent to null so the `== null`
+          # select below counts both shapes. A bare `.in_reply_to_id` stream
+          # would emit nothing for a fresh comment and skip every container.
           if [ "$KIND" = "pull_request_review" ]; then
             INLINE=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID/comments" \
               --jq '.[] | {body, in_reply_to_id}')
