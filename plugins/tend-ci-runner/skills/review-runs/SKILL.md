@@ -153,6 +153,38 @@ gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
 
 After retrieving the timeout cap from the workflow file, flag any job whose duration exceeded 90% of it as a near-timeout. For the default 360-min cap, that threshold is 324 min.
 
+### Drain stranded triggers
+
+A run whose agent session exits non-zero files (or appends to) a `tend-outage`-labelled **"Bot temporarily unavailable"** issue — one row per failure, naming the run and the trigger it stranded. Nothing re-runs those triggers: `tend-review` fires only on `pull_request_target`, so a PR whose one review attempt died stays unreviewed until someone pushes again. Drain the open outage issue as part of this sweep.
+
+```bash
+# Empty on most days — no open outage issue means nothing stranded; skip the rest.
+OUTAGE=$(gh issue list --state open --label tend-outage --json number --jq '.[0].number // empty')
+gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
+  | grep -oE 'runs/[0-9]+|\| #[0-9]+'
+```
+
+**Diagnose before re-running.** The issue body says only "The bot failed to process a request"; the failure annotation, which the nightly enrichment pass carries into the issue as a comment, is the cheapest next look but doesn't always name the cause. When it doesn't, read the session log — a subscription-quota exhaustion surfaces as a `<synthetic>` assistant message:
+
+```bash
+gh run download <run-id> --pattern '*session-logs*' --dir /tmp/outage
+jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/outage/*/*/*.jsonl
+# → You've hit your session limit · resets 8:30am (UTC)
+# → You've hit your weekly limit · resets 12am (UTC)
+```
+
+A cluster of these is quota exhaustion, not a bug — don't open a fix PR. The session and weekly limits reset on different clocks, so read the reset off the message rather than assuming the shorter session window; a weekly exhaustion can strand most of a day.
+
+**Re-run only what won't recover on its own.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next cron tick — re-running them double-spends quota. For an event-triggered run (`review`, `mention`, `triage`, `ci-fix`), confirm the work is still missing first; a later push often re-triggers the workflow on its own, and re-running a job that already happened burns quota for nothing:
+
+```bash
+gh pr view <n> --json state,headRefOid,reviews \
+  --jq '{state, headRefOid, reviewers: [.reviews[].author.login]}'
+gh run rerun <run-id> --failed
+```
+
+Re-run only once a later run has completed cleanly — re-running into a still-exhausted quota just refills the outage issue. Re-running the bot's own failed workflow is restorative, not destructive; no maintainer approval needed. Close the issue once every row is drained (`gh issue close "$OUTAGE"`): the harness auto-closes only duplicates from a create-create race, never the surviving issue, so one left open makes tomorrow's sweep re-check the same rows and folds the next outage into a stale incident.
+
 ## Step 2: Token usage report
 
 Run the token report script to get per-run token counts:
