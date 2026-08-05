@@ -19,7 +19,9 @@
 # *drops* a tick entirely (not just delays it), the window's floor is instead
 # pulled back to the previous actual run's intended tick so the orphaned period
 # still gets analyzed. For non-schedule events or cron shapes with no constant
-# period, falls back to a now-anchored 1h window.
+# period, falls back to a now-anchored 1h window. Either way the window's floor
+# is printed to stderr as `Completion window: >= <timestamp>`, since callers
+# filter on it and can't recover it from the run list.
 #
 # Environment variables:
 #   TARGET_REPO - Query a different repo (default: current repo)
@@ -158,6 +160,12 @@ else
   CREATED_SINCE=$(date -d '3 hours ago' +%Y-%m-%dT%H:%M:%S)
   COMPLETED_AFTER=$(date -d '1 hour ago' +%s)
 fi
+
+# Publish the window. Callers need the floor for their own time filtering, and
+# without it a fallback-branch run (any non-schedule event, e.g. a manual
+# workflow_dispatch) looks the same as a scheduled one while covering only the
+# last hour of a possibly longer period. stderr keeps stdout the run-list JSON.
+echo "Completion window: >= $(date -u -d "@$COMPLETED_AFTER" +%Y-%m-%dT%H:%M:%SZ)" >&2
 
 all_runs="[]"
 
