@@ -148,17 +148,14 @@
    every POST step, so any position below the tree switch is early enough.
    `paths` is empty for a `setup:` that names no local action, rendering this
    away. #}
-{% macro restore_local_actions(paths) %}
-{% if paths %}
+{% macro restore_local_actions(run_body) %}
+{% if run_body %}
 
 
       - name: Restore local setup actions for POST cleanup
         if: always()
         run: |
-{% for path in paths %}
-          git checkout "$GITHUB_SHA" -- <<path>> ||
-            echo "::warning::could not restore <<path>> from $GITHUB_SHA; POST cleanup of the local action may fail"
-{% endfor %}
+<<run_body|indent(10, first=True)>>
 {%- endif %}
 {%- endmacro %}
 

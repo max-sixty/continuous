@@ -139,6 +139,20 @@ def test_no_restore_step_without_a_local_setup_action(tmp_path: Path) -> None:
             assert _restore_step_index(job.get("steps", [])) is None, wf.filename
 
 
+@pytest.mark.parametrize(
+    "extra", ["", "setup:\n  - uses: ./.github/actions/tend-setup\n"]
+)
+def test_generated_workflows_end_with_exactly_one_newline(
+    tmp_path: Path, extra: str
+) -> None:
+    """A trailing blank line is pure churn in the adopter's regen diff, and the
+    repo's end-of-file-fixer rejects it in the snapshots."""
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    for wf in generate_all(cfg):
+        assert wf.content.endswith("\n"), f"{wf.filename}: no trailing newline"
+        assert not wf.content.endswith("\n\n"), f"{wf.filename}: trailing blank line"
+
+
 def test_sandbox_levers_rendered_for_claude(tmp_path: Path) -> None:
     """sandbox_path/sandbox_env/sandbox_setup render as action inputs and the
     workflow still parses; the values land under the agent step's `with:`."""

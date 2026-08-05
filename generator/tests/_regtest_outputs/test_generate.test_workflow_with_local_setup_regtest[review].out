@@ -76,4 +76,3 @@ jobs:
         run: |
           git checkout "$GITHUB_SHA" -- .github/actions/tend-setup ||
             echo "::warning::could not restore .github/actions/tend-setup from $GITHUB_SHA; POST cleanup of the local action may fail"
-

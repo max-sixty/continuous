@@ -147,8 +147,8 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     return "\n" + textwrap.indent(buf.getvalue().rstrip(), "    ") + "\n"
 
 
-def _local_action_paths(cfg: Config) -> list[str]:
-    """Shell-quoted workspace paths of the local composites in `setup:`.
+def _restore_local_actions_run(cfg: Config) -> str:
+    """Shell that puts the local composites named by `setup:` back on disk.
 
     A `uses: ./path` resolves against the workspace, and the runner re-reads
     the action file from that same path to dispatch the POST steps of the
@@ -156,18 +156,25 @@ def _local_action_paths(cfg: Config) -> list[str]:
     cached when the composite ran. Review and mention land the PR's tree over
     that workspace between the two reads, so a PR that resizes or deletes the
     file breaks cleanup (actions/runner#2816); the paths need restoring before
-    the POST chain walks. Empty when no step names a local action, which renders
-    the restore step away.
+    the POST chain walks.
+
+    Returned unindented and without a trailing newline, for the macro to place.
+    Empty when no step names a local action, which renders the step away.
     """
     paths: list[str] = []
     for step in cfg.setup:
         uses = step.fields.get("uses")
         if not isinstance(uses, str) or not uses.startswith("./"):
             continue
-        path = uses.removeprefix("./").rstrip("/")
-        if path and shlex.quote(path) not in paths:
-            paths.append(shlex.quote(path))
-    return paths
+        path = shlex.quote(uses.removeprefix("./").rstrip("/"))
+        if path != "''" and path not in paths:
+            paths.append(path)
+    return "\n".join(
+        f'git checkout "$GITHUB_SHA" -- {path} ||\n'
+        f'  echo "::warning::could not restore {path} from $GITHUB_SHA;'
+        f' POST cleanup of the local action may fail"'
+        for path in paths
+    )
 
 
 @dataclass
@@ -233,7 +240,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     content = _REVIEW_TMPL.render(
         cfg=eff,
         setup=_setup_yaml(eff),
-        local_actions=_local_action_paths(eff),
+        local_actions=_restore_local_actions_run(eff),
         prompt_expr=prompt_expr,
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
@@ -253,7 +260,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     content = _MENTION_TMPL.render(
         cfg=eff,
         setup=_setup_yaml(eff),
-        local_actions=_local_action_paths(eff),
+        local_actions=_restore_local_actions_run(eff),
     )
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
 
