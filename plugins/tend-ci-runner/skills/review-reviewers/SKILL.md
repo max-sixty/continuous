@@ -213,7 +213,7 @@ TARGET_REPO=$ARGUMENTS ${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh
 
 The script discovers `tend-*` workflows by default. Pass additional prefixes as arguments to include other workflows (e.g., `review-reviewers` when analyzing tend itself).
 
-It prints `Completion window: >= <timestamp>` on stderr. **Note that timestamp — it is the analysis window's floor**, and Step 2 needs it both for the survey prompt and for the corruption scan's `--jq` filters; nothing downstream can reconstruct it from the run list. The window is one cron period wide on a scheduled run, but only one hour on any other event (a manual `workflow_dispatch` takes that path), so on a dispatched run expect it to cover less than a full period.
+It prints `Completion window: >= <timestamp>` on stderr. **Note that timestamp — it is the analysis window's floor**, and Step 2 needs it both for the survey prompt and for the corruption scan's `--jq` filters; nothing downstream can reconstruct it from the run list. The window is normally one cron period wide on a scheduled run — wider when the script recovers a dropped tick — but only one hour on any other event (a manual `workflow_dispatch` takes that path), so on a dispatched run expect it to cover less than a full period.
 
 If empty, record the run as all-clear per "Recording below-threshold findings" above, then skip to Step 6.
 
