@@ -97,22 +97,37 @@ if [ -n "$cron_minute" ]; then
   # Default floor: one cron period back. Consecutive ticks tile exactly.
   COMPLETED_AFTER=$((intended - 3600))
 
-  # Dropped-tick recovery. GHA doesn't only *delay* scheduled ticks, it also
-  # *drops* them: a tick that fires zero times leaves that hour's completions
-  # in the gap between the previous and next cycle's windows (the skipped-tick
-  # case #526 deferred as acceptable). Rather than assume the previous tick
-  # fired, resume from where the previous *actual* completed run of this
-  # workflow left off: recover that run's intended tick and floor the window
-  # there. When every tick fires, the previous run's intended tick == the
+  # Dropped-tick and failed-run recovery. GHA doesn't only *delay* scheduled
+  # ticks, it also *drops* them: a tick that fires zero times leaves that hour's
+  # completions in the gap between the previous and next cycle's windows (the
+  # skipped-tick case #526 deferred as acceptable). Rather than assume the
+  # previous tick fired, resume from where the previous run that actually
+  # analyzed something left off: recover that run's intended tick and floor the
+  # window there.
+  #
+  # Anchor on the previous *successful* run, not merely a completed one. A run
+  # that failed before its agent produced any analysis — harness crash, model
+  # quota exhaustion, timeout — covered no window at all, so resuming from it
+  # discards every hour the outage spanned and the next green run reports a
+  # one-hour all-clear for a window nothing ever looked at. For the same reason
+  # the scan reaches well past one cron period: during an outage the most recent
+  # completed runs are all failures, and a short limit finds no success to
+  # anchor on. A partially-failed matrix run counts as a failure here, which
+  # only ever widens the window — overlap is re-offered work the caller dedups
+  # against its own evidence log, where a gap is silently unanalyzed.
+  #
+  # When every tick fires and succeeds, the previous run's intended tick == the
   # default (intended - 3600), so this is a byte-identical no-op — still no
-  # overlap between consecutive cycles. When a tick was dropped, it reaches
-  # back to cover the orphaned hour. Capped at 6h so a sustained outage can't
-  # create an unbounded window. The analyzing workflow runs on the current
-  # repo, so this query omits TARGET_REPO's -R.
+  # overlap between consecutive cycles. Capped at 6h so a sustained outage can't
+  # create an unbounded window; when the cap bites, say so on stderr so the
+  # caller records a coverage gap instead of a false all-clear. The analyzing
+  # workflow runs on the current repo, so this query omits TARGET_REPO's -R.
   if [ -n "${GITHUB_WORKFLOW:-}" ]; then
+    floor_cap=$((intended - 21600))   # never reach back more than 6h
+    floor_cap_iso=$(date -u -d "@$floor_cap" +%Y-%m-%dT%H:%M:%SZ)
     prev_start=$(gh run list --workflow "$GITHUB_WORKFLOW" --status completed \
-      --limit 10 --json databaseId,createdAt \
-      --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0}))] | .[0].createdAt // empty" \
+      --limit 50 --json databaseId,createdAt,conclusion \
+      --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0})) | select(.conclusion == \"success\")] | .[0].createdAt // empty" \
       2>/dev/null || true)
     if [ -n "$prev_start" ]; then
       prev_ts=$(date -u -d "$prev_start" +%s 2>/dev/null || echo "")
@@ -123,10 +138,15 @@ if [ -n "$cron_minute" ]; then
         else
           prev_intended=$((prev_hour_tick - 3600))
         fi
-        floor_cap=$((intended - 21600))   # never reach back more than 6h
-        [ "$prev_intended" -lt "$floor_cap" ] && prev_intended=$floor_cap
+        if [ "$prev_intended" -lt "$floor_cap" ]; then
+          echo "WARNING: the last successful '$GITHUB_WORKFLOW' run started $prev_start, more than 6h back. Window floored at $floor_cap_iso; runs that completed before it are NOT in this list. Record a coverage gap, not an all-clear." >&2
+          prev_intended=$floor_cap
+        fi
         [ "$prev_intended" -lt "$COMPLETED_AFTER" ] && COMPLETED_AFTER=$prev_intended
       fi
+    else
+      echo "WARNING: no successful '$GITHUB_WORKFLOW' run among the last 50 completed ones. Window floored at $floor_cap_iso; anything earlier is NOT in this list. Record a coverage gap, not an all-clear." >&2
+      [ "$floor_cap" -lt "$COMPLETED_AFTER" ] && COMPLETED_AFTER=$floor_cap
     fi
   fi
 
