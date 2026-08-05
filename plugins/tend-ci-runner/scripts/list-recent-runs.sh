@@ -109,12 +109,12 @@ if [ -n "$cron_minute" ]; then
   # that failed before its agent produced any analysis — harness crash, model
   # quota exhaustion, timeout — covered no window at all, so resuming from it
   # discards every hour the outage spanned and the next green run reports a
-  # one-hour all-clear for a window nothing ever looked at. For the same reason
-  # the scan reaches well past one cron period: during an outage the most recent
-  # completed runs are all failures, and a short limit finds no success to
-  # anchor on. A partially-failed matrix run counts as a failure here, which
-  # only ever widens the window — overlap is re-offered work the caller dedups
-  # against its own evidence log, where a gap is silently unanalyzed.
+  # one-hour all-clear for a window nothing ever looked at. `--status` takes
+  # conclusions as well as statuses, so the filter runs server-side and no scan
+  # depth is involved: an outage of any length can't bury the anchor. A
+  # partially-failed matrix run counts as a failure here, which only ever widens
+  # the window — overlap is re-offered work the caller dedups against its own
+  # evidence log, where a gap is silently unanalyzed.
   #
   # When every tick fires and succeeds, the previous run's intended tick == the
   # default (intended - 3600), so this is a byte-identical no-op — still no
@@ -125,10 +125,15 @@ if [ -n "$cron_minute" ]; then
   if [ -n "${GITHUB_WORKFLOW:-}" ]; then
     floor_cap=$((intended - 21600))   # never reach back more than 6h
     floor_cap_iso=$(date -u -d "@$floor_cap" +%Y-%m-%dT%H:%M:%SZ)
-    prev_start=$(gh run list --workflow "$GITHUB_WORKFLOW" --status completed \
-      --limit 50 --json databaseId,createdAt,conclusion \
-      --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0})) | select(.conclusion == \"success\")] | .[0].createdAt // empty" \
-      2>/dev/null || true)
+    # Route through gh_retry and fail loud, like the other queries here: a
+    # transient API error must not masquerade as "no successful run ever", which
+    # would emit a confidently-worded warning naming a cause that didn't happen.
+    if ! prev_start=$(gh_retry gh run list --workflow "$GITHUB_WORKFLOW" \
+      --status success --limit 5 --json databaseId,createdAt \
+      --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0}))] | .[0].createdAt // empty"); then
+      echo "ERROR: 'gh run list' for the window anchor failed after retries — refusing to guess a floor that would read as a false all-clear" >&2
+      exit 1
+    fi
     if [ -n "$prev_start" ]; then
       prev_ts=$(date -u -d "$prev_start" +%s 2>/dev/null || echo "")
       if [ -n "$prev_ts" ]; then
@@ -145,7 +150,7 @@ if [ -n "$cron_minute" ]; then
         [ "$prev_intended" -lt "$COMPLETED_AFTER" ] && COMPLETED_AFTER=$prev_intended
       fi
     else
-      echo "WARNING: no successful '$GITHUB_WORKFLOW' run among the last 50 completed ones. Window floored at $floor_cap_iso; anything earlier is NOT in this list. Record a coverage gap, not an all-clear." >&2
+      echo "WARNING: no successful '$GITHUB_WORKFLOW' run found at all. Window floored at $floor_cap_iso; anything earlier is NOT in this list. Record a coverage gap, not an all-clear." >&2
       [ "$floor_cap" -lt "$COMPLETED_AFTER" ] && COMPLETED_AFTER=$floor_cap
     fi
   fi
@@ -158,15 +163,30 @@ fi
 
 all_runs="[]"
 
+# `gh run list` returns newest-first, so a workflow with more runs in the window
+# than this limit silently drops the *oldest* ones — exactly the runs sitting in
+# a gap the recovery above just reached back for, which would restore the false
+# all-clear that recovery exists to prevent. A recovered window spans up to 8h,
+# and a single busy workflow clears 50 runs in that span, so the limit is sized
+# well past one workflow's output; gh paginates in hundreds, so the headroom
+# costs at most one extra page per workflow.
+RUN_LIMIT=200
+
 for wf in "${WORKFLOWS[@]}"; do
   if ! runs=$(gh_retry gh run list \
     "${repo_args[@]}" \
     --workflow "${wf}" \
     --created ">=${CREATED_SINCE}" \
     --json databaseId,conclusion,createdAt,updatedAt \
-    --limit 50); then
+    --limit "$RUN_LIMIT"); then
     echo "ERROR: 'gh run list' for workflow '$wf' failed after retries — refusing to report a partial run list" >&2
     exit 1
+  fi
+  # Exactly $RUN_LIMIT rows means the list may be capped rather than complete.
+  # Warn rather than exit: unlike a failed fetch, the rows in hand are still
+  # worth analyzing — the caller just can't read a short list as an all-clear.
+  if [ "$(printf '%s' "$runs" | jq 'length')" -ge "$RUN_LIMIT" ]; then
+    echo "WARNING: '$wf' returned $RUN_LIMIT runs, the fetch limit — older runs in this window are likely missing from the list. Record a coverage gap, not an all-clear." >&2
   fi
   all_runs=$(echo "$all_runs" "$runs" | jq -s 'add')
 done
