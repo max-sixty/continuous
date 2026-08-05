@@ -25,7 +25,7 @@ Tend has Claude-powered workflows beyond the generated `tend-*` set:
 
 | Workflow | File | Schedule | Purpose |
 |----------|------|----------|---------|
-| `review-reviewers` | `review-reviewers.yaml` | `47 * * * *` | Hourly analysis of adopter repo sessions |
+| `review-reviewers` | `review-reviewers.yaml` | `47 */3 * * *` | Every-3-hours analysis of adopter repo sessions |
 
 These use the tend composite action and produce `claude-session-logs*` artifacts,
 but their names don't match the `tend-*` prefix that scripts filter on by

@@ -1,6 +1,6 @@
 ---
 name: review-reviewers
-description: Hourly outcome-based analysis of tend's CI behavior — checks whether tend's outputs were accepted or rejected, escalating to session logs only when outcomes look wrong.
+description: Scheduled outcome-based analysis of tend's CI behavior — checks whether tend's outputs were accepted or rejected, escalating to session logs only when outcomes look wrong.
 argument-hint: "<owner/repo>"
 metadata:
   internal: true

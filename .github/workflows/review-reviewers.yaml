@@ -1,5 +1,13 @@
 name: review-reviewers
-# Hourly outcome-based analysis of bot behavior across adopter repos.
+# Every-3-hours outcome-based analysis of bot behavior across adopter repos.
+#
+# Cadence is a quota decision, not an analytical one. At hourly × a 5-repo
+# matrix this workflow issued 120 Claude sessions/day and took ~70-79% of
+# fleet spend, saturating the subscription quota and hard-failing the
+# event-driven workflows (review, mention, triage, nightly) that serve users.
+# Outcome-acceptance signal — was a bot PR merged, was a comment answered —
+# evolves over hours to days, so 3-hourly loses little. `list-recent-runs.sh`
+# anchors its window to the cron period, so the tiling holds at either rate.
 #
 # Each matrix entry is a repo to analyze. The job checks out the tend repo
 # (for creating improvement PRs/issues). TEND_BOT_TOKEN is sufficient for reading
@@ -9,7 +17,7 @@ name: review-reviewers
 # TODO: Cross-repo pattern detection — correlate findings across repos
 on:
   schedule:
-    - cron: '47 * * * *'
+    - cron: '47 */3 * * *'
   workflow_dispatch:
 
 jobs:

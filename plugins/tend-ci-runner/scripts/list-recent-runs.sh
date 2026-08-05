@@ -76,26 +76,44 @@ for prefix in "${PREFIXES[@]}"; do
   WORKFLOWS+=("${matches[@]}")
 done
 
-# Detect a simple hourly cron (e.g. "47 * * * *") from the workflow event
-# payload so we can anchor the window to the most recent intended tick.
+# Detect a fixed-period cron from the workflow event payload so we can anchor
+# the window to the most recent intended tick: either hourly ("47 * * * *") or
+# an every-N-hours step ("47 */3 * * *").
+#
+# The step form is only accepted when N divides 24. Cron's `*/N` restarts the
+# count at hour 0 each day, so a step that doesn't divide evenly (e.g. `*/5`
+# fires at 0,5,10,15,20 then wraps after 4h) has no constant period, and a
+# floor computed from one would silently under-reach across midnight. Those
+# fall through to the now-anchored window below, same as any other cron shape.
 cron_minute=""
+cron_hour_step=1
 if [ -f "${GITHUB_EVENT_PATH:-}" ]; then
   schedule=$(jq -r '.schedule // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
   if [[ "$schedule" =~ ^([0-9]+)\ \*\ \*\ \*\ \*$ ]]; then
     cron_minute="${BASH_REMATCH[1]}"
+  elif [[ "$schedule" =~ ^([0-9]+)\ \*/([0-9]+)\ \*\ \*\ \*$ ]] \
+    && [ "${BASH_REMATCH[2]}" -gt 0 ] && [ $((24 % BASH_REMATCH[2])) -eq 0 ]; then
+    cron_minute="${BASH_REMATCH[1]}"
+    cron_hour_step="${BASH_REMATCH[2]}"
   fi
 fi
 
 if [ -n "$cron_minute" ]; then
-  this_hour_tick=$(date -u -d "$(date -u +%Y-%m-%dT%H:00:00) $cron_minute minutes" +%s)
+  # One cron period in seconds. `cron_hour_step` is 1 for the hourly form, so
+  # every expression below reduces to the original hourly arithmetic.
+  period=$((cron_hour_step * 3600))
+  # Hour-of-day of the most recent tick: the largest multiple of the step at or
+  # before the current hour. For the hourly form this is just the current hour.
+  this_tick_hour=$(( ($(date -u +%-H) / cron_hour_step) * cron_hour_step ))
+  this_hour_tick=$(date -u -d "$(date -u +%Y-%m-%d)T$(printf '%02d' "$this_tick_hour"):00:00 $cron_minute minutes" +%s)
   now_ts=$(date -u +%s)
   if [ "$now_ts" -lt "$this_hour_tick" ]; then
-    intended=$((this_hour_tick - 3600))
+    intended=$((this_hour_tick - period))
   else
     intended=$this_hour_tick
   fi
   # Default floor: one cron period back. Consecutive ticks tile exactly.
-  COMPLETED_AFTER=$((intended - 3600))
+  COMPLETED_AFTER=$((intended - period))
 
   # Dropped-tick recovery. GHA doesn't only *delay* scheduled ticks, it also
   # *drops* them: a tick that fires zero times leaves that hour's completions
@@ -104,11 +122,13 @@ if [ -n "$cron_minute" ]; then
   # fired, resume from where the previous *actual* completed run of this
   # workflow left off: recover that run's intended tick and floor the window
   # there. When every tick fires, the previous run's intended tick == the
-  # default (intended - 3600), so this is a byte-identical no-op — still no
+  # default (intended - period), so this is a byte-identical no-op — still no
   # overlap between consecutive cycles. When a tick was dropped, it reaches
-  # back to cover the orphaned hour. Capped at 6h so a sustained outage can't
-  # create an unbounded window. The analyzing workflow runs on the current
-  # repo, so this query omits TARGET_REPO's -R.
+  # back to cover the orphaned period. Capped at 6h so a sustained outage can't
+  # create an unbounded window — one full period at hourly, and still two at
+  # the 3-hourly step, so a single dropped tick stays recoverable either way.
+  # The analyzing workflow runs on the current repo, so this query omits
+  # TARGET_REPO's -R.
   if [ -n "${GITHUB_WORKFLOW:-}" ]; then
     prev_start=$(gh run list --workflow "$GITHUB_WORKFLOW" --status completed \
       --limit 10 --json databaseId,createdAt \
@@ -117,11 +137,12 @@ if [ -n "$cron_minute" ]; then
     if [ -n "$prev_start" ]; then
       prev_ts=$(date -u -d "$prev_start" +%s 2>/dev/null || echo "")
       if [ -n "$prev_ts" ]; then
-        prev_hour_tick=$(date -u -d "$(date -u -d "@$prev_ts" +%Y-%m-%dT%H:00:00) $cron_minute minutes" +%s)
+        prev_tick_hour=$(( ($(date -u -d "@$prev_ts" +%-H) / cron_hour_step) * cron_hour_step ))
+        prev_hour_tick=$(date -u -d "$(date -u -d "@$prev_ts" +%Y-%m-%d)T$(printf '%02d' "$prev_tick_hour"):00:00 $cron_minute minutes" +%s)
         if [ "$prev_ts" -ge "$prev_hour_tick" ]; then
           prev_intended=$prev_hour_tick
         else
-          prev_intended=$((prev_hour_tick - 3600))
+          prev_intended=$((prev_hour_tick - period))
         fi
         floor_cap=$((intended - 21600))   # never reach back more than 6h
         [ "$prev_intended" -lt "$floor_cap" ] && prev_intended=$floor_cap
