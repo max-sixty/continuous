@@ -129,6 +129,21 @@ def test_local_setup_action_restored_for_post_cleanup(
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
 
+def test_restore_step_quotes_the_setup_path(tmp_path: Path) -> None:
+    """The path reaches both the `git` operand and the warning text through a
+    shell variable, so a `$` can't expand and a `"` can't end the string early
+    and fail the one step whose job is to never turn a working run red."""
+    extra = "setup:\n  - uses: './weird/$HOME\"; rm -rf /; echo \"'\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    steps = yaml.safe_load(generate_mention(cfg).content)["jobs"]["handle"]["steps"]
+    run = str(steps[_restore_step_index(steps)]["run"])
+
+    assert """dir='weird/$HOME"; rm -rf /; echo "'""" in run
+    assert 'git checkout "$GITHUB_SHA" -- "$dir"' in run
+    # Nothing but the single-quoted assignment carries the raw path.
+    assert run.count("rm -rf /") == 1
+
+
 def test_no_restore_step_without_a_local_setup_action(tmp_path: Path) -> None:
     """A remote `uses:` resolves from the action cache, not the workspace, so
     there is nothing to put back."""

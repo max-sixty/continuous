@@ -158,6 +158,10 @@ def _restore_local_actions_run(cfg: Config) -> str:
     file breaks cleanup (actions/runner#2816); the paths need restoring before
     the POST chain walks.
 
+    A restore covers the named directory recursively, so a composite that nests
+    another action *inside its own tree* is covered too; one that reaches for a
+    sibling `uses: ./elsewhere` is not, since only `setup:` is visible here.
+
     Returned unindented and without a trailing newline, for the macro to place.
     Empty when no step names a local action, which renders the step away.
     """
@@ -166,12 +170,18 @@ def _restore_local_actions_run(cfg: Config) -> str:
         uses = step.fields.get("uses")
         if not isinstance(uses, str) or not uses.startswith("./"):
             continue
-        path = shlex.quote(uses.removeprefix("./").rstrip("/"))
-        if path != "''" and path not in paths:
+        path = uses.removeprefix("./").rstrip("/")
+        if path and path not in paths:
             paths.append(path)
+    # The path goes through a shell variable rather than straight into both
+    # lines: `shlex.quote` makes it a safe operand for `git`, but the warning
+    # interpolates it into a double-quoted string, where a `$` would expand and
+    # a `"` would end the string early — failing the one step whose job is to
+    # never turn a working run red.
     return "\n".join(
-        f'git checkout "$GITHUB_SHA" -- {path} ||\n'
-        f'  echo "::warning::could not restore {path} from $GITHUB_SHA;'
+        f"dir={shlex.quote(path)}\n"
+        f'git checkout "$GITHUB_SHA" -- "$dir" ||\n'
+        f'  echo "::warning::could not restore $dir from $GITHUB_SHA;'
         f' POST cleanup of the local action may fail"'
         for path in paths
     )

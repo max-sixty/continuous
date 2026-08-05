@@ -410,8 +410,9 @@ jobs:
       - name: Restore local setup actions for POST cleanup
         if: always()
         run: |
-          git checkout "$GITHUB_SHA" -- .github/actions/tend-setup ||
-            echo "::warning::could not restore .github/actions/tend-setup from $GITHUB_SHA; POST cleanup of the local action may fail"
+          dir=.github/actions/tend-setup
+          git checkout "$GITHUB_SHA" -- "$dir" ||
+            echo "::warning::could not restore $dir from $GITHUB_SHA; POST cleanup of the local action may fail"
 
       - name: Remove eyes reaction
         if: |
