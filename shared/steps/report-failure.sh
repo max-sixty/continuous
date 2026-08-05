@@ -56,22 +56,43 @@ else
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
     "$TABLE" \
     "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
-  gh issue create --title "$TITLE" --label "$LABEL" -F /tmp/body.md
+  MINE=$(basename "$(gh issue create --title "$TITLE" --label "$LABEL" -F /tmp/body.md)")
+  echo "Filed outage issue #${MINE}"
 
   # The jitter above only narrows the create-create race; it can't close it.
   # Two legs can still both read $EXISTING empty (jitter collision within the
   # few-second window the list index takes to reflect a fresh create), so each
-  # files its own issue. Reconcile after creating: settle for the index, list
-  # every open tend-outage issue, keep the lowest-numbered, and close the rest
-  # as duplicates. Idempotent and convergent — every racing leg computes the
-  # same keeper, so a second leg closing an already-closed dup is a no-op.
-  sleep 5
-  OPEN=$(gh issue list --label "$LABEL" --state open --json number --jq 'sort_by(.number) | .[].number')
-  KEEP=$(echo "$OPEN" | head -1)
-  echo "$OPEN" | tail -n +2 | while read -r DUP; do
-    [ -z "$DUP" ] && continue
-    gh issue close "$DUP" \
-      --comment "Duplicate of #${KEEP} (concurrent matrix-leg failure); consolidating outage tracking there." \
-      2>/dev/null || true
+  # files its own issue and the pair has to be reconciled after the fact.
+  #
+  # Reconcile by probing issue numbers directly rather than re-listing. A
+  # settle-then-list reconcile reads the same lagging index that lost the race
+  # in the first place: observed in practice, a sibling created 3s earlier was
+  # still absent from the list while one created 6s earlier was present, so two
+  # legs whose creates landed in the same second each read back only their own
+  # issue and closed nothing. `GET /issues/{n}` is a primary-key read and
+  # returns a sibling the instant it exists, so no settle is needed.
+  #
+  # Issue numbers are monotonic, so any racing sibling sits just below ours:
+  # scan a short window downwards and defer to the lowest open tracker found.
+  # Convergent — every leg computes the same keeper from its own vantage point,
+  # and only higher-numbered legs close themselves.
+  KEEP=""
+  for n in $(seq $((MINE - 1)) -1 $((MINE - 10))); do
+    [ "$n" -gt 0 ] || break
+    MATCH=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${n}" \
+      --jq "select(.state == \"open\" and .title == \"${TITLE}\"
+            and ([.labels[].name] | index(\"${LABEL}\"))) | .number" 2>/dev/null || true)
+    if [ -n "$MATCH" ]; then KEEP="$MATCH"; fi
   done
+
+  if [ -n "$KEEP" ]; then
+    # Carry this leg's row over before closing, so the failure it recorded
+    # stays on the surviving tracker instead of being stranded in the body of
+    # a closed duplicate.
+    printf '%s\n' "$TABLE" > /tmp/comment.md
+    gh issue comment "$KEEP" -F /tmp/comment.md || true
+    gh issue close "$MINE" \
+      --comment "Duplicate of #${KEEP} (concurrent leg failure); consolidating outage tracking there." \
+      2>/dev/null || true
+  fi
 fi
