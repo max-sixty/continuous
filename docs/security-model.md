@@ -321,6 +321,20 @@ The check runs as a shell step, so a prompt-injection attack inside the
 Claude session cannot skip it. Concrete limits live in
 `shared/steps/rate-limit-preflight.sh`.
 
+The spike limit is resumable by a maintainer, the burst limit is not. On a
+spike trip the run files or reopens a `tend-rate-limit` issue listing the
+runs it refused; closing that issue doubles the ceiling for the rest of the
+UTC day, and each further close doubles it again, so the limit re-arms
+after use rather than switching off. Approval is a check rather than an
+instruction: the preflight counts only closes whose actor is not the bot,
+and since GitHub admits only the author or a triage/write collaborator to
+close an issue — and the bot is the author — that leaves exactly the
+maintainers. The bot cannot approve itself even if a prompt injection tells
+it to, and there is no allowlist to maintain.
+
+Refused runs do not retry on their own; the issue's table carries their
+links. Automating that is deferred (see `TODO.md`).
+
 **Fixed prompts and marketplace skills.** The prompt and skill set come from
 the composite action and the tend marketplace, not from the PR. An attacker
 can influence what Claude *reads* (the diff, the issue body) but not the

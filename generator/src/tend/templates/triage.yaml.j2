@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   triage:
-    if: <<fork_guard_prefix(cfg)>>contains(github.event.issue.labels.*.name, 'tend-outage') == false
+    if: <<fork_guard_prefix(cfg)>>contains(github.event.issue.labels.*.name, 'tend-outage') == false && contains(github.event.issue.labels.*.name, 'tend-rate-limit') == false
     runs-on: ubuntu-24.04
     environment: <<tend_environment>>
     permissions:
