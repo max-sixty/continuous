@@ -703,7 +703,7 @@ When the correction identifies a gap or bug in a **bundled** skill — the same 
      --jq '.[] | select([.files[].path] | index(".claude/skills/running-tend/SKILL.md"))'
    ```
    If one is open, add to it instead of opening a second.
-3. **Draft a minimal edit.** One short rule, in the maintainer's words where practical. Place it under an appropriate heading. New SKILL.md files start with YAML frontmatter:
+3. **Draft a minimal edit.** State the rule, not the incident that produced it — no verbatim quotes of the maintainer's comment, no reconstruction of the exchange. A few lines of instruction is the target; step 4's PR body is where the case history goes. Place it under an appropriate heading. New SKILL.md files start with YAML frontmatter:
    ```markdown
    ---
    name: running-tend
