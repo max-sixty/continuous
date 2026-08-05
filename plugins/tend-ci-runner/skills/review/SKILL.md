@@ -329,8 +329,13 @@ GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when
 # The body-length test is what distinguishes an orphan from a synthetic reply
 # container sitting on the same HEAD: case (a) persists the body, a container
 # never has one. Without it, the PUT below would overwrite an unrelated reply.
+# `gh api --paginate` applies `--jq` to each page separately, so a `| last`
+# inside `--jq` returns one id *per page* — pipe to `jq -rs 'add | …'` to reduce
+# over the merged array instead.
 ORPHAN_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\" and (.body | length) > 0)] | last | .id // empty")
+  | jq -rs --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" \
+    'add | [.[] | select(.user.login == $bot and .commit_id == $head and (.body | length) > 0)]
+         | last | .id // empty')
 ```
 
 Then, in either case, **move the failed inline comments into the review body** as fenced code blocks with file paths, and:
