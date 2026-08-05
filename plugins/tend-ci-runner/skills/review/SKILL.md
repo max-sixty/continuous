@@ -32,12 +32,24 @@ PR_AUTHOR=$(gh pr view <number> --json author --jq '.author.login')
 IS_DRAFT=$(gh pr view <number> --json isDraft --jq '.isDraft')
 EVENT_ACTION=$(jq -r '.action // ""' < "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)
 
-# Find the bot's most recent review (any state counts — COMMENTED reviews carry
-# inline comments even when the body is empty).
-# IMPORTANT: `gh pr view --json reviews` returns `.commit.oid` (NOT `.commit_id`).
-# The REST API (`gh api .../reviews`) uses `.commit_id` — don't confuse the two.
-LAST_REVIEW_SHA=$(gh pr view <number> --json reviews \
-  --jq "[.reviews[] | select(.author.login == \"$BOT_LOGIN\")] | last | .commit.oid // empty")
+# Find the bot's most recent *real* review. Replying to a review thread
+# (`POST /pulls/{n}/comments/{id}/replies`) makes GitHub wrap the reply in a
+# synthetic zero-body COMMENTED review anchored at the then-current HEAD, so the
+# newest review record routinely points at a commit nothing reviewed. Count a
+# record only when it has a body or owns a top-level (non-reply) inline comment
+# — reply containers have neither, while an empty-body review carrying real
+# inline findings still anchors.
+SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
+  --jq '.[] | select(.in_reply_to_id == null) | .pull_request_review_id' | jq -s 'unique')
+
+# IMPORTANT: REST reviews carry `.commit_id`, NOT the `.commit.oid` that
+# `gh pr view --json reviews` returns — don't confuse the two. `gh api --jq`
+# accepts no `--arg`/`--argjson`, so pipe to `jq` rather than using `--jq`.
+LAST_REVIEW_SHA=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+  | jq -rs --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" \
+    'add | [.[] | select(.user.login == $bot)
+                | select((.body | length) > 0 or (.id | IN($sub[])))]
+         | last | .commit_id // empty')
 ```
 
 If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
