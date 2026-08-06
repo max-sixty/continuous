@@ -314,7 +314,7 @@ For runs with negative outcome signals (or suspicious lack of output), spawn ano
 Grep for the write *shape*, not the endpoint — `/comments` and `/reviews` are the GET paths too, and reading the thread is the first thing nearly every run does. Don't truncate the tool input: a `git push` or `gh issue comment` often sits hundreds of characters into a longer command. Scan every `*.jsonl` under the run directory, since a subagent posts from its own `subagents/agent-*.jsonl`.
 
 ```bash
-WRITES='gh (pr|issue) (comment|review|create)|--method POST|-X POST|comments/[0-9]+/replies|git push'
+WRITES='gh (pr|issue) (comment|review|create|edit)|--method (POST|PATCH|PUT)|-X (POST|PATCH|PUT)|comments/[0-9]+/replies|git push|resolveReviewThread'
 
 # Claude logs
 for f in $(find /tmp/session-logs/<run-id> -name '*.jsonl'); do
@@ -327,7 +327,7 @@ for f in $(find /tmp/session-logs/<run-id> -name '*.jsonl'); do
 done | grep -E "$WRITES"
 ```
 
-The run whose log contains the posting call is the author. Presence is the strong signal; before concluding a run posted *nothing*, confirm you ran the variant matching the artifact you downloaded — the wrong one returns empty regardless of what the run did.
+The run whose log contains the posting call is the author. Presence is the strong signal; before concluding a run posted *nothing*, confirm you ran the variant matching the artifact you downloaded — the wrong one returns empty regardless of what the run did — and that the write you're chasing has a shape `WRITES` covers.
 
 Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 
@@ -336,6 +336,8 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > Download: `gh run download <run-id> -R $ARGUMENTS --pattern 'claude-session-logs*' --pattern 'codex-session-logs*' --dir /tmp/session-logs/<run-id>/` (both patterns are passed because the artifact prefix depends on the target repo's harness — Claude uploads `claude-session-logs*`, Codex uploads `codex-session-logs*`)
 >
 > The concerning outcome was: <signal from Step 2>.
+>
+> If your answer will name **which run produced an output**, say which output and confirm it from the log before answering — run the `WRITES` recipe above over every `*.jsonl` under the download directory, and quote the matching tool call verbatim rather than summarising it. Don't use the truncated query below for this: the write often sits hundreds of characters into a longer command.
 >
 > **JSONL parsing** — each line has a `type` field (`user`, `assistant`, `system`). Key queries:
 > ```
