@@ -183,12 +183,12 @@ If pushing fails (fork PR with edits disabled), fall back to posting code snippe
 
 ### Batch the push — every push restarts the reviewer
 
-`tend-review` triggers on `synchronize` under a per-PR concurrency group at `cancel-in-progress: true`, so each push to a bot-authored PR starts a fresh review run and cancels the one already running. Push twice in quick succession and the first reviewer is killed at startup having produced nothing; push after several minutes and it dies with whatever review it had assembled unsubmitted.
+`tend-review` triggers on `synchronize` under a per-PR concurrency group at `cancel-in-progress: true`, so each push to a PR starts a fresh review run and cancels the one already running. Push twice in quick succession and the first reviewer is killed at startup having produced nothing; push after several minutes and it dies with whatever review it had assembled unsubmitted.
 
 - **Commit everything before `gh pr create`.** Changelog entries, test pins, and formatting fixups belong in the initial push, not a follow-up thirty seconds later.
 - **Make the commits, then push once** — not a push after each commit. Amends and rebases count: a force-push fires `synchronize` too.
 
-A follow-up push that acts on review feedback *should* invalidate the running review — that one is correct. Land it as a single push rather than spreading the same fix over several.
+A follow-up push that acts on information the session didn't have at push time — review feedback, a red check — *should* invalidate the running review; that one is correct. What's wasteful is splitting work you already have into several pushes.
 
 ### Re-check PR state before pushing a follow-up commit
 
