@@ -39,6 +39,27 @@ gh issue list --state open --author "$BOT_LOGIN" --search "ci-fix: in:title" \
   --json number,title,body --limit 10
 ```
 
+#### Sibling sessions on the same failed run
+
+A consumer that keeps a nightly-failure tracker issue opens it before this session starts, and `tend-triage` fires on that issue within seconds of `tend-ci-fix` firing on the run. Both sessions then diagnose the same failure without knowing the other exists. The searches above can't see it: they match `ci-fix: in:title`, this skill's own artifacts, while the tracker is titled whatever the consumer's template says.
+
+Search by the **failed run id** instead, across any state — a sibling may have already diagnosed and closed:
+
+```bash
+gh api "repos/$GITHUB_REPOSITORY/issues?state=all&since=$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)&per_page=100" \
+  --jq "[.[] | select((.body // \"\") | contains(\"/runs/$RUN_ID\"))] | map({number, title, state})"
+```
+
+Use the list endpoint, not `gh search issues` — search indexing lags minutes behind, and the sibling started seconds ago. `since` filters on *update* time, so a tracker reused across a failure streak (`update_existing: true`) still matches on a stale creation date.
+
+A hit means a sibling owns this failure's issue thread. Then:
+
+- **Don't open your own diagnostic issue** (3a/3b) — comment the diagnosis on that issue, and only if it adds something the sibling didn't post.
+- **Check what the sibling already did** before repeating it — a rerun it triggered is already in flight, and both sessions polling the same job to completion doubles the cost for one result.
+- **A fix PR is still yours to open** if the cause is durable; reference the sibling issue with `Fixes #<n>`.
+
+This is defer-on-discovery, not a race-free gate — the two sessions start ~2 s apart. It works because the tracker exists before either one does.
+
 ### 2. Diagnose and fix
 
 1. Get failure logs: `gh run view <run-id> --log-failed`
@@ -78,7 +99,7 @@ Automated fix for [failed run](run-url)
 
 If the diagnosis identifies the failure as transient — runner-disk corruption, an isolated network blip, an upstream incident that has since resolved — there is no fix PR to create. Don't post the diagnosis as a commit comment (it surfaces on whatever commit triggered CI, including release commits where it's visibly off-topic).
 
-Instead, open an issue with the diagnosis and close it immediately. The closure records "diagnosed, no further action" while keeping the analysis discoverable and off the commit timeline. Apply the `tend-outage` label — the workflow-level `if:` in `tend-triage` and `tend-mention` skip labelled issues, suppressing the no-op cascade runs (`opened` → silent-exit; `closed`-comment → silent-exit) that would otherwise fire on every transient tracker:
+Instead, open an issue with the diagnosis and close it immediately — unless step 1 found a sibling's issue for this run, in which case comment there. The closure records "diagnosed, no further action" while keeping the analysis discoverable and off the commit timeline. Apply the `tend-outage` label — the workflow-level `if:` in `tend-triage` and `tend-mention` skip labelled issues, suppressing the no-op cascade runs (`opened` → silent-exit; `closed`-comment → silent-exit) that would otherwise fire on every transient tracker:
 
 ```bash
 gh label create tend-outage --description "Tracks bot outage incidents" --color "d93f0b" 2>/dev/null || true
@@ -113,7 +134,7 @@ If the diagnosis identifies a durable root cause but a safe fix can't be produce
 
 Leave the issue **open**. A subsequent fix PR closes it via `Fixes #<n>` in the PR body (see step 1 — search for a matching open tracking issue before opening the fix PR). This mirrors the consumer-side `create-issue-on-nightly-failure` pattern and gives maintainers a durable "still broken" signal until a fix ships.
 
-**Dedup first.** Search for an open tracking issue covering the same failure shape; if one exists, comment with the new run link rather than opening a duplicate. Match by failure shape (workflow name + diagnostic snippet), not run ID — each run ID is unique and won't dedup:
+**Dedup first.** If step 1's run-id search found a sibling's issue, comment there and stop. Otherwise search for an open tracking issue covering the same failure shape; if one exists, comment with the new run link rather than opening a duplicate. Match by failure shape (workflow name + diagnostic snippet), not run ID — a *recurrence* of the same cause carries a different run ID and won't dedup on it:
 
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
