@@ -228,12 +228,17 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > 1. Did the bot produce visible output (review, comment, issue action, commit)?
 > 2. If yes, was the output accepted or rejected?
 >
-> **Acceptance needs a non-bot actor — name it.** For every acceptance or rejection signal, report the login that produced it: who merged, who replied, who pushed the follow-up. `$BOT_LOGIN` reviewing, replying to, or pushing to its own PR is the bot talking to itself, not acceptance. List the thread's distinct participants before calling anything accepted, and report a bot-only thread as `bot-only — no human signal`:
+> **Acceptance needs a non-bot actor — name it.** For every acceptance or rejection signal, report the login that produced it: who merged, who reviewed, who replied, who pushed the follow-up. `$BOT_LOGIN` reviewing, replying to, or pushing to its own PR is the bot talking to itself, not acceptance. A non-bot merge *is* acceptance even when every commenter is the bot — the most common shape here is a maintainer merging a bot PR without ever posting. Check all five surfaces before calling a thread accepted or bot-only, and reserve `bot-only — no human signal` for threads where `$BOT_LOGIN` is the only login across all of them:
 >
 > ```bash
+> gh api "repos/$ARGUMENTS/pulls/<pr>" --jq '{merged_by: .merged_by.login, merged_at: .merged_at}'
+> gh api "repos/$ARGUMENTS/pulls/<pr>/reviews?per_page=100" --jq '[.[] | {login: .user.login, state}] | unique'
 > gh api "repos/$ARGUMENTS/pulls/<pr>/comments?per_page=100" --jq '[.[].user.login] | unique'
 > gh api "repos/$ARGUMENTS/issues/<n>/comments?per_page=100" --jq '[.[].user.login] | unique'
+> gh api "repos/$ARGUMENTS/pulls/<pr>/commits?per_page=100" --jq '[.[].author.login] | unique'
 > ```
+>
+> The two comments endpoints alone are not enough: `/pulls/<pr>/comments` returns only inline review comments and `/issues/<n>/comments` only conversation comments. Neither carries review records or the merge actor, so a silent maintainer merge and a human `CHANGES_REQUESTED` with no inline comments are both invisible without the first two queries.
 >
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
@@ -313,7 +318,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > <note if zero bot activity found across all runs — may indicate systemic failure>
 > ```
 
-Review the subagent's summary, and verify any actor attribution before it enters a finding — a survey that credits the bot's own reply to a human turns a self-conversation into a false all-clear. Bot-only threads are neither accepted nor concerning on their own; judge them on content. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
+Review the subagent's summary, and verify any actor attribution before it enters a finding — a survey that credits the bot's own reply to a human turns a self-conversation into a false all-clear. Route on the buckets: if concerning outcomes exist, continue to Step 3. Otherwise judge the bot-only threads on their content — a self-review chain that went wrong is a finding even with no human in it, and one that read fine is not — and if nothing there concerns you and there are no sanity-check flags, skip to Step 6 (summary).
 
 ## Step 3: Investigate concerning outcomes via cheap subagent
 
