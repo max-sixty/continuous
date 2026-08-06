@@ -262,3 +262,59 @@ def test_rate_limit_burst_aborts_regardless_of_daily_volume(tmp_path: Path) -> N
         f"burst of 11 PRs in 20 minutes did not abort; stdout:\n{result.stdout}"
     )
     assert "TEND_CREATION_PAUSED_NOTE" not in github_env
+
+
+def test_rate_limit_pause_tier_survives_a_zero_baseline(tmp_path: Path) -> None:
+    """A baseline of 0 still leaves a pause band between the two tiers.
+
+    Both limits scale off the baseline (`10 + P` and `10 + P/3`), so they
+    converge as it falls and coincide at 10 when it reaches 0 — which would put
+    the 11th item straight into the hard tier and revert this script to the
+    behaviour it exists to replace. A baseline of 0 is not exotic: a quota
+    outage, a quiet week, or an adopter's install day all produce one, and a
+    depressed baseline is the diagnosed trigger.
+    """
+    result, github_env = _preflight(tmp_path, today=11, baseline=0)
+
+    assert result.returncode == 0, (
+        f"zero baseline collapsed the tiers and aborted; stdout:\n{result.stdout}"
+    )
+    assert "TEND_CREATION_PAUSED_NOTE" in github_env, (
+        f"no creation pause exported; GITHUB_ENV:\n{github_env}"
+    )
+    assert "hard: 20" in result.stdout, (
+        f"hard limit not floored above the spike limit; stdout:\n{result.stdout}"
+    )
+
+
+def test_rate_limit_burst_abort_exports_no_pause_note(tmp_path: Path) -> None:
+    """A burst abort that also lands in the spike band exports no directive.
+
+    The two conditions are independent, so a run can be over the daily spike
+    limit *and* bursting. It exits 1 either way; a creation directive addressed
+    to an agent that never starts is dead state.
+    """
+    result, github_env = _preflight(tmp_path, today=16, burst_issues=11)
+
+    assert result.returncode != 0, (
+        f"burst of 11 issues in 20 minutes did not abort; stdout:\n{result.stdout}"
+    )
+    assert "TEND_CREATION_PAUSED_NOTE" not in github_env, (
+        "exported a pause note on a run that aborts anyway"
+    )
+
+
+def test_rate_limit_pause_note_covers_runs_with_no_thread(tmp_path: Path) -> None:
+    """The pause directive names a destination for threadless runs.
+
+    The workflows whose entire deliverable is a new issue or PR are the
+    scheduled and `workflow_run` ones, which have no triggering thread to defer
+    to. Without an explicit destination the pause converts a loud failure into a
+    silent one: the agent does the diagnosis, finds nowhere to put it, and the
+    result dies with the runner.
+    """
+    _, github_env = _preflight(tmp_path, today=16)
+
+    assert "/tmp/claude/step-summary.md" in github_env, (
+        f"pause note leaves threadless runs without a destination:\n{github_env}"
+    )

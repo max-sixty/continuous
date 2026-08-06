@@ -278,6 +278,19 @@ runs:
         fi
         exit $EXIT
 
+    # Same handoff as the Claude harness: skills that have no thread to post to
+    # (review-runs, review-reviewers, and any run under a creation pause) write
+    # their result here and it lands on the run page. Without this step those
+    # writes go nowhere under Codex.
+    - name: Append skill step summary
+      if: always()
+      shell: bash
+      run: |
+        if [ -f /tmp/claude/step-summary.md ]; then
+          cat /tmp/claude/step-summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
     # Codex writes rollouts to ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
     # Each event includes a token_count field (input/output/cached). Sum
     # them. Cost is left at 0 — Codex CLI doesn't surface API list prices
