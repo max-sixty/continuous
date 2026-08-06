@@ -13,7 +13,13 @@ import click
 from click.testing import CliRunner
 
 from tend.cli import main
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
@@ -271,20 +277,33 @@ def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
         assert "\n\n\n" not in wf.content, f"{wf.filename} has triple blank lines"
 
 
-def test_custom_secrets(tmp_path: Path) -> None:
-    extra = dedent("""\
-        secrets:
-          bot_token: MY_BOT_PAT
-          claude_token: MY_CLAUDE
-          anthropic_api_key: MY_API_KEY
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_workflows_read_only_the_operational_secrets(
+    tmp_path: Path, harness: str
+) -> None:
+    """Every stored secret a workflow reads is one `tend check` verifies.
+
+    The names are fixed constants shared by the templates and the checks, so
+    the failure this guards is a template naming a secret that nothing
+    provisions — which surfaces only as an empty token at run time. The set
+    is per harness because the checks are: `check_claude_auth` verifies the
+    Claude pair and `check_codex_auth` the OpenAI key, so a claude workflow
+    reading `secrets.OPENAI_API_KEY` is unprovisioned as surely as one
+    reading a name nothing defines. `secrets.GITHUB_TOKEN` is
+    workflow-scoped rather than stored, so it is outside the set."""
+    verified = {BOT_TOKEN_SECRET} | (
+        {CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET}
+        if harness == "claude"
+        else {OPENAI_KEY_SECRET}
+    )
+    cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}\n"))
     for wf in generate_all(cfg):
-        assert "MY_BOT_PAT" in wf.content, f"{wf.filename} missing custom bot token"
-        assert "MY_CLAUDE" in wf.content, f"{wf.filename} missing custom claude token"
-        assert "MY_API_KEY" in wf.content, (
-            f"{wf.filename} missing custom anthropic_api_key secret"
+        read = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", wf.content))
+        assert read - {"GITHUB_TOKEN"} <= verified, (
+            f"{wf.filename} reads a secret the {harness} harness does not "
+            f"provision: {sorted(read - {'GITHUB_TOKEN'} - verified)}"
         )
+        assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
 
 
 def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:

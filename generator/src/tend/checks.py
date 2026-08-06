@@ -25,7 +25,13 @@ from functools import cache
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import TEND_ENVIRONMENT
 
 
@@ -1415,7 +1421,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
 
     # The engine-specific auth secret is verified by check_claude_auth /
     # check_codex_auth below, which name the relevant one in their message.
-    required_secrets = [cfg.bot_token_secret]
+    required_secrets = [BOT_TOKEN_SECRET]
 
     # The operational secrets are deliberately absent from `allowed`: they
     # belong to the environment, and a copy left at repo level is readable by
@@ -1434,14 +1440,14 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     results.append(check_credential_environments(repo, cfg, admitted))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness == "claude":
-        results.append(check_claude_auth(repo, cfg))
+        results.append(check_claude_auth(repo))
     else:
-        results.append(check_codex_auth(repo, cfg))
+        results.append(check_codex_auth(repo))
     results.append(check_repo_secret_allowlist(repo, allowed))
     return results
 
 
-def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
+def check_claude_auth(repo: str) -> CheckResult:
     """Claude needs either CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY —
     both being absent is the failure mode. Both being set is fine; the
     action prefers the OAuth token.
@@ -1449,41 +1455,35 @@ def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
     names, err = _env_secret_names(repo)
     if names is None:
         return CheckResult("claude-auth", None, err)
-    has_oauth = cfg.claude_token_secret in names
-    has_key = cfg.anthropic_api_key_secret in names
-    if has_oauth or has_key:
-        which = []
-        if has_oauth:
-            which.append(cfg.claude_token_secret)
-        if has_key:
-            which.append(cfg.anthropic_api_key_secret)
+    which = [s for s in (CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET) if s in names]
+    if which:
         return CheckResult(
             "claude-auth", True, f"Claude auth secret present: {', '.join(which)}"
         )
     return CheckResult(
         "claude-auth",
         False,
-        f"Claude harness selected but neither {cfg.claude_token_secret} nor "
-        f"{cfg.anthropic_api_key_secret} is set in the '{TEND_ENVIRONMENT}' environment.",
+        f"Claude harness selected but neither {CLAUDE_TOKEN_SECRET} nor "
+        f"{ANTHROPIC_API_KEY_SECRET} is set in the '{TEND_ENVIRONMENT}' environment.",
     )
 
 
-def check_codex_auth(repo: str, cfg: Config) -> CheckResult:
+def check_codex_auth(repo: str) -> CheckResult:
     """Codex needs OPENAI_API_KEY — absence is the failure mode. The
     subscription auth.json path is not supported.
     """
     names, err = _env_secret_names(repo)
     if names is None:
         return CheckResult("codex-auth", None, err)
-    if cfg.openai_key_secret in names:
+    if OPENAI_KEY_SECRET in names:
         return CheckResult(
             "codex-auth",
             True,
-            f"Codex auth secret present: {cfg.openai_key_secret}",
+            f"Codex auth secret present: {OPENAI_KEY_SECRET}",
         )
     return CheckResult(
         "codex-auth",
         False,
-        f"Codex harness selected but {cfg.openai_key_secret} "
+        f"Codex harness selected but {OPENAI_KEY_SECRET} "
         f"is not set in the '{TEND_ENVIRONMENT}' environment.",
     )

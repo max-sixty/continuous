@@ -319,7 +319,7 @@ jobs:
 
           echo "should_run=false" >> "$GITHUB_OUTPUT"
         env:
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           EVENT_NAME: ${{ github.event_name }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
@@ -348,7 +348,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id || github.event.client_payload.id }}
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
 
   handle:
     needs: verify
@@ -375,7 +375,7 @@ jobs:
             echo "::warning::PR is $PR_STATE — staying on default branch"
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.client_payload.pr }}
 
       - name: Compute queue delay
@@ -412,4 +412,4 @@ jobs:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id || github.event.client_payload.id }}
           BOT_NAME: <<cfg.bot_name>>
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}

@@ -6,6 +6,27 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.14
+
+### Improved
+
+- **`tend check` sweeps credential-holding environments rather than secret-holding ones**, and the check is renamed `credential-environments`. An environment holds a credential if it stores a secret *or* a job requesting `id-token: write` deploys to it, so a repo publishing through a trusted publisher no longer passes unexamined. A ref policy no longer counts as a gate under `release: published`, `repository_dispatch`, or `workflow_dispatch` with inputs, where a write-scoped actor supplies the run's payload and fires it at an admitted ref; only a required reviewer covers those. `id-token: write` outside any environment is reported on its own line. ([#815](https://github.com/max-sixty/tend/pull/815))
+
+### Fixed
+
+- **Generated workflows name the environment as `{name: tend, deployment: false}`, so a job no longer files a deployment record.** GitHub files one for every job that names an environment, against the run's own head — under `pull_request_target` that is the PR's head, so every push to every PR added a `<bot> deployed to tend` line to its timeline. The deployment-branch policy that gates the operational secrets is unaffected. `tend check` grows an `environment-deployments` check that fails a job naming the environment without it. ([#852](https://github.com/max-sixty/tend/pull/852), [#853](https://github.com/max-sixty/tend/pull/853))
+- **`tend-mention` counts the bot's engagement outside `jq`.** `gh` applies `--jq` once per page, so a reduction inside a `--paginate`d call emitted one count per page; past 100 reviews or comments on one thread the variable held a multi-line value and the numeric guard below it errored, so the step fell through to `should_run=false`. The bot went silent on exactly the threads it had engaged with most, with nothing going red. ([#840](https://github.com/max-sixty/tend/pull/840))
+- **The `review` skill ignores synthetic reply containers when reading the bot's own review records.** Replying to a review thread wraps the reply in a zero-body `COMMENTED` review anchored at the then-current HEAD, so all three guards derived from those records counted it: `LAST_REVIEW_SHA` advanced past commits nothing had reviewed, the already-posted check discarded a review the run had already formed, and the 422 recovery pointed at an unrelated reply. A record now counts only if it carries a body, owns a top-level inline comment, or is `APPROVED`. ([#835](https://github.com/max-sixty/tend/pull/835))
+- **The review's second pass reaches a code-review skill again.** The built-in `/code-review` carries `disable-model-invocation`, so invoking it returned a tool-use error and the pass silently degraded to the manual review alone. The prompt is now a tend-owned `/tend-ci-runner:code-review`, which the Codex harness resolves too — it previously skipped the second pass entirely. ([#819](https://github.com/max-sixty/tend/pull/819))
+- **`mark-notification-read` tolerates a transient run-metadata fetch failure.** The unguarded `gh api` call ran under `set -eo pipefail` in a step gated on `if: success()`, so a dropped request turned an otherwise successful run red. It now skips the cycle and leaves the thread to the scheduled `tend-notifications` poll. ([#843](https://github.com/max-sixty/tend/pull/843))
+- **A `tend-outage` row names the trigger it points at.** `repository_dispatch` — the path every relayed review event takes — had no branch and recorded `N/A`, `workflow_run` discarded the id of the run it was dispatched to fix, and an absent field rendered as `#null`. ([#823](https://github.com/max-sixty/tend/pull/823))
+- **The triage skill's `gh pr create` recipes substitute the issue number into the PR body.** Both blocks ended with a literal `#<issue-number>` while the commit message and title on the surrounding lines used `$ARGUMENTS`, so a run following them verbatim shipped the placeholder and left the issue unlinked. ([#844](https://github.com/max-sixty/tend/pull/844))
+
+### Internal
+
+- `claude-smoke` and the `tend-manual` environment it required are removed. It ran four times, all while the headless proxy harness was under construction, and CI's `test-proxy` job covers its deterministic half at the production-pinned mitmproxy. ([#820](https://github.com/max-sixty/tend/pull/820))
+- The weekly bump rule covers third-party `uses:` refs. Dependabot has never run on this repo, and it reaches neither the composite actions nor `macros.yaml.j2`, which renders `actions/checkout` into every adopter's workflows. ([#814](https://github.com/max-sixty/tend/pull/814))
+
 ## 0.1.13
 
 ### Improved

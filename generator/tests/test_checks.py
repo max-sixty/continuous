@@ -31,7 +31,13 @@ from tend.checks import (
     run_all_checks,
 )
 from tend.cli import main
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import TEND_ENVIRONMENT
 
 
@@ -40,8 +46,6 @@ def _config(
     bot_name: str = "bot",
     default_branch: str = "main",
     protected_branches: list[str] | None = None,
-    bot_token_secret: str = "T1",
-    claude_token_secret: str = "T2",
     harness: str = "claude",
     model: str = "opus",
 ) -> Config:
@@ -50,10 +54,6 @@ def _config(
         bot_name=bot_name,
         default_branch=default_branch,
         protected_branches=protected_branches or [],
-        bot_token_secret=bot_token_secret,
-        claude_token_secret=claude_token_secret,
-        anthropic_api_key_secret="ANTHROPIC_API_KEY",
-        openai_key_secret="OPENAI_API_KEY",
         harness=harness,
         model=model,
         effort="",
@@ -68,6 +68,13 @@ def _make_completed(
     return subprocess.CompletedProcess(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr
     )
+
+
+def _secret_names(args: tuple, *names: str) -> str:
+    """A secrets listing in whichever shape the caller asked for: objects for
+    `gh secret list --json name`, bare names for the `--jq` reads."""
+    listed = [{"name": n} for n in names] if "--json" in args else list(names)
+    return json.dumps(listed) + "\n"
 
 
 def _write_config(tmp_path: Path, content: str = "bot_name: test-bot") -> Path:
@@ -886,7 +893,11 @@ def _gh_all_pass(*admitted: str):
             # Two callers read this path with different `--jq` shapes: the
             # membership check wants a JSON array, the environment sweep one
             # name per line. The fake answers whichever was asked for.
-            names = ["T1", "T2"] if url.endswith(f"{TEND_ENVIRONMENT}/secrets") else []
+            names = (
+                [BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET]
+                if url.endswith(f"{TEND_ENVIRONMENT}/secrets")
+                else []
+            )
             if any(a.startswith("[.secrets") for a in args):
                 return _make_completed(json.dumps(names))
             return _make_completed("\n".join(names) + "\n")
@@ -953,7 +964,7 @@ def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
     def gh_with_repo_level_copy(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         url = args[1]
         if "environments/tend/secrets" not in url and url.endswith("actions/secrets"):
-            return _make_completed('["T1"]\n')
+            return _make_completed(json.dumps([BOT_TOKEN_SECRET]) + "\n")
         return _gh_all_pass()(*args, **kwargs)
 
     with (
@@ -967,7 +978,7 @@ def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
         "a repo-level copy of the bot token must be flagged — it is readable "
         "from any branch the bot can push"
     )
-    assert "T1" in allowlist[0].message
+    assert BOT_TOKEN_SECRET in allowlist[0].message
 
 
 def test_run_all_checks_allowlist_catches_unexpected() -> None:
@@ -1039,9 +1050,9 @@ def test_codex_engine_passes_with_openai_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"},{"name":"OPENAI_API_KEY"}]\n')
-            return _make_completed('["T1","OPENAI_API_KEY"]\n')
+            return _make_completed(
+                _secret_names(args, BOT_TOKEN_SECRET, OPENAI_KEY_SECRET)
+            )
         return _make_completed(returncode=1)
 
     with (
@@ -1052,7 +1063,7 @@ def test_codex_engine_passes_with_openai_key() -> None:
     codex_check = [r for r in results if r.name == "codex-auth"]
     assert len(codex_check) == 1
     assert codex_check[0].passed is True
-    assert "OPENAI_API_KEY" in codex_check[0].message
+    assert OPENAI_KEY_SECRET in codex_check[0].message
 
 
 def test_codex_engine_fails_when_no_auth() -> None:
@@ -1069,9 +1080,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"}]\n')
-            return _make_completed('["T1"]\n')
+            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1081,7 +1090,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         results = run_all_checks(_config(harness="codex"), repo="owner/repo")
     codex_check = [r for r in results if r.name == "codex-auth"]
     assert codex_check[0].passed is False
-    assert "OPENAI_API_KEY" in codex_check[0].message
+    assert OPENAI_KEY_SECRET in codex_check[0].message
 
 
 def test_claude_engine_omits_codex_auth_check() -> None:
@@ -1096,7 +1105,6 @@ def test_claude_engine_omits_codex_auth_check() -> None:
 
 def test_claude_engine_passes_with_oauth_token() -> None:
     """Engine=claude with the OAuth token secret set passes claude-auth."""
-    # _gh_all_pass returns ["T1","T2"] — T2 is claude_token_secret.
     with (
         patch("shutil.which", return_value="/usr/bin/gh"),
         patch("tend.checks._gh", side_effect=_gh_all_pass()),
@@ -1105,7 +1113,7 @@ def test_claude_engine_passes_with_oauth_token() -> None:
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert len(claude_check) == 1
     assert claude_check[0].passed is True
-    assert "T2" in claude_check[0].message
+    assert CLAUDE_TOKEN_SECRET in claude_check[0].message
 
 
 def test_claude_engine_passes_with_api_key() -> None:
@@ -1122,9 +1130,9 @@ def test_claude_engine_passes_with_api_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"},{"name":"ANTHROPIC_API_KEY"}]\n')
-            return _make_completed('["T1","ANTHROPIC_API_KEY"]\n')
+            return _make_completed(
+                _secret_names(args, BOT_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET)
+            )
         return _make_completed(returncode=1)
 
     with (
@@ -1134,7 +1142,7 @@ def test_claude_engine_passes_with_api_key() -> None:
         results = run_all_checks(_config(), repo="owner/repo")
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert claude_check[0].passed is True
-    assert "ANTHROPIC_API_KEY" in claude_check[0].message
+    assert ANTHROPIC_API_KEY_SECRET in claude_check[0].message
 
 
 def test_claude_engine_fails_when_no_auth() -> None:
@@ -1151,9 +1159,7 @@ def test_claude_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"}]\n')
-            return _make_completed('["T1"]\n')
+            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1163,8 +1169,8 @@ def test_claude_engine_fails_when_no_auth() -> None:
         results = run_all_checks(_config(), repo="owner/repo")
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert claude_check[0].passed is False
-    assert "T2" in claude_check[0].message
-    assert "ANTHROPIC_API_KEY" in claude_check[0].message
+    assert CLAUDE_TOKEN_SECRET in claude_check[0].message
+    assert ANTHROPIC_API_KEY_SECRET in claude_check[0].message
 
 
 def test_run_all_checks_deduplicates_default_branch() -> None:

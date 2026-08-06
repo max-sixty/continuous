@@ -24,12 +24,12 @@
         if: <<if_condition>>
 {% endif %}
         with:
-          github_token: ${{ secrets.<<cfg.bot_token_secret>> }}
+          github_token: ${{ secrets.<<bot_token_secret>> }}
 {% if cfg.harness == 'claude' %}
-          claude_code_oauth_token: ${{ secrets.<<cfg.claude_token_secret>> }}
-          anthropic_api_key: ${{ secrets.<<cfg.anthropic_api_key_secret>> }}
+          claude_code_oauth_token: ${{ secrets.<<claude_token_secret>> }}
+          anthropic_api_key: ${{ secrets.<<anthropic_api_key_secret>> }}
 {% else %}
-          openai_api_key: ${{ secrets.<<cfg.openai_key_secret>> }}
+          openai_api_key: ${{ secrets.<<openai_key_secret>> }}
 {% if cfg.effort %}
           effort: <<cfg.effort>>
 {% endif %}
@@ -147,7 +147,7 @@
 {% endif %}
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.<<cfg.bot_token_secret>> }}
+          token: ${{ secrets.<<bot_token_secret>> }}
 {%- endmacro %}
 
 {# YAML block scalar prompt at column 10, with the supplied text indented at

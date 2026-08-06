@@ -40,14 +40,32 @@ KNOWN_TOP_LEVEL = {
     "workflows",
 }
 KNOWN_HARNESSES = {"claude", "codex"}
-# Claude harness reads claude_token (OAuth) and anthropic_api_key (console.
-# anthropic.com) — adopters set one. Codex harness reads openai_key.
-KNOWN_SECRETS_KEYS = {
-    "bot_token",
-    "claude_token",
-    "anthropic_api_key",
-    "openai_key",
-    "allowed",
+KNOWN_SECRETS_KEYS = {"allowed"}
+
+# The operational secrets, by fixed name. Claude reads the OAuth token
+# (subscription) or the API key (console.anthropic.com) — adopters set one;
+# Codex reads the OpenAI key. Not configurable: `install-tend` creates the
+# `tend` environment and fills it from scratch, so there is no pre-existing
+# secret whose name an adopter would want to keep.
+BOT_TOKEN_SECRET = "TEND_BOT_TOKEN"
+CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"
+ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY"
+OPENAI_KEY_SECRET = "OPENAI_API_KEY"
+OPERATIONAL_SECRETS = {
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    ANTHROPIC_API_KEY_SECRET,
+    OPENAI_KEY_SECRET,
+}
+# Keys that once renamed those secrets. A leftover one is refused rather
+# than warned past: ignoring it would generate workflows reading the fixed
+# name while the adopter's secret still answers to the old one, and every
+# job would fail on an empty token.
+REMOVED_SECRETS_KEYS = {
+    "bot_token": BOT_TOKEN_SECRET,
+    "claude_token": CLAUDE_TOKEN_SECRET,
+    "anthropic_api_key": ANTHROPIC_API_KEY_SECRET,
+    "openai_key": OPENAI_KEY_SECRET,
 }
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 # POSIX-ish env var name: letters, digits, underscore; not starting with a digit.
@@ -160,10 +178,6 @@ class Config:
     bot_name: str
     default_branch: str
     protected_branches: list[str]
-    bot_token_secret: str
-    claude_token_secret: str
-    anthropic_api_key_secret: str
-    openai_key_secret: str
     harness: str
     model: str
     effort: str
@@ -272,7 +286,17 @@ class Config:
             )
 
         secrets = raw.get("secrets", {}) or {}
-        unknown_secrets = set(secrets.keys()) - KNOWN_SECRETS_KEYS
+        removed = sorted(set(secrets) & set(REMOVED_SECRETS_KEYS))
+        if removed:
+            renames = ", ".join(
+                f"secrets.{key} → {REMOVED_SECRETS_KEYS[key]}" for key in removed
+            )
+            raise click.ClickException(
+                f"Removed secret name override(s): {renames}. The operational "
+                "secret names are fixed — rename each secret to the name shown "
+                "and drop the key."
+            )
+        unknown_secrets = set(secrets) - KNOWN_SECRETS_KEYS
         for key in sorted(unknown_secrets):
             click.echo(f"Warning: unknown secrets key '{key}'", err=True)
 
@@ -509,21 +533,12 @@ class Config:
                 'e.g. allowed: ["CODECOV_TOKEN"]'
             )
 
-        bot_token_secret = secrets.get("bot_token", "TEND_BOT_TOKEN")
-        claude_token_secret = secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN")
-        anthropic_api_key_secret = secrets.get("anthropic_api_key", "ANTHROPIC_API_KEY")
-        openai_key_secret = secrets.get("openai_key", "OPENAI_API_KEY")
         # The allowlist is the one deliberate exception to "no repo-level
         # secrets", for tokens whose exposure the maintainer accepts. The
         # operational secrets are never that: allowlisting one would let a
         # repo-level copy pass `tend check`, handing any workflow the bot
         # pushes exactly what the environment gate denies.
-        blessed = {
-            bot_token_secret,
-            claude_token_secret,
-            anthropic_api_key_secret,
-            openai_key_secret,
-        } & set(allowed)
+        blessed = OPERATIONAL_SECRETS & set(allowed)
         if blessed:
             raise click.ClickException(
                 f"secrets.allowed must not include {', '.join(sorted(blessed))}: "
@@ -536,10 +551,6 @@ class Config:
             bot_name=bot_name,
             default_branch="main",
             protected_branches=protected_branches,
-            bot_token_secret=bot_token_secret,
-            claude_token_secret=claude_token_secret,
-            anthropic_api_key_secret=anthropic_api_key_secret,
-            openai_key_secret=openai_key_secret,
             harness=harness,
             model=model,
             effort=effort,
