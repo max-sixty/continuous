@@ -353,7 +353,7 @@ Search titles AND bodies for related keywords. Only comment on existing issues i
 
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
-- **PR** (default): Branch `hourly/review-$GITHUB_RUN_ID-<target-repo-name>`, fix, commit, push, create with label `claude-behavior`. The workflow matrixes over target repos and every leg carries the same `$GITHUB_RUN_ID`, so the run ID alone is not a unique branch name — append the target's repo name (the part after the `/`) to keep two legs that both find something from racing the same ref. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
+- **PR** (default): Branch `hourly/review-$GITHUB_RUN_ID-<target-repo-name>-<topic-slug>`, fix, commit, push, create with label `claude-behavior`. `$GITHUB_RUN_ID` alone is not a unique branch name: every matrix leg of a tick carries the same one, and a single leg may open two PRs (see the 2-PR limit below). The target's repo name (the part after the `/`) keeps two legs from racing the same ref; the topic slug keeps one leg's two PRs from doing the same. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly. Include run ID, outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more findings, pick the highest-confidence ones and record the rest in the evidence gist.
