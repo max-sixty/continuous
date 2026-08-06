@@ -304,6 +304,33 @@ def test_rate_limit_burst_abort_exports_no_pause_note(tmp_path: Path) -> None:
     )
 
 
+def test_skill_summary_dir_is_created_by_both_harnesses() -> None:
+    """Both harnesses create `/tmp/claude` before the agent runs.
+
+    It is the only channel out of the session for a run with no thread to post
+    to: the sandbox is denylisted from `$GITHUB_STEP_SUMMARY` itself, so the
+    agent writes a file and a teardown step copies it. Nothing creates the
+    directory implicitly — `/tmp` is `1777`, and Codex writes files through the
+    shell, where a missing parent is a hard failure rather than an auto-mkdir.
+    Leaving it to the agent would make the copy step read an absent file on
+    exactly the paused runs it exists for.
+    """
+    claude = (REPO_ROOT / "proxy" / "setup-sandbox.sh").read_text()
+    codex = (REPO_ROOT / "codex" / "action.yaml").read_text()
+
+    assert 'sudo -u "$SANDBOX" mkdir -p /tmp/claude' in claude, (
+        "setup-sandbox.sh must create /tmp/claude as the sandbox user; a "
+        "runner-owned directory under 1777 /tmp is unwritable by the agent"
+    )
+    assert "mkdir -p /tmp/claude" in codex, (
+        "codex/action.yaml must create /tmp/claude before running the agent"
+    )
+    for name in ("claude/action.yaml", "codex/action.yaml"):
+        assert "/tmp/claude/step-summary.md" in (REPO_ROOT / name).read_text(), (
+            f"{name} no longer copies the skill summary into the job summary"
+        )
+
+
 def test_rate_limit_pause_note_covers_runs_with_no_thread(tmp_path: Path) -> None:
     """The pause directive names a destination for threadless runs.
 

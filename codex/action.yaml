@@ -252,6 +252,13 @@ runs:
         EFFORT: ${{ inputs.effort }}
         SANDBOX: ${{ inputs.sandbox }}
       run: |
+        # Skill-output handoff read by "Append skill step summary" below. The
+        # Claude harness creates this as the sandbox user in setup-sandbox.sh;
+        # here the agent runs as the runner user, so a plain mkdir suffices.
+        # Deterministic rather than left to the agent: Codex writes files
+        # through the shell, where a missing parent is a hard failure.
+        mkdir -p /tmp/claude
+
         OUTPUT_FILE="$RUNNER_TEMP/codex-final-message.md"
         ARGS=(
           --model "$MODEL"

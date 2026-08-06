@@ -300,6 +300,14 @@ log "workspace handed to $SANDBOX"
 sudo -u "$SANDBOX" mkdir -p "$TEND_RUN_DIR"
 log "run dir $TEND_RUN_DIR"
 
+# Skill-output handoff: the agent writes step-summary.md here and the action's
+# teardown copies it into $GITHUB_STEP_SUMMARY (the sandbox is denylisted from
+# GITHUB_STEP_SUMMARY itself, so a file is the only channel). Created as the
+# sandbox user — /tmp is 1777, so a runner-owned dir here would be unwritable
+# by the agent. Fixed path because the skills that use it hard-code it.
+sudo -u "$SANDBOX" mkdir -p /tmp/claude
+log "skill summary dir /tmp/claude"
+
 # 4. Start the injecting proxy. It inherits the real GitHub + Anthropic
 #    credentials from this shell; they never leave this runner-owned process.
 #    confdir is 0700 runner-only so the sandbox can't read the CA private key
