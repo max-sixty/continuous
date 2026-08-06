@@ -146,3 +146,119 @@ def test_mark_notification_read_leaves_activity_newer_than_the_run(
 
     assert result.returncode == 0, result.stderr
     assert not any("-X PATCH" in c for c in _calls(gh_env))
+
+
+# --- rate-limit-preflight.sh -------------------------------------------------
+
+RATE_LIMIT_PREFLIGHT = REPO_ROOT / "shared" / "steps" / "rate-limit-preflight.sh"
+
+# `gh api` stand-in returning the four counts the preflight reads. The two
+# search/issues calls are told apart by the `..` date range only the baseline
+# query carries. FAKE_ prefixes keep these clear of the names the script
+# assigns, so a test can't pass on an inherited value it never fetched.
+FAKE_GH_COUNTS = """#!/usr/bin/env bash
+case "$2" in
+  repos/*/pulls*) echo "$FAKE_BURST_PRS" ;;
+  repos/*/issues*) echo "$FAKE_BURST_ISSUES" ;;
+  *created:*..*) echo "$FAKE_BASELINE" ;;
+  search/issues*) echo "$FAKE_TODAY" ;;
+  *) exit 1 ;;
+esac
+"""
+
+# A 6-day baseline of 17 is what the bot actually carried into 2026-08-05: it
+# puts the spike tier at 10 + 17/3 = 15 and the hard tier at 10 + 17 = 27.
+BASELINE = 17
+
+
+def _preflight(
+    tmp_path: Path,
+    *,
+    today: int,
+    baseline: int = BASELINE,
+    burst_prs: int = 0,
+    burst_issues: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Run the preflight against fixed counts; return the result and GITHUB_ENV."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    gh = bindir / "gh"
+    gh.write_text(FAKE_GH_COUNTS)
+    gh.chmod(0o755)
+    github_env = tmp_path / "github-env"
+    github_env.write_text("")
+
+    result = subprocess.run(
+        ["bash", str(RATE_LIMIT_PREFLIGHT)],
+        env={
+            "PATH": f"{bindir}:/usr/bin:/bin",
+            "GITHUB_REPOSITORY": "owner/repo",
+            "GITHUB_ENV": str(github_env),
+            "BOT_NAME": "bot",
+            "FAKE_TODAY": str(today),
+            "FAKE_BASELINE": str(baseline),
+            "FAKE_BURST_PRS": str(burst_prs),
+            "FAKE_BURST_ISSUES": str(burst_issues),
+        },
+        capture_output=True,
+        text=True,
+    )
+    return result, github_env.read_text()
+
+
+def test_rate_limit_spike_tier_pauses_creation_without_aborting(
+    tmp_path: Path,
+) -> None:
+    """The spike tier lets the run proceed and pauses creation instead.
+
+    Aborting here took every workflow on the repo down for the rest of the UTC
+    day — `tend-review` and `tend-mention` included, which answer humans and
+    create nothing, so they cannot contribute to the count being enforced. This
+    is the 2026-08-05 case exactly: 16 items against a spike limit of 15.
+    """
+    result, github_env = _preflight(tmp_path, today=16)
+
+    assert result.returncode == 0, (
+        f"spike tier aborted the run (exit {result.returncode}); "
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "TEND_CREATION_PAUSED_NOTE" in github_env, (
+        f"no creation pause exported; GITHUB_ENV:\n{github_env}"
+    )
+    assert "do not open a new issue or pull request" in github_env
+
+
+def test_rate_limit_hard_tier_still_aborts(tmp_path: Path) -> None:
+    """A slow runaway crosses the hard tier and is stopped deterministically.
+
+    The spike tier is advisory once it reaches the model, so this is the gate a
+    prompt-injected session cannot talk its way past.
+    """
+    result, github_env = _preflight(tmp_path, today=28)
+
+    assert result.returncode != 0, (
+        f"runaway volume did not abort the run; stdout:\n{result.stdout}"
+    )
+    assert "hard limit of 27" in result.stdout
+    assert "TEND_CREATION_PAUSED_NOTE" not in github_env, (
+        "exported a pause note on a run that aborts anyway"
+    )
+
+
+def test_rate_limit_under_spike_tier_is_a_clean_pass(tmp_path: Path) -> None:
+    """Normal volume neither aborts nor pauses creation."""
+    result, github_env = _preflight(tmp_path, today=3)
+
+    assert result.returncode == 0, result.stderr
+    assert "Rate limit check passed" in result.stdout
+    assert "TEND_CREATION_PAUSED_NOTE" not in github_env
+
+
+def test_rate_limit_burst_aborts_regardless_of_daily_volume(tmp_path: Path) -> None:
+    """The 20-minute burst check is untouched: it still aborts the run."""
+    result, github_env = _preflight(tmp_path, today=3, burst_prs=11)
+
+    assert result.returncode != 0, (
+        f"burst of 11 PRs in 20 minutes did not abort; stdout:\n{result.stdout}"
+    )
+    assert "TEND_CREATION_PAUSED_NOTE" not in github_env
