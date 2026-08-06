@@ -415,6 +415,9 @@ def test_token_usage_survives_a_truncated_line_beside_a_second_session(
     usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
 
     assert usage["output_tokens"] == 6000, "lost the second session's first message"
+    # p2 contributes its opening prompt and no turn of its own. The subtraction
+    # is per session, so pooling the files must not count that prompt as one.
+    assert usage["turns"] == 3, "counted the second session's prompt as a turn"
     assert usage["partial"] is True
 
 

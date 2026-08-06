@@ -81,7 +81,8 @@ if [ -z "${USAGE:-}" ] && [ -n "$LOGS_DIR" ] && [ -d "$LOGS_DIR" ]; then
     # without a newline — the truncation case above — would glue its last line
     # to the next file's first line and `fromjson?` would drop both. awk ends
     # every file on a newline, so a truncated tail costs only itself.
-    USAGE=$(awk 1 "${SESSION_FILES[@]}" | jq -R -s -c --arg model "$MODEL" '
+    USAGE=$(awk 1 "${SESSION_FILES[@]}" | jq -R -s -c --arg model "$MODEL" \
+      --argjson sessions "${#SESSION_FILES[@]}" '
       split("\n") | map(fromjson? // empty) |
       ([.[] | select(.type == "assistant" and .message.id != null)
             | {id: .message.id, u: .message.usage}] | unique_by(.id)) as $ms |
@@ -93,8 +94,10 @@ if [ -z "${USAGE:-}" ] && [ -n "$LOGS_DIR" ] && [ -d "$LOGS_DIR" ]; then
           output_tokens: ([$ms[].u.output_tokens // 0] | add // 0),
           cache_creation_input_tokens: ([$ms[].u.cache_creation_input_tokens // 0] | add // 0),
           cache_read_input_tokens: ([$ms[].u.cache_read_input_tokens // 0] | add // 0),
-          # The prompt that opens the session is a `user` line but not a turn.
-          turns: ([([.[] | select(.type == "user")] | length) - 1, 0] | max),
+          # The prompt that opens a session is a `user` line but not a turn, and
+          # the files are pooled by the time this runs — so subtract one per
+          # session, not one overall.
+          turns: ([([.[] | select(.type == "user")] | length) - $sessions, 0] | max),
           model: $model,
           # Only `result.total_cost_usd` carries cost, and that is the event we
           # do not have. `null` says unknown; a `0` here would repeat the bug
