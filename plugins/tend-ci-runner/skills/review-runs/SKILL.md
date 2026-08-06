@@ -116,7 +116,8 @@ if [ -n "$EXISTING_COMMENT" ]; then
     gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
   fi
 else
-  # No prior bot comment on this month's tracking issue — create the first one.
+  # No prior evidence-log comment on this month's tracking issue — create the
+  # first one. Other bot comments may exist; they aren't append targets.
   gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
 fi
 ```
