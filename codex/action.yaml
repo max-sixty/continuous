@@ -332,10 +332,11 @@ runs:
 
     # Gate on the job being red, not on the agent step specifically — see the
     # matching note in claude/action.yaml, including why the security preflight
-    # is excluded. Every step ahead of `codex` (the rate-limit preflight, the
-    # CLI and plugin installs, the AGENTS.md staging, the fork-PR pinning)
-    # strands the same work when it fails, and keying on `steps.codex.outcome`
-    # kept all of them out of the outage tracker.
+    # is excluded. Every step ahead of `codex` (the rate-limit preflight, bot-ID
+    # resolution, auth validation, the CLI and plugin installs, the AGENTS.md
+    # staging, the fork-PR pinning) strands the same work when it fails, and
+    # keying on `steps.codex.outcome` kept all of them out of the outage
+    # tracker.
     - name: Report failure
       if: failure() && steps.security.outcome != 'failure'
       shell: bash

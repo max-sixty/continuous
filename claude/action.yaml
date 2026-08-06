@@ -616,13 +616,17 @@ runs:
     # out as a red run and nothing else; a rate-limit preflight abort held
     # every workflow on this repo for a full UTC day without filing a thing.
     #
-    # The security preflight is the one exclusion: its failure is a config
-    # refusal, not an outage. It stays failing until a human fixes the repo's
-    # branch protection, so it would file "Bot temporarily unavailable" and
-    # append a row on every subsequent trigger, forever, without ever naming
-    # the cause. It is also the one case where reporting would have the bot
-    # write to the repo with its PAT right after the security gate refused to
-    # let it operate there.
+    # The security preflight is the one exclusion, and what carves it out is
+    # that reporting would have the bot write to the repo (`gh issue create`,
+    # and `gh issue close` on the reconcile path) with its PAT immediately
+    # after the security gate refused to let it operate there. Its failure is
+    # also persistent — red until a human fixes branch protection, so an issue
+    # titled "Bot temporarily unavailable" would collect a row per trigger —
+    # but that argument doesn't single it out: `Validate auth configured` and
+    # the adopter's `sandbox_setup:` fail the same way and stay in. Bounding
+    # that repeated append belongs in `report-failure.sh`, where it covers
+    # every such step at once (#859); enumerating more step ids here would go
+    # stale as steps move.
     - name: Report failure
       if: failure() && steps.security.outcome != 'failure'
       shell: bash
