@@ -83,15 +83,18 @@ Also check last month's tracking issue (if it exists) for recent carry-over.
 
 ### Recording below-threshold findings
 
-After analysis, find **the bot's existing comment** on the tracking issue and **append** new findings to it. If no bot comment exists yet, create one. This avoids notification spam from frequent runs.
+After analysis, find **this skill's own evidence comment** on the tracking issue and **append** new findings to it. If it doesn't exist yet, create one. This avoids notification spam from frequent runs.
 
 The guard must run **before any posting path** — append-existing and create-new both publish a comment that needs to embed the real run ID, and a guard placed inside one branch silently no-ops on the other. The first run after a monthly tracking issue is created always takes the create-new branch, so the guard belongs above the branch:
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 BOT_LOGIN=$(gh api user --jq '.login')
+# Match the evidence log by its `## Run <id>` heading, not by "newest bot
+# comment" — other skills (nightly) post their own comments on this issue, and
+# the newest one is often not the log.
 EXISTING_COMMENT=$(gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | last | .id // empty")
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and (.body | test(\"^## Run [0-9]\")))] | last | .id // empty")
 
 # Verify the run heading references this run's $GITHUB_RUN_ID literally —
 # fabricated round numbers produce dead Workflow links, see @review-gates.md.
