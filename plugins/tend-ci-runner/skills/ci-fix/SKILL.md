@@ -46,11 +46,19 @@ A consumer that keeps a nightly-failure tracker issue opens it before this sessi
 Search by the **failed run id** instead, across any state — a sibling may have already diagnosed and closed:
 
 ```bash
-gh api "repos/$GITHUB_REPOSITORY/issues?state=all&since=$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)&per_page=100" \
-  --jq "[.[] | select((.body // \"\") | contains(\"/runs/$RUN_ID\"))] | map({number, title, state})"
+RUN_ID=<failed run id>
+gh api "repos/$GITHUB_REPOSITORY/issues?state=all&sort=updated&since=$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)&per_page=100" \
+  --jq "[.[] | select(.pull_request == null)
+             | select((.body // \"\") | contains(\"/runs/$RUN_ID\"))] | map({number, title, state})"
 ```
 
-Use the list endpoint, not `gh search issues` — search indexing lags minutes behind, and the sibling started seconds ago. `since` filters on *update* time, so a tracker reused across a failure streak (`update_existing: true`) still matches on a stale creation date.
+Three things that recipe depends on:
+
+- **Assign `RUN_ID`.** Unset, the filter degrades to `contains("/runs/")` and matches any issue citing any run — every session would defer to an unrelated thread.
+- **`select(.pull_request == null)`.** This endpoint returns pull requests as well as issues, and step 3's PR body links the failed run, so a fix PR matches the same filter. PRs are already handled at the top of step 1, and `Fixes #<n>` aimed at a PR number is silently ignored.
+- **The list endpoint, not `gh search issues`.** Search indexing lags minutes behind; the sibling started seconds ago.
+
+`since` and `sort=updated` both key on update time — a tracker reused across a failure streak (`update_existing: true`) has a stale creation date, and the endpoint's default `sort=created` would let it fall off the single page of 100 on a busy repo.
 
 A hit means a sibling owns this failure's issue thread. Then:
 
