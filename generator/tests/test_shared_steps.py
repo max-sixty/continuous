@@ -367,6 +367,58 @@ def test_token_usage_prefers_result_events_when_present(tmp_path: Path) -> None:
     assert usage["partial"] is False
 
 
+def test_token_usage_survives_a_truncated_final_line(tmp_path: Path) -> None:
+    """A half-written line costs that line, not the run's whole accounting.
+
+    A cancelled process can be killed mid-append, leaving its session JSONL
+    ending in a partial entry. `jq -s` aborts the file on the first parse
+    error and the `|| echo ''` swallows it, which would drop the run into the
+    "agent never ran" branch — republishing the all-zero `partial: false`
+    payload this fallback exists to replace, now indistinguishable from a
+    genuine preflight no-op.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    session = _session_jsonl(logs_dir)
+    session.write_text(session.read_text() + '{"type":"assistant","mess')
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 4500, "a truncated tail zeroed the totals"
+    assert usage["turns"] == 3
+    assert usage["partial"] is True
+
+
+def test_token_usage_survives_a_truncated_stream_json_line(tmp_path: Path) -> None:
+    """The same truncation on the stream-json must not lose a `result` event.
+
+    Falling through to the session JSONL would still report the tokens, but as
+    `partial` with an unknown cost — a needless downgrade when the result event
+    itself parsed fine.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+    stream = _ndjson(
+        tmp_path / "stream.json",
+        [
+            {
+                "type": "result",
+                "num_turns": 14,
+                "total_cost_usd": 1.25,
+                "usage": {"input_tokens": 23, "output_tokens": 9406},
+            },
+        ],
+    )
+    stream.write_text(stream.read_text() + '{"type":"resu')
+
+    usage = _usage(tmp_path, stream=stream, logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 9406
+    assert usage["cost_usd"] == 1.25
+    assert usage["partial"] is False
+
+
 def test_token_usage_reports_zero_when_the_agent_never_ran(tmp_path: Path) -> None:
     """No stream and no session JSONL is a genuine zero, not a partial total.
 

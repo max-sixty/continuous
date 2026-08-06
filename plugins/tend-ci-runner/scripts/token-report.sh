@@ -54,7 +54,7 @@ for prefix in "${PREFIXES[@]}"; do
 done
 
 if [ ${#WORKFLOWS[@]} -eq 0 ]; then
-  echo '{"runs":[],"totals":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"turns":0,"cost_usd":0}}'
+  echo '{"runs":[],"totals":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"turns":0,"cost_usd":0,"partial_runs":0}}'
   exit 0
 fi
 
@@ -68,7 +68,7 @@ done
 
 RUN_COUNT=$(echo "$ALL_RUNS" | jq 'length')
 if [ "$RUN_COUNT" -eq 0 ]; then
-  echo '{"runs":[],"totals":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"turns":0,"cost_usd":0}}'
+  echo '{"runs":[],"totals":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"turns":0,"cost_usd":0,"partial_runs":0}}'
   exit 0
 fi
 

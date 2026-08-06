@@ -17,12 +17,21 @@ LOGS_DIR=${LOGS_DIR:-}
 
 USAGE=""
 
+# Both parsers below read their NDJSON as raw text and parse line by line
+# (`-R -s`, then `map(fromjson? // empty)`) rather than letting jq decode the
+# stream. `jq -s` aborts the whole file on the first malformed line, and the
+# `|| echo ''` that follows swallows the error — so one bad line would zero the
+# run's accounting rather than cost that line. A killed process truncating its
+# final append is the likeliest way to get one, which is exactly the
+# cancellation case this script exists to account for.
+
 # Primary path: the stream-json's `type: "result"` events. Sessions that use
 # `run_in_background: true` Bash emit a second `result` on wakeup; `usage.*`
 # and `num_turns` are per-event, while `total_cost_usd` is cumulative. Sum the
 # per-event fields across all entries and take cost from the last.
 if [ -n "${STREAM_JSON:-}" ] && [ -s "$STREAM_JSON" ]; then
-  USAGE=$(jq -s -c --arg model "$MODEL" '
+  USAGE=$(jq -R -s -c --arg model "$MODEL" '
+    split("\n") | map(fromjson? // empty) |
     (map(select(.type == "result"))) as $rs |
     if ($rs | length) == 0 then
       empty
@@ -67,7 +76,8 @@ fi
 if [ -z "${USAGE:-}" ] && [ -n "$LOGS_DIR" ] && [ -d "$LOGS_DIR" ]; then
   mapfile -t SESSION_FILES < <(find "$LOGS_DIR" -name '*.jsonl' -type f -not -path '*/subagents/*')
   if [ ${#SESSION_FILES[@]} -gt 0 ]; then
-    USAGE=$(jq -s -c --arg model "$MODEL" '
+    USAGE=$(jq -R -s -c --arg model "$MODEL" '
+      split("\n") | map(fromjson? // empty) |
       ([.[] | select(.type == "assistant" and .message.id != null)
             | {id: .message.id, u: .message.usage}] | unique_by(.id)) as $ms |
       if ($ms | length) == 0 then
