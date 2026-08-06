@@ -170,6 +170,12 @@ runs:
           envsubst '$BOT_NAME' < "$SHARED"
           echo
           envsubst '$BOT_NAME' < "$TAIL"
+          # Set by rate-limit-preflight.sh on a spike-tier trip; the Claude
+          # harness appends the same text in compose-system-prompt.sh.
+          if [ -n "${TEND_CREATION_PAUSED_NOTE:-}" ]; then
+            echo
+            echo "$TEND_CREATION_PAUSED_NOTE"
+          fi
         } > "$AGENTS"
         echo "Staged AGENTS.md at $AGENTS ($(wc -l < "$AGENTS") lines)"
 

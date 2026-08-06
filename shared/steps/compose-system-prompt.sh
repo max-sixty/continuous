@@ -11,7 +11,9 @@
 #
 # Inputs (env): SYSTEM_PROMPT_FILE (absolute path to shared/system-prompt.md;
 # differs per action by checkout depth), BOT_NAME, EXTRA (system_prompt_append),
-# GITHUB_OUTPUT (from Actions).
+# GITHUB_OUTPUT (from Actions), TEND_CREATION_PAUSED_NOTE (reaches this step
+# through GITHUB_ENV when rate-limit-preflight.sh trips its spike tier; empty
+# otherwise). The pause note goes last so it outranks the adopter's append.
 set -eo pipefail
 
 SHARED="$SYSTEM_PROMPT_FILE"
@@ -21,6 +23,9 @@ BASE=$(BOT_NAME="$BOT_NAME" envsubst '$BOT_NAME' < "$SHARED")
 FULL="${CLAUDE_DIRECTIVE}"$'\n\n'"${AUTONOMY_DIRECTIVE}"$'\n\n'"${BASE}"
 if [ -n "$EXTRA" ]; then
   FULL="${FULL}"$'\n\n'"${EXTRA}"
+fi
+if [ -n "${TEND_CREATION_PAUSED_NOTE:-}" ]; then
+  FULL="${FULL}"$'\n\n'"${TEND_CREATION_PAUSED_NOTE}"
 fi
 {
   echo 'value<<TEND_EOF'

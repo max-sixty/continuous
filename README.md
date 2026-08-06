@@ -156,8 +156,9 @@ branch before the agent starts, blocking both startup-time code execution and
 prompt injection from a PR's own copy of those files.
 
 **Rate limiting** — Burst detection (10 PRs and 10 issues per 20 minutes,
-checked independently) and daily spike detection halt the bot before runaway
-loops cause damage.
+checked independently) and a hard daily ceiling halt the bot before runaway
+loops cause damage; a lower daily spike threshold stops it opening new issues
+and PRs without stopping the rest of its work.
 
 **Fixed prompts** — Workflow prompts come from the action, not from
 attacker-controlled input like PR descriptions or comments.

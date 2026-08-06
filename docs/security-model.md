@@ -318,11 +318,17 @@ Codex harness (`codex/action.yaml`) still passes both the PAT and the model
 auth directly to the agent. The merge restriction and the environment gate
 remain the load-bearing boundaries regardless of harness.
 
-**Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
-spike detection (today's volume vs 6-day baseline, scaled per repo) abort
-the run before Claude starts, catching runaway loops between workflows.
-The check runs as a shell step, so a prompt-injection attack inside the
-Claude session cannot skip it. Concrete limits live in
+**Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and a
+hard daily ceiling (a 6-day baseline's worth of issues and PRs in one day)
+abort the run before Claude starts, catching runaway loops between
+workflows. A softer daily spike threshold (today's volume vs the same
+baseline, scaled per repo) does not abort: the run proceeds with a
+creation-pause directive appended to the agent's prompt, so it keeps
+reviewing, replying, and pushing while opening no new issues or PRs. The
+thresholds are computed in a shell step, so a prompt-injection attack
+inside the Claude session cannot skip the two abort tiers — it could
+disregard the spike tier's prompt directive, which is why that tier sits
+below a hard ceiling rather than replacing one. Concrete limits live in
 `shared/steps/rate-limit-preflight.sh`.
 
 **Fixed prompts and marketplace skills.** The prompt and skill set come from
