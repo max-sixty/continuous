@@ -395,6 +395,42 @@ def test_rate_limit_renamed_bot_still_cannot_approve(
     )
 
 
+def test_rate_limit_reconciler_keeps_only_what_the_preflight_filed(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """The reconciler nominates its keeper on the anchor's predicate.
+
+    On the label alone, any lower-numbered issue carrying it outranks the
+    record just filed, which is then closed as that issue's duplicate — the
+    refused-run rows and the `::error::` end up pointing at different issues.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    Path(rate_limit_env["PAUSE_ISSUES_JSON"]).write_text(
+        json.dumps(
+            [
+                {"number": 7, "title": "Something a maintainer labelled"},
+                {"number": 9, "title": "And another"},
+            ]
+        )
+    )
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    assert any(c.startswith("issue create") for c in _calls(rate_limit_env))
+    closed = [c for c in _calls(rate_limit_env) if c.startswith("issue close")]
+    assert not closed, f"reconciled against issues the preflight never filed: {closed}"
+    reconcile = [
+        c
+        for c in _calls(rate_limit_env)
+        if c.startswith("issue list") and "--state open" in c
+    ]
+    assert reconcile, "the reconciler never listed"
+    assert all("--author @me" in c for c in reconcile), (
+        f"the reconciler is not scoped to issues the bot authored: {reconcile}"
+    )
+
+
 def test_rate_limit_relabelled_issue_does_not_carry_its_closes(
     rate_limit_env: dict[str, str],
 ) -> None:
