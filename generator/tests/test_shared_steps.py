@@ -124,6 +124,30 @@ def test_mark_notification_read_tolerates_run_metadata_failure(
     )
 
 
+def test_mark_notification_read_treats_a_null_timestamp_as_absent(
+    tmp_path: Path, gh_env: dict[str, str]
+) -> None:
+    """A 200 whose body lacks `run_started_at` must be handled like a failure.
+
+    `gh --jq` prints the literal `null` for a missing field, which is non-empty
+    and so survives the `-z` guard. It then reaches the jq comparison as a
+    string, and every ISO-8601 timestamp sorts before `null` by codepoint — so
+    the `updated_at <= $started` filter matches every thread and the run marks
+    read the mid-run activity the guard exists to preserve. The notification
+    here is dated two months *after* the run, so a PATCH can only come from
+    that inversion.
+    """
+    gh_env["NOTIFICATIONS_JSON"] = _notifications(tmp_path, "2026-03-01T00:00:00Z")
+    gh_env["FAKE_RUN_STARTED_AT"] = "null"
+
+    result = _run(gh_env)
+
+    assert result.returncode == 0, result.stderr
+    assert not any("-X PATCH" in c for c in _calls(gh_env)), (
+        "marked a thread read against a `null` run_started_at"
+    )
+
+
 def test_mark_notification_read_marks_thread_predating_the_run(
     tmp_path: Path, gh_env: dict[str, str]
 ) -> None:
