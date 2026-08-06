@@ -473,13 +473,55 @@ def test_rate_limit_github_app_cannot_approve(rate_limit_env: dict[str, str]) ->
 def test_rate_limit_yesterdays_approval_does_not_carry(
     rate_limit_env: dict[str, str],
 ) -> None:
-    """Approvals are scoped to today, since the count they lift resets daily."""
+    """Approvals are scoped to today, since the count they lift resets daily.
+
+    The label is dated a day back too, so the day floor is what excludes this
+    close. Left at today's default, the label-ordering rule would exclude it
+    first and this test would pass without the floor.
+    """
     rate_limit_env["FAKE_TODAY_POSTS"] = "16"
-    _approve(rate_limit_env, _closed_event("maintainer", day="2026-01-01"))
+    _approve(
+        rate_limit_env,
+        _closed_event("maintainer", day="2026-01-01"),
+        labelled_at="2026-01-01T08:00:00Z",
+    )
 
     result = _run_preflight(rate_limit_env)
 
     assert result.returncode == 1, "yesterday's approval lifted today's ceiling"
+
+
+def test_rate_limit_foreign_issue_is_not_the_anchor(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """Only an issue the preflight filed anchors the approval.
+
+    The bot holds `issues: write`, so it can label anything. Were the label the
+    whole predicate, the lowest-numbered issue carrying it would be nominated
+    and a close on it read as an approval nobody gave. The title half runs
+    through the script's real `--jq`; the author half is a server-side flag the
+    fake can't apply, so it is asserted on the call the script made.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    _approve(rate_limit_env, _closed_event("maintainer"))
+    Path(rate_limit_env["PAUSE_ISSUES_JSON"]).write_text(
+        json.dumps([{"number": 7, "title": "Something a maintainer labelled"}])
+    )
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1, "a foreign issue was taken as the anchor"
+    # `--state all` is the anchor lookup; the reconciler's own list is
+    # `--state open`, and would otherwise satisfy this on its own.
+    lookups = [
+        c
+        for c in _calls(rate_limit_env)
+        if c.startswith("issue list") and "--state all" in c
+    ]
+    assert lookups, "the anchor lookup never ran"
+    assert all("--author @me" in c for c in lookups), (
+        f"the anchor lookup is not scoped to issues the bot authored: {lookups}"
+    )
 
 
 def test_rate_limit_reopens_rather_than_refiling(

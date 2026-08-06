@@ -63,17 +63,25 @@ run_issue_row() {
     "| $(date -u +%Y-%m-%dT%H:%M:%SZ) | [workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) | ${ref:-N/A} |"
 }
 
-# The canonical issue on a label: the lowest-numbered, which is the same rule
-# `run_issue_create_and_reconcile` keeps. `gh issue list` orders newest-first,
-# so taking `.[0]` off an unsorted list can return a duplicate a race created
-# and the reconcile then closed — reopening and appending to a record that was
-# already consolidated away. Sorting by number makes every caller agree with
-# the reconciler about which issue is the real one. A label no repo has yet
-# returns an empty list rather than an error.
+# The canonical issue for a record: the lowest-numbered one this bot filed
+# under this title, carrying this label.
+#
+# All three constraints earn their place. The label alone pins neither author
+# nor title, and the bot holds `issues: write` — so a label put on somebody
+# else's issue would otherwise nominate it, which matters most where a close on
+# that issue is read as an approval. Lowest-numbered, rather than `gh issue
+# list`'s newest-first `.[0]`, because a race can leave a duplicate that the
+# reconcile then closes; sorting by number makes every caller agree with the
+# reconciler about which issue is real. A label no repo has yet returns an
+# empty list rather than an error.
+#
+# Titles are fixed constants in the callers, so interpolating one into the jq
+# filter introduces no quoting hazard.
 run_issue_canonical() {
-  local label=$1 state=$2
-  gh issue list --label "$label" --state "$state" --limit 100 \
-    --json number --jq 'sort_by(.number) | .[0].number // empty'
+  local label=$1 state=$2 title=$3
+  gh issue list --label "$label" --state "$state" --author @me --limit 100 \
+    --json number,title \
+    --jq "map(select(.title == \"${title}\")) | sort_by(.number) | .[0].number // empty"
 }
 
 # Creating the label is best-effort: it already exists on every repo after the
@@ -103,7 +111,13 @@ run_issue_create_and_reconcile() {
 
   sleep 5
   local open keep
-  open=$(gh issue list --label "$label" --state open --json number --jq 'sort_by(.number) | .[].number')
+  # Same predicate as run_issue_canonical, so the reconciler and every later
+  # lookup agree about which issue is real. Selecting on the label alone would
+  # let an unrelated issue carrying it outrank this one on lowest-number, and
+  # the freshly filed record would be closed as that issue's duplicate.
+  open=$(gh issue list --label "$label" --state open --author @me --limit 100 \
+    --json number,title \
+    --jq "map(select(.title == \"${title}\")) | sort_by(.number) | .[].number")
   keep=$(echo "$open" | head -1)
   echo "$open" | tail -n +2 | while read -r dup; do
     [ -z "$dup" ] && continue

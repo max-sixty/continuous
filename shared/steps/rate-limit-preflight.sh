@@ -38,17 +38,6 @@ REPO="${GITHUB_REPOSITORY}"
 PAUSE_LABEL="tend-rate-limit"
 PAUSE_TITLE="Bot rate limit reached"
 
-# The issue whose closes are the approvals: the lowest-numbered one this
-# preflight filed. Author and title both matter, and the label alone pins
-# neither — the bot holds `issues: write`, so it can put the label on any
-# issue, and one a maintainer happened to close earlier would then hand it an
-# approval nobody gave. Restricting to what the bot itself filed under this
-# exact title leaves the label as a finding aid rather than the credential.
-pause_issue() {
-  gh issue list --label "$PAUSE_LABEL" --state all --author "$BOT" --limit 100 \
-    --json number,title \
-    --jq "map(select(.title == \"${PAUSE_TITLE}\")) | sort_by(.number) | .[0].number // empty"
-}
 
 # Who the bot is comes from the credential, not from configuration: this runs
 # as the bot, so the authenticated user is the bot by definition. A configured
@@ -111,7 +100,7 @@ fi
 # Everything below runs only once the base limit is already exceeded, so the
 # common path costs no extra API calls at all.
 if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
-  PAUSE=$(pause_issue)
+  PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE")
 
   APPROVALS=0
   if [ -n "$PAUSE" ]; then
@@ -175,7 +164,7 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
       # once the issue is known to exist, and the lookup above is still good.
       if [ -z "$PAUSE" ]; then
         sleep $((RANDOM % 30))
-        PAUSE=$(pause_issue)
+        PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE")
       fi
 
       if [ -n "$PAUSE" ]; then

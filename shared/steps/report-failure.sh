@@ -34,7 +34,7 @@ run_issue_ensure_label "$LABEL" "Tracks bot outage incidents" "d93f0b"
 # seconds). Without this, every leg reads $EXISTING as empty in parallel and
 # each files its own outage issue.
 sleep $((RANDOM % 30))
-EXISTING=$(run_issue_canonical "$LABEL" open)
+EXISTING=$(run_issue_canonical "$LABEL" open "$TITLE")
 
 if [ -n "$EXISTING" ]; then
   printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -
