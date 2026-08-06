@@ -290,6 +290,12 @@ Invoke this Bash call with `timeout: 600000` (10 min). The default 2-min Bash ti
 3. Once terminal, do the follow-up: ship a green fix, comment an unresolved failure, or dismiss your approval on red.
 4. If the cap hits with checks still running, comment the still-pending checks as unverified before ending — don't exit as if done.
 
+### A review that lands while you poll is not yours to action
+
+`tend-review` fires on any PR you open, so its review often arrives while you are still polling that PR's checks. Don't act on it. `tend-mention` is dispatched on `pull_request_review` for every PR the bot authored, and that dispatch runs whether or not you also respond — so a session that starts editing is racing a run already making the same edits and running the same suite. The loser only finds out at `git push`, discards its commit, and the whole fix-and-verify cycle is paid twice for one review.
+
+Poll your checks to terminal, do the follow-up you were gated on, and exit; name the outstanding review in your summary. This covers a review that arrives *while* you work — a session dispatched to answer a specific review owns that review and actions it normally.
+
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
 ```bash

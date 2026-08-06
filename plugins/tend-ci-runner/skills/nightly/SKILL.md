@@ -320,7 +320,7 @@ The default action is a PR, not an issue. If there's a plausible fix, make it �
 
 For each finding:
 
-1. **Create a PR** — branch, fix, run full test suite, commit, push, create PR, poll CI. **Every bug fix must include a regression test that would have failed before the fix.** If a test is not feasible (e.g., pure documentation changes), note why in the PR description. When uncertain about the approach, explain the trade-offs in the description.
+1. **Create a PR** — branch, fix, run full test suite, commit, push, create PR, then poll CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`. Your job ends when those checks are terminal: a review posted on the PR while you poll belongs to `tend-mention`. **Every bug fix must include a regression test that would have failed before the fix.** If a test is not feasible (e.g., pure documentation changes), note why in the PR description. When uncertain about the approach, explain the trade-offs in the description.
 2. **Create an issue only when there's no obvious fix** — design questions, problems needing maintainer input, or findings requiring investigation beyond what the survey can provide.
 
 ## Optional steps
