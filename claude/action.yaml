@@ -607,8 +607,15 @@ runs:
           "*Cost at API list prices — a large multiple of the effective rate on Claude Code subscriptions.*"
         ' <<< "$USAGE" >> "$GITHUB_STEP_SUMMARY"
 
+    # Gate on the job being red, not on the agent step specifically. A dozen
+    # steps run before `claude` — the two preflights, auth validation, the
+    # proxy and sandbox build, the adopter's `sandbox_setup:` — and any of
+    # them failing strands the same work, so each needs to reach the outage
+    # tracker. Keying on `steps.claude.outcome` meant a pre-agent failure went
+    # out as a red run and nothing else; a rate-limit preflight abort held
+    # every workflow on this repo for a full UTC day without filing a thing.
     - name: Report failure
-      if: failure() && steps.claude.outcome == 'failure'
+      if: failure()
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
       env:

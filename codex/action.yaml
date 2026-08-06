@@ -329,8 +329,13 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # Gate on the job being red, not on the agent step specifically — see the
+    # matching note in claude/action.yaml. Every step ahead of `codex` (the
+    # preflights, the plugin staging, the adopter's setup) strands the same
+    # work when it fails, and keying on `steps.codex.outcome` kept all of them
+    # out of the outage tracker.
     - name: Report failure
-      if: failure() && steps.codex.outcome == 'failure'
+      if: failure()
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
       env:
