@@ -141,11 +141,13 @@ jq -r '
 
   def usd: tostring | if test("\\.") then split(".") | "\(.[0]).\((.[1] + "00")[:2])" else . + ".00" end | "$" + .;
 
+  # A partial run contributes tokens but no cost, so every cost it lands in —
+  # its own row, its workflow row, the total — is a floor, not the spend. Mark
+  # those cells with a trailing `+` so a reconstructed run never reads as free.
+  def floor_marker: if . then "+" else "" end;
+
   "\n\(.runs | length) runs since '"$SINCE"'",
-  "Totals: \(.totals.input_tokens | fmt) in, \(.totals.output_tokens | fmt) out, \(.totals.cache_creation_input_tokens | fmt) cache-create, \(.totals.cache_read_input_tokens | fmt) cache-read, \(.totals.cost_usd | usd) cost",
-  (if .totals.partial_runs > 0 then
-     "\(.totals.partial_runs) run(s) emitted no result event (typically cancelled): tokens counted, cost not recoverable — the cost total is a floor."
-   else empty end),
+  "Totals: \(.totals.input_tokens | fmt) in, \(.totals.output_tokens | fmt) out, \(.totals.cache_creation_input_tokens | fmt) cache-create, \(.totals.cache_read_input_tokens | fmt) cache-read, \(.totals.cost_usd | usd)\(.totals.partial_runs > 0 | floor_marker) cost",
   "",
   (["WORKFLOW", "RUNS", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ", "COST"] | @tsv),
   (.runs | group_by(.workflow) | map({
@@ -155,14 +157,21 @@ jq -r '
     o: (map(.output_tokens) | add),
     cc: (map(.cache_creation_input_tokens) | add),
     cr: (map(.cache_read_input_tokens) | add),
-    cost: (map(.cost_usd) | add | . * 100 | round / 100)
+    cost: (map(.cost_usd) | add | . * 100 | round / 100),
+    partial: (map(.partial // false) | any)
   }) | sort_by(.cr) | reverse | .[] |
-    [.w, (.n | tostring), (.i | fmt), (.o | fmt), (.cc | fmt), (.cr | fmt), (.cost | usd)] | @tsv),
+    [.w, (.n | tostring), (.i | fmt), (.o | fmt), (.cc | fmt), (.cr | fmt), ((.cost | usd) + (.partial | floor_marker))] | @tsv),
   "",
   (["RUN", "WORKFLOW", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ", "COST", "TIME"] | @tsv),
   (.runs | sort_by(.created_at) | reverse | .[] |
-    [(.run_id | tostring), .workflow, (.input_tokens | fmt), (.output_tokens | fmt), (.cache_creation_input_tokens | fmt), (.cache_read_input_tokens | fmt), (.cost_usd | usd), .created_at[:16]] | @tsv)
+    [(.run_id | tostring), .workflow, (.input_tokens | fmt), (.output_tokens | fmt), (.cache_creation_input_tokens | fmt), (.cache_read_input_tokens | fmt), ((.cost_usd | usd) + (.partial // false | floor_marker)), .created_at[:16]] | @tsv)
 ' "$WORKDIR/report.json" | column -t >&2
 
 echo >&2 ""
+# Printed outside the table's `column -t`, which would otherwise align a prose
+# line into the table's columns.
+PARTIAL_RUNS=$(jq -r '.totals.partial_runs' "$WORKDIR/report.json")
+if [ "$PARTIAL_RUNS" -gt 0 ]; then
+  echo >&2 "$PARTIAL_RUNS run(s) emitted no result event (typically cancelled): tokens counted, cost not recoverable. A '+' marks a cost that is a floor rather than the spend."
+fi
 echo >&2 "Cost at API list prices — a large multiple of the effective rate on Claude Code subscriptions."
