@@ -59,6 +59,26 @@
           <<prompt_body>>
 {%- endmacro %}
 
+{# Environment block at column 4. The environment is a secret scope, not a
+   deploy target: its branch policy is what stops a workflow pushed to a
+   feature branch reading the operational secrets (see TEND_ENVIRONMENT in
+   workflows.py). GitHub does not separate the two, so a job naming one also
+   gets a deployment record, filed against whatever the run belongs to — under
+   `pull_request_target` that is the PR's own head, so every push to every PR
+   grew a "<bot> deployed to tend" line in its timeline.
+
+   `deployment: false` drops the record and keeps the gate. Checked against
+   live GitHub rather than assumed, because dropping the record could as
+   easily have dropped the check that files it: with the property set, a job
+   on an admitted ref still receives the environment's secrets, and one on an
+   excluded ref is still refused before its first step with `Branch "x" is not
+   allowed to deploy to <env> due to environment protection rules`. #}
+{% macro environment() %}
+    environment:
+      name: <<tend_environment>>
+      deployment: false
+{%- endmacro %}
+
 {# Permissions block at column 6. `issues` defaults to True because every
    workflow except ci-fix needs it. The trailing inline conditional avoids
    the trim_blocks-eats-the-separator issue between `actions: read` and

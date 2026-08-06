@@ -14,6 +14,7 @@ from tend.checks import (
     admitted_refs,
     check_credential_environments,
     check_environment,
+    check_environment_deployments,
     fix_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
@@ -1011,9 +1012,9 @@ def test_run_all_checks_with_protected_branches() -> None:
             _config(protected_branches=["v1", "v2"]),
             repo="owner/repo",
         )
-    # default + v1 + v2 + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 9
-    assert len(results) == 9
+    # default + v1 + v2 + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 10
+    assert len(results) == 10
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 3
     assert {r.name for r in bp_results} == {
@@ -1176,9 +1177,9 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             _config(protected_branches=["main", "v1"]),
             repo="owner/repo",
         )
-    # main (deduped) + v1 + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 8
-    assert len(results) == 8
+    # main (deduped) + v1 + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 9
+    assert len(results) == 9
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 2
     assert {r.name for r in bp_results} == {
@@ -1478,6 +1479,80 @@ _CUSTOM_POLICY = {
         "custom_branch_policies": True,
     }
 }
+
+
+_GENERATED_JOB = """\
+name: tend-review
+on: pull_request_target
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
+    steps:
+      - run: echo hello
+"""
+
+
+def test_environment_deployments_passes_on_the_generated_shape() -> None:
+    """The block the `environment()` macro emits files no deployment."""
+    with patch(
+        "tend.checks._fetch_workflow_files",
+        return_value={"tend-review.yaml": _GENERATED_JOB},
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is True
+
+
+def test_environment_deployments_flags_the_shorthand() -> None:
+    """`environment: tend` gates the job exactly as well, so nothing else in
+    the repo fails — the only symptom is a deployment record posted on every
+    push to every PR, which is why this check exists at all."""
+    text = _GENERATED_JOB.replace(
+        "    environment:\n      name: tend\n      deployment: false\n",
+        "    environment: tend\n",
+    )
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"tend-review.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is False
+    assert "tend-review.yaml job 'review'" in result.message
+
+
+def test_environment_deployments_flags_deployment_true() -> None:
+    """Spelling the default out loud files the same record."""
+    text = _GENERATED_JOB.replace("deployment: false", "deployment: true")
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"tend-review.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is False
+
+
+def test_environment_deployments_leaves_real_deploy_targets_alone() -> None:
+    """A release environment deploys something, so its record is the point.
+    The check is the operational-secret environment's, not every job's."""
+    text = _GENERATED_JOB.replace(
+        "      name: tend\n      deployment: false\n", "      name: release\n"
+    )
+    # Without this the substitution could silently miss and leave a compliant
+    # `tend` job behind, which passes for the wrong reason.
+    assert "      name: release\n" in text and "      name: tend\n" not in text
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"release.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is True
+
+
+def test_environment_deployments_unreadable_does_not_pass() -> None:
+    """A workflow tend could not read holds jobs it cannot vouch for, so the
+    claim is withheld rather than granted."""
+    with patch("tend.checks._fetch_workflow_files", return_value={"opaque.yaml": None}):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is None
 
 
 def test_credential_environments_none_holding_secrets_passes() -> None:

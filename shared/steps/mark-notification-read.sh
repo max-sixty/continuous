@@ -34,8 +34,16 @@ case "$GITHUB_EVENT_NAME" in
     ;;
 esac
 
-RUN_STARTED_AT=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-  --jq '.run_started_at')
+# Same tolerance as the fetch below: the agent run already succeeded, so a
+# transient API error here must not fail the composite action. Without the
+# timestamp the `updated_at <= started` guard can't be evaluated, and marking
+# unconditionally would swallow activity that arrived mid-run — so skip this
+# cycle and leave the thread unread for the scheduled poll to pick up.
+if ! RUN_STARTED_AT=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+  --jq '.run_started_at') || [ -z "$RUN_STARTED_AT" ]; then
+  echo "::warning::Could not read run_started_at; leaving notification unread (non-fatal)"
+  exit 0
+fi
 
 # Wrap in a subshell — a transient API error (non-JSON response)
 # must not fail the composite action.

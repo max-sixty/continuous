@@ -15,17 +15,39 @@
 # GITHUB_RUN_ID, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH.
 
 # A one-line reference to the triggering context, for the Trigger column.
-# Empty for events that have no thread of their own (schedule, dispatch).
+# This is the only pointer back to the work a refused or failed run stranded,
+# so every trigger that carries one names it; `// empty` keeps a missing field
+# out of the cell as blank rather than the literal `null` jq would print, and
+# the caller's `${REF:-N/A}` turns that into N/A. Empty for events with no
+# thread of their own (schedule, workflow_dispatch).
 run_issue_ref() {
+  local num id
   case "$GITHUB_EVENT_NAME" in
     pull_request_target | pull_request_review | pull_request_review_comment)
-      printf '#%s' "$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+      num=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")
+      printf '%s' "${num:+#${num}}"
       ;;
     issues | issue_comment)
-      printf '#%s' "$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+      num=$(jq -r '.issue.number // empty' "$GITHUB_EVENT_PATH")
+      printf '%s' "${num:+#${num}}"
+      ;;
+    repository_dispatch)
+      # tend-mention relays review events through a secretless job that
+      # re-posts them as a repository_dispatch, so the PR number arrives in
+      # the payload rather than in a `pull_request` object.
+      num=$(jq -r '.client_payload.pr // empty' "$GITHUB_EVENT_PATH")
+      printf '%s' "${num:+#${num}}"
       ;;
     workflow_run)
-      printf 'CI fix for workflow run'
+      # Link the run being fixed — without its id there is no way back to the
+      # failure the ci-fix job was dispatched to handle.
+      id=$(jq -r '.workflow_run.id // empty' "$GITHUB_EVENT_PATH")
+      if [ -n "$id" ]; then
+        printf 'CI fix for [run %s](%s/%s/actions/runs/%s)' \
+          "$id" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$id"
+      else
+        printf 'CI fix for workflow run'
+      fi
       ;;
   esac
 }

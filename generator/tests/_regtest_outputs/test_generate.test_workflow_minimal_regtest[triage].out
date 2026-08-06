@@ -19,7 +19,9 @@ jobs:
   triage:
     if: contains(github.event.issue.labels.*.name, 'tend-outage') == false && contains(github.event.issue.labels.*.name, 'tend-rate-limit') == false
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
