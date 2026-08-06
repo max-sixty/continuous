@@ -228,6 +228,13 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > 1. Did the bot produce visible output (review, comment, issue action, commit)?
 > 2. If yes, was the output accepted or rejected?
 >
+> **Acceptance needs a non-bot actor — name it.** For every acceptance or rejection signal, report the login that produced it: who merged, who replied, who pushed the follow-up. `$BOT_LOGIN` reviewing, replying to, or pushing to its own PR is the bot talking to itself, not acceptance. List the thread's distinct participants before calling anything accepted, and report a bot-only thread as `bot-only — no human signal`:
+>
+> ```bash
+> gh api "repos/$ARGUMENTS/pulls/<pr>/comments?per_page=100" --jq '[.[].user.login] | unique'
+> gh api "repos/$ARGUMENTS/issues/<n>/comments?per_page=100" --jq '[.[].user.login] | unique'
+> ```
+>
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
 >   `gh -R $ARGUMENTS pr list --head <branch> --state all` → check bot reviews via
@@ -294,16 +301,19 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > - <run-id>: <workflow> — <reason> (e.g., "no artifacts", "notification no-op")
 >
 > ## Runs with accepted output
-> - <run-id>: <workflow> on PR #N — bot reviewed, PR merged
+> - <run-id>: <workflow> on PR #N — bot reviewed, PR merged by <login>
+>
+> ## Runs with bot-only threads (no human signal)
+> - <run-id>: <workflow> on PR #N — participants: [<login>, ...]
 >
 > ## Runs with concerning output
-> - <run-id>: <workflow> on PR #N — <signal> (e.g., "human posted CHANGES_REQUESTED")
+> - <run-id>: <workflow> on PR #N — <signal> by <login> (e.g., "human posted CHANGES_REQUESTED")
 >
 > ## Sanity check
 > <note if zero bot activity found across all runs — may indicate systemic failure>
 > ```
 
-Review the subagent's summary. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
+Review the subagent's summary, and verify any actor attribution before it enters a finding — a survey that credits the bot's own reply to a human turns a self-conversation into a false all-clear. Bot-only threads are neither accepted nor concerning on their own; judge them on content. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
 
 ## Step 3: Investigate concerning outcomes via cheap subagent
 
