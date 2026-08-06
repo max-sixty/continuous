@@ -97,14 +97,18 @@ for row in "${ROWS[@]}"; do
     continue
   fi
 
-  # Aggregate across matrix jobs (each job produces its own token-usage.json)
+  # Aggregate across matrix jobs (each job produces its own token-usage.json).
+  # `partial` marks a run whose counts were reconstructed from the session log
+  # because it emitted no result event — its tokens are real but its cost is
+  # unrecoverable, so the cost column under-counts by however many there are.
   USAGE=$(cat "${USAGE_FILES[@]}" | jq -s '{
     input_tokens: (map(.input_tokens) | add),
     output_tokens: (map(.output_tokens) | add),
     cache_creation_input_tokens: (map(.cache_creation_input_tokens) | add),
     cache_read_input_tokens: (map(.cache_read_input_tokens) | add),
     turns: (map(.turns) | add),
-    cost_usd: (map(.cost_usd // 0) | add)
+    cost_usd: (map(.cost_usd // 0) | add),
+    partial: (map(.partial // false) | any)
   }')
 
   jq -c --argjson usage "$USAGE" '
@@ -123,7 +127,8 @@ jq -s '{
     cache_creation_input_tokens: (map(.cache_creation_input_tokens) | add // 0),
     cache_read_input_tokens: (map(.cache_read_input_tokens) | add // 0),
     turns: (map(.turns) | add // 0),
-    cost_usd: (map(.cost_usd) | add // 0 | . * 100 | round / 100)
+    cost_usd: (map(.cost_usd) | add // 0 | . * 100 | round / 100),
+    partial_runs: (map(select(.partial)) | length)
   }
 }' "$ENTRIES" | tee "$WORKDIR/report.json"
 
@@ -138,6 +143,9 @@ jq -r '
 
   "\n\(.runs | length) runs since '"$SINCE"'",
   "Totals: \(.totals.input_tokens | fmt) in, \(.totals.output_tokens | fmt) out, \(.totals.cache_creation_input_tokens | fmt) cache-create, \(.totals.cache_read_input_tokens | fmt) cache-read, \(.totals.cost_usd | usd) cost",
+  (if .totals.partial_runs > 0 then
+     "\(.totals.partial_runs) run(s) emitted no result event (typically cancelled): tokens counted, cost not recoverable — the cost total is a floor."
+   else empty end),
   "",
   (["WORKFLOW", "RUNS", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ", "COST"] | @tsv),
   (.runs | group_by(.workflow) | map({

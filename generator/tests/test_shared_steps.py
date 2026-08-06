@@ -17,6 +17,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARK_NOTIFICATION_READ = REPO_ROOT / "shared" / "steps" / "mark-notification-read.sh"
+COMPUTE_TOKEN_USAGE = REPO_ROOT / "shared" / "steps" / "compute-token-usage.sh"
 
 # `gh api` stand-in. Records every invocation so a test can assert which calls
 # the script made, and fails the run-metadata fetch when FAIL_RUN_META is set.
@@ -146,3 +147,189 @@ def test_mark_notification_read_leaves_activity_newer_than_the_run(
 
     assert result.returncode == 0, result.stderr
     assert not any("-X PATCH" in c for c in _calls(gh_env))
+
+
+# --- compute-token-usage.sh -------------------------------------------------
+#
+# Fixtures below mirror the shapes observed in real uploaded artifacts. Two
+# properties drive the tests:
+#
+# 1. Both files record each assistant message roughly twice, so any sum has to
+#    deduplicate by `.message.id` or it lands ~2x high.
+# 2. The stream-json's assistant events are non-final (`stop_reason: null`):
+#    their `usage.output_tokens` is the message-start placeholder (single
+#    digits), not the finished count. Only the session JSONL carries final
+#    per-message usage. Reconstructing from the stream-json therefore
+#    under-counts output by orders of magnitude, while input and cache fields
+#    — known at message start — happen to match.
+
+
+def _assistant(msg_id: str, usage: dict[str, int], *, final: bool) -> dict[str, object]:
+    return {
+        "type": "assistant",
+        "message": {
+            "id": msg_id,
+            "stop_reason": "end_turn" if final else None,
+            "usage": usage,
+        },
+    }
+
+
+def _ndjson(path: Path, lines: list[dict[str, object]]) -> Path:
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    return path
+
+
+# Final per-message usage, as the session JSONL records it.
+FINAL_USAGE = [
+    {
+        "input_tokens": 10,
+        "output_tokens": 3000,
+        "cache_creation_input_tokens": 1000,
+        "cache_read_input_tokens": 20000,
+    },
+    {
+        "input_tokens": 5,
+        "output_tokens": 1500,
+        "cache_creation_input_tokens": 500,
+        "cache_read_input_tokens": 40000,
+    },
+]
+# The same two messages as the stream-json emits them: input/cache identical,
+# output still at its message-start placeholder.
+STREAM_USAGE = [dict(u, output_tokens=6) for u in FINAL_USAGE]
+
+
+def _session_jsonl(logs_dir: Path) -> Path:
+    """A cancelled session's JSONL: real usage, each message duplicated."""
+    project = logs_dir / "-home-runner-work-repo-repo"
+    project.mkdir(parents=True, exist_ok=True)
+    lines: list[dict[str, object]] = [{"type": "user"}]
+    for i, usage in enumerate(FINAL_USAGE):
+        entry = _assistant(f"msg_{i}", usage, final=True)
+        lines += [entry, dict(entry), {"type": "user"}]
+    lines.append({"type": "user"})
+    return _ndjson(project / "session.jsonl", lines)
+
+
+def _cancelled_stream(tmp_path: Path) -> Path:
+    """Stream-json for the same session: assistant events, no `result`."""
+    lines: list[dict[str, object]] = [{"type": "system"}]
+    for i, usage in enumerate(STREAM_USAGE):
+        entry = _assistant(f"msg_{i}", usage, final=False)
+        lines += [entry, dict(entry), {"type": "user"}]
+    return _ndjson(tmp_path / "stream.json", lines)
+
+
+def _usage(tmp_path: Path, *, stream: Path | None, logs_dir: Path) -> dict[str, object]:
+    result = subprocess.run(
+        ["bash", str(COMPUTE_TOKEN_USAGE)],
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "MODEL": "opus",
+            "LOGS_DIR": str(logs_dir),
+            "STREAM_JSON": str(stream) if stream else "",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_token_usage_reconstructs_a_cancelled_session(tmp_path: Path) -> None:
+    """A cancelled session must be accounted from its session JSONL.
+
+    `tend-review` runs with `cancel-in-progress: true`, so cancellation is
+    routine — and a cancelled session never emits a `type: "result"` event.
+    The step is `if: always()`, so it still writes token-usage.json and still
+    uploads the artifact; only the accounting is lost. Reporting zeros for a
+    run that did real work (and may already have posted a review) biases every
+    downstream total by the cancellation rate.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 4500, (
+        f"cancelled session reported output_tokens={usage['output_tokens']}; "
+        "the session JSONL records 4500 across two messages"
+    )
+    assert usage["input_tokens"] == 15
+    assert usage["cache_creation_input_tokens"] == 1500
+    assert usage["cache_read_input_tokens"] == 60000
+    # Three `user` lines bracket the two assistant turns; num_turns counts the
+    # turns between them.
+    assert usage["turns"] == 3
+    assert usage["partial"] is True, (
+        "a reconstructed total must be distinguishable from a run that "
+        "genuinely cost nothing"
+    )
+
+
+def test_token_usage_ignores_stream_json_placeholder_output(tmp_path: Path) -> None:
+    """The fallback must not sum the stream-json's non-final assistant events.
+
+    They carry `stop_reason: null` and a message-start `output_tokens`, so
+    summing them under-counts output by orders of magnitude while input and
+    cache fields still match — a wrong number that looks plausible.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    stream_sum = sum(u["output_tokens"] for u in STREAM_USAGE)
+    assert usage["output_tokens"] != stream_sum, (
+        "summed the stream-json's placeholder output_tokens"
+    )
+
+
+def test_token_usage_prefers_result_events_when_present(tmp_path: Path) -> None:
+    """A completed session still reports straight from its `result` events."""
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+    stream = _ndjson(
+        tmp_path / "stream.json",
+        [
+            _assistant("msg_0", STREAM_USAGE[0], final=False),
+            {
+                "type": "result",
+                "num_turns": 14,
+                "total_cost_usd": 1.2563179999999998,
+                "usage": {
+                    "input_tokens": 23,
+                    "output_tokens": 9406,
+                    "cache_creation_input_tokens": 62655,
+                    "cache_read_input_tokens": 789006,
+                },
+            },
+        ],
+    )
+
+    usage = _usage(tmp_path, stream=stream, logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 9406
+    assert usage["turns"] == 14
+    assert usage["cost_usd"] == 1.26
+    assert usage["partial"] is False
+
+
+def test_token_usage_reports_zero_when_the_agent_never_ran(tmp_path: Path) -> None:
+    """No stream and no session JSONL is a genuine zero, not a partial total.
+
+    A run that dies in preflight really did cost nothing; flagging it partial
+    would push a fabricated unknown into the reports.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+
+    usage = _usage(tmp_path, stream=None, logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 0
+    assert usage["cost_usd"] == 0
+    assert usage["partial"] is False
