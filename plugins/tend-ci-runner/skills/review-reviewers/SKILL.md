@@ -309,6 +309,15 @@ Review the subagent's summary. If all outputs are accepted and no sanity-check f
 
 For runs with negative outcome signals (or suspicious lack of output), spawn another cheap subagent to download and inspect the specific session logs.
 
+**Also escalate whenever a finding will name *which run* produced an output.** A timestamp falling inside a run's start/end span does not attribute the output to it: several runs are live at once — a long scheduled run that opened the PR, the event-triggered handle answering a review on it, a racing sibling — and any of them can post. Attributing by wall-clock inclusion credits the wrong run, and the run ID then ships in a public comment. Confirm from the posting run's own log before a run ID enters a finding:
+
+```bash
+jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | "\(.name): \(.input | tostring | .[0:200])"' FILE \
+  | grep -E 'comments/[0-9]+/replies|/(reviews|comments)\b|issue comment|pr comment|git push'
+```
+
+The run whose log contains the posting call is the author; a run whose log ends in a read-only sweep posted nothing, however well its span brackets the timestamp.
+
 Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 
 > Investigate session logs for run <run-id> on `$ARGUMENTS`.
