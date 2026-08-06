@@ -13,7 +13,13 @@ import click
 from click.testing import CliRunner
 
 from tend.cli import main
-from tend.config import BOT_TOKEN_SECRET, OPERATIONAL_SECRETS, Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
@@ -279,15 +285,23 @@ def test_workflows_read_only_the_operational_secrets(
 
     The names are fixed constants shared by the templates and the checks, so
     the failure this guards is a template naming a secret that nothing
-    provisions — which surfaces only as an empty token at run time.
-    `secrets.GITHUB_TOKEN` is workflow-scoped rather than stored, so it is
-    outside the set."""
+    provisions — which surfaces only as an empty token at run time. The set
+    is per harness because the checks are: `check_claude_auth` verifies the
+    Claude pair and `check_codex_auth` the OpenAI key, so a claude workflow
+    reading `secrets.OPENAI_API_KEY` is unprovisioned as surely as one
+    reading a name nothing defines. `secrets.GITHUB_TOKEN` is
+    workflow-scoped rather than stored, so it is outside the set."""
+    verified = {BOT_TOKEN_SECRET} | (
+        {CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET}
+        if harness == "claude"
+        else {OPENAI_KEY_SECRET}
+    )
     cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}\n"))
     for wf in generate_all(cfg):
         read = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", wf.content))
-        assert read - {"GITHUB_TOKEN"} <= OPERATIONAL_SECRETS, (
-            f"{wf.filename} reads a secret outside the operational set: "
-            f"{sorted(read - {'GITHUB_TOKEN'} - OPERATIONAL_SECRETS)}"
+        assert read - {"GITHUB_TOKEN"} <= verified, (
+            f"{wf.filename} reads a secret the {harness} harness does not "
+            f"provision: {sorted(read - {'GITHUB_TOKEN'} - verified)}"
         )
         assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
 
