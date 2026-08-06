@@ -74,9 +74,14 @@ fi
 # slurping the subagents alongside it inflates every field (turns roughly
 # doubles) and makes partial runs incomparable with complete ones.
 if [ -z "${USAGE:-}" ] && [ -n "$LOGS_DIR" ] && [ -d "$LOGS_DIR" ]; then
-  mapfile -t SESSION_FILES < <(find "$LOGS_DIR" -name '*.jsonl' -type f -not -path '*/subagents/*')
+  mapfile -t SESSION_FILES < <(find "$LOGS_DIR" -name '*.jsonl' -type f -not -path '*/subagents/*' | sort)
   if [ ${#SESSION_FILES[@]} -gt 0 ]; then
-    USAGE=$(jq -R -s -c --arg model "$MODEL" '
+    # `awk 1` rather than jq's own file arguments: `-R -s` concatenates the
+    # files into one string before `split("\n")` sees it, so a file that ends
+    # without a newline — the truncation case above — would glue its last line
+    # to the next file's first line and `fromjson?` would drop both. awk ends
+    # every file on a newline, so a truncated tail costs only itself.
+    USAGE=$(awk 1 "${SESSION_FILES[@]}" | jq -R -s -c --arg model "$MODEL" '
       split("\n") | map(fromjson? // empty) |
       ([.[] | select(.type == "assistant" and .message.id != null)
             | {id: .message.id, u: .message.usage}] | unique_by(.id)) as $ms |
@@ -98,7 +103,7 @@ if [ -z "${USAGE:-}" ] && [ -n "$LOGS_DIR" ] && [ -d "$LOGS_DIR" ]; then
           partial: true
         }
       end
-    ' "${SESSION_FILES[@]}" 2>/dev/null || echo '')
+    ' 2>/dev/null || echo '')
   fi
 fi
 

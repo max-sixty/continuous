@@ -389,6 +389,35 @@ def test_token_usage_survives_a_truncated_final_line(tmp_path: Path) -> None:
     assert usage["partial"] is True
 
 
+def test_token_usage_survives_a_truncated_line_beside_a_second_session(
+    tmp_path: Path,
+) -> None:
+    """A truncated file must not take the next file's first line with it.
+
+    `jq -R -s` concatenates its inputs into one string before `split("\\n")`
+    runs, so a file ending without a newline would join its partial last line
+    to the next file's first line and `fromjson?` would drop the pair. The
+    files are read through `awk 1`, which terminates each one.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    session = _session_jsonl(logs_dir)
+    session.write_text(session.read_text() + '{"type":"assistant","mess')
+
+    # Sorts after the truncated file, so it is the one glued onto its tail.
+    second = logs_dir / "-home-runner-work-repo-repo2"
+    second.mkdir()
+    _ndjson(
+        second / "session.jsonl",
+        [_assistant("msg_second", FINAL_USAGE[1], final=True), {"type": "user"}],
+    )
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 6000, "lost the second session's first message"
+    assert usage["partial"] is True
+
+
 def test_token_usage_survives_a_truncated_stream_json_line(tmp_path: Path) -> None:
     """The same truncation on the stream-json must not lose a `result` event.
 
