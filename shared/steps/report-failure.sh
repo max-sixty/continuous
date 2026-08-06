@@ -2,8 +2,11 @@
 # File or append to a `tend-outage` issue when a run fails, so outages are
 # tracked until resolved. Shared verbatim by both harness actions; the caller
 # gates it on the job being red, so a failure anywhere in the action — the
-# preflights and sandbox build ahead of the agent as much as the agent
-# itself — lands in the tracker.
+# rate-limit preflight and sandbox build ahead of the agent as much as the
+# agent itself — lands in the tracker. The one exclusion is the security
+# preflight: that failure is a persistent config refusal rather than an
+# outage, and the issue this files ("temporarily unavailable", closed once
+# resolved) would never resolve.
 #
 # Just records the run link. Error annotations and logs are not reliably
 # available while the job is in_progress, so the nightly skill enriches these

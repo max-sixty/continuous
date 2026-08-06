@@ -115,6 +115,7 @@ runs:
     # and runs the script (reached via ../shared/steps, since this action is
     # one level deep).
     - name: Security preflight
+      id: security
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/security-preflight.sh"
       env:
@@ -608,14 +609,22 @@ runs:
         ' <<< "$USAGE" >> "$GITHUB_STEP_SUMMARY"
 
     # Gate on the job being red, not on the agent step specifically. A dozen
-    # steps run before `claude` — the two preflights, auth validation, the
-    # proxy and sandbox build, the adopter's `sandbox_setup:` — and any of
+    # steps run before `claude` — the rate-limit preflight, auth validation,
+    # the proxy and sandbox build, the adopter's `sandbox_setup:` — and any of
     # them failing strands the same work, so each needs to reach the outage
     # tracker. Keying on `steps.claude.outcome` meant a pre-agent failure went
     # out as a red run and nothing else; a rate-limit preflight abort held
     # every workflow on this repo for a full UTC day without filing a thing.
+    #
+    # The security preflight is the one exclusion: its failure is a config
+    # refusal, not an outage. It stays failing until a human fixes the repo's
+    # branch protection, so it would file "Bot temporarily unavailable" and
+    # append a row on every subsequent trigger, forever, without ever naming
+    # the cause. It is also the one case where reporting would have the bot
+    # write to the repo with its PAT right after the security gate refused to
+    # let it operate there.
     - name: Report failure
-      if: failure()
+      if: failure() && steps.security.outcome != 'failure'
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
       env:
