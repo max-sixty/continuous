@@ -151,7 +151,7 @@ def test_mark_notification_read_leaves_activity_newer_than_the_run(
 
 # --- compute-token-usage.sh -------------------------------------------------
 #
-# Fixtures below mirror the shapes observed in real uploaded artifacts. Two
+# Fixtures below mirror the shapes observed in real uploaded artifacts. Three
 # properties drive the tests:
 #
 # 1. Both files record each assistant message roughly twice, so any sum has to
@@ -162,6 +162,8 @@ def test_mark_notification_read_leaves_activity_newer_than_the_run(
 #    per-message usage. Reconstructing from the stream-json therefore
 #    under-counts output by orders of magnitude, while input and cache fields
 #    — known at message start — happen to match.
+# 3. A session that ran a `Task` has a second transcript under
+#    `<session-id>/subagents/`, whose usage the `result` event does not count.
 
 
 def _assistant(msg_id: str, usage: dict[str, int], *, final: bool) -> dict[str, object]:
@@ -200,8 +202,24 @@ FINAL_USAGE = [
 STREAM_USAGE = [dict(u, output_tokens=6) for u in FINAL_USAGE]
 
 
+# A `Task` subagent's own transcript, which real artifacts carry alongside the
+# session it belongs to. Its usage is not in the `result` event, so nothing
+# here may reach the totals.
+SUBAGENT_USAGE = {
+    "input_tokens": 300,
+    "output_tokens": 7000,
+    "cache_creation_input_tokens": 40000,
+    "cache_read_input_tokens": 900000,
+}
+
+
 def _session_jsonl(logs_dir: Path) -> Path:
-    """A cancelled session's JSONL: real usage, each message duplicated."""
+    """A cancelled session's JSONL: real usage, each message duplicated.
+
+    Writes the subagent transcript beside it too — `<session>/subagents/` is
+    how Claude Code lays a `Task` out on disk, and `cp -a .../projects/.`
+    copies the subtree into LOGS_DIR.
+    """
     project = logs_dir / "-home-runner-work-repo-repo"
     project.mkdir(parents=True, exist_ok=True)
     lines: list[dict[str, object]] = [{"type": "user"}]
@@ -209,6 +227,17 @@ def _session_jsonl(logs_dir: Path) -> Path:
         entry = _assistant(f"msg_{i}", usage, final=True)
         lines += [entry, dict(entry), {"type": "user"}]
     lines.append({"type": "user"})
+
+    subagents = project / "session" / "subagents"
+    subagents.mkdir(parents=True, exist_ok=True)
+    _ndjson(
+        subagents / "agent-a1b2c3.jsonl",
+        [
+            {"type": "user"},
+            _assistant("msg_sub", SUBAGENT_USAGE, final=True),
+            {"type": "user"},
+        ],
+    )
     return _ndjson(project / "session.jsonl", lines)
 
 
@@ -286,6 +315,25 @@ def test_token_usage_ignores_stream_json_placeholder_output(tmp_path: Path) -> N
     assert usage["output_tokens"] != stream_sum, (
         "summed the stream-json's placeholder output_tokens"
     )
+
+
+def test_token_usage_ignores_subagent_transcripts(tmp_path: Path) -> None:
+    """Subagent transcripts must not be slurped into the reconstruction.
+
+    Every `Task` writes its own `<session>/subagents/agent-*.jsonl`, but the
+    `result` event this fallback stands in for counts only the main loop.
+    Summing both inflates each field — turns roughly doubles — so a partial
+    run would no longer be comparable with a complete one.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 4500, "summed the subagent's output_tokens"
+    assert usage["cache_read_input_tokens"] == 60000, "summed the subagent's cache"
+    assert usage["turns"] == 3, "counted the subagent's `user` lines as turns"
 
 
 def test_token_usage_prefers_result_events_when_present(tmp_path: Path) -> None:

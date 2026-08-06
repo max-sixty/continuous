@@ -58,8 +58,14 @@ fi
 # fields exactly.
 #
 # Both files record each assistant message roughly twice, hence unique_by(.id).
+#
+# Skip `<session-id>/subagents/agent-*.jsonl` — each `Task` subagent gets its
+# own transcript there, and `cp -a .../projects/.` brings the subtree along.
+# The `result` event this path reconstructs counts only the main loop, so
+# slurping the subagents alongside it inflates every field (turns roughly
+# doubles) and makes partial runs incomparable with complete ones.
 if [ -z "${USAGE:-}" ] && [ -n "$LOGS_DIR" ] && [ -d "$LOGS_DIR" ]; then
-  mapfile -t SESSION_FILES < <(find "$LOGS_DIR" -name '*.jsonl' -type f)
+  mapfile -t SESSION_FILES < <(find "$LOGS_DIR" -name '*.jsonl' -type f -not -path '*/subagents/*')
   if [ ${#SESSION_FILES[@]} -gt 0 ]; then
     USAGE=$(jq -s -c --arg model "$MODEL" '
       ([.[] | select(.type == "assistant" and .message.id != null)
