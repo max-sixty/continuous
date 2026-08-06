@@ -37,12 +37,11 @@ sleep $((RANDOM % 30))
 EXISTING=$(run_issue_canonical "$LABEL" open)
 
 if [ -n "$EXISTING" ]; then
-  printf '%s\n' "$ROW" > /tmp/comment.md
-  gh issue comment "$EXISTING" -F /tmp/comment.md
+  printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -
 else
   printf '%s\n\n%s\n\n%s\n' \
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
     "$ROW" \
-    "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
-  run_issue_create_and_reconcile "$LABEL" "$TITLE" /tmp/body.md
+    "This issue was created automatically. Close it once the outage is resolved." \
+    | run_issue_create_and_reconcile "$LABEL" "$TITLE" > /dev/null
 fi

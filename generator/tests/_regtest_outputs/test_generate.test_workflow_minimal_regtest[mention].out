@@ -90,20 +90,20 @@ jobs:
             -f "client_payload[id]=${{ github.event.review.id || github.event.comment.id }}"
 
   verify:
-    # Skip comments on `tend-outage` issues: the action's Report-failure step
-    # auto-comments on those when Claude invocation fails, and without this
-    # guard those comments re-trigger tend-mention during a persistent outage
-    # (e.g. Anthropic 401), producing a self-sustaining ~1 run/minute loop
-    # until the outage clears. The prompt's self-loop guard can't help here
-    # because the model never executes ? the action fails before Claude starts.
-    # A relayed review enters as `repository_dispatch` and is judged in the
-    # check step below, against the record the API holds.
+    # Skip comments on the issues tend files about its own health: the action
+    # auto-comments on those when a run fails or is refused, and without this
+    # guard those comments re-trigger tend-mention, producing a
+    # self-sustaining ~1 run/minute loop until the underlying condition
+    # clears. The prompt's self-loop guard can't help here because the model
+    # never executes ? the action fails before Claude starts. A relayed review
+    # enters as `repository_dispatch` and is judged in the check step below,
+    # against the record the API holds.
     if: |
       github.event_name == 'repository_dispatch' ||
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@test-bot')) ||
       (github.event_name == 'issue_comment' &&
-        !contains(github.event.issue.labels.*.name, 'tend-outage'))
+        contains(github.event.issue.labels.*.name, 'tend-outage') == false && contains(github.event.issue.labels.*.name, 'tend-rate-limit') == false)
     runs-on: ubuntu-24.04
     environment:
       name: tend

@@ -25,18 +25,15 @@ run_issue_ref() {
   case "$GITHUB_EVENT_NAME" in
     pull_request_target | pull_request_review | pull_request_review_comment)
       num=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")
-      printf '%s' "${num:+#${num}}"
       ;;
     issues | issue_comment)
       num=$(jq -r '.issue.number // empty' "$GITHUB_EVENT_PATH")
-      printf '%s' "${num:+#${num}}"
       ;;
     repository_dispatch)
       # tend-mention relays review events through a secretless job that
       # re-posts them as a repository_dispatch, so the PR number arrives in
       # the payload rather than in a `pull_request` object.
       num=$(jq -r '.client_payload.pr // empty' "$GITHUB_EVENT_PATH")
-      printf '%s' "${num:+#${num}}"
       ;;
     workflow_run)
       # Link the run being fixed — without its id there is no way back to the
@@ -48,8 +45,10 @@ run_issue_ref() {
       else
         printf 'CI fix for workflow run'
       fi
+      return
       ;;
   esac
+  printf '%s' "${num:+#${num}}"
 }
 
 # One row per incident, in the same table format whether it seeds an issue
@@ -69,11 +68,12 @@ run_issue_row() {
 # so taking `.[0]` off an unsorted list can return a duplicate a race created
 # and the reconcile then closed — reopening and appending to a record that was
 # already consolidated away. Sorting by number makes every caller agree with
-# the reconciler about which issue is the real one.
+# the reconciler about which issue is the real one. A label no repo has yet
+# returns an empty list rather than an error.
 run_issue_canonical() {
   local label=$1 state=$2
   gh issue list --label "$label" --state "$state" --limit 100 \
-    --json number --jq 'sort_by(.number) | .[0].number // empty' 2>/dev/null || echo ""
+    --json number --jq 'sort_by(.number) | .[0].number // empty'
 }
 
 # Creating the label is best-effort: it already exists on every repo after the
@@ -83,7 +83,8 @@ run_issue_ensure_label() {
   gh label create "$label" --description "$description" --color "$color" 2>/dev/null || true
 }
 
-# Create, then reconcile duplicates the create-create race let through.
+# Create from a body on stdin, reconcile the duplicates the create-create race
+# let through, and print the surviving issue number.
 #
 # Callers sleep a jittered interval before their check-then-act, which narrows
 # the window when a matrix workflow's legs trip at near-identical times but
@@ -93,9 +94,12 @@ run_issue_ensure_label() {
 # lowest-numbered, and close the rest. Idempotent and convergent — every
 # racing leg computes the same keeper, and closing an already-closed
 # duplicate is a no-op.
+#
+# Everything but the number goes to stderr, so the log keeps the created URL
+# while the caller can read the keeper straight out of stdout.
 run_issue_create_and_reconcile() {
-  local label=$1 title=$2 body_file=$3
-  gh issue create --title "$title" --label "$label" -F "$body_file"
+  local label=$1 title=$2
+  gh issue create --title "$title" --label "$label" -F - >&2
 
   sleep 5
   local open keep
@@ -105,6 +109,7 @@ run_issue_create_and_reconcile() {
     [ -z "$dup" ] && continue
     gh issue close "$dup" \
       --comment "Duplicate of #${keep} (concurrent run); consolidating tracking there." \
-      2>/dev/null || true
+      >&2 2>/dev/null || true
   done
+  printf '%s' "$keep"
 }

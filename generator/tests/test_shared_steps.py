@@ -10,6 +10,7 @@ behaviour.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -175,7 +176,7 @@ emit() {
 case "$1" in
   api)
     case "$2" in
-      *"/timeline") emit "$(cat "$TIMELINE_JSON")" ;;
+      *"/events?"*) emit "$(cat "$TIMELINE_JSON")" ;;
       user)
         [ -n "${FAIL_WHOAMI:-}" ] && exit 1
         emit "{\"login\":\"tend-agent\",\"id\":${FAKE_BOT_ID}}"
@@ -241,8 +242,6 @@ def _closed_event(
 @pytest.fixture
 def rate_limit_env(tmp_path: Path) -> dict[str, str]:
     """Fake gh/date/sleep on PATH, plus the Actions env the preflight reads."""
-    import shutil
-
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
     for name, body in (
