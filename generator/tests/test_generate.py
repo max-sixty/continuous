@@ -13,7 +13,7 @@ import click
 from click.testing import CliRunner
 
 from tend.cli import main
-from tend.config import Config
+from tend.config import BOT_TOKEN_SECRET, OPERATIONAL_SECRETS, Config
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
@@ -271,20 +271,25 @@ def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
         assert "\n\n\n" not in wf.content, f"{wf.filename} has triple blank lines"
 
 
-def test_custom_secrets(tmp_path: Path) -> None:
-    extra = dedent("""\
-        secrets:
-          bot_token: MY_BOT_PAT
-          claude_token: MY_CLAUDE
-          anthropic_api_key: MY_API_KEY
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_workflows_read_only_the_operational_secrets(
+    tmp_path: Path, harness: str
+) -> None:
+    """Every stored secret a workflow reads is one `tend check` verifies.
+
+    The names are fixed constants shared by the templates and the checks, so
+    the failure this guards is a template naming a secret that nothing
+    provisions — which surfaces only as an empty token at run time.
+    `secrets.GITHUB_TOKEN` is workflow-scoped rather than stored, so it is
+    outside the set."""
+    cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}\n"))
     for wf in generate_all(cfg):
-        assert "MY_BOT_PAT" in wf.content, f"{wf.filename} missing custom bot token"
-        assert "MY_CLAUDE" in wf.content, f"{wf.filename} missing custom claude token"
-        assert "MY_API_KEY" in wf.content, (
-            f"{wf.filename} missing custom anthropic_api_key secret"
+        read = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", wf.content))
+        assert read - {"GITHUB_TOKEN"} <= OPERATIONAL_SECRETS, (
+            f"{wf.filename} reads a secret outside the operational set: "
+            f"{sorted(read - {'GITHUB_TOKEN'} - OPERATIONAL_SECRETS)}"
         )
+        assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
 
 
 def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:

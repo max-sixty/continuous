@@ -82,18 +82,10 @@ bot_name: <bot-name>
 # effort: medium   # optional: low | medium | high | xhigh
 ```
 
-Check whether the repo already has a bot token secret under a non-default name:
+List the secrets the repo already holds:
 
 ```bash
 gh secret list --repo "$REPO" --json name --jq '.[].name'
-```
-
-If a bot-token-like secret exists (e.g., `GH_BOT_TOKEN`, `ROBOT_PAT`),
-suggest overriding the default name rather than creating a duplicate:
-
-```yaml
-secrets:
-  bot_token: GH_BOT_TOKEN
 ```
 
 Any repo-level secret not in `secrets.allowed` triggers a `tend check`
@@ -732,10 +724,8 @@ rm -rf "$HOME/.config/gh-bots/<bot-name>"
 
 ### 8c. Push token to secret
 
-Copy the bot's token to the environment secret (`<secret-name>` is the
-`secrets.bot_token` value from §1, default `TEND_BOT_TOKEN`; trust
-this over any name an audit issue quotes) and verify the `Updated`
-timestamp is fresh:
+Copy the bot's token to the `TEND_BOT_TOKEN` environment secret and verify
+the `Updated` timestamp is fresh:
 
 ```bash
 BOT_GH_TOKEN=$(env -u GH_TOKEN -u GITHUB_TOKEN \
@@ -743,7 +733,7 @@ BOT_GH_TOKEN=$(env -u GH_TOKEN -u GITHUB_TOKEN \
 if [ -z "$BOT_GH_TOKEN" ]; then
   echo "bot token empty — fix step 8 first" >&2
 else
-  gh secret set <secret-name> --repo "$REPO" --env tend --body "$BOT_GH_TOKEN"
+  gh secret set TEND_BOT_TOKEN --repo "$REPO" --env tend --body "$BOT_GH_TOKEN"
   gh secret list --repo "$REPO" --env tend
 fi
 ```
@@ -839,7 +829,7 @@ line picks the row that matches the chosen harness):
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Harness auth (claude): `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret set
 - [ ] Harness auth (codex): `OPENAI_API_KEY` secret set
-- [ ] Bot token: the `secrets.bot_token` secret (default `TEND_BOT_TOKEN`) set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
+- [ ] Bot token: `TEND_BOT_TOKEN` set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
 - [ ] Bot access: repo collaborator with write access, invitation accepted
 - [ ] Bot bio: profile bio reflects the authorization stance
 - [ ] Committed (push requires explicit permission)
