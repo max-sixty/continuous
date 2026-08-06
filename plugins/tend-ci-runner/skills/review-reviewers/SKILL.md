@@ -337,7 +337,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 >
 > The concerning outcome was: <signal from Step 2>.
 >
-> If your answer will name **which run produced an output**, say which output and confirm it from the log before answering — run the `WRITES` recipe above over every `*.jsonl` under the download directory, and quote the matching tool call verbatim rather than summarising it. Don't use the truncated query below for this: the write often sits hundreds of characters into a longer command.
+> If your answer will name **which run produced an output**, say which output and confirm it from the log before answering — run <paste the `WRITES` recipe above> over every `*.jsonl` under the download directory, and quote the matching tool call verbatim rather than summarising it. Don't use the truncated query below for this: the write often sits hundreds of characters into a longer command.
 >
 > **JSONL parsing** — each line has a `type` field (`user`, `assistant`, `system`). Key queries:
 > ```
