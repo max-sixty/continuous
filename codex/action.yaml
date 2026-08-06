@@ -17,7 +17,11 @@ inputs:
       break each other's auth mid-run.
   bot_name:
     required: true
-    description: GitHub username of the bot account
+    description: |
+      GitHub username of the bot account. Rendered into the workflows so an
+      adopter can see which account tend runs as; the steps themselves read
+      the identity off the token rather than from here, since a name left
+      stale by a rename fails open.
   prompt:
     required: true
     description: >-

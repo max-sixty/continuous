@@ -28,7 +28,11 @@ inputs:
       claude_code_oauth_token takes precedence when both are present.
   bot_name:
     required: true
-    description: GitHub username of the bot account
+    description: |
+      GitHub username of the bot account. Rendered into the workflows so an
+      adopter can see which account tend runs as; the steps themselves read
+      the identity off the token rather than from here, since a name left
+      stale by a rename fails open.
   prompt:
     required: true
     description: The prompt to send to Claude

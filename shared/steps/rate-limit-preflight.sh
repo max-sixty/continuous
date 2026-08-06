@@ -38,6 +38,18 @@ REPO="${GITHUB_REPOSITORY}"
 PAUSE_LABEL="tend-rate-limit"
 PAUSE_TITLE="Bot rate limit reached"
 
+# The issue whose closes are the approvals: the lowest-numbered one this
+# preflight filed. Author and title both matter, and the label alone pins
+# neither — the bot holds `issues: write`, so it can put the label on any
+# issue, and one a maintainer happened to close earlier would then hand it an
+# approval nobody gave. Restricting to what the bot itself filed under this
+# exact title leaves the label as a finding aid rather than the credential.
+pause_issue() {
+  gh issue list --label "$PAUSE_LABEL" --state all --author "$BOT" --limit 100 \
+    --json number,title \
+    --jq "map(select(.title == \"${PAUSE_TITLE}\")) | sort_by(.number) | .[0].number // empty"
+}
+
 # Who the bot is comes from the credential, not from configuration: this runs
 # as the bot, so the authenticated user is the bot by definition. A configured
 # name could be misspelled or left stale by a rename, and every way that went
@@ -99,72 +111,93 @@ fi
 # Everything below runs only once the base limit is already exceeded, so the
 # common path costs no extra API calls at all.
 if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
-  PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all)
+  PAUSE=$(pause_issue)
 
-  # Approvals are closes by a person, today. Scoped to today because the
-  # ceiling they lift resets at the UTC rollover along with the count itself.
-  #
-  # Two exclusions, covering different things. `id != BOT_ID` rules out the
-  # bot. `type != "Bot"` rules out GitHub Apps — `github-actions[bot]` above
-  # all, which a workflow's own `GITHUB_TOKEN` acts as, and which is a
-  # different account that would otherwise read as a person. Excluding the
-  # class rather than enumerating app names keeps this from needing an
-  # allowlist.
-  #
-  # Counted with `wc -l` outside jq rather than a `length` inside it: under
-  # `--paginate` a reduce runs once per page and prints one number per page,
-  # so `| length` would silently report the last page's count.
   APPROVALS=0
   if [ -n "$PAUSE" ]; then
-    # `/events` rather than `/timeline`: it carries the four fields read here
-    # and excludes comments, which matter because this issue accumulates one
-    # per refused run and is never replaced. Captured before counting, because
-    # under `pipefail` a transient failure mid-pipeline would take the whole
+    # `/events` rather than `/timeline`: it carries every field read here and
+    # excludes comments, which matter because this issue accumulates one per
+    # refused run and is never replaced. Captured whole and counted in bash,
+    # because under `pipefail` a transient failure mid-pipeline would take the
     # script down and lose the issue that is the only notice anyone gets;
     # failing to read the events leaves approvals at zero, which refuses the
     # run — the safe direction for a check whose job is to stop things.
-    APPROVAL_ACTORS=$(gh api "repos/$REPO/issues/$PAUSE/events?per_page=100" --paginate \
-      --jq ".[] | select(.event == \"closed\"
-                         and .actor.id != ${BOT_ID}
-                         and .actor.type != \"Bot\"
-                         and .created_at >= \"${TODAY}T00:00:00Z\") | .actor.login" \
+    EVENTS=$(gh api "repos/$REPO/issues/$PAUSE/events?per_page=100" --paginate \
+      --jq ".[] | select((.event == \"labeled\" and .label.name == \"${PAUSE_LABEL}\")
+                      or (.event == \"closed\"
+                          and .actor.id != ${BOT_ID}
+                          and .actor.type != \"Bot\")) | \"\(.event) \(.created_at)\"" \
       || true)
-    APPROVALS=$(grep -c . <<< "$APPROVAL_ACTORS" || true)
+
+    # An approval is a close by a person, after the label went on and today.
+    #
+    # Today, because the ceiling it lifts resets at the UTC rollover along
+    # with the count itself. After the label, because otherwise moving the
+    # label onto an issue closed at any earlier point would import that close
+    # as an approval — and the bot can move labels. On the issue the preflight
+    # files, the label goes on at creation, so this excludes nothing real.
+    #
+    # The two actor exclusions cover different things: `id != BOT_ID` rules
+    # out the bot, and `type != "Bot"` rules out GitHub Apps —
+    # `github-actions[bot]` above all, which a workflow's own `GITHUB_TOKEN`
+    # acts as, and which is a different account that would otherwise read as a
+    # person. Excluding the class rather than naming apps needs no allowlist.
+    SINCE="${TODAY}T00:00:00Z"
+    while read -r KIND AT; do
+      if [ "$KIND" = "labeled" ] && [[ "$AT" > "$SINCE" ]]; then
+        SINCE="$AT"
+      fi
+    done <<< "$EVENTS"
+
+    while read -r KIND AT; do
+      if [ "$KIND" = "closed" ] && [[ "$AT" > "$SINCE" ]]; then
+        APPROVALS=$((APPROVALS + 1))
+      fi
+    done <<< "$EVENTS"
   fi
 
   CEILING=$((SPIKE_LIMIT << APPROVALS))
 
-  if [ "$TODAY_POSTS" -gt "$CEILING" ]; then
-    ROW=$(run_issue_row)
-
-    # Only look again when there is nothing to append to. The jitter narrows
-    # the create-create race — sibling jobs trip within seconds of each other,
-    # and without it each files its own issue — so it buys nothing once the
-    # issue is known to exist, and the lookup above is still good.
-    if [ -z "$PAUSE" ]; then
-      sleep $((RANDOM % 30))
-      PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all)
-    fi
-
-    if [ -n "$PAUSE" ]; then
-      # A no-op when it is already open, which is the usual case for the
-      # second and later runs refused in one incident.
-      gh issue reopen "$PAUSE" >/dev/null 2>&1 || true
-      printf '%s\n' "$ROW" | gh issue comment "$PAUSE" -F -
-    else
-      run_issue_ensure_label "$PAUSE_LABEL" "Bot paused on its own rate limit; close to approve" "fbca04"
-      PAUSE=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
-        "The bot stopped before doing any work: it has filed more issues and PRs today than its spike limit allows, which is the check that catches a runaway loop between workflows." \
-        "**Closing this issue approves the volume and doubles the ceiling for the rest of the UTC day.** Each further close doubles it again, so the limit keeps working after you have used it. Close it only if the activity below is expected — and note the bot cannot approve itself: closes by its own account, or by any GitHub App, are not counted." \
-        "$ROW" \
-        "The runs listed above were refused and do not retry on their own; re-run them with \`gh run rerun <id> --failed\` once this is closed." \
-        | run_issue_create_and_reconcile "$PAUSE_LABEL" "$PAUSE_TITLE")
-    fi
-
-    echo "::error::Rate limit: bot created ${TODAY_POSTS} items today, above the ceiling of ${CEILING} (base limit ${SPIKE_LIMIT}, ${APPROVALS} approval(s), baseline ${PAST_POSTS} over past 6 days). Refused runs are listed in #${PAUSE:-?}; closing it doubles the ceiling."
-    ABORT=true
-  else
+  if [ "$TODAY_POSTS" -le "$CEILING" ]; then
     echo "Rate limit: ${TODAY_POSTS} today is over the base limit of ${SPIKE_LIMIT}, allowed by ${APPROVALS} approval(s) on #${PAUSE} (ceiling ${CEILING})"
+  else
+    # Only file when the spike is the whole reason this run is being refused.
+    # A burst trip is not resumable, so an issue offering to lift the ceiling
+    # would promise a recovery that closing it cannot deliver; the burst
+    # annotation above is the honest signal, and no row is owed for a run
+    # whose retry would be refused again on the same grounds.
+    if [ "$ABORT" = false ]; then
+      ROW=$(run_issue_row)
+
+      # Only look again when there is nothing to append to. The jitter narrows
+      # the create-create race — sibling jobs trip within seconds of each
+      # other, and without it each files its own issue — so it buys nothing
+      # once the issue is known to exist, and the lookup above is still good.
+      if [ -z "$PAUSE" ]; then
+        sleep $((RANDOM % 30))
+        PAUSE=$(pause_issue)
+      fi
+
+      if [ -n "$PAUSE" ]; then
+        # A no-op when it is already open, which is the usual case for the
+        # second and later runs refused in one incident.
+        gh issue reopen "$PAUSE" >/dev/null 2>&1 || true
+        printf '%s\n' "$ROW" | gh issue comment "$PAUSE" -F -
+      else
+        run_issue_ensure_label "$PAUSE_LABEL" "Bot paused on its own rate limit; close to approve" "fbca04"
+        PAUSE=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+          "The bot stopped before doing any work: it has filed more issues and PRs today than its spike limit allows, which is the check that catches a runaway loop between workflows." \
+          "**Closing this issue approves the volume and doubles the ceiling for the rest of the UTC day.** Each further close doubles it again, so the limit keeps working after you have used it. Close it only if the activity below is expected — and note the bot cannot approve itself: closes by its own account, or by any GitHub App, are not counted." \
+          "$ROW" \
+          "The runs listed above were refused and do not retry on their own; re-run them with \`gh run rerun <id> --failed\` once this is closed." \
+          | run_issue_create_and_reconcile "$PAUSE_LABEL" "$PAUSE_TITLE")
+      fi
+
+      echo "::error::Rate limit: bot created ${TODAY_POSTS} items today, above the ceiling of ${CEILING} (base limit ${SPIKE_LIMIT}, ${APPROVALS} approval(s), baseline ${PAST_POSTS} over past 6 days). Refused runs are listed in #${PAUSE:-?}; closing it doubles the ceiling."
+    else
+      echo "::error::Rate limit: bot created ${TODAY_POSTS} items today, above the ceiling of ${CEILING} (base limit ${SPIKE_LIMIT}, ${APPROVALS} approval(s), baseline ${PAST_POSTS} over past 6 days)."
+    fi
+    ABORT=true
   fi
 fi
 

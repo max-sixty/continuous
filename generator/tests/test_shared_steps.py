@@ -181,7 +181,11 @@ case "$1" in
         [ -n "${FAIL_WHOAMI:-}" ] && exit 1
         emit "{\"login\":\"tend-agent\",\"id\":${FAKE_BOT_ID}}"
         ;;
-      *"/pulls?"*) emit '[]' ;;
+      *"/pulls?"*)
+        # Built through jq so the script's own burst filter is what counts them.
+        emit "$(jq -nc --argjson n "${FAKE_RECENT_PRS:-0}" \
+          '[range($n) | {user: {login: "tend-agent"}, created_at: "2099-01-01T00:00:00Z"}]')"
+        ;;
       *"/issues?creator="*) emit '[]' ;;
       "search/issues?"*)
         # The baseline query is the one carrying a `created:from..to` range.
@@ -224,6 +228,10 @@ FAKE_SLEEP = "#!/usr/bin/env bash\nexit 0\n"
 
 TODAY = "2026-01-02"
 BOT_ID = 4242
+PAUSE_TITLE = "Bot rate limit reached"
+# The label goes on when the preflight files the issue; approvals are closes
+# after that moment.
+LABELLED_AT = f"{TODAY}T08:00:00Z"
 
 
 def _closed_event(
@@ -273,6 +281,7 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
         # past=15 puts the base limit at 10 + 15/3 = 15.
         "FAKE_PAST_POSTS": "15",
         "FAKE_TODAY_POSTS": "10",
+        "FAKE_RECENT_PRS": "0",
         "FAKE_BOT_ID": str(BOT_ID),
         "GITHUB_REPOSITORY": "owner/repo",
         "GITHUB_SERVER_URL": "https://github.com",
@@ -291,10 +300,22 @@ def _run_preflight(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _approve(env: dict[str, str], *events: dict, issue: int = 42) -> None:
-    """Put a pause issue on the label, with the given timeline events."""
-    Path(env["PAUSE_ISSUES_JSON"]).write_text(json.dumps([{"number": issue}]))
-    Path(env["TIMELINE_JSON"]).write_text(json.dumps(list(events)))
+def _approve(
+    env: dict[str, str],
+    *events: dict,
+    issue: int = 42,
+    labelled_at: str = LABELLED_AT,
+) -> None:
+    """Put a pause issue on the label, labelled then carrying `events`."""
+    Path(env["PAUSE_ISSUES_JSON"]).write_text(
+        json.dumps([{"number": issue, "title": PAUSE_TITLE}])
+    )
+    labelled = {
+        "event": "labeled",
+        "label": {"name": "tend-rate-limit"},
+        "created_at": labelled_at,
+    }
+    Path(env["TIMELINE_JSON"]).write_text(json.dumps([labelled, *events]))
 
 
 def test_rate_limit_passes_under_the_limit(rate_limit_env: dict[str, str]) -> None:
@@ -371,6 +392,49 @@ def test_rate_limit_renamed_bot_still_cannot_approve(
 
     assert result.returncode == 1, (
         "a rename let the bot approve itself; the check is matching on a name"
+    )
+
+
+def test_rate_limit_relabelled_issue_does_not_carry_its_closes(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """Moving the label onto an already-closed issue grants nothing.
+
+    The bot holds `issues: write`, so it can label any issue. Were approvals
+    counted from the whole history, labelling one a maintainer had closed
+    earlier today would import that close as an approval nobody gave. Only
+    closes after the label went on count, and on a real pause issue the label
+    goes on at creation, so nothing genuine is excluded.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    _approve(
+        rate_limit_env,
+        _closed_event("maintainer"),
+        labelled_at=f"{TODAY}T10:00:00Z",
+    )
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1, "a close predating the label counted as an approval"
+
+
+def test_rate_limit_skips_the_issue_when_the_burst_limit_refused(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """A burst trip files nothing: closing the issue could not lift it.
+
+    The burst limit is deliberately not resumable, so an issue offering to
+    double the ceiling would promise a recovery it cannot deliver.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    rate_limit_env["FAKE_RECENT_PRS"] = "11"
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    calls = _calls(rate_limit_env)
+    assert not any(c.startswith("issue create") for c in calls), (
+        f"filed a rate-limit issue for a burst trip it cannot lift: {calls}"
     )
 
 
