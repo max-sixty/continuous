@@ -176,7 +176,10 @@ case "$1" in
   api)
     case "$2" in
       *"/timeline") emit "$(cat "$TIMELINE_JSON")" ;;
-      "users/"*) emit "{\"id\":${FAKE_BOT_ID}}" ;;
+      user)
+        [ -n "${FAIL_WHOAMI:-}" ] && exit 1
+        emit "{\"login\":\"tend-agent\",\"id\":${FAKE_BOT_ID}}"
+        ;;
       *"/pulls?"*) emit '[]' ;;
       *"/issues?creator="*) emit '[]' ;;
       "search/issues?"*)
@@ -272,7 +275,6 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
         "FAKE_PAST_POSTS": "15",
         "FAKE_TODAY_POSTS": "10",
         "FAKE_BOT_ID": str(BOT_ID),
-        "BOT_NAME": "tend-agent",
         "GITHUB_REPOSITORY": "owner/repo",
         "GITHUB_SERVER_URL": "https://github.com",
         "GITHUB_RUN_ID": "12345",
@@ -352,13 +354,13 @@ def test_rate_limit_bot_cannot_approve_itself(rate_limit_env: dict[str, str]) ->
 def test_rate_limit_renamed_bot_still_cannot_approve(
     rate_limit_env: dict[str, str],
 ) -> None:
-    """A renamed bot account is still the bot.
+    """A renamed account is still the bot.
 
     The account is an ordinary user account, so the type check does nothing for
-    it and identifying it is the whole control. Matching on login would fail
-    open the moment the account were renamed and the configured name went
-    stale: an actor matching nothing reads as an approving person. Here the
-    close carries a login the config no longer knows, and the bot's id.
+    it and identifying it is the whole control. Matching on a name would fail
+    open the moment the account were renamed: an actor matching nothing reads
+    as an approving person. Here the close carries an unfamiliar login and the
+    bot's id.
     """
     rate_limit_env["FAKE_TODAY_POSTS"] = "16"
     _approve(
@@ -369,24 +371,26 @@ def test_rate_limit_renamed_bot_still_cannot_approve(
     result = _run_preflight(rate_limit_env)
 
     assert result.returncode == 1, (
-        "a rename let the bot approve itself; the check is matching on login"
+        "a rename let the bot approve itself; the check is matching on a name"
     )
 
 
-def test_rate_limit_refuses_to_run_without_a_bot_name(
+def test_rate_limit_refuses_to_run_without_an_identity(
     rate_limit_env: dict[str, str],
 ) -> None:
-    """An empty BOT_NAME inverts the control, so the preflight stops instead.
+    """Unable to read its own identity, the preflight stops rather than guesses.
 
-    With no bot to exclude, every close counts — including the bot's own. A
-    security check that silently reverses is worse than one that fails.
+    Every count and the approval filter are keyed on who the bot is. Carrying
+    on without that would leave the counts matching nothing and the filter
+    matching every close — a check that has silently reversed rather than
+    failed.
     """
-    rate_limit_env["BOT_NAME"] = ""
+    rate_limit_env["FAIL_WHOAMI"] = "1"
 
     result = _run_preflight(rate_limit_env)
 
     assert result.returncode == 1
-    assert "BOT_NAME is empty" in result.stdout
+    assert "could not read the bot's own identity" in result.stdout
 
 
 def test_rate_limit_github_app_cannot_approve(rate_limit_env: dict[str, str]) -> None:

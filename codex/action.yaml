@@ -93,7 +93,6 @@ runs:
       run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        BOT_NAME: ${{ inputs.bot_name }}
 
     - name: Resolve bot ID
       id: bot

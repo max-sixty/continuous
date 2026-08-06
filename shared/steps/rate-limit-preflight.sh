@@ -26,9 +26,8 @@
 # The burst limit is deliberately not resumable: ten PRs in twenty minutes is
 # a loop rather than a busy day, and there is nothing there to wave through.
 #
-# Inputs (env): GITHUB_TOKEN (for gh), BOT_NAME (bot username),
-# GITHUB_REPOSITORY (from Actions), plus the run/event vars lib/run-issue.sh
-# reads.
+# Inputs (env): GITHUB_TOKEN (the bot's PAT, for gh), GITHUB_REPOSITORY (from
+# Actions), plus the run/event vars lib/run-issue.sh reads.
 set -eo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -36,17 +35,22 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "${SCRIPT_DIR}/lib/run-issue.sh"
 
 REPO="${GITHUB_REPOSITORY}"
-BOT="${BOT_NAME}"
 PAUSE_LABEL="tend-rate-limit"
 PAUSE_TITLE="Bot rate limit reached"
 
-# The bot account is an ordinary user account, not a GitHub App, so the type
-# check further down does nothing for it: excluding the bot rests entirely on
-# identifying it. An empty BOT_NAME would leave the approval filter matching
-# every close including the bot's own, which inverts the control instead of
-# breaking it. Refuse to run.
-if [ -z "$BOT" ]; then
-  echo "::error::Rate limit preflight: BOT_NAME is empty, so the bot could approve itself. Set the action's bot_name input."
+# Who the bot is comes from the credential, not from configuration: this runs
+# as the bot, so the authenticated user is the bot by definition. A configured
+# name could be misspelled or left stale by a rename, and every way that went
+# wrong failed open — the counts below would match nothing and never trip, and
+# the approval filter would match every close including the bot's own. Neither
+# is possible when the name and id are read off the token.
+#
+# The id is what the approval filter compares, because the bot account is an
+# ordinary user account rather than a GitHub App: the type check further down
+# does nothing for it, so identifying it is the whole control.
+read -r BOT BOT_ID <<< "$(gh api user --jq '"\(.login) \(.id)"')"
+if [ -z "$BOT" ] || [ -z "$BOT_ID" ]; then
+  echo "::error::Rate limit preflight: could not read the bot's own identity from the token, so the limit cannot be enforced."
   exit 1
 fi
 # GNU date — runs on Ubuntu (GitHub Actions runners)
@@ -92,31 +96,21 @@ fi
 if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
   PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all)
 
-  # Identify the bot by its numeric id, not its login. A GitHub account can be
-  # renamed, and a BOT_NAME left stale by a rename would stop matching the
-  # bot's own closes — failing open, because an actor that matches nothing
-  # reads as an approving person. The id survives a rename. Resolving it costs
-  # one call, on the trip path only.
-  BOT_ID=$(gh api "users/${BOT}" --jq '.id' 2>/dev/null || echo "")
-
   # Approvals are closes by a person, today. Scoped to today because the
   # ceiling they lift resets at the UTC rollover along with the count itself.
   #
   # Two exclusions, covering different things. `id != BOT_ID` rules out the
-  # tend bot, which is an ordinary user account and so passes any type check.
-  # `type != "Bot"` rules out GitHub Apps — `github-actions[bot]` above all,
-  # which a workflow's own `GITHUB_TOKEN` acts as, and which is a different
-  # account that would otherwise read as a person. Excluding the class rather
-  # than enumerating app names keeps this from needing an allowlist.
+  # bot. `type != "Bot"` rules out GitHub Apps — `github-actions[bot]` above
+  # all, which a workflow's own `GITHUB_TOKEN` acts as, and which is a
+  # different account that would otherwise read as a person. Excluding the
+  # class rather than enumerating app names keeps this from needing an
+  # allowlist.
   #
   # Counted with `wc -l` outside jq rather than a `length` inside it: under
   # `--paginate` a reduce runs once per page and prints one number per page,
   # so `| length` would silently report the last page's count.
   APPROVALS=0
-  if [ -z "$BOT_ID" ] && [ -n "$PAUSE" ]; then
-    echo "Rate limit: could not resolve the id of '${BOT}', so no close counts as an approval"
-  fi
-  if [ -n "$PAUSE" ] && [ -n "$BOT_ID" ]; then
+  if [ -n "$PAUSE" ]; then
     # Counted in two steps rather than one pipeline: under `pipefail` a
     # transient failure of the API call would take the whole script down here,
     # losing the issue that is the only notice anyone gets. Failing to read
