@@ -391,10 +391,10 @@ If you are responding to your own prior comment or review (not a human's reply t
 
 ## Recheck Before Posting
 
-**Before posting any comment, review, or inline reply**, re-fetch the conversation and check whether the response would duplicate something already there. Two duplication paths:
+**Before posting any comment, review, or inline reply**, re-fetch the conversation and check whether the response would duplicate something already there. Run the re-fetch **as the last step before the post**, the same way the `gh pr create` dedup above does — composing the body, grepping it for placeholders, and checking its links all take time, and a sibling's comment landing in that gap is invisible to a check that ran before them. Two duplication paths:
 
 - **New entries arrived during the session.** Other participants may comment while the bot works. Compare counts against what was read at session start.
-- **A sibling tend workflow already responded.** `tend-mention`, `tend-triage`, and `tend-review` all post as the same bot account; a comment from one can pre-empt another (a `tend-mention` reply followed by a `synchronize`-triggered `tend-review` is the common pattern). The earlier comment may already be in the conversation at session start, so a stale-count check alone is not enough — scan for prior bot comments newer than the maintainer message being responded to.
+- **A sibling tend workflow already responded.** Every workflow posts as the same bot account, so the pre-empting comment can come from an event-triggered run (`tend-mention`, `tend-triage`, `tend-review`) or from a scheduled sweep that reaches the same thread (`tend-nightly`, `tend-review-runs`, `tend-notifications`, `review-reviewers`). A freshly-opened issue is the sharpest case: `tend-triage` fires on `issues: opened` and owns it, while a sweep already in session may find the same issue and answer it independently. The earlier comment may already be in the conversation at session start, so a stale-count check alone is not enough — scan for prior bot comments newer than the maintainer message being responded to.
 
 ```bash
 # For issues
