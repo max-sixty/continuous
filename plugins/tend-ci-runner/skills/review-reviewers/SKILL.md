@@ -82,7 +82,7 @@ GIST_DESC="review-reviewers evidence: $TARGET $MONTH"
 
 The tracking issue lives on tend (the current repo). It indexes gists via one comment per new gist — no per-run comments, no body edits.
 
-The workflow's `init-tracking` job runs before the matrix and creates the monthly tracking issue if absent, so matrix legs always find an existing one. The find-or-create logic below remains the fallback for ad-hoc invocations and as a safety net; sort lowest-numbered first in case a race ever does produce duplicates. `gh issue create` prints the new issue's URL; parse the number from its basename.
+The workflow's `init-tracking` job runs before the matrix and creates the monthly tracking issue if absent, so on a normal tick matrix legs find an existing one. It is not a precondition — the matrix runs even when that job fails or never gets a runner, so the find-or-create logic below is a live code path on the first tick of a month, not only a fallback for ad-hoc invocations. Sort lowest-numbered first so a lost race degrades to a duplicate rather than a crash. `gh issue create` prints the new issue's URL; parse the number from its basename.
 
 ```bash
 TRACKING_NUMBER=$(gh issue list --state open --label "$TRACKING_LABEL" \
