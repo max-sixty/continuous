@@ -64,16 +64,26 @@ fi
 # workflow busier than the limit drops the *oldest* runs in the window and the
 # totals below under-report with nothing marking the shortfall. The limit is
 # per workflow, not per report, so it only has to clear the busiest one; a
-# repo's chattiest workflow can run several times an hour. Warn on an exact-hit
-# rather than silently trusting it — a count landing precisely on the limit is
-# the one symptom of truncation visible without re-querying.
-RUN_LIMIT=500
+# repo's chattiest workflow can run several times an hour, and at this script's
+# own documented 168 h default that already reaches the high hundreds. Sized
+# well past that: the limit only bounds the listing call, which pages
+# internally, so headroom here is free — the per-run `gh run download` loop
+# below costs what the window actually holds, whatever this number is.
+#
+# Warn rather than trust, in both directions. A count landing on the limit is
+# the only symptom of truncation visible without re-querying `.total_count`,
+# and a failed fetch is the same silent under-report at full strength: it drops
+# every run of that workflow, and a length of 0 is not an exact-limit hit, so
+# the truncation guard alone would pass straight over it.
+RUN_LIMIT=2000
 ALL_RUNS="[]"
 for wf in "${WORKFLOWS[@]}"; do
-  runs=$(gh run list "${repo_args[@]}" --workflow "$wf" --created ">=$SINCE" --status completed \
-    --json databaseId,conclusion,createdAt,name --limit "$RUN_LIMIT" 2>/dev/null || echo "[]")
-  if [ "$(echo "$runs" | jq 'length')" -eq "$RUN_LIMIT" ]; then
-    echo >&2 "WARNING: '$wf' returned exactly $RUN_LIMIT runs — the window is likely truncated and the totals below under-report it."
+  if ! runs=$(gh run list "${repo_args[@]}" --workflow "$wf" --created ">=$SINCE" --status completed \
+    --json databaseId,conclusion,createdAt,name --limit "$RUN_LIMIT" 2>/dev/null); then
+    echo >&2 "WARNING: 'gh run list' for '$wf' failed — its runs are absent from the totals below."
+    runs="[]"
+  elif [ "$(echo "$runs" | jq 'length')" -ge "$RUN_LIMIT" ]; then
+    echo >&2 "WARNING: '$wf' returned $RUN_LIMIT runs, the fetch limit — older runs in the window are missing and the totals below under-report it."
   fi
   ALL_RUNS=$(echo "$ALL_RUNS" "$runs" | jq -s 'add | unique_by(.databaseId)')
 done
