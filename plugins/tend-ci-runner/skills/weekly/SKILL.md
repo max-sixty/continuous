@@ -57,6 +57,25 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    ```
 4. If CI is failing, comment with the failure summary and skip
 5. If a major version bump, comment noting it needs manual review and skip
+6. On either skip path (4 or 5), dismiss an approval that predates the newest rewrite before you leave. Both paths are reachable *because* a rebase changed something, and neither passes through item 3's guard — so the pre-rewrite approval stays the bot's latest review, re-anchored onto the current head, and the PR still reads as bot-approved while you comment that it isn't mergeable:
+   ```bash
+   BOT_LOGIN=$(gh api user --jq '.login')
+   REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+   LAST_FORCE_PUSH_AT=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
+     | jq -rs 'add | [.[] | select(.event == "head_ref_force_pushed") | .created_at] | max // ""')
+   STALE_APPROVAL_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+     | jq -rs --arg bot "$BOT_LOGIN" --arg fp "$LAST_FORCE_PUSH_AT" \
+       'add | [.[] | select(.user.login == $bot and .state == "APPROVED")
+                   | select($fp != "" and .submitted_at < $fp)]
+            | last | .id // empty')
+
+   if [ -n "$STALE_APPROVAL_ID" ]; then
+     # PUT, not POST — the dismiss endpoint requires it.
+     gh api "repos/$REPO/pulls/<number>/reviews/$STALE_APPROVAL_ID/dismissals" \
+       -X PUT -f message="Rebased since this approval; re-reviewing."
+   fi
+   ```
+   A dismissed review reports `DISMISSED` rather than `APPROVED`, so the filter stops matching it and a later run re-dismisses nothing.
 
 ## Step 3: Repo-specific weekly tasks
 
