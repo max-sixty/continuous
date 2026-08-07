@@ -327,7 +327,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > <note if zero bot activity found across all runs — may indicate systemic failure>
 > ```
 
-A report of little or no bot output is only usable if it carries the repo-wide sweep counts — without them, run the three sweep calls yourself before believing it, because a silent window and a broken per-run walk produce the same summary. Absence is not a finding on its own either: don't reason from it toward a conclusion the sweep would contradict.
+A report of little or no bot output is only usable if it carries the repo-wide sweep counts — without them, run the sweep block yourself before believing it, because a silent window and a broken per-run walk produce the same summary. Absence is not a finding on its own either: don't reason from it toward a conclusion the sweep would contradict.
 
 Review the subagent's summary. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
 
