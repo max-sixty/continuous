@@ -565,15 +565,17 @@ For **OAuth token**: before offering the CLI option, check:
   into `gh` keeps the token out of the transcript.
 
   ```bash
-  set -o pipefail
-  "${CLAUDE_SKILL_DIR}/scripts/oauth_token.py" --code-file /tmp/tend-oauth-code \
+  TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/oauth_token.py" --code-file /tmp/tend-oauth-code)
+  [ -n "$TOKEN" ] && printf '%s' "$TOKEN" \
     | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
   ```
 
-  `pipefail` is load-bearing: `gh secret set` stores an empty stdin as an
-  empty secret and exits 0, so without it a wrapper that fails leaves
-  behind a secret that exists and authenticates nothing, under an exit
-  status that reads as success.
+  The guard is load-bearing, and nothing writes the secret without it.
+  `gh secret set` stores empty stdin as an empty secret and exits 0, and
+  every check downstream reads names rather than values — `check_secrets`,
+  and this step's own pre-check above — so one failed run would leave a
+  `CLAUDE_CODE_OAUTH_TOKEN` that the next run reads as already set, skips,
+  and finishes green on.
 
   Give the user the URL from stderr. Approving it either returns to the
   CLI, which finishes the run on its own, or lands on a page showing a
