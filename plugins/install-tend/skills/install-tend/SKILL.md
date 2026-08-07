@@ -553,28 +553,42 @@ For **OAuth token**: before offering the CLI option, check:
 
 - `command -v claude` — if missing, only offer Manual (point them at
   `https://claude.com/claude-code` to install).
-- `uname` — the bundled wrapper depends on `bash` + `script(1)` and
-  has only been validated on macOS and Linux. On anything else
-  (`MINGW*`, `CYGWIN*`, `MSYS*`, `Windows_NT`, etc.), only offer Manual.
+- `uname` — the bundled wrapper needs `python3` and a pty, and has only
+  been validated on macOS and Linux. On anything else (`MINGW*`,
+  `CYGWIN*`, `MSYS*`, `Windows_NT`, etc.), only offer Manual.
 
 - **CLI (recommended on macOS/Linux when `claude` is on PATH)** — run
   the bundled wrapper, which invokes `claude setup-token` (OAuth 2.0
-  PKCE, opens browser):
+  PKCE, opens browser). **Run it in the background:** it prints the
+  authorize URL to stderr and then waits, and one of the two ways it
+  finishes needs you to act while it is still running. Piping straight
+  into `gh` keeps the token out of the transcript.
 
   ```bash
-  TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/oauth-token.sh")
+  "${CLAUDE_SKILL_DIR}/scripts/oauth-token.py" --code-file /tmp/tend-oauth-code \
+    | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
   ```
+
+  Give the user the URL from stderr. Approving it either returns to the
+  CLI, which finishes the run on its own, or lands on a page showing a
+  `code#state` string. For the second, have them paste that string back
+  and write it to the same path — the wrapper types it into the prompt:
+
+  ```bash
+  printf '%s' '<code#state>' > /tmp/tend-oauth-code
+  ```
+
+  Each run generates a fresh PKCE challenge, so a code from an earlier
+  run is dead; a restart needs a fresh approval.
 
 - **Manual** — have the user run `claude setup-token` in their own
   terminal (any machine with Claude Code installed) and paste the
   `sk-ant-oat01-…` token back. Use this on Windows or when the
-  wrapper errors out.
+  wrapper errors out. Then store it:
 
-Then store the secret:
-
-```bash
-echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
-```
+  ```bash
+  printf '%s' "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
+  ```
 
 For **API key**:
 
