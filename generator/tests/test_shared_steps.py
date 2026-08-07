@@ -575,3 +575,263 @@ def test_rate_limit_reopens_rather_than_refiling(
     assert not any(c.startswith("issue create") for c in calls), (
         f"filed a second pause issue instead of reopening #42: {calls}"
     )
+
+
+REPORT_FAILURE = REPO_ROOT / "shared" / "steps" / "report-failure.sh"
+
+OUTAGE_TITLE = "Bot temporarily unavailable"
+OUTAGE_LABEL = "tend-outage"
+# The anchor `run_issue_anchor` builds from the fixture's server/repo/run id.
+# Both dedup matchers select on it, so it is what the fixtures have to carry.
+RUN_LINK = "[workflow run](https://github.com/owner/repo/actions/runs/12345)"
+POSTED_AT = "2026-01-02T12:00:00Z"
+
+# `gh` stand-in for the outage reporter. Same shape as the rate-limit fake —
+# fixtures in, the script's own filters doing the work — with two additions the
+# comment dedup needs. `issue comment` appends to the comment fixture, so the
+# reconcile that follows sees the row this run just posted, and the comment
+# list is chunked into pages of 100 only when `--slurp` asks for them: an
+# unpaginated read gets the oldest page alone, exactly as the API serves it.
+FAKE_GH_REPORT_FAILURE = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALLS"
+
+jq_expr=""
+slurp=""
+prev=""
+for arg in "$@"; do
+  [ "$prev" = "--jq" ] && jq_expr="$arg"
+  [ "$arg" = "--slurp" ] && slurp=1
+  prev="$arg"
+done
+
+emit() {
+  if [ -n "$jq_expr" ]; then
+    printf '%s' "$1" | jq -r "$jq_expr"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+case "$1 $2" in
+  "issue list") emit "$(cat "$OPEN_ISSUES_JSON")" ;;
+  "issue view") emit "$(cat "$KEEPER_JSON")" ;;
+  "issue comment")
+    body=$(cat)
+    printf '%s\n' "$body" >> "$COMMENT_BODIES"
+    jq -c --arg b "$body" --arg t "$POSTED_AT" \
+      '. + [{id: ((map(.id) | max // 0) + 1), created_at: $t, body: $b}]' \
+      "$ISSUE_COMMENTS_JSON" > "$ISSUE_COMMENTS_JSON.tmp"
+    mv "$ISSUE_COMMENTS_JSON.tmp" "$ISSUE_COMMENTS_JSON"
+    ;;
+  "issue create")
+    cat > /dev/null
+    echo "https://github.com/owner/repo/issues/${FAKE_NEW_ISSUE}"
+    ;;
+  "issue close" | "label create") ;;
+  *)
+    case "$*" in
+      *"/comments?per_page=100"*)
+        # Paged the way the endpoint pages, whether or not the caller asked
+        # for every page: `--slurp` gets the array of pages, a plain read gets
+        # the oldest 100 alone. Both go through `emit`, so a caller passing
+        # `--jq` has its own filter applied to what it actually received.
+        if [ -n "$slurp" ]; then
+          emit "$(jq -c '[_nwise(100)]' "$ISSUE_COMMENTS_JSON")"
+        else
+          emit "$(jq -c '.[0:100]' "$ISSUE_COMMENTS_JSON")"
+        fi
+        ;;
+      *"-X DELETE"*) ;;
+      *) exit 1 ;;
+    esac
+    ;;
+esac
+"""
+
+
+@pytest.fixture
+def report_failure_env(tmp_path: Path) -> dict[str, str]:
+    """Fake gh/sleep on PATH, plus the Actions env the reporter reads."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    for name, body in (("gh", FAKE_GH_REPORT_FAILURE), ("sleep", FAKE_SLEEP)):
+        path = bindir / name
+        path.write_text(body)
+        path.chmod(0o755)
+
+    jq = shutil.which("jq")
+    assert jq, "jq is required for these tests"
+
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"number": 851}}))
+    (tmp_path / "open-issues.json").write_text(
+        json.dumps([{"number": 42, "title": OUTAGE_TITLE}])
+    )
+    (tmp_path / "issue-comments.json").write_text("[]")
+    (tmp_path / "keeper.json").write_text('{"body": "", "comments": []}')
+    (tmp_path / "comment-bodies.txt").write_text("")
+
+    return {
+        "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
+        "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "OPEN_ISSUES_JSON": str(tmp_path / "open-issues.json"),
+        "ISSUE_COMMENTS_JSON": str(tmp_path / "issue-comments.json"),
+        "KEEPER_JSON": str(tmp_path / "keeper.json"),
+        "COMMENT_BODIES": str(tmp_path / "comment-bodies.txt"),
+        "POSTED_AT": POSTED_AT,
+        "FAKE_NEW_ISSUE": "42",
+        "GITHUB_REPOSITORY": "owner/repo",
+        "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_RUN_ID": "12345",
+        "GITHUB_EVENT_NAME": "pull_request_target",
+        "GITHUB_EVENT_PATH": str(event),
+    }
+
+
+def _run_report_failure(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(REPORT_FAILURE)], env=env, capture_output=True, text=True
+    )
+
+
+def _comments(env: dict[str, str]) -> str:
+    return Path(env["COMMENT_BODIES"]).read_text()
+
+
+def _deleted(env: dict[str, str]) -> list[str]:
+    """Comment ids the reconcile deleted."""
+    return [c.rsplit("/", 1)[-1] for c in _calls(env) if "-X DELETE" in c]
+
+
+def _issue_comments(env: dict[str, str], *comments: dict) -> None:
+    """Seed the comment list the reconcile reads, oldest-first as the API serves it."""
+    Path(env["ISSUE_COMMENTS_JSON"]).write_text(json.dumps(list(comments)))
+
+
+def _comment(number: int, body: str, at: str) -> dict:
+    return {"id": number, "created_at": at, "body": body}
+
+
+def _filler(count: int, *, first_id: int = 1) -> list[dict]:
+    """Unrelated comments, none carrying this run's anchor."""
+    return [
+        _comment(first_id + i, f"nightly enrichment {i}", f"2026-01-01T00:{i:02d}:00Z")
+        for i in range(count)
+    ]
+
+
+def _seen_by_the_guard(env: dict[str, str], *bodies: str) -> None:
+    """What `gh issue view --json body,comments` returns for the tracker."""
+    Path(env["KEEPER_JSON"]).write_text(
+        json.dumps({"body": "", "comments": [{"body": b} for b in bodies]})
+    )
+
+
+def test_report_failure_skips_a_run_already_recorded(
+    report_failure_env: dict[str, str],
+) -> None:
+    """A leg whose sibling already recorded this run posts nothing.
+
+    This is the guard that collapses the flood: a matrix workflow calls the
+    script once per leg, every leg sharing one GITHUB_RUN_ID, so without it a
+    5-leg matrix leaves 5 comments all citing the same run.
+    """
+    _seen_by_the_guard(report_failure_env, f"| when | {RUN_LINK} | #851 |")
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert not _comments(report_failure_env), (
+        f"appended a second row for a run already recorded: "
+        f"{_comments(report_failure_env)!r}"
+    )
+
+
+def test_report_failure_appends_a_row_for_an_unrecorded_run(
+    report_failure_env: dict[str, str],
+) -> None:
+    """The happy path: a run the tracker has not seen still gets its row."""
+    _seen_by_the_guard(report_failure_env, "some other run's row")
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert RUN_LINK in _comments(report_failure_env)
+
+
+def test_report_failure_reconciles_a_racing_leg(
+    report_failure_env: dict[str, str],
+) -> None:
+    """Two legs that both read the tracker before either posted converge to one row.
+
+    The guard is a check-then-act, so jittered legs can both miss. Every leg
+    sorts the same list the same way, so each computes the same keeper — the
+    earliest — and deletes the rest.
+    """
+    _seen_by_the_guard(report_failure_env, "nothing recorded yet")
+    _issue_comments(
+        report_failure_env,
+        _comment(1, f"| when | {RUN_LINK} | #851 |", "2026-01-02T11:59:00Z"),
+    )
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _deleted(report_failure_env) == ["2"], (
+        f"expected the later of the two rows deleted, got "
+        f"{_deleted(report_failure_env)}"
+    )
+
+
+def test_report_failure_reconciles_past_the_first_page(
+    report_failure_env: dict[str, str],
+) -> None:
+    """The flood the reconcile exists for is exactly where it must paginate.
+
+    Issue comments come back oldest-first, so on a tracker past 100 comments an
+    unpaginated read returns only the oldest page — the rows this run and its
+    racing sibling just posted are not in it, and the reconcile no-ops on the
+    one issue that needed it.
+    """
+    _seen_by_the_guard(report_failure_env, "nothing recorded yet")
+    _issue_comments(
+        report_failure_env,
+        *_filler(138),
+        _comment(139, f"| when | {RUN_LINK} | #851 |", "2026-01-02T11:59:00Z"),
+    )
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _deleted(report_failure_env) == ["140"], (
+        f"the reconcile did not reach past the first page of comments; deleted "
+        f"{_deleted(report_failure_env)}"
+    )
+
+
+def test_report_failure_leaves_a_human_comment_naming_the_run(
+    report_failure_env: dict[str, str],
+) -> None:
+    """Only the bot's own generated rows are eligible for deletion.
+
+    The reconcile deletes, so its predicate is the whole protection. Selecting
+    on the bare run URL would make a person linking the run in discussion — the
+    normal way an outage gets diagnosed — a duplicate to be removed.
+    """
+    _seen_by_the_guard(report_failure_env, "nothing recorded yet")
+    _issue_comments(
+        report_failure_env,
+        _comment(
+            1,
+            "https://github.com/owner/repo/actions/runs/12345 is the one that failed",
+            "2026-01-02T11:00:00Z",
+        ),
+    )
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert not _deleted(report_failure_env), (
+        f"deleted a human comment that merely named the run: "
+        f"{_deleted(report_failure_env)}"
+    )

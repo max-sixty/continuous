@@ -68,9 +68,19 @@ if [ -n "$EXISTING" ]; then
   # every racing leg sorts the same way and computes the same keeper, so
   # deleting an already-deleted comment is a harmless 404. Selecting on the
   # anchor keeps only the bot's own generated rows eligible for deletion.
+  # Paginated, because this endpoint returns comments oldest-first and the
+  # issues that need reconciling are exactly the flooded ones: past 100
+  # comments the rows just posted fall off the first page, and an unpaginated
+  # read would find nothing to reconcile on the only issues where it matters.
+  # `--paginate` alone won't do — `gh` applies `--jq` per page, so each page
+  # would keep its own earliest comment and `sort_by | .[1:]` would delete the
+  # keeper. `--slurp` refuses `--jq`, hence the filter moved downstream, with
+  # `add` flattening the array of pages. On an issue with no comments `--slurp`
+  # yields `[[]]`, so `add` gives `[]` and the filter emits nothing.
   sleep 5
-  gh api "repos/${GITHUB_REPOSITORY}/issues/${EXISTING}/comments?per_page=100" \
-    --jq "[.[] | select(.body | contains(\"${ANCHOR}\"))] | sort_by(.created_at) | .[1:] | .[].id" \
+  gh api --paginate --slurp \
+    "repos/${GITHUB_REPOSITORY}/issues/${EXISTING}/comments?per_page=100" \
+    | jq -r "add | [.[] | select(.body | contains(\"${ANCHOR}\"))] | sort_by(.created_at) | .[1:] | .[].id" \
     | while read -r DUP_ID; do
         [ -z "$DUP_ID" ] && continue
         gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${DUP_ID}" 2>/dev/null || true
