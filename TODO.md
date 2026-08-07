@@ -45,9 +45,11 @@ generated workflow names it. What remains:
      `homebrew-prql` half alone: `publish-winget` runs `winget-releaser`,
      which supports only a *classic* PAT, and the `public_repo` scope it needs
      is not per-repo — it carries write to every public repository the account
-     can reach, `PRQL/prql` included. It also needs `push-web-branch` to drop
-     to `GITHUB_TOKEN`, so check whether anything runs on the `web` branch — a
-     `GITHUB_TOKEN` push fires no workflow.
+     can reach, `PRQL/prql` included. It also needs `push-web-branch` down to
+     `GITHUB_TOKEN`, which costs nothing: `publish-web` subscribes to `push` on
+     `web`, but carries `release: [released]` for exactly this reason — a
+     `GITHUB_TOKEN` push fires no workflow, so the deploy already has a path
+     that does not depend on who pushed.
 
    Until one lands, `repo-secret-allowlist` fails, correctly.
 
