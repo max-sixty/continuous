@@ -58,11 +58,23 @@ if [ ${#WORKFLOWS[@]} -eq 0 ]; then
   exit 0
 fi
 
-# Collect all completed runs across workflows
+# Collect all completed runs across workflows.
+#
+# `gh run list` returns newest-first and silently stops at --limit, so a
+# workflow busier than the limit drops the *oldest* runs in the window and the
+# totals below under-report with nothing marking the shortfall. The limit is
+# per workflow, not per report, so it only has to clear the busiest one; a
+# repo's chattiest workflow can run several times an hour. Warn on an exact-hit
+# rather than silently trusting it — a count landing precisely on the limit is
+# the one symptom of truncation visible without re-querying.
+RUN_LIMIT=500
 ALL_RUNS="[]"
 for wf in "${WORKFLOWS[@]}"; do
   runs=$(gh run list "${repo_args[@]}" --workflow "$wf" --created ">=$SINCE" --status completed \
-    --json databaseId,conclusion,createdAt,name --limit 100 2>/dev/null || echo "[]")
+    --json databaseId,conclusion,createdAt,name --limit "$RUN_LIMIT" 2>/dev/null || echo "[]")
+  if [ "$(echo "$runs" | jq 'length')" -eq "$RUN_LIMIT" ]; then
+    echo >&2 "WARNING: '$wf' returned exactly $RUN_LIMIT runs — the window is likely truncated and the totals below under-report it."
+  fi
   ALL_RUNS=$(echo "$ALL_RUNS" "$runs" | jq -s 'add | unique_by(.databaseId)')
 done
 
