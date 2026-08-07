@@ -83,7 +83,7 @@ for wf in "${WORKFLOWS[@]}"; do
     echo >&2 "WARNING: 'gh run list' for '$wf' failed — its runs are absent from the totals below."
     runs="[]"
   elif [ "$(echo "$runs" | jq 'length')" -ge "$RUN_LIMIT" ]; then
-    echo >&2 "WARNING: '$wf' returned $RUN_LIMIT runs, the fetch limit — older runs in the window are missing and the totals below under-report it."
+    echo >&2 "WARNING: '$wf' returned $RUN_LIMIT runs, the Actions API's pagination ceiling — older runs in the window are unreachable and the totals below under-report it. Narrow HOURS to bring the window under the ceiling; raising RUN_LIMIT cannot help."
   fi
   ALL_RUNS=$(echo "$ALL_RUNS" "$runs" | jq -s 'add | unique_by(.databaseId)')
 done
