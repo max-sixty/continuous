@@ -28,10 +28,26 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    ```bash
    HEAD_SHA=$(gh pr view <number> --json commits --jq '.commits[-1].oid')
    BOT_LOGIN=$(gh api user --jq '.login')
-   LAST_APPROVAL_SHA=$(gh pr view <number> --json reviews \
-     --jq "[.reviews[] | select(.author.login == \"$BOT_LOGIN\" and .state == \"APPROVED\")] | last | .commit.oid // empty")
+   REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 
-   if [ "$LAST_APPROVAL_SHA" = "$HEAD_SHA" ]; then
+   # A force-push re-points an existing review's commit anchor at the NEW head,
+   # so an approval of the pre-rebase code reports the current `$HEAD_SHA` and
+   # this guard skips a commit the bot never read — leaving the rebased PR
+   # carrying an approval it never earned. Dependency PRs are the population
+   # tend rewrites on purpose (`nightly` posts `@dependabot recreate` and ticks
+   # renovate's rebase-check), so ignore approvals older than the newest
+   # rewrite. REST reviews carry `.commit_id`/`.submitted_at`, NOT the
+   # `.commit.oid` that `gh pr view --json reviews` returns; `gh api --jq`
+   # accepts no `--arg`, so pipe to `jq`.
+   LAST_FORCE_PUSH_AT=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
+     | jq -rs 'add | [.[] | select(.event == "head_ref_force_pushed") | .created_at] | max // ""')
+   LAST_APPROVAL_SHA=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+     | jq -rs --arg bot "$BOT_LOGIN" --arg fp "$LAST_FORCE_PUSH_AT" \
+       'add | [.[] | select(.user.login == $bot and .state == "APPROVED")
+                   | select($fp == "" or .submitted_at > $fp)]
+            | last | .commit_id // empty')
+
+   if [ -n "$LAST_APPROVAL_SHA" ] && [ "$LAST_APPROVAL_SHA" = "$HEAD_SHA" ]; then
      echo "Already approved on this commit; skipping."
    else
      # Compose a one-line review body naming the package, bump type, and what you
