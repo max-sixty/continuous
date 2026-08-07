@@ -10,7 +10,7 @@ naming an environment still reads repo-level secrets. Every adopter now has
 the environment, admitting only `main`, with `TEND_BOT_TOKEN` in it, and every
 generated workflow names it. What remains:
 
-1. **The model credential, every repo.** `CLAUDE_CODE_OAUTH_TOKEN` can't be
+1. **The model credential.** `CLAUDE_CODE_OAUTH_TOKEN` can't be
    read back and isn't stored anywhere locally, so it has to be pasted or
    re-minted with `claude setup-token`:
    `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <repo> --env tend`, then
@@ -51,8 +51,10 @@ generated workflow names it. What remains:
 
    Until one lands, `repo-secret-allowlist` fails, correctly.
 
-`numbagg/numbagg`, `max-sixty/cargo-affected`, and `max-sixty/worktrunk` are
-done bar the model credential.
+`max-sixty/worktrunk` is done: both secrets are environment-scoped, `CODECOV_TOKEN`
+is the only thing left at repo level, and `tend check` passes every line.
+`numbagg/numbagg` and `max-sixty/cargo-affected` are done bar the model
+credential.
 
 The check also sweeps every *other* credential-holding environment — one
 that stores a secret, or that a job requesting `id-token: write` deploys
