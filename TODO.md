@@ -23,7 +23,8 @@ generated workflow names it. What remains:
    differ.
 
    Jobs running at `refs/heads/main` are admitted by the policy as it stands,
-   so `environment: tend` is the whole change: worktrunk's benchmark gist
+   so adding `environment: {name: tend, deployment: false}` is the whole
+   change: worktrunk's benchmark gist
    append and its two create-issue-on-failure jobs, prql's
    `update-rust-toolchain` (all four `schedule`-only, and already `if`-gated
    to it) and prql's backport. A `pull_request_target` run reports
@@ -249,6 +250,30 @@ open a draft advisory for security-classified failures. Needs (a) the
 discrimination rule (fix narrows a credential's scope → security; fix
 updates config to reflect intent → drift), (b) `install-tend` enabling PVR
 at setup, (c) confirming the bot token can hit the reports endpoint.
+
+## Re-run the work a rate-limit trip refused
+
+The `tend-rate-limit` issue lists the runs the spike limit refused, and
+closing it approves the volume — but nothing re-runs them. `tend-review`
+fires only on `pull_request_target`, so a refused review stays missing until
+someone pushes to the PR again. Today the recovery is one
+`gh run rerun <id> --failed` per row.
+
+The shape: a generated workflow on `issues: closed`, filtered to the label
+and to a closer who isn't the bot (the same check the preflight makes),
+re-running rows from the last 24 hours whose run is still in `failure` —
+which makes it idempotent, and stops an old row resurrecting itself. It
+needs `actions: write` and, being generated, a template plus config
+plumbing and generator tests. A re-run re-executes the preflight, which now
+sees the approval and passes, so nothing loops.
+
+**Blocked on** confirming tend's re-runs work correctly in the first place.
+Building an automatic re-runner over a broken re-run path would bury that
+bug under a second mechanism: the symptom moves from "my review never came
+back" to "the recovery workflow ran and my review still never came back".
+
+The same gap covers `tend-outage`; #816 tracks it from that side, and the
+`review-runs` skill's drain recipe reads the same table format.
 
 ## Worker: Phase 2 LLM summary of `/activity`
 
