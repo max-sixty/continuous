@@ -82,7 +82,7 @@ GIST_DESC="review-reviewers evidence: $TARGET $MONTH"
 
 The tracking issue lives on tend (the current repo). It indexes gists via one comment per new gist — no per-run comments, no body edits.
 
-The workflow's `init-tracking` job runs before the matrix and creates the monthly tracking issue if absent, so matrix legs always find an existing one. The find-or-create logic below remains the fallback for ad-hoc invocations and as a safety net; sort lowest-numbered first in case a race ever does produce duplicates. `gh issue create` prints the new issue's URL; parse the number from its basename.
+The workflow's `init-tracking` job runs before the matrix and creates the monthly tracking issue if absent, so on a normal tick matrix legs find an existing one. It is not a precondition — the matrix runs even when that job fails or never gets a runner, so the find-or-create logic below is a live code path on the first tick of a month, not only a fallback for ad-hoc invocations. Sort lowest-numbered first so a lost race degrades to a duplicate rather than a crash. `gh issue create` prints the new issue's URL; parse the number from its basename.
 
 ```bash
 TRACKING_NUMBER=$(gh issue list --state open --label "$TRACKING_LABEL" \
@@ -353,7 +353,7 @@ Search titles AND bodies for related keywords. Only comment on existing issues i
 
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
-- **PR** (default): Branch `hourly/review-$GITHUB_RUN_ID`, fix, commit, push, create with label `claude-behavior`. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
+- **PR** (default): Branch `hourly/review-$GITHUB_RUN_ID-<target-repo-name>-<topic-slug>`, fix, commit, push, create with label `claude-behavior`. `$GITHUB_RUN_ID` alone is not a unique branch name: every matrix leg of a tick carries the same one, and a single leg may open two PRs (see the 2-PR limit below). The target's repo name (the part after the `/`) keeps two legs from racing the same ref; the topic slug keeps one leg's two PRs from doing the same. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly. Include run ID, outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more findings, pick the highest-confidence ones and record the rest in the evidence gist.
