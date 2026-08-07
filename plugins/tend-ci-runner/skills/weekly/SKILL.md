@@ -67,7 +67,9 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    # newest approval is stale, not whether some stale approval exists. Filtering
    # first would return the pre-rewrite id even when a later approval already
    # superseded it — dismissing a review that no longer sets the PR's state
-   # while the one that does stands untouched.
+   # while the one that does stands untouched. Item 3 keeps the opposite order
+   # and is still correct: `submitted_at` is monotonic here, so its `> $fp` keeps
+   # a suffix (last-of-suffix == last-of-list) while this `< $fp` keeps a prefix.
    STALE_APPROVAL_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
      | jq -rs --arg bot "$BOT_LOGIN" --arg fp "$LAST_FORCE_PUSH_AT" \
        'add | [.[] | select(.user.login == $bot and .state == "APPROVED")]
