@@ -132,8 +132,11 @@ if [ -z "$GIST_ID" ]; then
   fi
   GIST_ID=$(basename "$GIST_URL")
   # First time this month for this target — announce the gist on the tracking issue
-  gh issue comment "$TRACKING_NUMBER" \
-    --body "Evidence gist for \`$TARGET\`: $GIST_URL"
+  # printf, not an inline --body: the backticks are literal inside single
+  # quotes, so nothing needs escaping and bash can't run the span.
+  printf 'Evidence gist for `%s`: %s\n' "$TARGET" "$GIST_URL" \
+    > /tmp/gist-announce.md
+  gh issue comment "$TRACKING_NUMBER" --body-file /tmp/gist-announce.md
 else
   GIST_URL="https://gist.github.com/$GIST_ID"
 fi

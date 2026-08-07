@@ -425,7 +425,7 @@ If `EXISTING` is greater than 0, **do not post** — another run already handled
 
 ## Comment Formatting
 
-**Compose bodies with the Write tool, then post with `--body-file`.** The composed file is reviewable before it ships, quoting and escaping are non-issues, and line wrapping is just file content. The bot writes to `/tmp/` constantly — one more file is cheap. `--body "…"` is fine only for a one-line body containing no backtick, `$`, `\`, or `!`. Inside double quotes bash runs a backticked span as a command and substitutes its output, so a markdown inline-code span is silently deleted from the posted comment: `` --body "`some-check` now passes" `` ships as ` now passes`. Inline code appears in nearly every body the bot writes, and single-quoting instead breaks on any apostrophe, so reach for `--body-file` whenever the text is anything but plain prose.
+**Compose bodies with the Write tool, then post with `--body-file`.** The composed file is reviewable before it ships, quoting and escaping are non-issues, and line wrapping is just file content. The bot writes to `/tmp/` constantly — one more file is cheap. `--body "…"` is fine only for a one-line body containing no backtick, `$`, or `\`. Inside double quotes bash runs a backticked span as a command and substitutes its output, so a markdown inline-code span is silently deleted from the posted comment: `` --body "`some-check` now passes" `` ships as ` now passes`. Inline code appears in nearly every body the bot writes, and single-quoting instead breaks on any apostrophe, so reach for `--body-file` whenever the text is anything but plain prose.
 
 ```bash
 # After writing /tmp/comment-body.md with the Write tool:
