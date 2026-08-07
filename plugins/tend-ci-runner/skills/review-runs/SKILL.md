@@ -201,11 +201,15 @@ gh issue list --state open --json number,title,body
 gh issue list --state closed --json number,title,closedAt --limit 30
 # --state all: a merged PR is the most common way a finding is already fixed
 gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body
+# Bundled-skill defects are filed upstream (Step 6), and the queries above only
+# see this repo — dedup against tend before filing there.
+gh pr list --repo max-sixty/tend --state all --limit 40 --json number,title,state,mergedAt,body
+gh issue list --repo max-sixty/tend --state all --limit 40 --json number,title,body
 ```
 
 Search titles AND bodies for related keywords.
 
-**A merged fix still reproduces on adopters.** Adopters call a pinned action ref, so a merged skill fix is dormant on their repos until the next release tags. Observing the bug is therefore not evidence the fix is missing — check merged PRs before filing, or the report is churn on something already landed.
+**A fix merged upstream still reproduces here.** The action ref is pinned per release, so a skill fix that merged in `max-sixty/tend` stays dormant on this repo until the next release tags. Observing the bug is therefore not evidence the fix is missing — check tend's merged PRs before filing, or the report is churn on something already landed.
 
 ## Step 6: Act on findings
 
