@@ -359,9 +359,19 @@ GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when
 # `gh api --paginate` applies `--jq` to each page separately, so a `| last`
 # inside `--jq` returns one id *per page* — pipe to `jq -rs 'add | …'` to reduce
 # over the merged array instead.
+#
+# The force-push filter from the pre-post guard is required here too, and the
+# consequence of omitting it is worse than a skipped run: a body-bearing review
+# from before a rewrite reports `.commit_id == $HEAD_SHA`, passes the body-length
+# test, and the PUT below overwrites that older review's text with this run's
+# findings — destroying a published review and leaving the new body over the old
+# review's inline comments on code that no longer exists.
+LAST_FORCE_PUSH_AT=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
+  | jq -rs 'add | [.[] | select(.event == "head_ref_force_pushed") | .created_at] | max // ""')
 ORPHAN_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
-  | jq -rs --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" \
-    'add | [.[] | select(.user.login == $bot and .commit_id == $head and (.body | length) > 0)]
+  | jq -rs --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" --arg fp "$LAST_FORCE_PUSH_AT" \
+    'add | [.[] | select(.user.login == $bot and .commit_id == $head and (.body | length) > 0)
+                | select($fp == "" or .submitted_at > $fp)]
          | last | .id // empty')
 ```
 
