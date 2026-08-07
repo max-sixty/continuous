@@ -131,13 +131,20 @@ List tend CI runs that completed in the past 24 hours (the cron runs daily):
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-for workflow in $(gh api repos/$REPO/actions/workflows --jq '.workflows[] | select(.name | startswith("tend-")) | .id'); do
-  gh api "repos/$REPO/actions/workflows/$workflow/runs?created=>=$SINCE&status=completed" \
+# `--paginate` on both calls. Both endpoints page at 30 by default and return
+# runs newest-first, so without it the census silently covers only the most
+# recent 30 runs per workflow — on a busy repo that is the last hour, not the
+# last 24. Each `--jq` here is a per-element projection, so `--paginate`
+# applying it per page is harmless.
+for workflow in $(gh api --paginate repos/$REPO/actions/workflows --jq '.workflows[] | select(.name | startswith("tend-")) | .id'); do
+  gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?created=>=$SINCE&status=completed&per_page=100" \
     --jq '.workflow_runs[] | {databaseId: .id, conclusion, createdAt: .created_at, name: .name}'
 done
 ```
 
 If no runs found, report "no runs to review" and exit.
+
+Report the run census as the count this returns. Cross-check any workflow whose count lands on a round page boundary (30, 100) against `.total_count` before trusting it — a count that equals the page size is the signature of a page that was never followed.
 
 Then, for each run ID from above, pull its jobs and classify them:
 
