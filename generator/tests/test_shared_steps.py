@@ -79,6 +79,16 @@ def _calls(env: dict[str, str]) -> list[str]:
     return Path(env["GH_CALLS"]).read_text().splitlines()
 
 
+def _comments(env: dict[str, str]) -> str:
+    """Every comment body the fake `gh` was handed on stdin, concatenated."""
+    return Path(env["COMMENT_BODIES"]).read_text()
+
+
+# The Run cell of a row generated under the fixtures' GITHUB_RUN_ID. What a
+# carried-over row is recognised by, on either record.
+RUN_LINK = "[workflow run](https://github.com/owner/repo/actions/runs/12345)"
+
+
 def _notifications(tmp_path: Path, updated_at: str) -> str:
     """One unread notification for issue 7 of owner/repo."""
     path = tmp_path / "notifications.json"
@@ -210,7 +220,10 @@ case "$1" in
       # number off the end of it.
       create) echo "https://github.com/owner/repo/issues/${FAKE_NEW_ISSUE}" ;;
       view) emit "$(cat "$KEEPER_JSON")" ;;
-      comment | reopen | close) ;;
+      # Comment bodies arrive on stdin (`-F -`), not in the args, so they are
+      # captured rather than dropped: the carry-over row is asserted on.
+      comment) cat >> "$COMMENT_BODIES" ;;
+      reopen | close) ;;
       *) exit 1 ;;
     esac
     ;;
@@ -305,6 +318,7 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
     probe_issues.write_text("[]")
     keeper = tmp_path / "keeper.json"
     keeper.write_text('{"body": "", "comments": []}')
+    (tmp_path / "comment-bodies.txt").write_text("")
 
     return {
         "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
@@ -313,6 +327,7 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
         "PAUSE_ISSUES_JSON": str(pause_issues),
         "PROBE_ISSUES_JSON": str(probe_issues),
         "KEEPER_JSON": str(keeper),
+        "COMMENT_BODIES": str(tmp_path / "comment-bodies.txt"),
         "FAKE_NEW_ISSUE": "42",
         # past=15 puts the base limit at 10 + 15/3 = 15.
         "FAKE_PAST_POSTS": "15",
@@ -497,6 +512,36 @@ def test_rate_limit_reconciler_stands_down_to_a_racing_sibling(
     assert "#41" in result.stdout, result.stdout
 
 
+def test_rate_limit_carries_its_row_onto_the_racing_sibling(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """Standing down must not strand the refused run's row.
+
+    Here the row *is* the notice: the `::error::` sends the maintainer to the
+    survivor, and closing that issue is what lifts the ceiling. So the leg that
+    stands down has to move its row across first — otherwise the one artifact a
+    person is asked to act on is the one missing the run it refused.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    Path(rate_limit_env["PROBE_ISSUES_JSON"]).write_text(
+        json.dumps([_probe_issue(41, title=PAUSE_TITLE, label=PAUSE_LABEL)])
+    )
+    # A sibling from another workflow: its seed row cites a different run.
+    Path(rate_limit_env["KEEPER_JSON"]).write_text(
+        json.dumps({"body": "run 999 row", "comments": []})
+    )
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    calls = _calls(rate_limit_env)
+    assert any(c.startswith("issue comment 41") for c in calls), (
+        f"closed its own record without carrying the row over: {calls}"
+    )
+    assert any(c.startswith("issue close 42") for c in calls), calls
+    assert RUN_LINK in _comments(rate_limit_env), _comments(rate_limit_env)
+
+
 def test_rate_limit_relabelled_issue_does_not_carry_its_closes(
     rate_limit_env: dict[str, str],
 ) -> None:
@@ -647,7 +692,6 @@ REPORT_FAILURE = REPO_ROOT / "shared" / "steps" / "report-failure.sh"
 
 OUTAGE_TITLE = "Bot temporarily unavailable"
 OUTAGE_LABEL = "tend-outage"
-RUN_LINK = "[workflow run](https://github.com/owner/repo/actions/runs/12345)"
 
 # `gh` stand-in for the outage reporter. Same shape as the rate-limit fake —
 # fixtures in, the script's own `--jq` doing the filtering — plus it captures
@@ -733,10 +777,6 @@ def _run_report_failure(env: dict[str, str]) -> subprocess.CompletedProcess[str]
     )
 
 
-def _comments(env: dict[str, str]) -> str:
-    return Path(env["COMMENT_BODIES"]).read_text()
-
-
 def _outage_probe(number: int, **kw) -> dict:
     kw.setdefault("title", OUTAGE_TITLE)
     kw.setdefault("label", OUTAGE_LABEL)
@@ -782,9 +822,15 @@ def test_report_failure_carries_its_row_onto_the_racing_sibling(
 
     The row lives in the body of the issue this leg filed, so closing that
     issue takes the row with it unless it is carried onto the survivor first.
+
+    Two siblings rather than one, because with a single match "lowest" and
+    "nearest" are the same answer and the choice between them goes untested.
+    Convergence rests on lowest: a third leg filing #43 sees both #41 and #38,
+    and only if every leg keeps descending past the first hit do they agree on
+    one keeper instead of scattering rows across two.
     """
     Path(report_failure_env["PROBE_ISSUES_JSON"]).write_text(
-        json.dumps([_outage_probe(41)])
+        json.dumps([_outage_probe(41), _outage_probe(38)])
     )
     # A sibling from another workflow: its seed row cites a different run.
     Path(report_failure_env["KEEPER_JSON"]).write_text(
@@ -795,8 +841,14 @@ def test_report_failure_carries_its_row_onto_the_racing_sibling(
 
     assert result.returncode == 0, result.stderr
     calls = _calls(report_failure_env)
-    assert any(c.startswith("issue comment 41") for c in calls), calls
+    assert any(c.startswith("issue comment 38") for c in calls), (
+        f"carried the row onto the nearest sibling rather than the lowest: {calls}"
+    )
+    assert not any(c.startswith("issue comment 41") for c in calls), (
+        f"stopped at the first hit instead of descending to the lowest: {calls}"
+    )
     assert any(c.startswith("issue close 42") for c in calls), calls
+    assert "Duplicate of #38" in " ".join(calls), calls
     assert RUN_LINK in _comments(report_failure_env), _comments(report_failure_env)
 
 
