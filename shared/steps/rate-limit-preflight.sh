@@ -100,7 +100,10 @@ fi
 # Everything below runs only once the base limit is already exceeded, so the
 # common path costs no extra API calls at all.
 if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
-  PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE")
+  # A failed read costs nothing extra here: no issue and no way to see it both
+  # leave approvals at zero, which refuses the run either way. Where the two
+  # part company is whether to file, further down.
+  PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE") || PAUSE=""
 
   APPROVALS=0
   if [ -n "$PAUSE" ]; then
@@ -162,13 +165,25 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
       # the create-create race — sibling jobs trip within seconds of each
       # other, and without it each files its own issue — so it buys nothing
       # once the issue is known to exist, and the lookup above is still good.
+      #
+      # This second read is also what decides whether filing is safe, so its
+      # status is kept: a failure here is not "no issue exists", though both
+      # are the empty string. Filing on the wrong reading is how a repo ends up
+      # with two pause issues, and this is the record where that does real
+      # damage — the lookup resolves to the lowest-numbered one, so a maintainer
+      # closing the newer issue, the one this run's annotation names, would
+      # approve nothing and never learn it.
+      PAUSE_LOOKUP_OK=true
       if [ -z "$PAUSE" ]; then
         sleep $((RANDOM % 30))
-        PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE")
+        if ! PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE"); then
+          PAUSE=""
+          PAUSE_LOOKUP_OK=false
+        fi
       fi
 
-      FILED=true
       if [ -n "$PAUSE" ]; then
+        NOTICE=numbered
         # A no-op when it is already open, which is the usual case for the
         # second and later runs refused in one incident.
         gh issue reopen "$PAUSE" >/dev/null 2>&1 || true
@@ -182,6 +197,10 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
         if ! printf '%s\n' "$ROW" | gh issue comment "$PAUSE" -F -; then
           echo "::warning::Could not append this run's row to #${PAUSE}."
         fi
+      elif [ "$PAUSE_LOOKUP_OK" = false ]; then
+        # Cannot tell whether an issue is already open, so file nothing: see
+        # the lookup above for why a second one is worse here than none.
+        NOTICE=lookup-failed
       else
         run_issue_ensure_label "$PAUSE_LABEL" "Bot paused on its own rate limit; close to approve" "fbca04"
         # Tested rather than assigned bare: `set -e` would take the script down
@@ -196,26 +215,37 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
           "$ROW" \
           "The runs listed above were refused and do not retry on their own; re-run them with \`gh run rerun <id> --failed\` once this is closed." \
           | run_issue_create_and_reconcile "$PAUSE_LABEL" "$PAUSE_TITLE"); then
-          FILED=false
+          NOTICE=create-failed
           PAUSE=""
+        elif [ -n "$PAUSE" ]; then
+          NOTICE=numbered
+        else
+          # Filed, but the issue index had not caught up in time to hand back
+          # a number.
+          NOTICE=unnumbered
         fi
       fi
 
-      # What the annotation can offer depends on whether an issue ended up
-      # existing, and on whether its number came back — three states that must
-      # not be collapsed. Saying "could not be filed" about an issue that was
-      # filed sends a maintainer away from the one thing that would restart the
-      # bot; the `#${PAUSE:-?}` this replaces sent them after a number that
-      # never existed.
-      if [ "$FILED" = false ]; then
-        RECOVERY="The pause issue could not be filed (see the error above), so there is nothing to close and the ceiling holds until the UTC rollover."
-      elif [ -n "$PAUSE" ]; then
-        RECOVERY="Refused runs are listed in #${PAUSE}; closing it doubles the ceiling."
-      else
-        # Filed, but the issue index had not caught up in time to hand back a
-        # number. The label names it just as uniquely.
-        RECOVERY="Refused runs are listed in the open \`${PAUSE_LABEL}\` issue; closing it doubles the ceiling."
-      fi
+      # What the annotation can offer depends on how the notice ended up, and
+      # the states must not be collapsed onto "is the number empty". Saying
+      # "could not be filed" about an issue that was filed sends a maintainer
+      # away from the one thing that would restart the bot; the `#${PAUSE:-?}`
+      # this replaces sent them after a number that never existed.
+      case "$NOTICE" in
+        numbered)
+          RECOVERY="Refused runs are listed in #${PAUSE}; closing it doubles the ceiling."
+          ;;
+        unnumbered)
+          # The label names the issue as uniquely as the number would.
+          RECOVERY="Refused runs are listed in the open \`${PAUSE_LABEL}\` issue; closing it doubles the ceiling."
+          ;;
+        create-failed)
+          RECOVERY="The pause issue could not be filed (see the error above), so there is nothing to close and the ceiling holds until the UTC rollover."
+          ;;
+        lookup-failed)
+          RECOVERY="This repo's issues could not be read (see the error above), so none was filed; if an open \`${PAUSE_LABEL}\` issue exists, closing it doubles the ceiling."
+          ;;
+      esac
 
       echo "::error::Rate limit: bot created ${TODAY_POSTS} items today, above the ceiling of ${CEILING} (base limit ${SPIKE_LIMIT}, ${APPROVALS} approval(s), baseline ${PAST_POSTS} over past 6 days). ${RECOVERY}"
     else

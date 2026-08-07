@@ -87,9 +87,17 @@ run_issue_matching() {
 # The one that counts: lowest-numbered, empty when there is none. Sliced in the
 # shell rather than piped to `head`, which would close the pipe under `pipefail`
 # and can take the whole script down with it.
+#
+# Returns non-zero, having printed nothing, when the list read itself fails.
+# That is a different fact from "there is none", though an empty string states
+# both, and every caller acts on the difference: filing a fresh record because
+# the read failed is how a repo ends up with two open ones, and the reconcile
+# that would close the loser reads the same list that just failed. `set -e`
+# does not reach inside the command substitutions the callers read this through,
+# so the status has to be carried out explicitly to be seen at all.
 run_issue_canonical() {
   local matching
-  matching=$(run_issue_matching "$1" "$2" "$3")
+  matching=$(run_issue_matching "$1" "$2" "$3") || return 1
   printf '%s' "${matching%%$'\n'*}"
 }
 
@@ -131,7 +139,16 @@ run_issue_create_and_reconcile() {
   # on the label alone would let an unrelated issue carrying it outrank this
   # one on lowest-number, and the record just filed would be closed as that
   # issue's duplicate.
-  open=$(run_issue_matching "$label" open "$title")
+  #
+  # A failed read here is not fatal: the issue is filed either way, and the
+  # contract already allows handing back no number. Tested rather than left
+  # bare, because a bare assignment *does* propagate its status — unlike the
+  # substitution-wrapped calls above — so `set -e` would take the caller down
+  # in the gap between the create and the caller's own reporting of it.
+  if ! open=$(run_issue_matching "$label" open "$title"); then
+    echo "Could not list ${label} issues to reconcile duplicates; leaving any in place." >&2
+    return 0
+  fi
   keep=${open%%$'\n'*}
   echo "$open" | tail -n +2 | while read -r dup; do
     [ -z "$dup" ] && continue

@@ -199,7 +199,18 @@ case "$1" in
     ;;
   issue)
     case "$2" in
-      list) emit "$(cat "$PAUSE_ISSUES_JSON")" ;;
+      list)
+        # Fail from the Nth list call on. `1` fails every one; a higher number
+        # lets the caller's own lookup succeed and fails only the reconcile's
+        # read, which runs in a different caller context — the one where
+        # `set -e` is live.
+        if [ -n "${FAIL_ISSUE_LIST_FROM:-}" ]; then
+          n=$(( $(cat "$LIST_CALLS" 2>/dev/null || echo 0) + 1 ))
+          echo "$n" > "$LIST_CALLS"
+          if [ "$n" -ge "$FAIL_ISSUE_LIST_FROM" ]; then exit 1; fi
+        fi
+        emit "$(cat "$ISSUE_LIST_JSON")"
+        ;;
       create)
         # An `if` rather than `[ ... ] && exit 1`: with nothing after it, the
         # failed test would become the branch's status and every create would
@@ -256,9 +267,12 @@ def _closed_event(
     }
 
 
-@pytest.fixture
-def rate_limit_env(tmp_path: Path) -> dict[str, str]:
-    """Fake gh/date/sleep on PATH, plus the Actions env the preflight reads."""
+def _fakebin(tmp_path: Path) -> Path:
+    """gh/date/sleep stand-ins, in a directory ready to go on PATH.
+
+    Shared by the preflight and report-failure fixtures: both drive the same
+    `lib/run-issue.sh` helpers, so they need the same `gh` to exercise them.
+    """
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
     for name, body in (
@@ -269,6 +283,13 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
         path = bindir / name
         path.write_text(body)
         path.chmod(0o755)
+    return bindir
+
+
+@pytest.fixture
+def rate_limit_env(tmp_path: Path) -> dict[str, str]:
+    """Fake gh/date/sleep on PATH, plus the Actions env the preflight reads."""
+    bindir = _fakebin(tmp_path)
 
     # Both the fake gh and the script itself shell out to jq.
     jq = shutil.which("jq")
@@ -285,8 +306,9 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
     return {
         "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
         "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "LIST_CALLS": str(tmp_path / "list-calls"),
         "TIMELINE_JSON": str(timeline),
-        "PAUSE_ISSUES_JSON": str(pause_issues),
+        "ISSUE_LIST_JSON": str(pause_issues),
         # past=15 puts the base limit at 10 + 15/3 = 15.
         "FAKE_PAST_POSTS": "15",
         "FAKE_TODAY_POSTS": "10",
@@ -316,7 +338,7 @@ def _approve(
     labelled_at: str = LABELLED_AT,
 ) -> None:
     """Put a pause issue on the label, labelled then carrying `events`."""
-    Path(env["PAUSE_ISSUES_JSON"]).write_text(
+    Path(env["ISSUE_LIST_JSON"]).write_text(
         json.dumps([{"number": issue, "title": PAUSE_TITLE}])
     )
     labelled = {
@@ -384,7 +406,7 @@ def test_rate_limit_names_the_label_when_the_number_is_unknown(
     # The lag is the subject, so it is set here rather than left to the
     # fixture's default: the create succeeds, and the list it reconciles
     # against still does not show the issue.
-    Path(rate_limit_env["PAUSE_ISSUES_JSON"]).write_text("[]")
+    Path(rate_limit_env["ISSUE_LIST_JSON"]).write_text("[]")
 
     result = _run_preflight(rate_limit_env)
 
@@ -413,6 +435,31 @@ def test_rate_limit_keeps_its_annotation_when_the_row_cannot_be_appended(
 
     assert result.returncode == 1
     assert "Refused runs are listed in #42" in result.stdout
+
+
+def test_rate_limit_files_nothing_when_the_issue_list_cannot_be_read(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """A failed list read must not be taken for "no issue exists".
+
+    Both readings are the empty string, and acting on the wrong one files a
+    second pause issue. That is the costly duplicate: the lookup resolves to
+    the lowest-numbered issue, so a maintainer closing the newer one — the one
+    the annotation names — approves nothing and never learns it. The reconcile
+    that would close the loser reads the same list that just failed.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    # An issue is already open; the point is that the run cannot see it.
+    _approve(rate_limit_env)
+    rate_limit_env["FAIL_ISSUE_LIST_FROM"] = "1"
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    calls = _calls(rate_limit_env)
+    assert not any(c.startswith("issue create") for c in calls), calls
+    assert "could not be read" in result.stdout
+    assert "#?" not in result.stdout
 
 
 def test_rate_limit_human_close_doubles_the_ceiling(
@@ -479,7 +526,7 @@ def test_rate_limit_reconciler_keeps_only_what_the_preflight_filed(
     refused-run rows and the `::error::` end up pointing at different issues.
     """
     rate_limit_env["FAKE_TODAY_POSTS"] = "16"
-    Path(rate_limit_env["PAUSE_ISSUES_JSON"]).write_text(
+    Path(rate_limit_env["ISSUE_LIST_JSON"]).write_text(
         json.dumps(
             [
                 {"number": 7, "title": "Something a maintainer labelled"},
@@ -614,7 +661,7 @@ def test_rate_limit_foreign_issue_is_not_the_anchor(
     """
     rate_limit_env["FAKE_TODAY_POSTS"] = "16"
     _approve(rate_limit_env, _closed_event("maintainer"))
-    Path(rate_limit_env["PAUSE_ISSUES_JSON"]).write_text(
+    Path(rate_limit_env["ISSUE_LIST_JSON"]).write_text(
         json.dumps([{"number": 7, "title": "Something a maintainer labelled"}])
     )
 
@@ -649,3 +696,99 @@ def test_rate_limit_reopens_rather_than_refiling(
     assert not any(c.startswith("issue create") for c in calls), (
         f"filed a second pause issue instead of reopening #42: {calls}"
     )
+
+
+REPORT_FAILURE = REPO_ROOT / "shared" / "steps" / "report-failure.sh"
+OUTAGE_TITLE = "Bot temporarily unavailable"
+
+
+@pytest.fixture
+def report_failure_env(tmp_path: Path) -> dict[str, str]:
+    """The other caller of the shared lookup, on the same fake gh."""
+    bindir = _fakebin(tmp_path)
+
+    jq = shutil.which("jq")
+    assert jq, "jq is required for these tests"
+
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"number": 851}}))
+    issues = tmp_path / "issue-list.json"
+    issues.write_text("[]")
+
+    return {
+        "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
+        "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "LIST_CALLS": str(tmp_path / "list-calls"),
+        "ISSUE_LIST_JSON": str(issues),
+        "GITHUB_REPOSITORY": "owner/repo",
+        "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_RUN_ID": "12345",
+        "GITHUB_EVENT_NAME": "pull_request_target",
+        "GITHUB_EVENT_PATH": str(event),
+    }
+
+
+def _run_report_failure(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(REPORT_FAILURE)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_report_failure_appends_to_the_open_tracker(
+    report_failure_env: dict[str, str],
+) -> None:
+    """With a tracker open the row is a comment on it, not a second issue."""
+    Path(report_failure_env["ISSUE_LIST_JSON"]).write_text(
+        json.dumps([{"number": 7, "title": OUTAGE_TITLE}])
+    )
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    calls = _calls(report_failure_env)
+    assert any(c.startswith("issue comment 7") for c in calls), calls
+    assert not any(c.startswith("issue create") for c in calls), calls
+
+
+def test_report_failure_files_nothing_when_the_issue_list_cannot_be_read(
+    report_failure_env: dict[str, str],
+) -> None:
+    """The duplicate-tracker path, from the other caller.
+
+    Two open trackers is the state that breaks the drain sweep: rows scatter
+    across both and neither carries the complete set. Skipping costs this one
+    row, and the next failure records normally.
+    """
+    Path(report_failure_env["ISSUE_LIST_JSON"]).write_text(
+        json.dumps([{"number": 7, "title": OUTAGE_TITLE}])
+    )
+    report_failure_env["FAIL_ISSUE_LIST_FROM"] = "1"
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    calls = _calls(report_failure_env)
+    assert not any(c.startswith("issue create") for c in calls), calls
+    assert "::warning::" in result.stdout
+
+
+def test_report_failure_survives_a_reconcile_that_cannot_list(
+    report_failure_env: dict[str, str],
+) -> None:
+    """The issue is filed; a failed reconcile read must not then fail the step.
+
+    Here the helper runs as the last element of a top-level pipeline, where
+    `set -e` *does* apply — unlike the command substitutions the preflight
+    reads it through. So the reconcile's bare assignment aborts the script in
+    the gap between filing the issue and returning from it.
+    """
+    # Lookup succeeds and finds nothing; the reconcile's own read then fails.
+    report_failure_env["FAIL_ISSUE_LIST_FROM"] = "2"
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert any(c.startswith("issue create") for c in _calls(report_failure_env))
