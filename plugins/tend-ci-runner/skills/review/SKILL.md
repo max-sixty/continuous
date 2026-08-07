@@ -61,10 +61,11 @@ LAST_REVIEW_SHA=$(jq -r '.commit_id // empty' <<<"$LAST_REVIEW")
 # apart.) Probe the timeline for a rewrite newer than that review.
 LAST_REVIEW_AT=$(jq -r '.submitted_at // empty' <<<"$LAST_REVIEW")
 FORCE_PUSHED=0
-[ -n "$LAST_REVIEW_AT" ] && FORCE_PUSHED=$(
-  gh api --paginate "repos/$REPO/issues/<number>/timeline" \
+if [ -n "$LAST_REVIEW_AT" ]; then
+  FORCE_PUSHED=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
     | jq -s --arg at "$LAST_REVIEW_AT" \
       'add | [.[] | select(.event == "head_ref_force_pushed" and .created_at > $at)] | length')
+fi
 ```
 
 If `FORCE_PUSHED` is non-zero, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports.
@@ -249,12 +250,22 @@ read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json commits,state \
 # left on the current HEAD would read as "already reviewed" and discard this run's
 # review at the last step, after all the work. Shell state doesn't carry between
 # tool calls, so re-derive $SUBSTANTIVE here.
+#
+# The force-push re-anchoring from step 1 lands on this guard too, and harder: a
+# review submitted against the rewritten-away commit now reports
+# `.commit_id == $HEAD_SHA`, so it reads as "already reviewed" and discards the
+# very re-review step 1's `FORCE_PUSHED` probe just unblocked. Drop reviews older
+# than the newest rewrite; anything submitted after it really did anchor here.
 # NOTE: REST API uses .commit_id (not .commit.oid from gh pr view --json)
 SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
   --jq '.[] | select(.in_reply_to_id == null) | .pull_request_review_id' | jq -s 'unique')
+LAST_FORCE_PUSH_AT=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
+  | jq -rs 'add | [.[] | select(.event == "head_ref_force_pushed") | .created_at] | max // ""')
 ALREADY_POSTED=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
   | jq -rs --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" \
+    --arg fp "$LAST_FORCE_PUSH_AT" \
     'add | [.[] | select(.user.login == $bot and .commit_id == $head)
+                | select($fp == "" or .submitted_at > $fp)
                 | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
          | last | .submitted_at // empty')
 [ -n "$ALREADY_POSTED" ] && echo "Already reviewed — skipping" && exit 0
