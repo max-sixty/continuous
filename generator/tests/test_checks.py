@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 from click.testing import CliRunner
@@ -1441,16 +1442,20 @@ def _credential_env_gh(
             if url.endswith(f"/rulesets/{ruleset_id}"):
                 return _make_completed(json.dumps(detail))
         for env_name, (secrets, detail, policies) in environments.items():
-            if url.endswith(f"/environments/{env_name}/deployment-branch-policies"):
+            # Matched percent-encoded, as GitHub answers: a name is one path
+            # segment, so a caller that interpolates it raw addresses another
+            # environment (or none) once the name holds a `/`.
+            seg = quote(env_name, safe="")
+            if url.endswith(f"/environments/{seg}/deployment-branch-policies"):
                 entries = [
                     dict(zip(("type", "name"), line.split(" ", 1)))
                     for line in policies.splitlines()
                     if line
                 ]
                 return _make_completed("\n".join(json.dumps(e) for e in entries) + "\n")
-            if url.endswith(f"/environments/{env_name}/secrets"):
+            if url.endswith(f"/environments/{seg}/secrets"):
                 return _make_completed("\n".join(secrets) + "\n")
-            if url.endswith(f"/environments/{env_name}"):
+            if url.endswith(f"/environments/{seg}"):
                 return _make_completed(json.dumps(detail))
         return _make_completed(returncode=1)
 
@@ -1615,8 +1620,7 @@ def test_credential_environments_reads_a_name_containing_a_space() -> None:
     returns one name per line. Splitting on whitespace instead made two names
     that exist nowhere; both 404, and the first 404 returned the whole check
     as skipped-for-want-of-admin — so a repo could hold an ungated credential
-    and read PASS-adjacent silence. Verified against live GitHub: `gh api`
-    encodes the space itself, so no quoting is needed here."""
+    and read PASS-adjacent silence."""
     fake = _credential_env_gh(
         {"staging deploy": (["T1"], {"protection_rules": []}, "")}
     )
@@ -1624,6 +1628,21 @@ def test_credential_environments_reads_a_name_containing_a_space() -> None:
         result = check_credential_environments("owner/repo", _config(), ["main"])
     assert result.passed is False, result.message
     assert "staging deploy" in result.message
+
+
+def test_credential_environments_reads_a_name_containing_a_slash() -> None:
+    """The other half of the same failure: GitHub admits `/` in an environment
+    name too, and a name is one path segment. Interpolating it raw addressed a
+    path that 404s, which is the same skipped-for-want-of-admin return as the
+    split above — so the name survives the read only to be lost on the way back
+    out. Verified against live GitHub: an environment named `a/b probe` lists
+    under that name, `gh api repos/<r>/environments/a/b probe/secrets` exits 1
+    with 404, and the percent-encoded path resolves."""
+    fake = _credential_env_gh({"a/b probe": (["T1"], {"protection_rules": []}, "")})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False, result.message
+    assert "a/b probe" in result.message
 
 
 def test_credential_environments_accepts_a_human_reviewer() -> None:
