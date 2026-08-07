@@ -46,7 +46,9 @@ bot_name: my-project-bot
 
 # ## Secrets
 #
-# Repo secrets, by harness:
+# Required secrets, by harness, under these exact names — stored in the
+# repo's `tend` GitHub Environment (install-tend creates it; a workflow the
+# bot pushes to a branch cannot read them there):
 #
 # | Harness    | Required                                                                  |
 # |------------|---------------------------------------------------------------------------|
@@ -77,16 +79,11 @@ bot_name: my-project-bot
 # read and write` permission (for the bio). `notifications:write` is
 # required so the action can mark threads read after handling an event.
 #
-# Override names if the repo uses different secret names:
-#
-# secrets:
-#   bot_token: MY_BOT_PAT
-#   claude_token: MY_CLAUDE_TOKEN        # claude (OAuth)
-#   anthropic_api_key: MY_ANTHROPIC_KEY  # claude (API key)
-#   openai_key: MY_OPENAI_KEY            # codex
-#
-# `tend check` flags repo-level secrets not in an explicit allowlist. Repos with
-# additional legitimate secrets must list them:
+# `tend check` flags repo-level secrets not in an explicit allowlist — each
+# entry is a deliberate acceptance that any workflow the repo runs can read
+# that token. The operational secret names are refused here (a repo-level
+# copy of one would reopen what the environment gate closes); a build token
+# that belongs at repo level must be listed:
 #
 # secrets:
 #   allowed: ["CODECOV_TOKEN", "DEPLOY_KEY"]

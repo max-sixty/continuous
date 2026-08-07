@@ -13,6 +13,21 @@ from mitmproxy.test import tflow, tutils
 from inject_credentials import CredentialInjector
 
 
+def test_addon_methods_are_real_mitmproxy_hooks() -> None:
+    # mitmproxy loads an addon whose method names don't match any event without
+    # complaining, and simply never calls them — the proxy would come up and
+    # inject nothing, failing every authenticated call. Nothing about the
+    # process (alive, listening, CA written) shows that, so pin the names
+    # against mitmproxy's own registry.
+    import mitmproxy.proxy.layers.http  # noqa: F401  (registers the HTTP hooks)
+    from mitmproxy import hooks
+
+    known = {hook.name for hook in hooks.all_hooks.values()}
+    declared = {name for name in vars(CredentialInjector) if not name.startswith("_")}
+    assert declared, "the addon declares no hooks at all"
+    assert declared <= known, f"not mitmproxy events: {sorted(declared - known)}"
+
+
 def _flow(
     host: str, headers: dict[str, str] | None = None, scheme: str = "https"
 ) -> object:
@@ -133,6 +148,18 @@ def test_plain_http_is_never_injected(injector: CredentialInjector) -> None:
     # A cleartext request to an allowlisted host must not carry the real
     # secret — it would transit unencrypted.
     flow = _flow("api.github.com", {"Authorization": "token ghp_dummy"}, scheme="http")
+    injector.request(flow)
+    assert flow.request.headers["Authorization"] == "token ghp_dummy"
+
+
+def test_uppercase_http_scheme_is_never_injected(
+    injector: CredentialInjector,
+) -> None:
+    # The guard compares `scheme != "https"` case-sensitively, so it holds only
+    # while mitmproxy normalizes the scheme it parses off the wire. mitmproxy
+    # 12.2.2 started accepting absolute-form requests with an uppercase scheme
+    # that earlier versions rejected outright, which routes a new shape here.
+    flow = _flow("api.github.com", {"Authorization": "token ghp_dummy"}, scheme="HTTP")
     injector.request(flow)
     assert flow.request.headers["Authorization"] == "token ghp_dummy"
 

@@ -32,12 +32,25 @@ PR_AUTHOR=$(gh pr view <number> --json author --jq '.author.login')
 IS_DRAFT=$(gh pr view <number> --json isDraft --jq '.isDraft')
 EVENT_ACTION=$(jq -r '.action // ""' < "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)
 
-# Find the bot's most recent review (any state counts — COMMENTED reviews carry
-# inline comments even when the body is empty).
-# IMPORTANT: `gh pr view --json reviews` returns `.commit.oid` (NOT `.commit_id`).
-# The REST API (`gh api .../reviews`) uses `.commit_id` — don't confuse the two.
-LAST_REVIEW_SHA=$(gh pr view <number> --json reviews \
-  --jq "[.reviews[] | select(.author.login == \"$BOT_LOGIN\")] | last | .commit.oid // empty")
+# Find the bot's most recent *real* review. Replying to a review thread
+# (`POST /pulls/{n}/comments/{id}/replies`) makes GitHub wrap the reply in a
+# synthetic zero-body COMMENTED review anchored at the then-current HEAD, so the
+# newest review record routinely points at a commit nothing reviewed. Count a
+# record only when it has a body, owns a top-level (non-reply) inline comment, or
+# is an APPROVED review — reply containers are always zero-body COMMENTED, while
+# an empty-body approval and an empty-body review carrying real inline findings
+# both still anchor.
+SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
+  --jq '.[] | select(.in_reply_to_id == null) | .pull_request_review_id' | jq -s 'unique')
+
+# IMPORTANT: REST reviews carry `.commit_id`, NOT the `.commit.oid` that
+# `gh pr view --json reviews` returns — don't confuse the two. `gh api --jq`
+# accepts no `--arg`/`--argjson`, so pipe to `jq` rather than using `--jq`.
+LAST_REVIEW_SHA=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+  | jq -rs --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" \
+    'add | [.[] | select(.user.login == $bot)
+                | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
+         | last | .commit_id // empty')
 ```
 
 If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
@@ -131,12 +144,12 @@ Scale depth to the change. A docs-only PR or a mechanical rename needs a skim fo
 
 Check the project's CLAUDE.md for language-specific review criteria and conventions. Load any project-specific review skill if available.
 
-Review the diff two ways at once: the manual checks below, plus a `/code-review` over it (Claude harness only; the Codex harness lacks the command, so skip it there). `/code-review` is a Claude Code built-in that reviews the working-tree diff (here, the PR's merged tree) for correctness bugs and cleanups. Scale its effort tier to how core the change is, the same way you scale the manual depth above:
+Review the diff two ways at once: the manual checks below, plus a `/tend-ci-runner:code-review` pass over the PR's merged tree. That skill is a structured second pass — correctness and cleanup angles, then a verify pass — and it returns findings rather than posting anything. Scale its depth to how core the change is, the same way you scale the manual depth above:
 
-- Peripheral or mechanical (docs, config, dependency bumps, test-only): `/code-review low` or `medium`.
-- The project's core logic: `/code-review high` or `max`.
+- Peripheral or mechanical (docs, config, dependency bumps, test-only): tell it the change is peripheral, so it runs the short angle set in one pass.
+- The project's core logic: tell it the change is core, so it fans the angles out and sweeps for gaps.
 
-What counts as core is repo-specific; let the project's own guidance (CLAUDE.md, a repo review skill) or your judgment decide. Skip `ultra` (the human-triggered cloud pass). Both passes feed one verdict: fold the `/code-review` findings into the review you submit in step 5, and don't pass `--comment` or `--fix`, which act outside the dedup and single-review path.
+What counts as core is repo-specific; let the project's own guidance (CLAUDE.md, a repo review skill) or your judgment decide. Both passes feed one verdict: fold its findings into the review you submit in step 5. It only reports back — it never posts a review, comment, or commit of its own, so the dedup and single-review path is preserved.
 
 **Code quality:**
 
@@ -215,9 +228,19 @@ read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json commits,state \
 [ "$CURRENT_HEAD" != "$HEAD_SHA" ] && echo "HEAD moved — skipping" && exit 0
 [ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
 
+# Same substantive-review filter as step 1, and for the same reason: a synthetic
+# reply container is anchored at whatever HEAD was when the reply posted, so one
+# left on the current HEAD would read as "already reviewed" and discard this run's
+# review at the last step, after all the work. Shell state doesn't carry between
+# tool calls, so re-derive $SUBSTANTIVE here.
 # NOTE: REST API uses .commit_id (not .commit.oid from gh pr view --json)
-ALREADY_POSTED=$(gh api "repos/$REPO/pulls/<number>/reviews" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\")] | last | .submitted_at // empty")
+SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
+  --jq '.[] | select(.in_reply_to_id == null) | .pull_request_review_id' | jq -s 'unique')
+ALREADY_POSTED=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+  | jq -rs --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" \
+    'add | [.[] | select(.user.login == $bot and .commit_id == $head)
+                | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
+         | last | .submitted_at // empty')
 [ -n "$ALREADY_POSTED" ] && echo "Already reviewed — skipping" && exit 0
 ```
 
@@ -303,8 +326,16 @@ GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when
 **Check which case you are in before deciding how to recover** — query for an orphan review on the current HEAD first, then branch on the result.
 
 ```bash
-ORPHAN_ID=$(gh api "repos/$REPO/pulls/<number>/reviews" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and .commit_id == \"$HEAD_SHA\")] | last | .id // empty")
+# The body-length test is what distinguishes an orphan from a synthetic reply
+# container sitting on the same HEAD: case (a) persists the body, a container
+# never has one. Without it, the PUT below would overwrite an unrelated reply.
+# `gh api --paginate` applies `--jq` to each page separately, so a `| last`
+# inside `--jq` returns one id *per page* — pipe to `jq -rs 'add | …'` to reduce
+# over the merged array instead.
+ORPHAN_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+  | jq -rs --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" \
+    'add | [.[] | select(.user.login == $bot and .commit_id == $head and (.body | length) > 0)]
+         | last | .id // empty')
 ```
 
 Then, in either case, **move the failed inline comments into the review body** as fenced code blocks with file paths, and:

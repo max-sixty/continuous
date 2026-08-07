@@ -17,7 +17,11 @@ inputs:
       break each other's auth mid-run.
   bot_name:
     required: true
-    description: GitHub username of the bot account
+    description: |
+      GitHub username of the bot account. Rendered into the workflows so an
+      adopter can see which account tend runs as; the steps themselves read
+      the identity off the token rather than from here, since a name left
+      stale by a rename fails open.
   prompt:
     required: true
     description: >-
@@ -88,17 +92,13 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # Also publishes `login`/`id` for the bot: it reads them off the token it
+    # already holds, so nothing downstream has to resolve them again from the
+    # configured name, which a rename would leave stale.
     - name: Rate limit preflight
-      shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
-      env:
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-        BOT_NAME: ${{ inputs.bot_name }}
-
-    - name: Resolve bot ID
       id: bot
       shell: bash
-      run: echo "id=$(gh api users/${{ inputs.bot_name }} --jq '.id')" >> "$GITHUB_OUTPUT"
+      run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
@@ -159,7 +159,7 @@ runs:
     - name: Stage AGENTS.md
       shell: bash
       env:
-        BOT_NAME: ${{ inputs.bot_name }}
+        BOT_NAME: ${{ steps.bot.outputs.login }}
       run: |
         SHARED="${{ github.action_path }}/../shared/system-prompt.md"
         TAIL="${{ github.action_path }}/agents-tail.md"
@@ -239,7 +239,7 @@ runs:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         GH_TOKEN: ${{ inputs.github_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        BOT_NAME: ${{ inputs.bot_name }}
+        BOT_NAME: ${{ steps.bot.outputs.login }}
         BOT_ID: ${{ steps.bot.outputs.id }}
         PROMPT: ${{ inputs.prompt }}
         MODEL: ${{ inputs.model }}

@@ -143,32 +143,68 @@ is empty — `git diff --quiet` returns 0 for untracked paths, so the
 first-run case would no-op. Code search is 10 req/min — one call covers
 the whole list.
 
-## Weekly: bump pinned agent binaries
+## Weekly: bump pinned versions
 
-Every harness action installs a pinned agent binary: `claude_version` in
-`claude/action.yaml` and `codex_version` in `codex/action.yaml`. These pins
-are static strings nothing else moves, so
-they drift behind and the harness resolves `--model opus`/`sonnet` to a stale
-alias target (an old binary maps `opus` to a superseded Opus version).
+Title each PR `chore: bump <name> to <version>`; the uv-plus-mitmproxy PR names
+both.
+
+### Action inputs
+
+| Pin | File | Rule |
+|---|---|---|
+| `claude_version` | `claude/action.yaml` | track latest |
+| `mitmproxy_version` | `claude/action.yaml` | track latest |
+| `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
+| `codex_version` | `codex/action.yaml` | keep it on its prerelease line; bump only to a release confirmed to run under `codex exec` |
 
 ```bash
-# Claude: pinned defaults vs latest release
-rg -A1 'claude_version:' claude/action.yaml
+yq '.inputs.claude_version.default' claude/action.yaml
 npm view @anthropic-ai/claude-code dist-tags.latest
+
+yq '.inputs.mitmproxy_version.default' claude/action.yaml
+curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
 ```
 
-If `latest` is newer, bump the `default:` in `claude/action.yaml` and open a PR
-titled `chore: bump claude_version to <latest>`. Skim the claude-code
-CHANGELOG between the two versions for anything touching the agent paths
-(first-run onboarding, `--model` alias resolution, headless `-p` result
-events, Stop-hook behavior) and note it in the PR.
+A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
+target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
+between the two versions for anything touching the agent paths (first-run
+onboarding, `--model` alias resolution, headless `-p` result events, Stop-hook
+behavior) and note it in the PR.
 
-Codex pins a prerelease on purpose (`codex_version`) and its catalog
-churns, so bump it only to a release confirmed to still run under
-`codex exec`, not blindly to the newest npm tag.
+`mitmproxy_version` pins the process that holds the real PAT and model
+credential, so a security fix there matters here. Check anything security- or
+addon-related in its CHANGELOG against the `mitmdump` flags in
+`proxy/setup-sandbox.sh`, and report the comparison in the PR. `uv_version`
+only launches that mitmproxy and CI smokes the two together, so it needs no
+release stream of its own; move both in one PR, at whatever uv is latest then
+(`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
 
-The bump reaches adopters at the next tend release, since their workflows
-pin `max-sixty/tend@X.Y.Z`; tend's own workflows pick it up the same way.
+### `uses:` refs
+
+```bash
+git grep -hoE 'uses: [^ ./][^ @]*@[^ ]+' -- ':!generator/tests' ':!*.md' \
+  | sed 's/uses: //' | grep -v '^max-sixty/tend/' | sort -u \
+  | while IFS='@' read -r action pin; do
+      latest=$(gh api "repos/$action/releases/latest" --jq .tag_name 2>/dev/null) \
+        || { printf '%-30s %-9s -> no releases; read its tags\n' "$action" "$pin"; continue; }
+      case "$pin" in "$latest" | "${latest%%.*}") continue ;; esac
+      printf '%-30s %-9s -> %s\n' "$action" "$pin" "$latest"
+    done
+```
+
+An action listed twice is pinned at two majors: refs move when someone needs a
+behavior from one of them, never in a sweep. `git grep` each drifted action for
+its call sites, then split the PRs by who runs the result.
+
+- **Ships to adopters** — `generator/src/tend/templates/` and `workflows.py`
+  render into adopters' workflow files; `claude/action.yaml` and
+  `codex/action.yaml` run in every adopter's job from the next release. One PR
+  per action, its body naming what changed across the majors it crosses.
+- **Ours alone** — the hand-maintained `.github/workflows/` files and
+  `.config/tend.yaml`. One PR for the lot.
+
+The generated `tend-*.yaml` show up in that grep too; their refs come from the
+templates and from `.config/tend.yaml`'s `setup:`, which is where they move.
 
 ## Weekly: integration test
 

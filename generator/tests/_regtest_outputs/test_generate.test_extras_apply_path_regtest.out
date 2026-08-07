@@ -17,10 +17,12 @@ jobs:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
       actions: read
       issues: write
       packages: read

@@ -15,10 +15,12 @@ on:
 jobs:
   nightly:
     runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
       actions: read
       issues: write
     steps:

@@ -1,4 +1,4 @@
-"""Shared test constants."""
+"""Shared test constants and helpers."""
 
 from __future__ import annotations
 

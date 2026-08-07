@@ -19,6 +19,9 @@ jobs:
   # issues (one per matrix leg that lost the find-or-create race).
   init-tracking:
     runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
     permissions:
       issues: write
     steps:
@@ -55,12 +58,14 @@ jobs:
           - max-sixty/worktrunk
           - numbagg/numbagg
     runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
       issues: write
       actions: read
-      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -68,7 +73,7 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: max-sixty/tend/claude@0.1.12
+      - uses: max-sixty/tend/claude@0.1.14
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

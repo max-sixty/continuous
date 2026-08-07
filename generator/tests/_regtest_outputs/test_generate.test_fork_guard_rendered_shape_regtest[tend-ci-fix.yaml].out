@@ -17,10 +17,12 @@ jobs:
   fix-ci:
     if: github.repository_owner == 'test-owner' && github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
       actions: read
     steps:
       - uses: actions/checkout@v7

@@ -3,6 +3,74 @@
 Deferred work and unimplemented options. Each entry should justify the cost
 of building it if revisited.
 
+## Finish moving the operational secrets into the `tend` environment
+
+The gate closes on a repo only when the repo-level copy is gone, since a job
+naming an environment still reads repo-level secrets. Every adopter now has
+the environment, admitting only `main`, with `TEND_BOT_TOKEN` in it, and every
+generated workflow names it. What remains:
+
+1. **The model credential, every repo.** `CLAUDE_CODE_OAUTH_TOKEN` can't be
+   read back and isn't stored anywhere locally, so it has to be pasted or
+   re-minted with `claude setup-token`:
+   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <repo> --env tend`, then
+   `gh secret delete CLAUDE_CODE_OAUTH_TOKEN --repo <repo>`. Only the
+   generated workflows read it, and all of them name the environment, so
+   nothing else breaks.
+2. **`max-sixty/worktrunk` and `PRQL/prql` keep a repo-level
+   `TEND_BOT_TOKEN`,** because hand-maintained workflows read it outside the
+   generated set. What each needs follows from its trigger, and the two repos
+   differ.
+
+   Jobs running at `refs/heads/main` are admitted by the policy as it stands,
+   so adding `environment: {name: tend, deployment: false}` is the whole
+   change: worktrunk's benchmark gist
+   append and its two create-issue-on-failure jobs, prql's
+   `update-rust-toolchain` (all four `schedule`-only, and already `if`-gated
+   to it) and prql's backport. A `pull_request_target` run reports
+   `GITHUB_REF=refs/heads/main` and is admitted — which also means the
+   environment is not what gates that job.
+
+   worktrunk's release jobs run on a tag *push*, which is not bot-steerable,
+   and its all-tags ruleset is admin-gated — but the tag entry does not go on
+   the `tend` policy, whose shape `check_environment` pins to exactly the
+   protected branches and whose `--fix` deletes anything else. They get a
+   second environment (say `release`) whose policy admits the release tag
+   pattern, the shape `check_credential_environments` already credits under
+   that ruleset. Winget and homebrew move in too, and the repo-level copy
+   goes with no new credential.
+
+   prql's release jobs run on `release`, which is bot-steerable: creating a
+   release against an existing tag takes no tag operation, so the tag ruleset
+   does not stop it and a tag entry would not gate it. One of — a required
+   reviewer on a release environment, costing an approval on every release; a
+   second fine-grained credential scoped to `PRQL/homebrew-prql` and the
+   winget fork, left at repo level and allowlisted; or moving the workflow to
+   a tag push, which makes it worktrunk's case. The second narrows furthest
+   only if `push-web-branch` can drop to `GITHUB_TOKEN`, so check whether
+   anything runs on the `web` branch — a `GITHUB_TOKEN` push fires no
+   workflow.
+
+   Until one lands, `repo-secret-allowlist` fails on both, correctly.
+
+`numbagg/numbagg` and `max-sixty/cargo-affected` are done bar the model
+credential.
+
+The check also sweeps every *other* credential-holding environment — one
+that stores a secret, or that a job requesting `id-token: write` deploys
+to — so a repo with a pre-existing publish environment may fail here until
+that environment is gated: a required reviewer that is not the bot, or a
+policy naming only verified branches — with tag entries needing the
+admin-only all-tags ruleset the install recipe's §3 creates. A trusted
+publisher stores no secret, so this is where a repo that publishes to PyPI
+or npm shows up. That failure is the check doing its job; gate the
+environment rather than allowlisting around it.
+
+`tend-agent/tend-integration` migrates itself: its `integration-secrets`
+reseed writes both secrets into the environment and deletes the repo-level
+copies once the fixture's workflows name it. The fixture regenerates with the
+published `tend`, so this completes on the first weekly after 0.1.13.
+
 ## Cut tend over to harness = "codex" (post-release)
 
 The Codex harness landed but tend itself still runs on Claude. The cutover
@@ -126,47 +194,6 @@ Limitations: triage-level approvals don't satisfy required-review policies,
 and triage can't push to human PR branches — the bot posts review
 suggestions instead.
 
-## Environment-gating operational secrets: considered, rejected
-
-Moving `TEND_BOT_TOKEN` and the harness token into a `tend` GitHub Environment
-gated to the default branch was evaluated as a way to close the no-merge exfil
-path: a write-scoped actor (a hijacked session, attacker code in the sandbox, a
-leaked PAT) pushes `.github/workflows/exfil.yml` to a branch, or opens a
-same-repo `pull_request`, and reads the repo-level secret from that run without
-ever touching the proxy. It does not work, because GitHub evaluates an
-Environment's deployment branch policy against `GITHUB_REF`, and `tend-mention`'s
-legitimate review paths share their ref with the attack.
-
-Probe on `tend-agent/tend-integration` (current GitHub behavior, 2026-06), a job
-bound to an environment whose policy admits only the default branch:
-
-| Trigger | `GITHUB_REF` | Gate |
-|---|---|---|
-| `pull_request_target` | `refs/heads/main` | passes, `HAS_SECRET` |
-| `issue_comment`, `issues`, `schedule`, `workflow_run` | `refs/heads/main` | passes |
-| `push` to a feature branch | `refs/heads/<branch>` | blocked, 0 steps |
-| same-repo `pull_request` | `refs/pull/N/merge` | blocked |
-| `pull_request_review`, `pull_request_review_comment` | `refs/pull/N/merge` | **blocked, 0 steps** |
-
-(`pull_request_target`, `issue_comment`, both review events, and `push` were
-observed directly; the rest follow from the same default-ref vs merge-ref
-families.)
-
-The gate blocks the same-repo-PR exfil attempt, but also blocks mention's
-review-submission and inline-review-comment handling: those carry the same
-`refs/pull/N/merge` ref and a ref policy cannot tell them apart. There is no ref
-pattern that admits the review events without also admitting the attack. The
-"runs in the context of the default branch" docs sentence for review events
-refers to which workflow *file* runs, not `GITHUB_REF`.
-
-The precise gate keys on the workflow file's source ref, not the execution ref.
-That value exists as the OIDC `job_workflow_ref` claim, but no native mechanism
-releases a secret on it; it needs a token-minting service. That is the GitHub
-App route above, which also retires the durable-PAT-leak risk. Until then the
-operational tokens stay repo-level and `docs/security-model.md` records the
-accepted risk: repo write access implies secret access, as with any GitHub
-secret.
-
 ## Security hardening — deferred
 
 From the old `docs/security-model.md` "what we could do but don't" — none
@@ -185,24 +212,6 @@ implemented yet:
 - **Network isolation.** Self-hosted runners with outbound traffic
   restricted to GitHub and Anthropic API endpoints. Not viable on
   GitHub-hosted runners; significant infra overhead self-hosted.
-- **Bash sandbox to hide the model auth.** Setting
-  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` forces Claude Code's bubblewrap
-  sandbox on, which hides the model auth from the agent's Bash tool. The
-  fresh `/proc` mount blocks the `/proc/<harness-pid>/environ` read that
-  defeats naive env-scrubbing (a GHA probe found the OAuth token in 2
-  processes with the sandbox off, 0 with it on), and `denyRead` plus
-  Read-tool deny rules block credential files. Verified to work; the
-  reusable `settings.json` and probe live in #639. Blocked from shipping:
-  the same bwrap path corrupts `!` to `\!` in Bash commands (breaks `jq
-  !=`, `feat!:` titles), so both actions pin `=0`. Reproduced through
-  claude 2.1.159 and filed as anthropics/claude-code#64301; re-enable
-  once that lands. Superseded for both Claude harnesses: the credential
-  proxy injects the Anthropic secret for api.anthropic.com, so the agent's
-  env holds only a dummy and there is no model auth left to hide there. The
-  GitHub token is likewise isolated in both Claude harnesses via the proxy.
-  The **codex** harness still passes the model auth (an OpenAI key) and the
-  PAT directly, but it's a different engine with its own sandbox story (see
-  "Auth: GitHub App alternatives to PAT").
 - **Workflow dispatch isolation.** Split each workflow into an analysis
   job (`GITHUB_TOKEN` only, reads the diff, produces a plan) and a push
   job (bot token, separate workflow triggered by `workflow_run`). The bot
@@ -241,6 +250,30 @@ open a draft advisory for security-classified failures. Needs (a) the
 discrimination rule (fix narrows a credential's scope → security; fix
 updates config to reflect intent → drift), (b) `install-tend` enabling PVR
 at setup, (c) confirming the bot token can hit the reports endpoint.
+
+## Re-run the work a rate-limit trip refused
+
+The `tend-rate-limit` issue lists the runs the spike limit refused, and
+closing it approves the volume — but nothing re-runs them. `tend-review`
+fires only on `pull_request_target`, so a refused review stays missing until
+someone pushes to the PR again. Today the recovery is one
+`gh run rerun <id> --failed` per row.
+
+The shape: a generated workflow on `issues: closed`, filtered to the label
+and to a closer who isn't the bot (the same check the preflight makes),
+re-running rows from the last 24 hours whose run is still in `failure` —
+which makes it idempotent, and stops an old row resurrecting itself. It
+needs `actions: write` and, being generated, a template plus config
+plumbing and generator tests. A re-run re-executes the preflight, which now
+sees the approval and passes, so nothing loops.
+
+**Blocked on** confirming tend's re-runs work correctly in the first place.
+Building an automatic re-runner over a broken re-run path would bury that
+bug under a second mechanism: the symptom moves from "my review never came
+back" to "the recovery workflow ran and my review still never came back".
+
+The same gap covers `tend-outage`; #816 tracks it from that side, and the
+`review-runs` skill's drain recipe reads the same table format.
 
 ## Worker: Phase 2 LLM summary of `/activity`
 

@@ -17,12 +17,14 @@ concurrency:
 
 jobs:
   triage:
-    if: github.repository_owner == 'test-owner' && contains(github.event.issue.labels.*.name, 'tend-outage') == false
+    if: github.repository_owner == 'test-owner' && contains(github.event.issue.labels.*.name, 'tend-outage') == false && contains(github.event.issue.labels.*.name, 'tend-rate-limit') == false
     runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
       actions: read
       issues: write
     steps:

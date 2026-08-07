@@ -24,12 +24,12 @@
         if: <<if_condition>>
 {% endif %}
         with:
-          github_token: ${{ secrets.<<cfg.bot_token_secret>> }}
+          github_token: ${{ secrets.<<bot_token_secret>> }}
 {% if cfg.harness == 'claude' %}
-          claude_code_oauth_token: ${{ secrets.<<cfg.claude_token_secret>> }}
-          anthropic_api_key: ${{ secrets.<<cfg.anthropic_api_key_secret>> }}
+          claude_code_oauth_token: ${{ secrets.<<claude_token_secret>> }}
+          anthropic_api_key: ${{ secrets.<<anthropic_api_key_secret>> }}
 {% else %}
-          openai_api_key: ${{ secrets.<<cfg.openai_key_secret>> }}
+          openai_api_key: ${{ secrets.<<openai_key_secret>> }}
 {% if cfg.effort %}
           effort: <<cfg.effort>>
 {% endif %}
@@ -59,14 +59,39 @@
           <<prompt_body>>
 {%- endmacro %}
 
+{# Environment block at column 4. The environment is a secret scope, not a
+   deploy target: its branch policy is what stops a workflow pushed to a
+   feature branch reading the operational secrets (see TEND_ENVIRONMENT in
+   workflows.py). GitHub does not separate the two, so a job naming one also
+   gets a deployment record, filed against whatever the run belongs to — under
+   `pull_request_target` that is the PR's own head, so every push to every PR
+   grew a "<bot> deployed to tend" line in its timeline.
+
+   `deployment: false` drops the record and keeps the gate. Checked against
+   live GitHub rather than assumed, because dropping the record could as
+   easily have dropped the check that files it: with the property set, a job
+   on an admitted ref still receives the environment's secrets, and one on an
+   excluded ref is still refused before its first step with `Branch "x" is not
+   allowed to deploy to <env> due to environment protection rules`. #}
+{% macro environment() %}
+    environment:
+      name: <<tend_environment>>
+      deployment: false
+{%- endmacro %}
+
 {# Permissions block at column 6. `issues` defaults to True because every
    workflow except ci-fix needs it. The trailing inline conditional avoids
    the trim_blocks-eats-the-separator issue between `actions: read` and
-   `      issues: write` that arises with `{% if %}` on its own line. #}
+   `      issues: write` that arises with `{% if %}` on its own line.
+
+   No `id-token: write`: nothing in the harness actions requests an OIDC
+   token, and a job holding it can mint the repository's OIDC identity for
+   any relying party whose trust policy doesn't pin the workflow and ref.
+   An adopter whose `setup:` authenticates over OIDC re-adds it with a
+   `jobs.<name>.permissions` override. #}
 {% macro permissions(issues=True) %}
       contents: write
       pull-requests: write
-      id-token: write
       actions: read<<'\n      issues: write' if issues else ''>>
 {%- endmacro %}
 
@@ -84,6 +109,17 @@
 {% if cfg.repo_owner %}
     if: github.repository_owner == '<<cfg.repo_owner|replace("'", "''")>>'
 {% endif %}
+{%- endmacro %}
+
+{# True when the issue carries none of the labels tend puts on its own
+   bookkeeping issues. The list lives in workflows.py so a new one reaches
+   every workflow at once; see BOOKKEEPING_LABELS for why they are skipped.
+
+   `contains(…) == false` rather than `!contains(…)`: a value starting with
+   `!` is a tag indicator to YAML, so the negated form only parses where the
+   expression is already inside a block scalar. This one renders in both. #}
+{% macro not_bookkeeping() -%}
+{% for label in bookkeeping_labels %}contains(github.event.issue.labels.*.name, '<<label>>') == false{% if not loop.last %} && {% endif %}{% endfor %}
 {%- endmacro %}
 
 {% macro fork_guard_prefix(cfg) -%}
@@ -122,7 +158,7 @@
 {% endif %}
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.<<cfg.bot_token_secret>> }}
+          token: ${{ secrets.<<bot_token_secret>> }}
 {%- endmacro %}
 
 {# YAML block scalar prompt at column 10, with the supplied text indented at

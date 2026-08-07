@@ -124,7 +124,7 @@ Step 3's duplicate check catches identical fixes. It misses the *same root cause
    [How the fix was verified — mention the reproduction test]
 
    ---
-   Closes #<issue-number> — automated triage"
+   Closes #$ARGUMENTS — automated triage"
    ```
 4. Wait for CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`.
 
@@ -141,7 +141,7 @@ gh pr create --title "test: reproduction for #$ARGUMENTS" --body "## Context
 Adds a failing test that reproduces #$ARGUMENTS. The fix is not yet included — this PR captures the reproduction so a maintainer can investigate.
 
 ---
-Automated triage for #<issue-number>"
+Automated triage for #$ARGUMENTS"
 ```
 
 Note the PR number for the comment.

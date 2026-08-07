@@ -15,6 +15,7 @@ jobs:
   fix-ci:
     if: <<fork_guard_prefix(cfg)>>github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-24.04
+<<environment()>>
     permissions:
 <<permissions(issues=False)>>
     steps:

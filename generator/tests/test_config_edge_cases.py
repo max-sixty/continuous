@@ -9,7 +9,7 @@ import pytest
 from tests import _yaml as yaml
 from click import ClickException
 
-from tend.config import Config
+from tend.config import BOT_TOKEN_SECRET, Config
 from tend.workflows import generate_all
 
 
@@ -44,8 +44,6 @@ def test_bot_name_only(tmp_path: Path) -> None:
     assert cfg.bot_name == "my-bot"
     assert cfg.model == "opus"
     assert cfg.protected_branches == []
-    assert cfg.bot_token_secret == "TEND_BOT_TOKEN"
-    assert cfg.claude_token_secret == "CLAUDE_CODE_OAUTH_TOKEN"
     assert cfg.setup == []
     assert cfg.workflows == {}
     assert cfg.allowed_repo_secrets == []
@@ -700,6 +698,40 @@ def test_allowed_secrets_string_rejected(tmp_path: Path) -> None:
     """),
     )
     with pytest.raises(ClickException, match="secrets.allowed must be a list"):
+        Config.load(path)
+
+
+def test_allowed_secrets_refuses_operational_names(tmp_path: Path) -> None:
+    """Allowlisting an operational secret would let a repo-level copy pass
+    `tend check` — one config line quietly re-opening what the environment
+    gate closes — so the config is refused at the edge."""
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        secrets:
+          allowed: ["CODECOV_TOKEN", "TEND_BOT_TOKEN"]
+    """),
+    )
+    with pytest.raises(ClickException, match=BOT_TOKEN_SECRET):
+        Config.load(path)
+
+
+def test_secret_name_override_refused(tmp_path: Path) -> None:
+    """The per-adopter name overrides are gone. Ignoring a leftover one would
+    generate workflows reading the fixed name while the adopter's secret still
+    answers to the old one, so it fails with the rename to make."""
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        secrets:
+          bot_token: MY_BOT_PAT
+    """),
+    )
+    with pytest.raises(
+        ClickException, match=rf"secrets\.bot_token → {BOT_TOKEN_SECRET}"
+    ):
         Config.load(path)
 
 

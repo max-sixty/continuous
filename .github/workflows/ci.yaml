@@ -26,11 +26,66 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
-      # Pin to match the Claude actions' mitmproxy_version default so the
-      # test exercises the same version the production proxy runs — the addon
-      # imports mitmproxy.test (an internal helper), so version skew could green
-      # the test while production breaks.
-      - run: uv run --no-project --with 'mitmproxy==12.2.1' --with pytest pytest
+      # Read the version from the Claude action's mitmproxy_version default so
+      # the test exercises the version the production proxy runs. The addon
+      # imports mitmproxy.test (an internal helper), so a second copy of the pin
+      # here could drift and green the test while production breaks. `yq -e`
+      # exits non-zero if the input is ever renamed, rather than yielding the
+      # string "null" and failing later as an unresolvable version.
+      - run: |
+          v=$(yq -e '.inputs.mitmproxy_version.default' ../claude/action.yaml)
+          uv run --no-project --with "mitmproxy==$v" --with pytest pytest
+
+      # The addon tests above pass unchanged across major mitmproxy versions —
+      # they exercise `mitmproxy.http` and never launch the proxy. This starts
+      # mitmdump the way setup-sandbox.sh does, so a release that drops a flag,
+      # moves the CA file, or breaks the addon's import fails here rather than
+      # on every adopter's next run. It goes through the pinned uv, which
+      # nothing else in CI installs. The --allow-hosts value is a throwaway:
+      # setup-sandbox.sh owns the real regex, which must track the allowlists
+      # in inject_credentials.py.
+      #
+      # It installs uv by running install-proxy-uv.sh rather than repeating it,
+      # which also gives that script its only CI coverage, then warms the uvx
+      # cache as setup-sandbox.sh does so the wait measures startup.
+      #
+      # Readiness is the port accepting, not the CA file: mitmdump writes the
+      # CA before it binds the port and before it loads `-s` scripts, so a port
+      # collision or an addon raising on import leaves the CA behind and exits
+      # ~0.1s later. Polling the CA and then sampling the process is a race
+      # whose outcome depends on how fast the addon imports. Waiting for a
+      # connection asserts the proxy is actually serving, needs no tuned
+      # settle, and the liveness check inside the loop exits early on death.
+      - name: Smoke the pinned uv and mitmdump
+        run: |
+          uv_v=$(yq -e '.inputs.uv_version.default' ../claude/action.yaml)
+          mitm_v=$(yq -e '.inputs.mitmproxy_version.default' ../claude/action.yaml)
+          UV_VERSION="$uv_v" TEND_UV_DIR="$RUNNER_TEMP/tend-uv" \
+            bash ../shared/steps/install-proxy-uv.sh
+          confdir=$RUNNER_TEMP/tend-mitm-conf
+          log=$RUNNER_TEMP/tend-mitm.log
+          uvx=$RUNNER_TEMP/tend-uv/uvx
+          "$uvx" --from "mitmproxy==${mitm_v}" mitmdump --version >/dev/null
+          TEND_GH_TOKEN=dummy TEND_ANTHROPIC_OAUTH_TOKEN=dummy \
+            "$uvx" --from "mitmproxy==${mitm_v}" mitmdump \
+              -s inject_credentials.py \
+              --listen-host 127.0.0.1 --listen-port 8081 \
+              --set confdir="$confdir" \
+              --allow-hosts '^example\.invalid$' >"$log" 2>&1 &
+          pid=$!
+          ready=
+          for _ in $(seq 1 60); do
+            kill -0 "$pid" 2>/dev/null || break
+            if (exec 3<>/dev/tcp/127.0.0.1/8081) 2>/dev/null; then ready=1; break; fi
+            sleep 0.5
+          done
+          if [ -z "$ready" ]; then
+            cat "$log"
+            echo "::error::mitmdump never accepted a connection under mitmproxy ${mitm_v}"
+            exit 1
+          fi
+          kill "$pid" 2>/dev/null || true
+          test -f "$confdir/mitmproxy-ca-cert.pem"
 
   test-worker:
     runs-on: ubuntu-24.04

@@ -28,7 +28,11 @@ inputs:
       claude_code_oauth_token takes precedence when both are present.
   bot_name:
     required: true
-    description: GitHub username of the bot account
+    description: |
+      GitHub username of the bot account. Rendered into the workflows so an
+      adopter can see which account tend runs as; the steps themselves read
+      the identity off the token rather than from here, since a name left
+      stale by a rename fails open.
   prompt:
     required: true
     description: The prompt to send to Claude
@@ -54,7 +58,7 @@ inputs:
     description: >-
       Version of the `claude` binary to install via
       `https://claude.ai/install.sh`, pinned to a specific
-      claude-code release. Kept in step with the interactive harness's pin.
+      claude-code release.
   timeout_seconds:
     default: "21000"
     description: >-
@@ -68,7 +72,7 @@ inputs:
       instead of GitHub's own silent one. Short tasks finish well before
       the cap regardless.
   mitmproxy_version:
-    default: "12.2.1"
+    default: "12.2.3"
     description: >-
       Pinned `mitmproxy` version for the credential-injection proxy. Pinned
       so the uv download cache key is stable; bump to upgrade.
@@ -120,17 +124,13 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # Also publishes `login`/`id` for the bot: it reads them off the token it
+    # already holds, so nothing downstream has to resolve them again from the
+    # configured name, which a rename would leave stale.
     - name: Rate limit preflight
-      shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
-      env:
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-        BOT_NAME: ${{ inputs.bot_name }}
-
-    - name: Resolve bot ID
       id: bot
       shell: bash
-      run: echo "id=$(gh api users/${{ inputs.bot_name }} --jq '.id')" >> "$GITHUB_OUTPUT"
+      run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
@@ -170,7 +170,7 @@ runs:
       run: bash "${{ github.action_path }}/../shared/steps/compose-system-prompt.sh"
       env:
         SYSTEM_PROMPT_FILE: ${{ github.action_path }}/../shared/system-prompt.md
-        BOT_NAME: ${{ inputs.bot_name }}
+        BOT_NAME: ${{ steps.bot.outputs.login }}
         EXTRA: ${{ inputs.system_prompt_append }}
 
     # Credential isolation: run the agent as a separate, non-sudo
@@ -284,7 +284,7 @@ runs:
         # nothing: the agent's env holds only dummy secrets, and the proxy
         # injects the real ones per-host.
         CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0"
-        BOT_NAME: ${{ inputs.bot_name }}
+        BOT_NAME: ${{ steps.bot.outputs.login }}
         BOT_ID: ${{ steps.bot.outputs.id }}
         TEND_MODEL: ${{ inputs.model }}
         TEND_ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
