@@ -131,7 +131,13 @@ List tend CI runs that completed in the past 24 hours (the cron runs daily):
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-for workflow in $(gh api repos/$REPO/actions/workflows --jq '.workflows[] | select(.name | startswith("tend-")) | .id'); do
+# Census every workflow that runs the tend action, not only the generated
+# `tend-*` ones — a workflow named outside that prefix is otherwise never
+# classified, never near-timeout-checked, and never reaches Step 3. The repo's
+# `running-tend` skill carries the extra prefixes; Step 2 takes the same list.
+PREFIXES=("tend-")
+PREFIX_RE="^($(IFS='|'; echo "${PREFIXES[*]}"))"
+for workflow in $(gh api repos/$REPO/actions/workflows --jq ".workflows[] | select(.name | test(\"$PREFIX_RE\")) | .id"); do
   gh api "repos/$REPO/actions/workflows/$workflow/runs?created=>=$SINCE&status=completed" \
     --jq '.workflow_runs[] | {databaseId: .id, conclusion, createdAt: .created_at, name: .name}'
 done
@@ -165,7 +171,7 @@ Run the token report script to get per-run token counts:
 "${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 > /tmp/token-report.json
 ```
 
-Pass additional workflow prefixes to include non-`tend-*` workflows that use the tend action (e.g., `review-reviewers`). Check the repo's `running-tend` skill for the list.
+Pass the same extra prefixes Step 1 censuses, so the two steps agree on what the fleet is — the repo's `running-tend` skill is the source for both (e.g. `review-` for a `review-reviewers` workflow that uses the tend action but isn't named `tend-*`).
 
 Include the totals and per-workflow breakdown in the summary (Step 7). Flag any runs with unusually high token usage for closer inspection in Step 3.
 
