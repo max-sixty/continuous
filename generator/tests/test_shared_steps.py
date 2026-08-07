@@ -604,6 +604,14 @@ for arg in "$@"; do
   prev="$arg"
 done
 
+# Real `gh` refuses the combination outright and exits 1, and the reconcile's
+# shape rests on that: fold the filter back into `--jq` and the script dies
+# under pipefail just after posting its row, never reconciling.
+if [ -n "$slurp" ] && [ -n "$jq_expr" ]; then
+  echo "the --slurp option is not supported with --jq or --template" >&2
+  exit 1
+fi
+
 emit() {
   if [ -n "$jq_expr" ]; then
     printf '%s' "$1" | jq -r "$jq_expr"
@@ -720,23 +728,32 @@ def _filler(count: int, *, first_id: int = 1) -> list[dict]:
     ]
 
 
-def _seen_by_the_guard(env: dict[str, str], *bodies: str) -> None:
+def _seen_by_the_guard(env: dict[str, str], *bodies: str, body: str = "") -> None:
     """What `gh issue view --json body,comments` returns for the tracker."""
     Path(env["KEEPER_JSON"]).write_text(
-        json.dumps({"body": "", "comments": [{"body": b} for b in bodies]})
+        json.dumps({"body": body, "comments": [{"body": b} for b in bodies]})
     )
 
 
+@pytest.mark.parametrize(
+    ("body", "comments"),
+    [
+        pytest.param("", (f"| when | {RUN_LINK} | #851 |",), id="in-a-comment"),
+        pytest.param(f"| when | {RUN_LINK} | #851 |", (), id="in-the-issue-body"),
+    ],
+)
 def test_report_failure_skips_a_run_already_recorded(
-    report_failure_env: dict[str, str],
+    report_failure_env: dict[str, str], body: str, comments: tuple[str, ...]
 ) -> None:
     """A leg whose sibling already recorded this run posts nothing.
 
     This is the guard that collapses the flood: a matrix workflow calls the
     script once per leg, every leg sharing one GITHUB_RUN_ID, so without it a
-    5-leg matrix leaves 5 comments all citing the same run.
+    5-leg matrix leaves 5 comments all citing the same run. The body case is
+    the first run of an outage: one leg seeds the issue with its row, and the
+    siblings that follow have no comment to match — only the body.
     """
-    _seen_by_the_guard(report_failure_env, f"| when | {RUN_LINK} | #851 |")
+    _seen_by_the_guard(report_failure_env, *comments, body=body)
 
     result = _run_report_failure(report_failure_env)
 
