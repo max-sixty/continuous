@@ -128,7 +128,7 @@ Step 3's duplicate check catches identical fixes. It misses the *same root cause
    [How the fix was verified — mention the reproduction test]
 
    ---
-   Closes #<issue number> — automated triage
+   Closes #$ARGUMENTS — automated triage
    ```
 
    ```bash
@@ -151,10 +151,10 @@ Compose the body with the Write tool at `/tmp/pr-body.md`:
 
 ```markdown
 ## Context
-Adds a failing test that reproduces #<issue number>. The fix is not yet included — this PR captures the reproduction so a maintainer can investigate.
+Adds a failing test that reproduces #$ARGUMENTS. The fix is not yet included — this PR captures the reproduction so a maintainer can investigate.
 
 ---
-Automated triage for #<issue number>
+Automated triage for #$ARGUMENTS
 ```
 
 ```bash
