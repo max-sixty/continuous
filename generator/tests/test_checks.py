@@ -1610,6 +1610,22 @@ def test_credential_environments_is_keyed_on_secrets_not_on_the_name() -> None:
     assert "smoke-secrets" in result.message
 
 
+def test_credential_environments_reads_a_name_containing_a_space() -> None:
+    """GitHub admits a space in an environment name, and the list endpoint
+    returns one name per line. Splitting on whitespace instead made two names
+    that exist nowhere; both 404, and the first 404 returned the whole check
+    as skipped-for-want-of-admin — so a repo could hold an ungated credential
+    and read PASS-adjacent silence. Verified against live GitHub: `gh api`
+    encodes the space itself, so no quoting is needed here."""
+    fake = _credential_env_gh(
+        {"staging deploy": (["T1"], {"protection_rules": []}, "")}
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False, result.message
+    assert "staging deploy" in result.message
+
+
 def test_credential_environments_accepts_a_human_reviewer() -> None:
     fake = _credential_env_gh(
         {"tend-manual": (["T1"], _reviewers(("User", "maintainer")), "")}

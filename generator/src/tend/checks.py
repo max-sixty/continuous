@@ -1033,7 +1033,16 @@ def check_credential_environments(
 
     ungated: list[str] = []
     holders: list[str] = []
-    for env_name in listed.stdout.split():
+    # One name per line, not one per whitespace-separated token: GitHub admits
+    # a space in an environment name, and splitting on whitespace turns one
+    # such environment into two names that exist nowhere. Each answers 404,
+    # which is the `returncode != 0` below, so the whole check reports itself
+    # skipped for want of admin access — a credential check that stops
+    # verifying and blames the token. The real environment goes unexamined
+    # either way.
+    for env_name in listed.stdout.splitlines():
+        if not env_name:
+            continue
         secrets = _gh(
             "api",
             "--paginate",
