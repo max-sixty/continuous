@@ -228,21 +228,29 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > 1. Did the bot produce visible output (review, comment, issue action, commit)?
 > 2. If yes, was the output accepted or rejected?
 >
-> **Sweep the window repo-wide before mapping any run, and report the row counts.** The per-run mapping below walks run → branch → PR → endpoint; a break anywhere in that chain returns empty for *every* run at once, and uniform silence reads as a quiet hour rather than as a broken query. These three calls take no run ID, so they fail independently of it:
+> **Sweep the window repo-wide before mapping any run, and report the row counts.** The per-run mapping below walks run → branch → PR → endpoint; a break anywhere in that chain returns empty for *every* run at once, and uniform silence reads as a quiet hour rather than as a broken query. These calls take no run ID, so they fail independently of it:
 >
 > ```bash
 > WINDOW_START=<window start, ISO 8601>
 > WINDOW_END=<window end, ISO 8601>
 > IN_WINDOW="[.[] | select(.user.login == \"$BOT_LOGIN\")
->   | select(.created_at >= \"$WINDOW_START\" and .created_at <= \"$WINDOW_END\")] | length"
+>   | select((.created_at // .submitted_at) >= \"$WINDOW_START\"
+>            and (.created_at // .submitted_at) <= \"$WINDOW_END\")] | length"
+>
 > gh api "repos/$ARGUMENTS/issues/comments?since=$WINDOW_START&per_page=100" --jq "$IN_WINDOW"
 > gh api "repos/$ARGUMENTS/pulls/comments?since=$WINDOW_START&per_page=100" --jq "$IN_WINDOW"
-> gh -R $ARGUMENTS pr list --state all --search "updated:>$WINDOW_START" --json number --jq '[.[].number]'
+>
+> CANDIDATES=$(gh -R $ARGUMENTS pr list --state all --limit 100 \
+>   --search "updated:>$WINDOW_START" --json number --jq '.[].number')
+> echo "$CANDIDATES"
+> for pr in $CANDIDATES; do
+>   gh api "repos/$ARGUMENTS/pulls/$pr/reviews?per_page=100" --jq "$IN_WINDOW"
+> done | jq -s add
 > ```
 >
-> Filter both comment calls on `created_at` at both ends. `since` is an `updated_at` floor with no ceiling, so unfiltered it also returns comments written days earlier and merely edited in the window, plus everything posted between the window end and now — this skill starts 20–40 min after its tick, so on a busy repo that is most windows. Those are rows the per-run walk was right not to reach, and a check that contradicts a correct walk every run stops being believed. Leave the third call unbounded above: `updated:` matches the PR's own `updated_at`, so a range drops any PR that got bot output inside the window and was touched after it, and over-inclusion in a candidate list costs nothing.
+> Filter the comment calls on `created_at` at both ends. `since` is an `updated_at` floor with no ceiling, so unfiltered it also returns comments written days earlier and merely edited in the window, plus everything posted between the window end and now — this skill starts 20–40 min after its tick, so on a busy repo that is most windows. Those are rows the per-run walk was right not to reach, and a check that contradicts a correct walk every run stops being believed. Leave `CANDIDATES` unbounded above: `updated:` matches the PR's own `updated_at`, so a range drops any PR that got bot output inside the window and was touched after it, and over-inclusion in a candidate list costs nothing. `--limit 100` is load-bearing — `gh pr list` defaults to 30 and truncates silently.
 >
-> The first two counts cover conversation and inline-review comments only — neither endpoint returns review submissions, so a window whose sole output was a review reads zero there, and reviews are reachable only through the third call's PR list. Report all three at the top of your summary. If the sweep found in-window rows your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
+> The comment endpoints cover conversation and inline-review comments only; neither returns review submissions, and an empty-body `APPROVE` is `tend-review`'s most common output. Without the fourth count an approvals-only window reports `0, 0` and satisfies the gate below with two zeros carrying no signal. Report all four numbers at the top of your summary. If the sweep found in-window rows your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
 >
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
