@@ -46,14 +46,30 @@ SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
 # IMPORTANT: REST reviews carry `.commit_id`, NOT the `.commit.oid` that
 # `gh pr view --json reviews` returns — don't confuse the two. `gh api --jq`
 # accepts no `--arg`/`--argjson`, so pipe to `jq` rather than using `--jq`.
-LAST_REVIEW_SHA=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
-  | jq -rs --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" \
+LAST_REVIEW=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
+  | jq -s --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" \
     'add | [.[] | select(.user.login == $bot)
                 | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
-         | last | .commit_id // empty')
+         | last // {}')
+LAST_REVIEW_SHA=$(jq -r '.commit_id // empty' <<<"$LAST_REVIEW")
+
+# A force-push does not just move HEAD — GitHub re-points the prior review's
+# `.commit_id` at the NEW head, so `LAST_REVIEW_SHA == HEAD_SHA` reads true for
+# code nothing ever reviewed and the run exits silently, leaving a stale APPROVE
+# standing as the active verdict. (An ordinary push leaves the old anchor
+# intact; only a rewrite re-points it, so `.commit_id` alone can't tell the two
+# apart.) Probe the timeline for a rewrite newer than that review.
+LAST_REVIEW_AT=$(jq -r '.submitted_at // empty' <<<"$LAST_REVIEW")
+FORCE_PUSHED=0
+[ -n "$LAST_REVIEW_AT" ] && FORCE_PUSHED=$(
+  gh api --paginate "repos/$REPO/issues/<number>/timeline" \
+    | jq -s --arg at "$LAST_REVIEW_AT" \
+      'add | [.[] | select(.event == "head_ref_force_pushed" and .created_at > $at)] | length')
 ```
 
-If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
+If `FORCE_PUSHED` is non-zero, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports.
+
+Otherwise, if `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
 
 If the bot reviewed a previous commit (`LAST_REVIEW_SHA` exists but differs from `HEAD_SHA`), judge what was pushed since. Read two signals, both leak-free against base-merges:
 
