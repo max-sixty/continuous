@@ -75,6 +75,6 @@ When composing the findings file, either interpolate the values with an unquoted
 
 Each run gets its own heading so future runs can count prior occurrences and trace incidents to session logs.
 
-**Name people without `@`.** Write `` `alice` ``, not `@alice`. The evidence store is an internal accounting log nobody asked to be in; every `@handle` in it — including one added by appending to an existing comment — notifies that person and auto-subscribes them to every later entry. Backticks keep the attribution and drop the ping. Same rule for a PR or issue body opened from a finding, and for any repo the handle belongs to.
+**Name people without `@`.** Write `` `alice` ``, not `@alice`. The evidence store is an internal accounting log nobody asked to be in; every `@handle` in it — including one added by appending to an existing comment — notifies that person and auto-subscribes them to every later entry. Backticks keep the attribution and drop the ping. Same rule for a PR or issue body opened from a finding, and it holds even when the person is a collaborator of the repo you're writing in.
 
 When a historical entry looks like it might match a current finding, **download and investigate the linked workflow's session logs** — don't rely on the summary text alone, which lacks sufficient context to judge relatedness. Trace the original decision chain in the session JSONL to confirm the historical case is genuinely the same pattern, not just superficially similar.
