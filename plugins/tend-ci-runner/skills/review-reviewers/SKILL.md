@@ -228,6 +228,19 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > 1. Did the bot produce visible output (review, comment, issue action, commit)?
 > 2. If yes, was the output accepted or rejected?
 >
+> **Sweep the window repo-wide before mapping any run, and report the row counts.** The per-run mapping below walks run → branch → PR → endpoint; a break anywhere in that chain returns empty for *every* run at once, and uniform silence reads as a quiet hour rather than as a broken query. These three calls take no run ID, so they fail independently of it:
+>
+> ```bash
+> WINDOW_START=<window start, ISO 8601>
+> gh api "repos/$ARGUMENTS/issues/comments?since=$WINDOW_START&per_page=100" \
+>   --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | length"
+> gh api "repos/$ARGUMENTS/pulls/comments?since=$WINDOW_START&per_page=100" \
+>   --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | length"
+> gh -R $ARGUMENTS pr list --state all --search "updated:>$WINDOW_START" --json number --jq '[.[].number]'
+> ```
+>
+> The first two are the bot's conversation and inline-review comments. The third is the candidate list for the review and body queries further down, which have no `since` parameter of their own. Report all three counts at the top of your summary. If the sweep returns rows that your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
+>
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
 >   `gh -R $ARGUMENTS pr list --head <branch> --state all` → check bot reviews via
@@ -303,7 +316,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > <note if zero bot activity found across all runs — may indicate systemic failure>
 > ```
 
-Review the subagent's summary. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
+Review the subagent's summary. A report of little or no bot output is only usable if it carries the repo-wide sweep counts — without them, run the three sweep calls yourself before believing it, because a silent window and a broken per-run walk produce the same summary. Absence is also not a finding on its own: don't reason from it toward a conclusion the sweep would contradict. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
 
 ## Step 3: Investigate concerning outcomes via cheap subagent
 
