@@ -232,14 +232,17 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 >
 > ```bash
 > WINDOW_START=<window start, ISO 8601>
-> gh api "repos/$ARGUMENTS/issues/comments?since=$WINDOW_START&per_page=100" \
->   --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | length"
-> gh api "repos/$ARGUMENTS/pulls/comments?since=$WINDOW_START&per_page=100" \
->   --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | length"
+> WINDOW_END=<window end, ISO 8601>
+> IN_WINDOW="[.[] | select(.user.login == \"$BOT_LOGIN\")
+>   | select(.created_at >= \"$WINDOW_START\" and .created_at <= \"$WINDOW_END\")] | length"
+> gh api "repos/$ARGUMENTS/issues/comments?since=$WINDOW_START&per_page=100" --jq "$IN_WINDOW"
+> gh api "repos/$ARGUMENTS/pulls/comments?since=$WINDOW_START&per_page=100" --jq "$IN_WINDOW"
 > gh -R $ARGUMENTS pr list --state all --search "updated:>$WINDOW_START" --json number --jq '[.[].number]'
 > ```
 >
-> The first two are the bot's conversation and inline-review comments. The third is the candidate list for the review and body queries further down, which have no `since` parameter of their own. Report all three counts at the top of your summary. If the sweep returns rows that your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
+> Filter both comment calls on `created_at` at both ends. `since` is an `updated_at` floor with no ceiling, so unfiltered it also returns comments written days earlier and merely edited in the window, plus everything posted between the window end and now — this skill starts 20–40 min after its tick, so on a busy repo that is most windows. Those are rows the per-run walk was right not to reach, and a check that contradicts a correct walk every run stops being believed. Leave the third call unbounded above: `updated:` matches the PR's own `updated_at`, so a range drops any PR that got bot output inside the window and was touched after it, and over-inclusion in a candidate list costs nothing.
+>
+> The first two counts cover conversation and inline-review comments only — neither endpoint returns review submissions, so a window whose sole output was a review reads zero there, and reviews are reachable only through the third call's PR list. Report all three at the top of your summary. If the sweep found in-window rows your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
 >
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
@@ -316,7 +319,9 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > <note if zero bot activity found across all runs — may indicate systemic failure>
 > ```
 
-Review the subagent's summary. A report of little or no bot output is only usable if it carries the repo-wide sweep counts — without them, run the three sweep calls yourself before believing it, because a silent window and a broken per-run walk produce the same summary. Absence is also not a finding on its own: don't reason from it toward a conclusion the sweep would contradict. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
+A report of little or no bot output is only usable if it carries the repo-wide sweep counts — without them, run the three sweep calls yourself before believing it, because a silent window and a broken per-run walk produce the same summary. Absence is not a finding on its own either: don't reason from it toward a conclusion the sweep would contradict.
+
+Review the subagent's summary. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
 
 ## Step 3: Investigate concerning outcomes via cheap subagent
 
