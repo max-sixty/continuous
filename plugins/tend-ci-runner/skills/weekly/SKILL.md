@@ -63,16 +63,23 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
    LAST_FORCE_PUSH_AT=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
      | jq -rs 'add | [.[] | select(.event == "head_ref_force_pushed") | .created_at] | max // ""')
+   # `last` BEFORE the staleness test, not after: the question is whether the
+   # newest approval is stale, not whether some stale approval exists. Filtering
+   # first would return the pre-rewrite id even when a later approval already
+   # superseded it — dismissing a review that no longer sets the PR's state
+   # while the one that does stands untouched.
    STALE_APPROVAL_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
      | jq -rs --arg bot "$BOT_LOGIN" --arg fp "$LAST_FORCE_PUSH_AT" \
-       'add | [.[] | select(.user.login == $bot and .state == "APPROVED")
-                   | select($fp != "" and .submitted_at < $fp)]
-            | last | .id // empty')
+       'add | [.[] | select(.user.login == $bot and .state == "APPROVED")]
+            | last
+            | select(. != null and $fp != "" and .submitted_at < $fp)
+            | .id')
 
    if [ -n "$STALE_APPROVAL_ID" ]; then
-     # PUT, not POST — the dismiss endpoint requires it.
+     # PUT, not POST — the dismiss endpoint requires it. Keep the message to what
+     # these paths actually do: they comment and stop, so don't promise a re-review.
      gh api "repos/$REPO/pulls/<number>/reviews/$STALE_APPROVAL_ID/dismissals" \
-       -X PUT -f message="Rebased since this approval; re-reviewing."
+       -X PUT -f message="Rebased since this approval; the new head is unreviewed."
    fi
    ```
    A dismissed review reports `DISMISSED` rather than `APPROVED`, so the filter stops matching it and a later run re-dismisses nothing.
