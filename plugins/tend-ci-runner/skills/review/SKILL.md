@@ -68,7 +68,7 @@ if [ -n "$LAST_REVIEW_AT" ]; then
 fi
 ```
 
-If `FORCE_PUSHED` is non-zero, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports.
+If `FORCE_PUSHED` is non-zero, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports. If that prior review was an `APPROVED` and the re-review lands on findings rather than an approval, dismiss it too — it is re-anchored onto the rewritten head, so posting a COMMENT alone leaves the PR reading as bot-approved. `jq -r '.state, .id' <<<"$LAST_REVIEW"` gives the state and the `$REVIEW_ID` for step 6's `reviews/$REVIEW_ID/dismissals` call.
 
 Otherwise, if `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
 
