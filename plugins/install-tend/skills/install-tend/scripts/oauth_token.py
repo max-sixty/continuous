@@ -18,7 +18,7 @@ running this in the background can hand it to the user. Nothing else from the
 TUI is echoed: its output carries the token.
 
 Usage:
-    oauth-token.py [--code-file PATH]
+    oauth_token.py [--code-file PATH]
 
 `--code-file` names a path to watch. Write the `code#state` string there and it
 is typed into the TUI, for the runs where the browser shows a code instead of
@@ -43,12 +43,18 @@ TIMEOUT_SECONDS = 900
 # Ink wraps at the terminal width; the token runs ~108 characters and has to
 # land on one logical line for the extraction below to see all of it.
 COLUMNS, ROWS = 250, 50
+# Tokens are ~108 characters. Anything past this is not a token the TUI meant
+# to print, and is reported rather than truncated to a plausible length.
+MAX_TOKEN_LENGTH = 200
 
 ANSI_CSI = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]")
 AUTHORIZE_URL = re.compile(
     rb"https://[a-z.]+/[a-z/]*oauth/authorize\?[A-Za-z0-9%&=?:/._~+-]+"
 )
-TOKEN = re.compile(rb"sk-ant-oat01-[A-Za-z0-9_-]{80,200}")
+# Deliberately open-ended: a ceiling here would match a long token's first N
+# bytes, and `complete_match` would then see a following byte and call the
+# truncation final. Length is checked after extraction so it fails loudly.
+TOKEN = re.compile(rb"sk-ant-oat01-[A-Za-z0-9_-]{80,}")
 
 
 def complete_match(pattern, buf):
@@ -64,14 +70,14 @@ def complete_match(pattern, buf):
     return match.group(0)
 
 
-def first_url(buf):
-    """The authorize URL, or None.
+def first_url(visible):
+    """The authorize URL in ANSI-stripped output, or None.
 
     The TUI emits it as an OSC 8 hyperlink, whose target and visible text are
     the same URL back to back with no separator — so a match can run straight
     from the end of one into the start of the next.
     """
-    url = complete_match(AUTHORIZE_URL, ANSI_CSI.sub(b"", buf))
+    url = complete_match(AUTHORIZE_URL, visible)
     if not url or b"state=" not in url:
         return None
     doubled = url.find(b"https://", 1)
@@ -87,6 +93,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--code-file", help="path to watch for a `code#state` string")
     args = parser.parse_args()
+
+    # A code from an earlier run is dead — its PKCE challenge went with that
+    # run — so a leftover file would be typed into this run's prompt before the
+    # user has approved anything, and the run would wait out its whole deadline.
+    if args.code_file and os.path.exists(args.code_file):
+        os.unlink(args.code_file)
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLUMNS, 0, 0))
@@ -121,8 +133,12 @@ def main():
                 break
             buf += chunk
 
+        # Ink restyles mid-frame, so a CSI sequence can land inside either the
+        # URL or the token. Both are read from the stripped view.
+        visible = ANSI_CSI.sub(b"", buf)
+
         if not announced:
-            url = first_url(buf)
+            url = first_url(visible)
             if url:
                 print(f"Approve in the browser:\n{url.decode()}", file=sys.stderr)
                 announced = True
@@ -146,7 +162,7 @@ def main():
             os.write(master, b"\r")
             enters += 1
 
-        match = complete_match(TOKEN, buf)
+        match = complete_match(TOKEN, visible)
         if match:
             token = match.decode()
             break
@@ -164,7 +180,7 @@ def main():
     if token is None:
         # Nothing more can arrive, so a match here cannot be a partial read —
         # which is the case where the token is the last thing the TUI writes.
-        final = TOKEN.search(buf)
+        final = TOKEN.search(ANSI_CSI.sub(b"", buf))
         if final:
             token = final.group(0).decode()
 
@@ -173,6 +189,8 @@ def main():
             "Error: no sk-ant-oat01-… token in TUI output. If the browser showed "
             "a code to copy, rerun with --code-file and write it to that path."
         )
+    if len(token) > MAX_TOKEN_LENGTH:
+        sys.exit(f"Error: extracted token has implausible length ({len(token)} chars)")
     print(token)
 
 
