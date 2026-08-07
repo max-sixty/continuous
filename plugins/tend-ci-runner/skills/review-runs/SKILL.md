@@ -131,10 +131,9 @@ List tend CI runs that completed in the past 24 hours (the cron runs daily):
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-# Census every workflow that runs the tend action, not only the generated
-# `tend-*` ones — a workflow named outside that prefix is otherwise never
-# classified, never near-timeout-checked, and never reaches Step 3. The repo's
-# `running-tend` skill carries the extra prefixes; Step 2 takes the same list.
+# Add the repo's extra prefixes from its `running-tend` skill: any workflow
+# running the tend action is in scope, not just the generated `tend-*` ones.
+# Step 2 prices the same list.
 PREFIXES=("tend-")
 PREFIX_RE="^($(IFS='|'; echo "${PREFIXES[*]}"))"
 for workflow in $(gh api repos/$REPO/actions/workflows --jq ".workflows[] | select(.name | test(\"$PREFIX_RE\")) | .id"); do
