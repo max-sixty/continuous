@@ -5,10 +5,9 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-  # No `files:` filter — every Python file in the repo is linted and formatted.
-  # Python lives in three places now (`generator/`, `proxy/`, and the
-  # install-tend OAuth wrapper), and a path filter only ever covered the first,
-  # so each new one arrived unlinted and stayed that way until someone noticed.
+  # The hook already selects Python by type; the previous `^generator/` filter
+  # only meant that each new Python directory arrived unlinted and stayed that
+  # way until someone noticed.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.11
     hooks:
