@@ -18,9 +18,13 @@ suite() {
   shift
   printf '\n==> %s: %s\n' "$dir" "$*"
   (cd "$dir" && "$@") || rc=$?
-  # pytest exits 5 for "no tests collected" — what a -k aimed at one suite looks
-  # like from the others. Only a filtered run gets to treat that as a pass.
-  if [ "$rc" -eq 5 ] && [ ${#pytest_args[@]} -gt 0 ]; then rc=0; fi
+  # A filtered run gets slack: pytest exits 5 for "no tests collected" and 4 for
+  # a path that only exists in another suite. generator/ stays strict, so a bad
+  # flag — 4 everywhere — still fails the run.
+  if [ ${#pytest_args[@]} -gt 0 ] &&
+    { [ "$rc" -eq 5 ] || { [ "$rc" -eq 4 ] && [ "$dir" != generator ]; }; }; then
+    rc=0
+  fi
   if [ "$rc" -ne 0 ]; then failed+=("$dir"); fi
 }
 
@@ -43,11 +47,12 @@ suite plugins/install-tend/skills/install-tend/scripts \
   uv run --no-project --with pytest pytest "${pytest_args[@]}"
 
 if [ ${#pytest_args[@]} -eq 0 ]; then
-  # Install only when the tree is missing, and with `npm ci` rather than
-  # `npm install` — an older local npm reruns resolution and rewrites
-  # package-lock.json, leaving churn in the diff that has nothing to do with the
-  # change under test.
-  if [ ! -d worker/node_modules ]; then
+  # Install when the tree is missing or older than the lockfile (`npm ci` writes
+  # node_modules/.package-lock.json), and with `npm ci` rather than `npm install`
+  # — an older local npm reruns resolution and rewrites package-lock.json,
+  # leaving churn in the diff that has nothing to do with the change under test.
+  if [ ! -d worker/node_modules ] ||
+    [ worker/package-lock.json -nt worker/node_modules/.package-lock.json ]; then
     suite worker npm ci --prefer-offline --no-audit --no-fund
   fi
   suite worker npm run typecheck
