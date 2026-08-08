@@ -100,10 +100,15 @@ fi
 # Everything below runs only once the base limit is already exceeded, so the
 # common path costs no extra API calls at all.
 if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
-  # A failed read costs nothing extra here: no issue and no way to see one both
-  # leave approvals at zero, which refuses the run either way. Where the two
-  # part company is whether to file, further down.
-  PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE") || PAUSE=""
+  # Whether the read succeeded is kept, not just what it returned: a failure
+  # and "none open" are both the empty string, and further down that difference
+  # decides whether filing is safe. For the approval count just below the two
+  # are equivalent — both leave it at zero, which refuses the run either way.
+  PAUSE_LOOKUP_OK=true
+  if ! PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE"); then
+    PAUSE=""
+    PAUSE_LOOKUP_OK=false
+  fi
 
   APPROVALS=0
   if [ -n "$PAUSE" ]; then
@@ -166,20 +171,23 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
       # other, and without it each files its own issue — so it buys nothing
       # once the issue is known to exist, and the lookup above is still good.
       #
-      # This second read also decides whether filing is safe, so its status is
-      # kept: a failure is not "no issue exists", though both are the empty
-      # string. Filing on the wrong reading leaves two pause issues, and the
-      # reconcile below cannot merge them — it probes the ten numbers under the
-      # one it just filed, and an existing pause issue is normally far older.
-      # This is the record where that hurts most: the lookup resolves to the
-      # lowest-numbered issue, so a maintainer closing the newer one — the issue
-      # this run's annotation names — approves nothing and never learns it.
-      PAUSE_LOOKUP_OK=true
+      # A failed re-read leaves the first read's verdict standing rather than
+      # clearing it, because the two rule out different things. The first
+      # excludes an already-open issue of any age — the duplicate that matters
+      # here, since the lookup resolves to the lowest-numbered issue, so a
+      # maintainer closing the newer one, the issue this run's annotation
+      # names, would approve nothing and never learn it. The re-read only
+      # narrows the seconds-wide sibling race, and that race is what
+      # run_issue_create_and_reconcile's downward probe already catches. So
+      # only a run that never managed a good read has to hold off filing;
+      # holding off on a failed re-read would pause the bot with no issue at
+      # all, which is the outcome opening one exists to avoid.
       if [ -z "$PAUSE" ]; then
         sleep $((RANDOM % 30))
-        if ! PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE"); then
+        if PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE"); then
+          PAUSE_LOOKUP_OK=true
+        else
           PAUSE=""
-          PAUSE_LOOKUP_OK=false
         fi
       fi
 
@@ -199,8 +207,9 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
           echo "::warning::Could not append this run's row to #${PAUSE}."
         fi
       elif [ "$PAUSE_LOOKUP_OK" = false ]; then
-        # Cannot tell whether an issue is already open, so file nothing: see
-        # the retry above for why a second one is worse here than none.
+        # Neither read succeeded, so whether an issue is already open is
+        # unknown; file nothing. See the re-read above for why a second issue
+        # is worse here than none.
         FILED=false
       else
         run_issue_ensure_label "$PAUSE_LABEL" "Bot paused on its own rate limit; close to approve" "fbca04"
@@ -240,7 +249,8 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
       if [ "$PAUSE_LOOKUP_OK" = false ]; then
         # Nothing was filed, and the reason is the read rather than the write —
         # so unlike the next branch, an issue may well be open and worth
-        # closing. Naming the label is all this run can offer toward it.
+        # closing, this run just never managed to see. Naming the label is all
+        # it can offer toward it.
         RECOVERY="This repo's issues could not be read (see the error above), so none was filed; if an open \`${PAUSE_LABEL}\` issue exists, closing it doubles the ceiling."
       elif [ "$FILED" = false ]; then
         RECOVERY="The pause issue could not be filed (see the error above), so there is nothing to close and the ceiling holds until the UTC rollover."

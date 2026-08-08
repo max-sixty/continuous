@@ -240,7 +240,13 @@ case "$1" in
   issue)
     case "$2" in
       list)
-        if [ -n "${FAIL_ISSUE_LIST:-}" ]; then exit 1; fi
+        # Fail from the Nth list call on, so the spike block's two reads can be
+        # failed independently: `1` fails both, `2` leaves the first standing.
+        if [ -n "${FAIL_ISSUE_LIST_FROM:-}" ]; then
+          n=$(( $(cat "$LIST_CALLS" 2>/dev/null || echo 0) + 1 ))
+          echo "$n" > "$LIST_CALLS"
+          if [ "$n" -ge "$FAIL_ISSUE_LIST_FROM" ]; then exit 1; fi
+        fi
         emit "$(cat "$PAUSE_ISSUES_JSON")"
         ;;
       create)
@@ -359,6 +365,7 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
     return {
         "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
         "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "LIST_CALLS": str(tmp_path / "list-calls"),
         "TIMELINE_JSON": str(timeline),
         "PAUSE_ISSUES_JSON": str(pause_issues),
         "PROBE_ISSUES_JSON": str(probe_issues),
@@ -510,7 +517,7 @@ def test_rate_limit_files_nothing_when_the_issue_list_cannot_be_read(
     rate_limit_env["FAKE_TODAY_POSTS"] = "16"
     # An issue is already open; the point is that this run cannot see it.
     _approve(rate_limit_env)
-    rate_limit_env["FAIL_ISSUE_LIST"] = "1"
+    rate_limit_env["FAIL_ISSUE_LIST_FROM"] = "1"
 
     result = _run_preflight(rate_limit_env)
 
@@ -519,6 +526,30 @@ def test_rate_limit_files_nothing_when_the_issue_list_cannot_be_read(
     assert not any(c.startswith("issue create") for c in calls), calls
     assert "could not be read" in result.stdout
     assert "could not be filed" not in result.stdout
+
+
+def test_rate_limit_still_files_when_only_the_re_read_fails(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """A failed re-read must not suppress the file the first read cleared.
+
+    The two reads rule out different things. The first excludes an already-open
+    issue of any age, which is the duplicate worth avoiding; the re-read after
+    the jitter only narrows the seconds-wide sibling race, and the reconcile's
+    downward probe catches that anyway. Holding off here would pause the bot
+    with no issue at all — the outcome opening one exists to avoid — and point
+    the maintainer at an issue this run's own first read established isn't
+    there.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    # Nothing open, so the first read is a clean "none"; only the re-read fails.
+    rate_limit_env["FAIL_ISSUE_LIST_FROM"] = "2"
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    assert any(c.startswith("issue create") for c in _calls(rate_limit_env))
+    assert "could not be read" not in result.stdout
 
 
 def test_rate_limit_human_close_doubles_the_ceiling(
@@ -847,7 +878,11 @@ emit() {
 case "$1 $2" in
   "api user") emit '{"login":"tend-agent","id":4242}' ;;
   "issue list")
-    if [ -n "${FAIL_ISSUE_LIST:-}" ]; then exit 1; fi
+    if [ -n "${FAIL_ISSUE_LIST_FROM:-}" ]; then
+      n=$(( $(cat "$LIST_CALLS" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$LIST_CALLS"
+      if [ "$n" -ge "$FAIL_ISSUE_LIST_FROM" ]; then exit 1; fi
+    fi
     emit "$(cat "$OPEN_ISSUES_JSON")"
     ;;
   "issue create") echo "https://github.com/owner/repo/issues/${FAKE_NEW_ISSUE}" ;;
@@ -891,6 +926,7 @@ def report_failure_env(tmp_path: Path) -> dict[str, str]:
     return {
         "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
         "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "LIST_CALLS": str(tmp_path / "list-calls"),
         "OPEN_ISSUES_JSON": str(tmp_path / "open-issues.json"),
         "PROBE_ISSUES_JSON": str(tmp_path / "probe-issues.json"),
         "KEEPER_JSON": str(tmp_path / "keeper.json"),
@@ -961,7 +997,7 @@ def test_report_failure_files_nothing_when_the_issue_list_cannot_be_read(
     Path(report_failure_env["OPEN_ISSUES_JSON"]).write_text(
         json.dumps([{"number": 8, "title": OUTAGE_TITLE}])
     )
-    report_failure_env["FAIL_ISSUE_LIST"] = "1"
+    report_failure_env["FAIL_ISSUE_LIST_FROM"] = "1"
 
     result = _run_report_failure(report_failure_env)
 
