@@ -618,15 +618,6 @@ Two paths, in order of preference:
 
 If both paths fail (GUI-only tool, private repo, environment-specific behavior), cite what you found, name the remaining gap honestly, and follow **Who to ask when you can't do it yourself** below — don't hand the verification to an outside party, least of all an upstream maintainer reviewing your change.
 
-**Path 1 runs against the live repo.** Verifying a skill's own recipe is the common case, and those recipes write: `gh issue close`, `gh pr comment`, `git push`. Read a block before running it, and never select one by position — `awk` on the Nth fence, `sed` on a line range — because the ordinal moves with every edit to the file, so the block that runs is not the one you meant to test. Match on the surrounding prose or the command instead. Run the read half and stop before the pipe into the write:
-
-```bash
-gh issue list --state open --author '@me' --search '"..." in:title' --json number --jq '.[].number'
-# ...and read that, rather than piping it into `xargs gh issue close`.
-```
-
-If the write is the part in question, point it at a scratch object you own. A wrong write is only partly recoverable: reopening an issue leaves the close in its timeline, and a deleted comment has already fired its `issue_comment` event, so any workflow it triggered ran and is still in the run list.
-
 <example>
 <bad reason="Trusted upstream docs for a fast-moving external CLI and shipped a broken recipe">
 
@@ -639,6 +630,15 @@ Good: Same question. Cloned cmux's source repo → grepped the CLI parser for `l
 
 </good>
 </example>
+
+**Path 1 runs against the live repo.** Verifying a skill's own recipe is the common case, and those recipes write: `gh issue close`, `gh pr comment`, `git push`. Never extract a block programmatically to run it — not by position (`awk` on the Nth fence, `sed` on a line range), and not by anchor either: both hand you a block you haven't read, and the ordinal additionally moves with every edit to the file, so what runs isn't even the block you meant to test. Read the file, then run the commands directly. Run the read half and stop before the pipe into the write:
+
+```bash
+gh issue list --state open --author '@me' --search '"..." in:title' --json number --jq '.[].number'
+# ...and read that, rather than piping it into `xargs gh issue close`.
+```
+
+If the write is the part in question, point it at a scratch object you own. A wrong write is only partly recoverable: reopening an issue leaves the close in its timeline, and a deleted comment has already fired its `issue_comment` event, so any workflow it triggered ran and is still in the run list.
 
 ### Who to ask when you can't do it yourself
 
