@@ -106,8 +106,8 @@ resolve bot identity. They differ in how the agent runs:
   (`claude -p`) as a non-sudo sandbox user behind a local
   credential-injecting proxy, so the bot token and Anthropic credential
   never enter the agent's environment. Each workflow's prompt names the
-  skill to run in prose, which also keeps the prompt eligible for the
-  waiver that makes the built-in `/code-review` invocable.
+  skill to run in prose rather than as a leading slash command, which
+  keeps the built-in `/code-review` reachable during the run.
 - **Codex harness** — installs the `@openai/codex` CLI on the runner and
   shells out to `codex exec`. An AGENTS.md staged into `$CODEX_HOME`
   teaches Codex to resolve `/tend-ci-runner:NAME` references to the

@@ -200,6 +200,19 @@ class Config:
     sandbox_env: dict[str, str] = field(default_factory=dict)
     sandbox_setup: list[str] = field(default_factory=list)
 
+    @property
+    def code_review_notice(self) -> str:
+        """Sentence declaring the built-in `/code-review`; empty off the Claude harness.
+
+        Every Claude prompt carries it, including `mention`, whose prompt
+        `mention.yaml.j2` builds rather than `default_prompt`. One definition, so
+        the two can't drift — and the token's regex (see `default_prompt`) is
+        fragile enough that a second copy is a second way to break it.
+        """
+        if self.harness != "claude":
+            return ""
+        return "Beyond the skills the Skill tool lists, /code-review is available too."
+
     def default_prompt(self, skill: str, args: str = "") -> str:
         """Default prompt invoking a tend-ci-runner skill in harness-native syntax.
 
@@ -232,10 +245,7 @@ class Config:
         invocation = f"Run the /tend-ci-runner:{skill} skill"
         if args:
             invocation += f" for {args}"
-        return (
-            f"{invocation}. Beyond the skills the Skill tool lists, "
-            "/code-review is available too."
-        )
+        return f"{invocation}. {self.code_review_notice}"
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:

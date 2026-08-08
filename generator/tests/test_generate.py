@@ -421,9 +421,22 @@ def test_default_prompt_unlocks_code_review(tmp_path: Path) -> None:
 
     codex = Config.load(_minimal_config(tmp_path, "harness: codex\n"))
     assert codex.default_prompt("review", "{pr_number}") == "$review {pr_number}"
+    assert codex.code_review_notice == ""
 
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    assert "/code-review" in workflows["tend-review.yaml"].content
+    # Rendering is where the token can lose its whitespace: the review prompt is
+    # the one that goes through `_escape_braces`, `''`-quoting and GHA `format()`,
+    # and `mention` is the one workflow whose prompt skips `default_prompt`.
+    claude = {wf.filename: wf for wf in generate_all(cfg)}
+    for name in ["tend-review.yaml", "tend-mention.yaml"]:
+        assert user_typed_this_turn.search(claude[name].content), (
+            f"{name} lost the bare /code-review token in rendering"
+        )
+
+    codex_workflows = {wf.filename: wf for wf in generate_all(codex)}
+    for name, wf in codex_workflows.items():
+        assert "/code-review" not in wf.content, (
+            f"{name} declares /code-review, which the Codex harness has no skill for"
+        )
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
