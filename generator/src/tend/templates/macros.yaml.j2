@@ -111,6 +111,17 @@
 {% endif %}
 {%- endmacro %}
 
+{# True when the issue carries none of the labels tend puts on its own
+   bookkeeping issues. The list lives in workflows.py so a new one reaches
+   every workflow at once; see BOOKKEEPING_LABELS for why they are skipped.
+
+   `contains(…) == false` rather than `!contains(…)`: a value starting with
+   `!` is a tag indicator to YAML, so the negated form only parses where the
+   expression is already inside a block scalar. This one renders in both. #}
+{% macro not_bookkeeping() -%}
+{% for label in bookkeeping_labels %}contains(github.event.issue.labels.*.name, '<<label>>') == false{% if not loop.last %} && {% endif %}{% endfor %}
+{%- endmacro %}
+
 {% macro fork_guard_prefix(cfg) -%}
 {% if cfg.repo_owner %}github.repository_owner == '<<cfg.repo_owner|replace("'", "''")>>' && {% endif %}
 {%- endmacro %}

@@ -87,6 +87,20 @@ jobs:
           kill "$pid" 2>/dev/null || true
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
+  # The OAuth wrapper ships inside the install-tend plugin rather than under
+  # generator/, so the suites above never reach it. Its extractors decide what
+  # becomes an adopter's model credential, and a wrong answer stores a secret
+  # that authenticates nothing, so they get a job of their own.
+  test-install-tend-scripts:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: plugins/install-tend/skills/install-tend/scripts
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --no-project --with pytest pytest
+
   test-worker:
     runs-on: ubuntu-24.04
     defaults:

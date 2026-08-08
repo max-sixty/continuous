@@ -58,11 +58,33 @@ if [ ${#WORKFLOWS[@]} -eq 0 ]; then
   exit 0
 fi
 
-# Collect all completed runs across workflows
+# Collect all completed runs across workflows.
+#
+# `gh run list` returns newest-first and silently stops at --limit, so a
+# workflow busier than the limit drops the *oldest* runs in the window and the
+# totals below under-report with nothing marking the shortfall. The limit is
+# per workflow, not per report, so it only has to clear the busiest one; a
+# repo's chattiest workflow can run several times an hour, and at this script's
+# own documented 168 h default that already reaches the high hundreds. Capped
+# at 1000 because that is the ceiling: the Actions runs endpoint stops
+# paginating there whatever `total_count` says, so a larger constant is
+# unreachable and would only make the guard below unable to fire.
+#
+# Warn rather than trust, in both directions. A count landing on the limit is
+# the only symptom of truncation visible without re-querying `.total_count`,
+# and a failed fetch is the same silent under-report at full strength: it drops
+# every run of that workflow, and a length of 0 is not an exact-limit hit, so
+# the truncation guard alone would pass straight over it.
+RUN_LIMIT=1000
 ALL_RUNS="[]"
 for wf in "${WORKFLOWS[@]}"; do
-  runs=$(gh run list "${repo_args[@]}" --workflow "$wf" --created ">=$SINCE" --status completed \
-    --json databaseId,conclusion,createdAt,name --limit 100 2>/dev/null || echo "[]")
+  if ! runs=$(gh run list "${repo_args[@]}" --workflow "$wf" --created ">=$SINCE" --status completed \
+    --json databaseId,conclusion,createdAt,name --limit "$RUN_LIMIT" 2>/dev/null); then
+    echo >&2 "WARNING: 'gh run list' for '$wf' failed — its runs are absent from the totals below."
+    runs="[]"
+  elif [ "$(echo "$runs" | jq 'length')" -ge "$RUN_LIMIT" ]; then
+    echo >&2 "WARNING: '$wf' returned $RUN_LIMIT runs, the Actions API's pagination ceiling — older runs in the window are unreachable and the totals below under-report it. Narrow HOURS to bring the window under the ceiling; raising RUN_LIMIT cannot help."
+  fi
   ALL_RUNS=$(echo "$ALL_RUNS" "$runs" | jq -s 'add | unique_by(.databaseId)')
 done
 
