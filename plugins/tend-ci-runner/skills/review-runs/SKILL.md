@@ -131,12 +131,18 @@ List tend CI runs that completed in the past 24 hours (the cron runs daily):
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+# Add the repo's extra prefixes from its `running-tend` skill: any workflow
+# running the tend action is in scope, not just the generated `tend-*` ones.
+# Step 2 prices the same list.
+#
 # `--paginate` on both calls. Both endpoints page at 30 by default and return
 # runs newest-first, so without it the census silently covers only the most
 # recent 30 runs per workflow — on a busy repo that is the last hour, not the
 # last 24. Each `--jq` here is a per-element projection, so `--paginate`
 # applying it per page is harmless.
-for workflow in $(gh api --paginate repos/$REPO/actions/workflows --jq '.workflows[] | select(.name | startswith("tend-")) | .id'); do
+PREFIXES=("tend-")
+PREFIX_RE="^($(IFS='|'; echo "${PREFIXES[*]}"))"
+for workflow in $(gh api --paginate repos/$REPO/actions/workflows --jq ".workflows[] | select(.name | test(\"$PREFIX_RE\")) | .id"); do
   gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?created=>=$SINCE&status=completed&per_page=100" \
     --jq '.workflow_runs[] | {databaseId: .id, conclusion, createdAt: .created_at, name: .name}'
 done
@@ -151,7 +157,7 @@ Then, for each run ID from above, pull its jobs and classify them:
 - **Long-running** (>30 min): Tend runs typically finish in single-digit minutes. Anything over 30 is worth a look — download session logs in Step 3 and diagnose where the time went (long background waits, push-wait-fix cycles, a stuck tool call).
 - **Near-timeout** (within 90% of the cap): A job that consumed most of its timeout budget is one slow external check away from being killed. These are **structural** failures: one occurrence is enough to act on.
 
-To determine the timeout cap for a workflow, read `timeout-minutes` from the workflow YAML file (`.github/workflows/tend-*.yaml`). Tend's generated workflows do not set `timeout-minutes`, so GitHub's 360-minute default applies unless the adopter has overridden it via `workflows.<name>.jobs.<job>.timeout-minutes` in `.config/tend.yaml`.
+To determine the timeout cap for a workflow, read `timeout-minutes` from that workflow's own file under `.github/workflows/` — the census admits workflows named outside the `tend-` prefix, so don't glob for one. Tend's generated workflows do not set `timeout-minutes`, so GitHub's 360-minute default applies unless the adopter has overridden it via `workflows.<name>.jobs.<job>.timeout-minutes` in `.config/tend.yaml`.
 
 ```bash
 # Flag long-running and near-timeout jobs
@@ -172,7 +178,7 @@ Run the token report script to get per-run token counts:
 "${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 > /tmp/token-report.json
 ```
 
-Pass additional workflow prefixes to include non-`tend-*` workflows that use the tend action (e.g., `review-reviewers`). Check the repo's `running-tend` skill for the list.
+Pass the same extra prefixes Step 1 censuses, so the two steps agree on what the fleet is — the repo's `running-tend` skill is the source for both (e.g. `review-` for a `review-reviewers` workflow that uses the tend action but isn't named `tend-*`).
 
 Include the totals and per-workflow breakdown in the summary (Step 7). Flag any runs with unusually high token usage for closer inspection in Step 3.
 
@@ -205,11 +211,18 @@ Before creating issues or PRs, check for existing ones:
 
 ```bash
 gh issue list --state open --json number,title,body
-gh pr list --state open --json number,title,headRefName,body
 gh issue list --state closed --json number,title,closedAt --limit 30
+# --state all: a merged PR is the most common way a finding is already fixed
+gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body
+# Bundled-skill defects are filed upstream (Step 6), and the queries above only
+# see this repo — dedup against tend before filing there.
+gh pr list --repo max-sixty/tend --state all --limit 40 --json number,title,state,mergedAt,body
+gh issue list --repo max-sixty/tend --state all --limit 40 --json number,title,body
 ```
 
 Search titles AND bodies for related keywords.
+
+**A fix merged upstream still reproduces here.** The action ref is pinned per release, so a skill fix that merged in `max-sixty/tend` stays dormant on this repo until the next release tags. Observing the bug is therefore not evidence the fix is missing — check tend's merged PRs before filing, or the report is churn on something already landed.
 
 ## Step 6: Act on findings
 

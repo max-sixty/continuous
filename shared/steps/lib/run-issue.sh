@@ -101,7 +101,8 @@ run_issue_ensure_label() {
 }
 
 # Create from a body on stdin, reconcile the duplicates the create-create race
-# let through, and print the surviving issue number.
+# let through, and print the surviving issue number. Returns non-zero, having
+# printed nothing, when the create itself fails.
 #
 # Callers sleep a jittered interval before their check-then-act, which narrows
 # the window when a matrix workflow's legs trip at near-identical times but
@@ -116,7 +117,13 @@ run_issue_ensure_label() {
 # while the caller can read the keeper straight out of stdout.
 run_issue_create_and_reconcile() {
   local label=$1 title=$2
-  gh issue create --title "$title" --label "$label" -F - >&2
+  # Carry a failed create out as this function's status. `set -e` does not
+  # reach inside a command substitution unless `inherit_errexit` is set, and
+  # every caller reads the number back through one — so without this the
+  # failure runs on to the `printf` at the end, whose success becomes the
+  # substitution's status, and the caller is handed an empty number it takes
+  # for a filed issue.
+  gh issue create --title "$title" --label "$label" -F - >&2 || return 1
 
   sleep 5
   local open keep
