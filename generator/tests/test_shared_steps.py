@@ -239,7 +239,10 @@ case "$1" in
     ;;
   issue)
     case "$2" in
-      list) emit "$(cat "$PAUSE_ISSUES_JSON")" ;;
+      list)
+        if [ -n "${FAIL_ISSUE_LIST:-}" ]; then exit 1; fi
+        emit "$(cat "$PAUSE_ISSUES_JSON")"
+        ;;
       create)
         # An `if` rather than `[ ... ] && exit 1`: with nothing after it, the
         # failed test would become the branch's status and every create would
@@ -490,6 +493,32 @@ def test_rate_limit_keeps_its_annotation_when_the_row_cannot_be_appended(
 
     assert result.returncode == 1
     assert "Refused runs are listed in #42" in result.stdout
+
+
+def test_rate_limit_files_nothing_when_the_issue_list_cannot_be_read(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """A failed list read must not be taken for "no issue exists".
+
+    Both readings are the empty string, and acting on the wrong one files a
+    second pause issue. The reconcile cannot merge that one away: it probes the
+    ten numbers under the issue it just filed, and an already-open pause issue
+    is normally far older. The duplicate then costs an approval outright — the
+    lookup resolves to the lowest-numbered issue, so a maintainer closing the
+    newer one, which is the issue this run's annotation names, approves nothing.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    # An issue is already open; the point is that this run cannot see it.
+    _approve(rate_limit_env)
+    rate_limit_env["FAIL_ISSUE_LIST"] = "1"
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    calls = _calls(rate_limit_env)
+    assert not any(c.startswith("issue create") for c in calls), calls
+    assert "could not be read" in result.stdout
+    assert "could not be filed" not in result.stdout
 
 
 def test_rate_limit_human_close_doubles_the_ceiling(
@@ -817,7 +846,10 @@ emit() {
 
 case "$1 $2" in
   "api user") emit '{"login":"tend-agent","id":4242}' ;;
-  "issue list") emit "$(cat "$OPEN_ISSUES_JSON")" ;;
+  "issue list")
+    if [ -n "${FAIL_ISSUE_LIST:-}" ]; then exit 1; fi
+    emit "$(cat "$OPEN_ISSUES_JSON")"
+    ;;
   "issue create") echo "https://github.com/owner/repo/issues/${FAKE_NEW_ISSUE}" ;;
   "issue view") emit "$(cat "$KEEPER_JSON")" ;;
   "issue comment") cat >> "$COMMENT_BODIES" ;;
@@ -914,6 +946,29 @@ def test_report_failure_appends_to_the_open_tracker(
     assert not any(c.startswith("issue create") for c in calls), (
         f"filed a second tracker while one was open: {calls}"
     )
+
+
+def test_report_failure_files_nothing_when_the_issue_list_cannot_be_read(
+    report_failure_env: dict[str, str],
+) -> None:
+    """The same conflation, from the other caller.
+
+    Two open trackers is the state that breaks the drain sweep: later rows
+    scatter across both and neither carries the complete set. The reconcile's
+    downward probe does not reach an older tracker, so the duplicate persists.
+    Skipping costs this one row, and the next failure records normally.
+    """
+    Path(report_failure_env["OPEN_ISSUES_JSON"]).write_text(
+        json.dumps([{"number": 8, "title": OUTAGE_TITLE}])
+    )
+    report_failure_env["FAIL_ISSUE_LIST"] = "1"
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    calls = _calls(report_failure_env)
+    assert not any(c.startswith("issue create") for c in calls), calls
+    assert "::warning::" in result.stdout
 
 
 def test_report_failure_carries_its_row_onto_the_racing_sibling(

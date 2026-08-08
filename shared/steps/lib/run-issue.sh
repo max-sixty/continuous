@@ -87,9 +87,18 @@ run_issue_matching() {
 # The one that counts: lowest-numbered, empty when there is none. Sliced in the
 # shell rather than piped to `head`, which would close the pipe under `pipefail`
 # and can take the whole script down with it.
+#
+# Returns non-zero, having printed nothing, when the list read itself fails.
+# That is a different fact from "there is none", though an empty string states
+# both, and a caller that conflates them files a fresh record while one is
+# already open. The reconcile below will not catch that duplicate: it only
+# probes the ten numbers under the one it just created, and an existing record
+# is usually far older than that. `set -e` does not reach inside the command
+# substitutions the callers read this through, so the status has to be carried
+# out explicitly to be seen at all.
 run_issue_canonical() {
   local matching
-  matching=$(run_issue_matching "$1" "$2" "$3")
+  matching=$(run_issue_matching "$1" "$2" "$3") || return 1
   printf '%s' "${matching%%$'\n'*}"
 }
 

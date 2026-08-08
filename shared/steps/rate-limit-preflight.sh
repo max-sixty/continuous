@@ -100,7 +100,10 @@ fi
 # Everything below runs only once the base limit is already exceeded, so the
 # common path costs no extra API calls at all.
 if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
-  PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE")
+  # A failed read costs nothing extra here: no issue and no way to see one both
+  # leave approvals at zero, which refuses the run either way. Where the two
+  # part company is whether to file, further down.
+  PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE") || PAUSE=""
 
   APPROVALS=0
   if [ -n "$PAUSE" ]; then
@@ -162,9 +165,22 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
       # the create-create race — sibling jobs trip within seconds of each
       # other, and without it each files its own issue — so it buys nothing
       # once the issue is known to exist, and the lookup above is still good.
+      #
+      # This second read also decides whether filing is safe, so its status is
+      # kept: a failure is not "no issue exists", though both are the empty
+      # string. Filing on the wrong reading leaves two pause issues, and the
+      # reconcile below cannot merge them — it probes the ten numbers under the
+      # one it just filed, and an existing pause issue is normally far older.
+      # This is the record where that hurts most: the lookup resolves to the
+      # lowest-numbered issue, so a maintainer closing the newer one — the issue
+      # this run's annotation names — approves nothing and never learns it.
+      PAUSE_LOOKUP_OK=true
       if [ -z "$PAUSE" ]; then
         sleep $((RANDOM % 30))
-        PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE")
+        if ! PAUSE=$(run_issue_canonical "$PAUSE_LABEL" all "$PAUSE_TITLE"); then
+          PAUSE=""
+          PAUSE_LOOKUP_OK=false
+        fi
       fi
 
       FILED=true
@@ -182,6 +198,10 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
         if ! printf '%s\n' "$ROW" | gh issue comment "$PAUSE" -F -; then
           echo "::warning::Could not append this run's row to #${PAUSE}."
         fi
+      elif [ "$PAUSE_LOOKUP_OK" = false ]; then
+        # Cannot tell whether an issue is already open, so file nothing: see
+        # the retry above for why a second one is worse here than none.
+        FILED=false
       else
         run_issue_ensure_label "$PAUSE_LABEL" "Bot paused on its own rate limit; close to approve" "fbca04"
         # Tested rather than assigned bare: `set -e` would take the script down
@@ -211,12 +231,18 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
       fi
 
       # What the annotation can offer depends on whether an issue ended up
-      # existing, and on whether its number came back — three states that must
-      # not be collapsed. Saying "could not be filed" about an issue that was
+      # existing, on whether its number came back, and on whether this run
+      # could see well enough to say — four states that must not be collapsed.
+      # Saying "could not be filed" about an issue that was
       # filed sends a maintainer away from the one thing that would restart the
       # bot; the `#${PAUSE:-?}` this replaces sent them after a number that
       # never existed.
-      if [ "$FILED" = false ]; then
+      if [ "$PAUSE_LOOKUP_OK" = false ]; then
+        # Nothing was filed, and the reason is the read rather than the write —
+        # so unlike the next branch, an issue may well be open and worth
+        # closing. Naming the label is all this run can offer toward it.
+        RECOVERY="This repo's issues could not be read (see the error above), so none was filed; if an open \`${PAUSE_LABEL}\` issue exists, closing it doubles the ceiling."
+      elif [ "$FILED" = false ]; then
         RECOVERY="The pause issue could not be filed (see the error above), so there is nothing to close and the ceiling holds until the UTC rollover."
       elif [ -n "$PAUSE" ]; then
         RECOVERY="Refused runs are listed in #${PAUSE}; closing it doubles the ceiling."
