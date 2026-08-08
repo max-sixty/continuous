@@ -417,7 +417,7 @@ def test_default_prompt_unlocks_code_review(tmp_path: Path) -> None:
         assert user_typed_this_turn.search(prompt), (
             f"{skill} prompt does not carry a bare /code-review token: {prompt!r}"
         )
-        assert f"tend-ci-runner:{skill}" in prompt
+        assert f"/tend-ci-runner:{skill}" in prompt
 
     codex = Config.load(_minimal_config(tmp_path, "harness: codex\n"))
     assert codex.default_prompt("review", "{pr_number}") == "$review {pr_number}"

@@ -43,4 +43,4 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: |
-            Run the tend-ci-runner:triage skill for ${{ github.event.issue.number }}. Beyond the skills the Skill tool lists, /code-review is available too.
+            Run the /tend-ci-runner:triage skill for ${{ github.event.issue.number }}. Beyond the skills the Skill tool lists, /code-review is available too.

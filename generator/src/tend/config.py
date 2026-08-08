@@ -209,14 +209,18 @@ class Config:
         callers can splice their own placeholders (`{pr_number}` etc.) and run
         the existing replace step.
 
-        Claude's prompt is prose naming the skill, rather than the
+        Claude's prompt is prose naming the skill, rather than the bare
         `/tend-ci-runner:NAME` slash command it also resolves, so that the
         built-in `/code-review` is reachable. That skill carries
         `disable-model-invocation`, which the `Skill` tool waives only for a turn
-        whose own user message names the command; a prompt starting with `/` is
+        whose own user message names the command; a prompt *starting* with `/` is
         stored wrapped in `<command-message>` and is skipped by that scan, so no
         eligible message ever exists. Prose leaves the prompt eligible, and the
         `/code-review` token in it unlocks the skill for the whole run.
+
+        Only the leading position routes a prompt to the slash-command path, so
+        the skill mention keeps its own `/` — the invocable form, and the same
+        shape as the `/code-review` beside it.
 
         The token has to survive that scan's regex, `(?<!\\S)/code-review(?=$|\\s)`:
         whitespace on both sides, so a trailing period or a backtick silently
@@ -225,7 +229,7 @@ class Config:
         """
         if self.harness != "claude":
             return f"${skill} {args}".rstrip()
-        invocation = f"Run the tend-ci-runner:{skill} skill"
+        invocation = f"Run the /tend-ci-runner:{skill} skill"
         if args:
             invocation += f" for {args}"
         return (
