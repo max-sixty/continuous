@@ -19,7 +19,7 @@ pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, 
 ```
 
 `wt test` covers `generator/` only. Two more pytest suites live beside the code
-they test and have CI jobs of their own — run them from their own directory:
+they test and have CI jobs of their own — run each from the repo root:
 
 ```bash
 # proxy addon — pin mitmproxy the way CI does, to the version production runs
