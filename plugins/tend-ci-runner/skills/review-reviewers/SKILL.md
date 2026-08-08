@@ -252,17 +252,20 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 >
 > The comment endpoints cover conversation and inline-review comments only; neither returns review submissions, and an empty-body `APPROVE` is `tend-review`'s most common output. Without the fourth count an approvals-only window reports `0, 0` and satisfies the gate below with two zeros carrying no signal. Report all four numbers at the top of your summary. If the sweep found in-window rows your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
 >
-> **Acceptance needs a non-bot actor — name it.** For every acceptance or rejection signal, report the login that produced it: who merged, who reviewed, who replied, who pushed the follow-up. `$BOT_LOGIN` reviewing, replying to, or pushing to its own PR is the bot talking to itself, not acceptance. A non-bot merge *is* acceptance even when every commenter is the bot — the most common shape here is a maintainer merging a bot PR without ever posting. Check all five surfaces before calling a thread accepted or bot-only, and reserve `bot-only — no human signal` for threads where `$BOT_LOGIN` is the only login across all of them:
+> **Acceptance needs a non-bot actor — name it.** For every acceptance or rejection signal, report the login that produced it: who merged, who reviewed, who replied, who pushed the follow-up. `$BOT_LOGIN` reviewing, replying to, or pushing to its own PR is the bot talking to itself, not acceptance. A non-bot merge *is* acceptance even when every commenter is the bot — the most common shape here is a maintainer merging a bot PR without ever posting. Reserve `bot-only — no human signal` for threads where `$BOT_LOGIN` is the only login across every surface. One `gh pr view` covers them all — merge actor, reviews, inline comments, conversation comments, commits:
 >
 > ```bash
-> gh api "repos/$ARGUMENTS/pulls/<pr>" --jq '{merged_by: .merged_by.login, merged_at: .merged_at}'
-> gh api "repos/$ARGUMENTS/pulls/<pr>/reviews?per_page=100" --jq '[.[] | {login: .user.login, state}] | unique'
-> gh api "repos/$ARGUMENTS/pulls/<pr>/comments?per_page=100" --jq '[.[].user.login] | unique'
-> gh api "repos/$ARGUMENTS/issues/<n>/comments?per_page=100" --jq '[.[].user.login] | unique'
-> gh api "repos/$ARGUMENTS/pulls/<pr>/commits?per_page=100" --jq '[.[].author.login] | unique'
+> gh -R $ARGUMENTS pr view <pr> --json number,state,author,mergedBy,reviews,comments,commits --jq '{
+>   pr: .number, state, author: .author.login, merged_by: .mergedBy.login,
+>   reviews: [.reviews[] | {login: .author.login, state}],
+>   logins: ([.mergedBy.login, .reviews[].author.login, .comments[].author.login,
+>             .commits[].authors[].login] | map(select(. != null and . != "")) | unique)
+> }'
 > ```
 >
-> The two comments endpoints alone are not enough: `/pulls/<pr>/comments` returns only inline review comments and `/issues/<n>/comments` only conversation comments. Neither carries review records or the merge actor, so a silent maintainer merge and a human `CHANGES_REQUESTED` with no inline comments are both invisible without the first two queries.
+> `logins` is the bot-only test: `["$BOT_LOGIN"]` or empty means no human touched the thread. Anything else, name that login and say which surface it came from. Every inline review comment belongs to a review record — including a standalone reply posted through the replies endpoint — so `reviews` covers inline commenters as well as submitted reviews, and its `state` gives the accept/reject direction. `comments`, `reviews`, and `commits` paginate in full, so a long thread does not truncate.
+>
+> A comments-only check is not enough on its own: it misses both a silent maintainer merge (`mergedBy` set, nobody commenting) and a human `CHANGES_REQUESTED` that carries no inline comments.
 >
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
