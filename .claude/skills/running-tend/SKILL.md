@@ -111,9 +111,10 @@ because the workflow files are public.
 
 ```bash
 # 1. Discover consumer repos via code search. Generated workflows pin a
-#    version tag (`max-sixty/tend@X.Y.Z`, or `/codex@X.Y.Z`), so search the
-#    bare `max-sixty/tend` token (version-agnostic; GitHub code search does
-#    not index `@` or `/`, so this matches both the Claude and Codex refs).
+#    version tag (`max-sixty/tend/claude@X.Y.Z`, or `/codex@X.Y.Z`), so
+#    search the bare `max-sixty/tend` token (version-agnostic; GitHub code
+#    search does not index `@` or `/`, so this matches both the Claude and
+#    Codex refs).
 #    `--extension yaml` is required: without it, README/CLAUDE.md/TODO.md
 #    hits on `max-sixty/tend` itself crowd out tend's own workflow files
 #    past the 100-result cap, dropping tend from its own consumers.json.

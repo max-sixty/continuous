@@ -34,16 +34,7 @@ run_issue_ensure_label "$LABEL" "Tracks bot outage incidents" "d93f0b"
 # seconds). Without this, every leg reads $EXISTING as empty in parallel and
 # each files its own outage issue.
 sleep $((RANDOM % 30))
-# A failed read is not "nothing is open". Filing on it is how a repo ends up
-# with two open trackers: the reconcile that would close the loser reads the
-# same list that just failed, so the duplicate survives and every later failure
-# scatters its rows across both, leaving no tracker with the complete set the
-# drain sweep needs. Skipping costs this one row on a transient failure, and
-# the next failure records normally.
-if ! EXISTING=$(run_issue_canonical "$LABEL" open "$TITLE"); then
-  echo "::warning::Could not read this repo's ${LABEL} issues, so this run was not recorded on the outage tracker."
-  exit 0
-fi
+EXISTING=$(run_issue_canonical "$LABEL" open "$TITLE")
 
 if [ -n "$EXISTING" ]; then
   printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -
@@ -52,5 +43,5 @@ else
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
     "$ROW" \
     "This issue was created automatically. Close it once the outage is resolved." \
-    | run_issue_create_and_reconcile "$LABEL" "$TITLE" > /dev/null
+    | run_issue_create_and_reconcile "$LABEL" "$TITLE" "$ROW" > /dev/null
 fi

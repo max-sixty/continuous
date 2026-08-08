@@ -21,6 +21,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from functools import cache
+from urllib.parse import quote
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
@@ -454,6 +455,19 @@ def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
         return None, "Could not parse environment secrets response"
 
 
+def _env_path(env_name: str) -> str:
+    """An environment name as one path segment.
+
+    GitHub admits `/` in an environment name, and `gh api` treats the path it
+    is given as already-formed — it percent-encodes a space but passes a slash
+    through as a separator, so `a/b` addresses an environment that does not
+    exist. Every such 404 reads to the callers below as a token without admin
+    access, which returns the whole credential check as skipped. `safe=""`
+    encodes the separator too; `gh` does not re-encode what it is handed.
+    """
+    return quote(env_name, safe="")
+
+
 def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
     """An environment's deployment branch policies, or None if unlistable.
 
@@ -463,7 +477,7 @@ def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
     listed = _gh(
         "api",
         "--paginate",
-        f"repos/{repo}/environments/{env_name}/deployment-branch-policies",
+        f"repos/{repo}/environments/{_env_path(env_name)}/deployment-branch-policies",
         "--jq",
         ".branch_policies[]",
     )
@@ -1033,11 +1047,20 @@ def check_credential_environments(
 
     ungated: list[str] = []
     holders: list[str] = []
-    for env_name in listed.stdout.split():
+    # One name per line, not one per whitespace-separated token: GitHub admits
+    # a space in an environment name, and splitting on whitespace turns one
+    # such environment into two names that exist nowhere. Each answers 404,
+    # which is the `returncode != 0` below, so the whole check reports itself
+    # skipped for want of admin access — a credential check that stops
+    # verifying and blames the token. The real environment goes unexamined
+    # either way.
+    for env_name in listed.stdout.splitlines():
+        if not env_name:
+            continue
         secrets = _gh(
             "api",
             "--paginate",
-            f"repos/{repo}/environments/{env_name}/secrets",
+            f"repos/{repo}/environments/{_env_path(env_name)}/secrets",
             "--jq",
             ".secrets[].name",
         )
@@ -1052,7 +1075,7 @@ def check_credential_environments(
         holders.append(env_name)
         if env_name == TEND_ENVIRONMENT:
             continue  # Gated by its branch policy; `environment` verifies that.
-        detail = _gh("api", f"repos/{repo}/environments/{env_name}")
+        detail = _gh("api", f"repos/{repo}/environments/{_env_path(env_name)}")
         if detail is None or detail.returncode != 0:
             return CheckResult(name, None, f"Could not read environment '{env_name}'")
         try:

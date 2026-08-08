@@ -87,17 +87,9 @@ run_issue_matching() {
 # The one that counts: lowest-numbered, empty when there is none. Sliced in the
 # shell rather than piped to `head`, which would close the pipe under `pipefail`
 # and can take the whole script down with it.
-#
-# Returns non-zero, having printed nothing, when the list read itself fails.
-# That is a different fact from "there is none", though an empty string states
-# both, and every caller acts on the difference: filing a fresh record because
-# the read failed is how a repo ends up with two open ones, and the reconcile
-# that would close the loser reads the same list that just failed. `set -e`
-# does not reach inside the command substitutions the callers read this through,
-# so the status has to be carried out explicitly to be seen at all.
 run_issue_canonical() {
   local matching
-  matching=$(run_issue_matching "$1" "$2" "$3") || return 1
+  matching=$(run_issue_matching "$1" "$2" "$3")
   printf '%s' "${matching%%$'\n'*}"
 }
 
@@ -108,53 +100,108 @@ run_issue_ensure_label() {
   gh label create "$label" --description "$description" --color "$color" 2>/dev/null || true
 }
 
-# Create from a body on stdin, reconcile the duplicates the create-create race
+# Create from a body on stdin, reconcile the duplicate the create-create race
 # let through, and print the surviving issue number. Returns non-zero, having
-# printed nothing, when the create itself fails.
+# printed nothing, when the create itself fails. The third argument is this
+# run's row: when this leg stands down it carries that row onto the keeper
+# first, so an incident it recorded is not stranded in the body of a closed
+# duplicate. Required, not optional — a caller that omits it strands the very
+# record this function exists to preserve, so it aborts rather than creating an
+# issue it would then close without carrying anything over.
 #
 # Callers sleep a jittered interval before their check-then-act, which narrows
-# the window when a matrix workflow's legs trip at near-identical times but
-# cannot close it: two legs can still both read the list as empty within the
-# few seconds the index takes to reflect a fresh create, and each files its
-# own. So settle for the index, list every open issue on the label, keep the
-# lowest-numbered, and close the rest. Idempotent and convergent — every
-# racing leg computes the same keeper, and closing an already-closed
-# duplicate is a no-op.
+# the window when sibling jobs trip at near-identical times but cannot close
+# it: two legs can still both read the list as empty within the few seconds
+# the index takes to reflect a fresh create, and each files its own.
+#
+# Reconcile by probing issue numbers directly rather than re-listing. A
+# settle-then-list reconcile reads the same lagging index that lost the race in
+# the first place: observed in practice, a sibling created 3s earlier was still
+# absent from the list while one created 6s earlier was present, so two legs
+# whose creates landed in the same second each read back only their own issue
+# and closed nothing. `GET /issues/{n}` is a primary-key read and returns a
+# sibling the instant it exists, so no settle is needed.
+#
+# Issue numbers are monotonic, so any racing sibling sits just below ours: scan
+# a short window downwards and defer to the lowest match. Convergent — every
+# leg computes the same keeper from its own vantage point, and only
+# higher-numbered legs stand down.
+#
+# Self-close-only is a deliberate narrowing: the previous reconcile closed
+# every higher duplicate it could see, so a leg that dies between its create
+# and its probe (cancelled job, or every probe erroring — indistinguishable
+# from "no sibling" here) now leaves a record no other leg will close. That
+# only ever worked when the lagging list happened to be current, which is the
+# very thing that failed in production, and scanning upwards instead cannot
+# fix it: higher numbers may not exist yet at probe time, so it would not
+# converge. The residual window is strictly narrower than the one it replaces,
+# and it fails toward an extra open record rather than scattered rows.
 #
 # Everything but the number goes to stderr, so the log keeps the created URL
 # while the caller can read the keeper straight out of stdout.
 run_issue_create_and_reconcile() {
-  local label=$1 title=$2
-  # Carry a failed create out as this function's status. `set -e` does not
-  # reach inside a command substitution unless `inherit_errexit` is set, and
-  # every caller reads the number back through one — so without this the
-  # failure runs on to the `printf` at the end, whose success becomes the
-  # substitution's status, and the caller is handed an empty number it takes
-  # for a filed issue.
-  gh issue create --title "$title" --label "$label" -F - >&2 || return 1
+  # The row is required, and the message must stay apostrophe-free: the word of
+  # a `${x:?word}` is parsed for quotes, so a lone `'` opens a string that runs
+  # to EOF and breaks the file rather than this call.
+  local label=$1 title=$2 row=${3:?the row for this run is required}
+  local url mine
+  # Carry a failed create out as this function's status, explicitly. `set -e`
+  # does not reach inside a command substitution unless `inherit_errexit` is
+  # set, and every caller reads the number back through one — so without the
+  # `|| return 1` the failure would run on to the `printf` at the end, whose
+  # success becomes the substitution's status, and the caller is handed an
+  # empty number it takes for a filed issue. The create keeps its own
+  # assignment rather than being wrapped in another command (`basename "$(gh
+  # issue create ...)"`), which would report the wrapper's status instead.
+  url=$(gh issue create --title "$title" --label "$label" -F -) || return 1
+  echo "$url" >&2
+  mine=${url##*/}
 
-  sleep 5
-  local open keep
-  # The same predicate the lookup uses, because it is the same call. Selecting
-  # on the label alone would let an unrelated issue carrying it outrank this
-  # one on lowest-number, and the record just filed would be closed as that
-  # issue's duplicate.
-  #
-  # A failed read here is not fatal: the issue is filed either way, and the
-  # contract already allows handing back no number. Tested rather than left
-  # bare, because a bare assignment *does* propagate its status — unlike the
-  # substitution-wrapped calls above — so `set -e` would take the caller down
-  # in the gap between the create and the caller's own reporting of it.
-  if ! open=$(run_issue_matching "$label" open "$title"); then
-    echo "Could not list ${label} issues to reconcile duplicates; leaving any in place." >&2
-    return 0
+  # The same three constraints run_issue_matching applies — author, title,
+  # label — checked one issue at a time instead of over a list. Author above
+  # all: the bot holds `issues: write`, so without it a label put on somebody
+  # else's issue could be adopted as the keeper, and on the rate-limit record a
+  # close is read as an approval. Failing to read our own identity leaves the
+  # pair open rather than deferring to an issue we cannot vouch for.
+  local me
+  me=$(gh api user --jq '.login' 2>/dev/null || true)
+
+  local keep="" n match
+  if [ -n "$me" ]; then
+    for n in $(seq $((mine - 1)) -1 $((mine - 10))); do
+      [ "$n" -gt 0 ] || break
+      match=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${n}" \
+        --jq "select(.state == \"open\" and .title == \"${title}\"
+              and .user.login == \"${me}\"
+              and ([.labels[].name] | index(\"${label}\"))) | .number" 2>/dev/null || true)
+      if [ -n "$match" ]; then keep="$match"; fi
+    done
   fi
-  keep=${open%%$'\n'*}
-  echo "$open" | tail -n +2 | while read -r dup; do
-    [ -z "$dup" ] && continue
-    gh issue close "$dup" \
-      --comment "Duplicate of #${keep} (concurrent run); consolidating tracking there." \
-      >&2 2>/dev/null || true
-  done
+
+  if [ -z "$keep" ]; then
+    printf '%s' "$mine"
+    return
+  fi
+
+  # Carry the row over only when the keeper does not already cite this run.
+  # Matrix legs share one GITHUB_RUN_ID, so when the racing legs belong to the
+  # same matrix the keeper's seed row already points at this run and a carried
+  # row would just duplicate it, differing only in its timestamp. The
+  # cross-workflow race has distinct run ids, so it still carries over.
+  # Anchor on the generated row's run link rather than the bare id, so a human
+  # comment mentioning the run cannot suppress the row. Read into a variable
+  # rather than piped to grep, which would close the pipe under `pipefail` and
+  # could report a match as a read failure.
+  local seen run_url
+  run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+  seen=$(gh issue view "$keep" --json body,comments \
+    --jq '.body + "\n" + ([.comments[].body] | join("\n"))' 2>/dev/null || true)
+  if ! grep -qF "[workflow run](${run_url})" <<< "$seen"; then
+    printf '%s\n' "$row" | gh issue comment "$keep" -F - >&2 || true
+  fi
+
+  gh issue close "$mine" \
+    --comment "Duplicate of #${keep} (concurrent run); consolidating tracking there." \
+    >&2 2>/dev/null || true
   printf '%s' "$keep"
 }

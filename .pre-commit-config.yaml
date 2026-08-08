@@ -5,14 +5,15 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+  # The hook already selects Python by type; the previous `^generator/` filter
+  # only meant that each new Python directory arrived unlinted and stayed that
+  # way until someone noticed.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.11
     hooks:
       - id: ruff-check
         args: ["--fix"]
-        files: ^generator/
       - id: ruff-format
-        files: ^generator/
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.7.12
     hooks:
