@@ -11,26 +11,15 @@ completely — old formats should fail with a clear error, not silently parse.
 ## Commands
 
 ```bash
-wt test                            # run pytest in generator/
+wt test                            # every suite (generator/, proxy/, install-tend scripts, worker/)
 uvx tend@latest init               # regenerate workflows from .config/tend.yaml
 uvx tend@latest init --dry-run     # preview without writing
 uvx tend@latest check              # verify branch protection, secrets, bot access
 pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, uv-lock
 ```
 
-`wt test` covers `generator/` only. Two more pytest suites live beside the code
-they test and have CI jobs of their own — run each from the repo root:
-
-```bash
-# proxy addon — pin mitmproxy the way CI does, to the version production runs
-(cd proxy && uv run --no-project --with pytest \
-  --with "mitmproxy==$(yq -e '.inputs.mitmproxy_version.default' ../claude/action.yaml)" pytest)
-# install-tend OAuth wrapper
-(cd plugins/install-tend/skills/install-tend/scripts && uv run --no-project --with pytest pytest)
-```
-
-`worker/` is a third suite outside `wt test`, vitest rather than pytest, with
-its own CI job — see [`worker/README.md`](worker/README.md).
+`wt test` runs [`dev/test.sh`](dev/test.sh), which mirrors the test jobs in
+`ci.yaml`; arguments go to the pytest suites (`wt test -k render`).
 
 ## Architecture
 
