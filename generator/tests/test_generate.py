@@ -393,6 +393,9 @@ def test_custom_prompt(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     triage = workflows["tend-triage.yaml"]
     assert "Custom triage:" in triage.content
+    # An adopter's prompt replaces the whole thing, `code_review_notice` included,
+    # so it carries no /code-review token — what that property's docstring claims.
+    assert "/code-review" not in triage.content
 
 
 def test_default_prompt_unlocks_code_review(tmp_path: Path) -> None:

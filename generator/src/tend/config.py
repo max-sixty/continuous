@@ -204,8 +204,9 @@ class Config:
     def code_review_notice(self) -> str:
         """Sentence declaring the built-in `/code-review`; empty off the Claude harness.
 
-        Every Claude prompt carries it, including `mention`, whose prompt
-        `mention.yaml.j2` builds rather than `default_prompt`. One definition, so
+        Every generated Claude prompt carries it, including `mention`, whose prompt
+        `mention.yaml.j2` builds rather than `default_prompt` — but not an adopter's
+        `workflows.<name>.prompt`, which replaces the whole prompt. One definition, so
         the two can't drift — and the token's regex (see `default_prompt`) is
         fragile enough that a second copy is a second way to break it.
         """
