@@ -10,16 +10,6 @@ metadata:
 
 A structured pass over a diff that returns ranked findings. Ported from Claude Code's built-in `/code-review`, read out of the 2.1.220 binary `claude/action.yaml` pins. The Codex harness has no built-in equivalent, and on Claude the built-in carries `disable-model-invocation`, which no tend prompt lifts. This copy is tend-owned: reachable from the model on either harness.
 
-<!-- TODO(2026-08-08): decide whether the built-in `/code-review` should replace this
-     port. Making the prompt prose, so the `Skill` tool's waiver fires and the built-in
-     becomes reachable, was tried and reverted (#902). Measured against the 2.1.226
-     binary, the two share their angles, verify pass and sweep near-verbatim — but the
-     built-in resolves per model and effort, and `claude-opus-5` at medium/high renders
-     a minimal single-pass cell with no verify and no sweep, then reports through
-     `ReportFindings`, which `claude/action.yaml` does not allowlist. Codex has no
-     built-in at all. The port stays until one of those changes. -->
-
-
 **Return findings; don't act on them.** No review, comment, commit, or artifact from this skill — the caller folds the findings into its own single review.
 
 ## Phase 0 — Gather the diff
