@@ -419,7 +419,6 @@ jobs:
                 && format('You were mentioned in a comment ({0}). Read the full context and respond. If changes are requested, make them, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({0}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between other participants, exit silently.', github.event.comment.html_url)
             }}
-            Beyond the skills the Skill tool lists, /code-review is available too.
 
       - name: Remove eyes reaction
         if: |
