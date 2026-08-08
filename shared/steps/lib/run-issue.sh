@@ -101,10 +101,11 @@ run_issue_ensure_label() {
 }
 
 # Create from a body on stdin, reconcile the duplicate the create-create race
-# let through, and print the surviving issue number. The optional third
-# argument is this run's row: when this leg stands down it carries that row
-# onto the keeper first, so an incident it recorded is not stranded in the
-# body of a closed duplicate.
+# let through, and print the surviving issue number. Returns non-zero, having
+# printed nothing, when the create itself fails. The optional third argument is
+# this run's row: when this leg stands down it carries that row onto the keeper
+# first, so an incident it recorded is not stranded in the body of a closed
+# duplicate.
 #
 # Callers sleep a jittered interval before their check-then-act, which narrows
 # the window when sibling jobs trip at near-identical times but cannot close
@@ -139,11 +140,15 @@ run_issue_ensure_label() {
 run_issue_create_and_reconcile() {
   local label=$1 title=$2 row=${3:-}
   local url mine
-  # Keep the create in its own assignment so `set -e` still sees its exit
-  # status. Wrapping it in another command (`basename "$(gh issue create ...)"`)
-  # would make the assignment report the wrapper's status, so a failed create
-  # would sail past `set -e` with an empty number and the incident unrecorded.
-  url=$(gh issue create --title "$title" --label "$label" -F -)
+  # Carry a failed create out as this function's status, explicitly. `set -e`
+  # does not reach inside a command substitution unless `inherit_errexit` is
+  # set, and every caller reads the number back through one — so without the
+  # `|| return 1` the failure would run on to the `printf` at the end, whose
+  # success becomes the substitution's status, and the caller is handed an
+  # empty number it takes for a filed issue. The create keeps its own
+  # assignment rather than being wrapped in another command (`basename "$(gh
+  # issue create ...)"`), which would report the wrapper's status instead.
+  url=$(gh issue create --title "$title" --label "$label" -F -) || return 1
   echo "$url" >&2
   mine=${url##*/}
 

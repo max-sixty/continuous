@@ -216,13 +216,22 @@ case "$1" in
   issue)
     case "$2" in
       list) emit "$(cat "$PAUSE_ISSUES_JSON")" ;;
-      # `gh issue create` prints the new issue's URL; the reconciler reads its
-      # number off the end of it.
-      create) echo "https://github.com/owner/repo/issues/${FAKE_NEW_ISSUE}" ;;
+      create)
+        # An `if` rather than `[ ... ] && exit 1`: with nothing after it, the
+        # failed test would become the branch's status and every create would
+        # report failure.
+        if [ -n "${FAIL_ISSUE_CREATE:-}" ]; then exit 1; fi
+        # `gh issue create` prints the new issue's URL; the reconciler reads its
+        # number off the end of it.
+        echo "https://github.com/owner/repo/issues/${FAKE_NEW_ISSUE}"
+        ;;
       view) emit "$(cat "$KEEPER_JSON")" ;;
-      # Comment bodies arrive on stdin (`-F -`), not in the args, so they are
-      # captured rather than dropped: the carry-over row is asserted on.
-      comment) cat >> "$COMMENT_BODIES" ;;
+      comment)
+        if [ -n "${FAIL_ISSUE_COMMENT:-}" ]; then exit 1; fi
+        # Comment bodies arrive on stdin (`-F -`), not in the args, so they are
+        # captured rather than dropped: the carry-over row is asserted on.
+        cat >> "$COMMENT_BODIES"
+        ;;
       reopen | close) ;;
       *) exit 1 ;;
     esac
@@ -390,6 +399,73 @@ def test_rate_limit_files_an_issue_when_unapproved(
 
     assert result.returncode == 1
     assert any(c.startswith("issue create") for c in _calls(rate_limit_env))
+
+
+def test_rate_limit_says_so_when_the_issue_cannot_be_filed(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """A failed create must not be reported as a filed issue.
+
+    `set -e` does not reach inside a command substitution, so the failure runs
+    on to the function's trailing `printf` and the caller reads success with an
+    empty number. The run is refused either way; what is lost is the notice —
+    and the annotation used to print a literal `#?`, sending a maintainer after
+    an issue that does not exist while the bot stays halted for the UTC day.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    rate_limit_env["FAIL_ISSUE_CREATE"] = "1"
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    assert "could not be filed" in result.stdout
+    assert "#?" not in result.stdout
+
+
+def test_rate_limit_names_the_issue_when_the_index_lags(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """Created while the issue index lagged: still name the number.
+
+    The reconcile reads the number off the create's own URL rather than out of
+    a list, so a lagging index no longer costs the annotation its number — the
+    state this used to cover (filed, number unknown) is unreachable now. Still
+    distinct from a failed create: the issue is there to be closed, so the
+    annotation offers the approval route either way.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    # The lag is the subject, so it is set here rather than left to the
+    # fixture's default: the create succeeds, and the list it reconciles
+    # against still does not show the issue.
+    Path(rate_limit_env["PAUSE_ISSUES_JSON"]).write_text("[]")
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    assert f"#{rate_limit_env['FAKE_NEW_ISSUE']}" in result.stdout
+    assert "could not be filed" not in result.stdout
+    assert "#?" not in result.stdout
+
+
+def test_rate_limit_keeps_its_annotation_when_the_row_cannot_be_appended(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """A failed comment must not cost the run its annotation.
+
+    The append path is the common one — every refusal after the first in an
+    incident takes it — and a bare pipeline under `set -e` aborts the script on
+    it, so the run leaves no trace at all. The row is the lesser loss: the issue
+    exists, so the annotation can still say what to close.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    rate_limit_env["FAIL_ISSUE_COMMENT"] = "1"
+    # The issue exists and carries the label, but nothing has approved it.
+    _approve(rate_limit_env)
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    assert "Refused runs are listed in #42" in result.stdout
 
 
 def test_rate_limit_human_close_doubles_the_ceiling(

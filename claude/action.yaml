@@ -457,7 +457,23 @@ runs:
         case "$status" in
           exited)
             if [ "$CLAUDE_EXIT" -ne 0 ]; then
-              echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT) — see the session-logs artifact"
+              # This is the most common failure path — a session-limit exit is
+              # non-zero and emits a <synthetic> assistant message ("You've hit
+              # your session limit · resets 8:30am (UTC)"). Surface that last
+              # assistant text so the annotation names the cause (session limit
+              # vs auth failure vs server error) instead of a generic "see the
+              # artifact". The nightly enrich-tend-outage-issues.sh pass then
+              # carries the annotation into the tend-outage issue for free, so a
+              # maintainer can triage without downloading logs and writing jq.
+              REASON=$(jq -r '
+                select(.type == "assistant") | .message.content[]?
+                | select(.type == "text") | .text
+              ' "$STREAM_JSON" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1)
+              if [ -n "$REASON" ]; then
+                echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT): $REASON — see the session-logs artifact"
+              else
+                echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT) — see the session-logs artifact"
+              fi
               tail -20 "$STDERR_LOG" 2>/dev/null || true
               exit "$CLAUDE_EXIT"
             fi
