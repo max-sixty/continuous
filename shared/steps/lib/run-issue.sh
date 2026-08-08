@@ -102,10 +102,12 @@ run_issue_ensure_label() {
 
 # Create from a body on stdin, reconcile the duplicate the create-create race
 # let through, and print the surviving issue number. Returns non-zero, having
-# printed nothing, when the create itself fails. The optional third argument is
-# this run's row: when this leg stands down it carries that row onto the keeper
+# printed nothing, when the create itself fails. The third argument is this
+# run's row: when this leg stands down it carries that row onto the keeper
 # first, so an incident it recorded is not stranded in the body of a closed
-# duplicate.
+# duplicate. Required, not optional — a caller that omits it strands the very
+# record this function exists to preserve, so it aborts rather than creating an
+# issue it would then close without carrying anything over.
 #
 # Callers sleep a jittered interval before their check-then-act, which narrows
 # the window when sibling jobs trip at near-identical times but cannot close
@@ -138,7 +140,10 @@ run_issue_ensure_label() {
 # Everything but the number goes to stderr, so the log keeps the created URL
 # while the caller can read the keeper straight out of stdout.
 run_issue_create_and_reconcile() {
-  local label=$1 title=$2 row=${3:-}
+  # The row is required, and the message must stay apostrophe-free: the word of
+  # a `${x:?word}` is parsed for quotes, so a lone `'` opens a string that runs
+  # to EOF and breaks the file rather than this call.
+  local label=$1 title=$2 row=${3:?the row for this run is required}
   local url mine
   # Carry a failed create out as this function's status, explicitly. `set -e`
   # does not reach inside a command substitution unless `inherit_errexit` is
@@ -178,23 +183,21 @@ run_issue_create_and_reconcile() {
     return
   fi
 
-  if [ -n "$row" ]; then
-    # Carry the row over only when the keeper does not already cite this run.
-    # Matrix legs share one GITHUB_RUN_ID, so when the racing legs belong to
-    # the same matrix the keeper's seed row already points at this run and a
-    # carried row would just duplicate it, differing only in its timestamp. The
-    # cross-workflow race has distinct run ids, so it still carries over.
-    # Anchor on the generated row's run link rather than the bare id, so a
-    # human comment mentioning the run cannot suppress the row. Read into a
-    # variable rather than piped to grep, which would close the pipe under
-    # `pipefail` and could report a match as a read failure.
-    local seen run_url
-    run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-    seen=$(gh issue view "$keep" --json body,comments \
-      --jq '.body + "\n" + ([.comments[].body] | join("\n"))' 2>/dev/null || true)
-    if ! grep -qF "[workflow run](${run_url})" <<< "$seen"; then
-      printf '%s\n' "$row" | gh issue comment "$keep" -F - >&2 || true
-    fi
+  # Carry the row over only when the keeper does not already cite this run.
+  # Matrix legs share one GITHUB_RUN_ID, so when the racing legs belong to the
+  # same matrix the keeper's seed row already points at this run and a carried
+  # row would just duplicate it, differing only in its timestamp. The
+  # cross-workflow race has distinct run ids, so it still carries over.
+  # Anchor on the generated row's run link rather than the bare id, so a human
+  # comment mentioning the run cannot suppress the row. Read into a variable
+  # rather than piped to grep, which would close the pipe under `pipefail` and
+  # could report a match as a read failure.
+  local seen run_url
+  run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+  seen=$(gh issue view "$keep" --json body,comments \
+    --jq '.body + "\n" + ([.comments[].body] | join("\n"))' 2>/dev/null || true)
+  if ! grep -qF "[workflow run](${run_url})" <<< "$seen"; then
+    printf '%s\n' "$row" | gh issue comment "$keep" -F - >&2 || true
   fi
 
   gh issue close "$mine" \

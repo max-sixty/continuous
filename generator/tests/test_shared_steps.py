@@ -765,6 +765,7 @@ def test_rate_limit_reopens_rather_than_refiling(
 
 
 REPORT_FAILURE = REPO_ROOT / "shared" / "steps" / "report-failure.sh"
+RUN_ISSUE_LIB = REPO_ROOT / "shared" / "steps" / "lib" / "run-issue.sh"
 
 OUTAGE_TITLE = "Bot temporarily unavailable"
 OUTAGE_LABEL = "tend-outage"
@@ -996,3 +997,34 @@ def test_report_failure_propagates_a_failed_create(
     assert result.returncode != 0, (
         f"a failed create left the step green; stdout:\n{result.stdout}"
     )
+
+
+def test_run_issue_reconcile_refuses_a_call_with_no_row(
+    report_failure_env: dict[str, str],
+) -> None:
+    """Both callers pass a row, so omitting one is a bug, not a mode.
+
+    It has to abort *before* the create: a leg that files an issue and then
+    stands down without carrying its row over strands the incident in the
+    duplicate it closes, which is the failure the carry-over exists to prevent.
+    """
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'. "{RUN_ISSUE_LIB}"'
+            f"; run_issue_create_and_reconcile {OUTAGE_LABEL} {OUTAGE_TITLE!r}"
+            "; echo REACHED",
+        ],
+        env=report_failure_env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "REACHED" not in result.stdout, (
+        f"ran on past a call with no row: {result.stdout}"
+    )
+    assert "the row for this run is required" in result.stderr, result.stderr
+    calls = Path(report_failure_env["GH_CALLS"])
+    assert not calls.exists(), f"reached gh before refusing: {calls.read_text()}"
