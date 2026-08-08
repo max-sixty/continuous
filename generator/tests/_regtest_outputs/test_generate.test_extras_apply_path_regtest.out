@@ -66,14 +66,16 @@ jobs:
           fi
 
           # Fail open on API errors: a redundant agent run beats a silently skipped
-          # review.
-          if ! PR_INFO=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" 2>/dev/null); then
+          # review. The parse belongs inside the guard ? GitHub sometimes returns an
+          # HTML error page with a 200 during a blip, so a zero `gh` exit doesn't mean
+          # the body is JSON, and an unguarded `jq` under the run block's `bash -e`
+          # would fail the step (fail-closed) instead.
+          if ! PR_INFO=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" 2>/dev/null) \
+            || ! STATE=$(echo "$PR_INFO" | jq -re '.state'); then
             echo "PR #$PR fetch failed ? proceeding without the pre-check"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          STATE=$(echo "$PR_INFO" | jq -r '.state')
           if [ "$STATE" != "open" ]; then
             echo "PR #$PR is $STATE ? skipping"
             echo "should_run=false" >> "$GITHUB_OUTPUT"

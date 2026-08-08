@@ -891,7 +891,7 @@ case "$2" in
     [ -n "${FAIL_PR:-}" ] && exit 1
     cat "$PR_JSON"
     ;;
-  repos/*/commits/*/status\?per_page=100)
+  repos/*/commits/*/status\\?per_page=100)
     [ -n "${FAIL_STATUS:-}" ] && exit 1
     cat "$STATUS_JSON"
     ;;
@@ -1004,6 +1004,20 @@ def test_review_gate_fails_open_on_api_errors(
     """An API error must boot the agent, not silently skip the review."""
     _stamp(gate_env, {"context": "tend-review/7", "state": "success"})
     gate_env[failure] = "1"
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _should_run(gate_env) == "true"
+
+
+def test_review_gate_fails_open_on_an_html_200(gate_env: dict[str, str]) -> None:
+    """A GitHub blip can return an HTML error page with a 200: `gh` exits zero
+    but the body isn't JSON. The parse must stay inside the fail-open guard —
+    unguarded under the run block's `bash -e` it fails the step, skipping the
+    whole review (fail-closed)."""
+    _stamp(gate_env, {"context": "tend-review/7", "state": "success"})
+    Path(gate_env["PR_JSON"]).write_text("<html>oops</html>")
 
     result = _run_gate(gate_env)
 
