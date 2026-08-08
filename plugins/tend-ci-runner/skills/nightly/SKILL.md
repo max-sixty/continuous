@@ -76,15 +76,24 @@ a one-line reason) plus a `_Last refreshed: <YYYY-MM-DD>_` footer. Updates:
 
 Find conflicted PRs from this bot and from upstream dependency bots:
 
+`mergeable` is computed lazily, not stored. The first query after `main` moves returns `UNKNOWN` for every PR whose merge hasn't been recomputed and *enqueues* the computation; a later query returns the real value. Filtering a cold read on `== "CONFLICTING"` therefore reports a conflicted PR as clean. Re-query until it settles:
+
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
 for author in "$BOT_LOGIN" app/dependabot app/renovate; do
-  gh pr list --author "$author" --json number,title,mergeable,headRefName,author \
-    --jq '.[] | select(.mergeable == "CONFLICTING")'
+  out="/tmp/prs-${author//\//-}.json"   # `app/dependabot` has a slash; strip it
+  for _ in 1 2 3 4 5; do
+    gh pr list --author "$author" --json number,title,mergeable,headRefName,author > "$out"
+    [ "$(jq '[.[] | select(.mergeable == "UNKNOWN")] | length' "$out")" -eq 0 ] && break
+    sleep 10
+  done
+  jq -c '.[] | select(.mergeable == "CONFLICTING")' "$out"
+  jq -r '.[] | select(.mergeable == "UNKNOWN")
+    | "unsettled, treat as possibly conflicted: #\(.number) \(.title)"' "$out"
 done
 ```
 
-Skip the rest of this step if none of the queries return anything.
+Skip the rest of this step only when every PR settled and none came back `CONFLICTING`. A PR still `UNKNOWN` after the retries is not a clean one — check it out and test-merge (`git merge --no-commit --no-ff origin/main`) before dismissing it, and report it as unverified rather than counting it clean.
 
 ### Upstream dependency bots: trigger the bot's own rebase
 
