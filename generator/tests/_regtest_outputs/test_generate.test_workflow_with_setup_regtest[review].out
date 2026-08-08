@@ -144,4 +144,4 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: >-
-            ${{ format('/tend-ci-runner:review {0}', github.event.pull_request.number) }}
+            ${{ format('Run the /tend-ci-runner:review skill for {0}. Beyond the skills the Skill tool lists, /code-review is available too.', github.event.pull_request.number) }}

@@ -391,10 +391,10 @@ If you are responding to your own prior comment or review (not a human's reply t
 
 ## Recheck Before Posting
 
-**Before posting any comment, review, or inline reply**, re-fetch the conversation and check whether the response would duplicate something already there. Two duplication paths:
+**Before posting any comment, review, or inline reply**, re-fetch the conversation and check whether the response would duplicate something already there. Run the re-fetch **as the last step before the post**, the same way the `gh pr create` dedup above does — composing the body, grepping it for placeholders, and checking its links all take time, and a sibling's comment landing in that gap is invisible to a check that ran before them. Two duplication paths:
 
 - **New entries arrived during the session.** Other participants may comment while the bot works. Compare counts against what was read at session start.
-- **A sibling tend workflow already responded.** `tend-mention`, `tend-triage`, and `tend-review` all post as the same bot account; a comment from one can pre-empt another (a `tend-mention` reply followed by a `synchronize`-triggered `tend-review` is the common pattern). The earlier comment may already be in the conversation at session start, so a stale-count check alone is not enough — scan for prior bot comments newer than the maintainer message being responded to.
+- **A sibling tend workflow already responded.** Every workflow posts as the same bot account, so the pre-empting comment can come from an event-triggered run (`tend-mention`, `tend-triage`, `tend-review`) or from a scheduled sweep that reaches the same thread (`tend-nightly`, `tend-review-runs`, `tend-notifications`, plus any non-`tend-*` workflow the repo's `running-tend` skill lists). A freshly-opened issue is the sharpest case: `tend-triage` fires on `issues: opened` and owns it, while a sweep already in session may find the same issue and answer it independently. The earlier comment may already be in the conversation at session start, so a stale-count check alone is not enough — scan for prior bot comments newer than the maintainer message being responded to.
 
 ```bash
 # For issues
@@ -712,7 +712,7 @@ When the correction identifies a gap or bug in a **bundled** skill — the same 
      --jq '.[] | select([.files[].path] | index(".claude/skills/running-tend/SKILL.md"))'
    ```
    If one is open, add to it instead of opening a second.
-3. **Draft a minimal edit.** One short rule, in the maintainer's words where practical. Place it under an appropriate heading. New SKILL.md files start with YAML frontmatter:
+3. **Draft a minimal edit.** State the rule, not the incident that produced it — no verbatim quotes of the maintainer's comment, no reconstruction of the exchange. A few lines of instruction is the target; step 4's PR body is where the case history goes. Place it under an appropriate heading. New SKILL.md files start with YAML frontmatter:
    ```markdown
    ---
    name: running-tend
