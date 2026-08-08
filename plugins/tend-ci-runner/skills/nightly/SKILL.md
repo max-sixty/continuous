@@ -83,7 +83,9 @@ BOT_LOGIN=$(gh api user --jq '.login')
 git fetch --quiet origin main
 for author in "$BOT_LOGIN" app/dependabot app/renovate; do
   out="/tmp/prs-${author//\//-}.json"   # `app/dependabot` has a slash; strip it
-  gh pr list --author "$author" --json number,title,headRefName,author > "$out"
+  # `--limit 100` is load-bearing: `gh pr list` defaults to 30 and truncates
+  # silently, so PR 31 onward would never be test-merged.
+  gh pr list --author "$author" --limit 100 --json number,title,headRefName,author > "$out"
   # A failed query leaves `$out` empty, which reads as "no conflicts" — the
   # same silent-miss shape. `[]` (no open PRs) is 3 bytes, a failure is 0.
   [ -s "$out" ] || { echo "query for $author never landed — conflicts unverified"; continue; }
@@ -98,9 +100,9 @@ for author in "$BOT_LOGIN" app/dependabot app/renovate; do
     if tree=$(git merge-tree --write-tree origin/main "refs/tend/pr/$n" 2>/dev/null); then
       continue
     elif [ -n "$tree" ]; then
-      echo "CONFLICTING: #$n $title"
+      echo "CONFLICTING: $author #$n $title"
     else
-      echo "merge test never ran, conflicts unverified: #$n $title"
+      echo "merge test never ran, conflicts unverified: $author #$n $title"
     fi
   done
 done
