@@ -263,7 +263,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > }'
 > ```
 >
-> `logins` is the bot-only test: `["$BOT_LOGIN"]` or empty means no human touched the thread. Anything else, name that login and say which surface it came from. Every inline review comment belongs to a review record — including a standalone reply posted through the replies endpoint — so `reviews` covers inline commenters as well as submitted reviews, and its `state` gives the accept/reject direction. `comments`, `reviews`, and `commits` paginate in full, so a long thread does not truncate.
+> `logins` is the bot-only test: `["$BOT_LOGIN"]` or empty means no human touched the thread. Anything else, name that login and say which surface it came from. Every inline review comment belongs to a review record — including a standalone reply posted through the replies endpoint — so `reviews` covers inline commenters as well as submitted reviews, and its `state` gives the accept/reject direction. `comments` and `reviews` paginate in full. `commits` does not: `gh pr view` selects `commits(first: 100)` and never fetches a second page, oldest-first, so past 100 commits the newest drop out — exactly where a human follow-up push sits. On a PR that long, read the authors from `gh api "repos/$ARGUMENTS/pulls/<pr>/commits" --paginate` (itself capped at 250) before calling the thread bot-only.
 >
 > A comments-only check is not enough on its own: it misses both a silent maintainer merge (`mergedBy` set, nobody commenting) and a human `CHANGES_REQUESTED` that carries no inline comments.
 >
