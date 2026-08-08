@@ -18,16 +18,19 @@ uvx tend@latest check              # verify branch protection, secrets, bot acce
 pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, uv-lock
 ```
 
-`wt test` covers `generator/` only. Two smaller suites live beside the code
+`wt test` covers `generator/` only. Two more pytest suites live beside the code
 they test and have CI jobs of their own — run them from their own directory:
 
 ```bash
 # proxy addon — pin mitmproxy the way CI does, to the version production runs
-cd proxy && uv run --no-project --with pytest \
-  --with "mitmproxy==$(yq -e '.inputs.mitmproxy_version.default' ../claude/action.yaml)" pytest
+(cd proxy && uv run --no-project --with pytest \
+  --with "mitmproxy==$(yq -e '.inputs.mitmproxy_version.default' ../claude/action.yaml)" pytest)
 # install-tend OAuth wrapper
-cd plugins/install-tend/skills/install-tend/scripts && uv run --no-project --with pytest pytest
+(cd plugins/install-tend/skills/install-tend/scripts && uv run --no-project --with pytest pytest)
 ```
+
+`worker/` is a third suite outside `wt test`, vitest rather than pytest, with
+its own CI job — see [`worker/README.md`](worker/README.md).
 
 ## Architecture
 
