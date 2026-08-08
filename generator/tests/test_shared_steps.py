@@ -1,10 +1,11 @@
-"""Tests for the composite actions' shared step bodies (shared/steps/*.sh).
+"""Tests for the workflow step bodies shipped as shell scripts.
 
-These scripts run as `bash <script>` inside both harness actions, so a
-non-zero exit fails the step and turns an otherwise-successful agent run red.
-They aren't part of the generator package; the tests live here because this is
-the repo's only Python suite, and shellcheck (pre-commit) can't catch runtime
-behaviour.
+Two homes, one testing need: the composite actions' shared steps
+(shared/steps/*.sh) run as `bash <script>` inside both harness actions, and
+the generator's template scripts (generator/src/tend/templates/*.sh) are
+inlined into generated workflows. In both, a non-zero exit fails the step, and
+shellcheck (pre-commit) can't catch runtime behaviour; this is the repo's only
+Python suite, so the tests live here.
 """
 
 from __future__ import annotations
@@ -18,6 +19,18 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARK_NOTIFICATION_READ = REPO_ROOT / "shared" / "steps" / "mark-notification-read.sh"
+
+
+def _fake_bin(tmp_path: Path, **scripts: str) -> Path:
+    """Write executable command stand-ins (gh, date, …); return the PATH dir."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    for name, body in scripts.items():
+        path = bindir / name
+        path.write_text(body)
+        path.chmod(0o755)
+    return bindir
+
 
 # `gh api` stand-in. Records every invocation so a test can assert which calls
 # the script made, and fails the run-metadata fetch when FAIL_RUN_META is set.
@@ -43,11 +56,7 @@ esac
 @pytest.fixture
 def gh_env(tmp_path: Path) -> dict[str, str]:
     """A fake `gh` on PATH plus the Actions env the script reads."""
-    bindir = tmp_path / "fakebin"
-    bindir.mkdir()
-    gh = bindir / "gh"
-    gh.write_text(FAKE_GH)
-    gh.chmod(0o755)
+    bindir = _fake_bin(tmp_path, gh=FAKE_GH)
 
     event = tmp_path / "event.json"
     event.write_text(json.dumps({"issue": {"number": 7}}))
@@ -259,16 +268,9 @@ def _closed_event(
 @pytest.fixture
 def rate_limit_env(tmp_path: Path) -> dict[str, str]:
     """Fake gh/date/sleep on PATH, plus the Actions env the preflight reads."""
-    bindir = tmp_path / "fakebin"
-    bindir.mkdir()
-    for name, body in (
-        ("gh", FAKE_GH_RATE_LIMIT),
-        ("date", FAKE_DATE),
-        ("sleep", FAKE_SLEEP),
-    ):
-        path = bindir / name
-        path.write_text(body)
-        path.chmod(0o755)
+    bindir = _fake_bin(
+        tmp_path, gh=FAKE_GH_RATE_LIMIT, date=FAKE_DATE, sleep=FAKE_SLEEP
+    )
 
     # Both the fake gh and the script itself shell out to jq.
     jq = shutil.which("jq")
@@ -649,3 +651,136 @@ def test_rate_limit_reopens_rather_than_refiling(
     assert not any(c.startswith("issue create") for c in calls), (
         f"filed a second pause issue instead of reopening #42: {calls}"
     )
+
+
+# ---------------------------------------------------------------------------
+# review-gate.sh — the tend-review pre-check inlined into generated workflows
+# ---------------------------------------------------------------------------
+
+REVIEW_GATE = REPO_ROOT / "generator" / "src" / "tend" / "templates" / "review-gate.sh"
+
+FAKE_GH_REVIEW_GATE = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_CALLS"
+case "$2" in
+  repos/*/pulls/*)
+    [ -n "${FAIL_PR:-}" ] && exit 1
+    cat "$PR_JSON"
+    ;;
+  repos/*/commits/*/status\?per_page=100)
+    [ -n "${FAIL_STATUS:-}" ] && exit 1
+    cat "$STATUS_JSON"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+"""
+
+
+@pytest.fixture
+def gate_env(tmp_path: Path) -> dict[str, str]:
+    """A fake `gh` on PATH plus the workflow env the gate script reads."""
+    bindir = _fake_bin(tmp_path, gh=FAKE_GH_REVIEW_GATE)
+
+    pr = tmp_path / "pr.json"
+    pr.write_text(json.dumps({"state": "open", "head": {"sha": "abc123"}}))
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"statuses": []}))
+
+    return {
+        "PATH": f"{bindir}:/usr/bin:/bin",
+        "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "GITHUB_OUTPUT": str(tmp_path / "output.txt"),
+        "GITHUB_REPOSITORY": "owner/repo",
+        "PR": "7",
+        "EVENT_ACTION": "synchronize",
+        "PR_JSON": str(pr),
+        "STATUS_JSON": str(status),
+    }
+
+
+def _run_gate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
+    return subprocess.run(
+        ["bash", "-e", str(REVIEW_GATE)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _should_run(env: dict[str, str]) -> str:
+    lines = Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
+    values = [line.split("=", 1)[1] for line in lines if line.startswith("should_run=")]
+    assert len(values) == 1, f"expected exactly one should_run, got: {lines}"
+    return values[0]
+
+
+def _stamp(env: dict[str, str], *statuses: dict[str, str]) -> None:
+    Path(env["STATUS_JSON"]).write_text(json.dumps({"statuses": list(statuses)}))
+
+
+def test_review_gate_skips_a_stamped_head(gate_env: dict[str, str]) -> None:
+    """A `synchronize` whose live HEAD carries this PR's stamp is a no-op."""
+    _stamp(gate_env, {"context": "tend-review/7", "state": "success"})
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _should_run(gate_env) == "false"
+
+
+def test_review_gate_runs_when_head_is_unstamped(gate_env: dict[str, str]) -> None:
+    """Foreign contexts don't gate: another PR's stamp (one branch can be two
+    open PRs with different bases) and a non-success state both leave the
+    review to run."""
+    _stamp(
+        gate_env,
+        {"context": "tend-review/8", "state": "success"},
+        {"context": "tend-review/7", "state": "pending"},
+        {"context": "ci/tests", "state": "success"},
+    )
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _should_run(gate_env) == "true"
+
+
+def test_review_gate_only_gates_synchronize(gate_env: dict[str, str]) -> None:
+    """`opened`/`reopened`/`ready_for_review` always run — with no API calls,
+    so a GitHub blip can't fail the ungated path."""
+    gate_env["EVENT_ACTION"] = "ready_for_review"
+    _stamp(gate_env, {"context": "tend-review/7", "state": "success"})
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _should_run(gate_env) == "true"
+    assert not Path(gate_env["GH_CALLS"]).exists(), "ungated event still hit the API"
+
+
+def test_review_gate_skips_closed_prs(gate_env: dict[str, str]) -> None:
+    """A queued run whose PR was merged or closed while it waited is a no-op."""
+    Path(gate_env["PR_JSON"]).write_text(
+        json.dumps({"state": "closed", "head": {"sha": "abc123"}})
+    )
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _should_run(gate_env) == "false"
+
+
+@pytest.mark.parametrize("failure", ["FAIL_PR", "FAIL_STATUS"])
+def test_review_gate_fails_open_on_api_errors(
+    gate_env: dict[str, str], failure: str
+) -> None:
+    """An API error must boot the agent, not silently skip the review."""
+    _stamp(gate_env, {"context": "tend-review/7", "state": "success"})
+    gate_env[failure] = "1"
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _should_run(gate_env) == "true"

@@ -181,14 +181,14 @@ Always use `git push` without specifying a remote — `gh pr checkout` configure
 
 If pushing fails (fork PR with edits disabled), fall back to posting code snippets in a comment. Don't reference commit SHAs from temporary branches — post code inline.
 
-### Batch the push — every push restarts the reviewer
+### Batch the push — every push costs a reviewer round
 
-`tend-review` triggers on `synchronize` under a per-PR concurrency group at `cancel-in-progress: true`, so each push to a PR starts a fresh review run and cancels the one already running. Push twice in quick succession and the first reviewer is killed at startup having produced nothing; push after several minutes and it dies with whatever review it had assembled unsubmitted.
+`tend-review` triggers on `synchronize` under a per-PR concurrency group without cancel-in-progress: a push while a review session runs queues a replacement run, and the running session folds the push into its review before ending (review skill, step 9). Nothing is killed, but each push still costs a round — a fold-in extends the live session, and an unabsorbed push boots a fresh one.
 
 - **Commit everything before `gh pr create`.** Changelog entries, test pins, and formatting fixups belong in the initial push, not a follow-up thirty seconds later.
 - **Make the commits, then push once** — not a push after each commit. Amends and rebases count: a force-push fires `synchronize` too.
 
-A follow-up push that acts on information the session didn't have at push time — review feedback, a red check — *should* invalidate the running review; that one is correct. What's wasteful is splitting work you already have into several pushes.
+A follow-up push that acts on information the session didn't have at push time — review feedback, a red check — earns its round. What's wasteful is splitting work you already have into several pushes.
 
 ### Re-check PR state before pushing a follow-up commit
 

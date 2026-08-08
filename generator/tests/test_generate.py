@@ -526,6 +526,32 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert "clean" not in checkouts[0]["with"]
 
 
+def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
+    """A push mid-review queues a replacement run; the gate step decides
+    whether it boots an agent.
+
+    The running session folds the push in and stamps examined commits, so the
+    queued run's work is usually already done. That only holds if the gate is
+    the first step and everything after it — checkouts, setup, the agent — is
+    conditioned on its verdict; an ungated step would run (and bill) on every
+    replaced event.
+    """
+    extra = "setup:\n  - run: npm ci\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    job = data["jobs"]["review"]
+
+    assert job["concurrency"]["cancel-in-progress"] is False
+    steps = job["steps"]
+    assert steps[0].get("id") == "gate"
+    assert "tend-review/$PR" in steps[0]["run"]
+    for step in steps[1:]:
+        assert step.get("if") == "steps.gate.outputs.should_run == 'true'", (
+            f"ungated step after the gate: {step}"
+        )
+
+
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
     """`raw` was removed in favor of structured steps — the error message
     must point users at the two supported paths so they can migrate."""

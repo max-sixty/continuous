@@ -239,7 +239,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > **Negative outcome signals** — report any sign the bot's output was rejected, corrected, or ignored. Common shapes (use judgment for signals not listed):
 > - Human reviewer posted CHANGES_REQUESTED after bot approved
 > - PR closed without merge shortly after bot approved
-> - Bot posted no review despite a `tend-review` run completing on an open PR
+> - Bot posted no review despite a `tend-review` run completing on an open PR — first check the run wasn't gate-skipped (its pre-check found the live HEAD already stamped `tend-review/<pr>`; agent step skipped, no session-log artifacts). A gate-skipped run is expected silence: a sibling session covered the push.
 > - Subsequent commits reversed changes the bot approved
 > - Bot-closed issue was reopened
 > - Fix commit was reverted or CI still failing after bot pushed
