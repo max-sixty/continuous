@@ -1090,10 +1090,9 @@ def check_credential_environments(
             f"{'; '.join(ungated)}. Gate each environment with a required "
             "reviewer that is not the bot, or a deployment policy listing "
             "only verified refs — branches this run confirmed the bot cannot "
-            "write, or tags under an admin-only all-tags ruleset. The "
-            "policy's 'protected branches' setting is not one of them: it "
-            "keys on a rule covering the branch, not on who may push it. "
-            "Move an OIDC job into such an environment.",
+            "write, or tags under an admin-only all-tags ruleset; move an "
+            "OIDC job into such an environment. The policy's 'protected "
+            "branches' setting is not one of them.",
         )
     if surface.unresolved:
         return CheckResult(
