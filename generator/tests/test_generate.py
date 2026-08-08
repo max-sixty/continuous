@@ -395,6 +395,37 @@ def test_custom_prompt(tmp_path: Path) -> None:
     assert "Custom triage:" in triage.content
 
 
+def test_default_prompt_unlocks_code_review(tmp_path: Path) -> None:
+    """Claude prompts stay eligible for the `/code-review` waiver; Codex is untouched.
+
+    The `Skill` tool waives `disable-model-invocation` only for a turn whose own
+    user message names the command, and it finds that name with this regex. A
+    prompt starting with `/` is stored wrapped in `<command-message>` and skipped
+    by the scan, so prose is what keeps the message eligible at all — and the
+    token then has to clear the regex, which a trailing period or a backtick
+    silently fails.
+    """
+    user_typed_this_turn = re.compile(r"(?<!\S)/code-review(?=$|\s)")
+
+    cfg = Config.load(_minimal_config(tmp_path))
+    for skill, args in [("review", "{pr_number}"), ("nightly", "")]:
+        prompt = cfg.default_prompt(skill, args)
+        assert not prompt.startswith("/"), (
+            f"{skill} prompt starts with '/', so Claude Code stores it as a "
+            "slash command and the scan skips it"
+        )
+        assert user_typed_this_turn.search(prompt), (
+            f"{skill} prompt does not carry a bare /code-review token: {prompt!r}"
+        )
+        assert f"tend-ci-runner:{skill}" in prompt
+
+    codex = Config.load(_minimal_config(tmp_path, "harness: codex\n"))
+    assert codex.default_prompt("review", "{pr_number}") == "$review {pr_number}"
+
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    assert "/code-review" in workflows["tend-review.yaml"].content
+
+
 def test_watched_workflows(tmp_path: Path) -> None:
     extra = dedent("""\
         workflows:

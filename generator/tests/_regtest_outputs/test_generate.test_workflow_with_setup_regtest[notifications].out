@@ -146,4 +146,4 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: |
-            /tend-ci-runner:notifications
+            Run the tend-ci-runner:notifications skill. Beyond the skills the Skill tool lists, /code-review is available too.

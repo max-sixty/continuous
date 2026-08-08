@@ -39,4 +39,4 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: |
-            /tend-ci-runner:weekly
+            Run the tend-ci-runner:weekly skill. Beyond the skills the Skill tool lists, /code-review is available too.

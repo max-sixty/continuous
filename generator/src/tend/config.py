@@ -203,15 +203,35 @@ class Config:
     def default_prompt(self, skill: str, args: str = "") -> str:
         """Default prompt invoking a tend-ci-runner skill in harness-native syntax.
 
-        Claude resolves `/tend-ci-runner:NAME` as a slash command. Codex resolves
-        `$NAME` as a skill mention (or matches by description); the
+        Codex resolves `$NAME` as a skill mention (or matches by description); the
         `tend-ci-runner` namespace prefix isn't needed at the prompt site because
         skill names within the plugin are unique. `args` is appended raw so
         callers can splice their own placeholders (`{pr_number}` etc.) and run
         the existing replace step.
+
+        Claude's prompt is prose naming the skill, rather than the
+        `/tend-ci-runner:NAME` slash command it also resolves, so that the
+        built-in `/code-review` is reachable. That skill carries
+        `disable-model-invocation`, which the `Skill` tool waives only for a turn
+        whose own user message names the command; a prompt starting with `/` is
+        stored wrapped in `<command-message>` and is skipped by that scan, so no
+        eligible message ever exists. Prose leaves the prompt eligible, and the
+        `/code-review` token in it unlocks the skill for the whole run.
+
+        The token has to survive that scan's regex, `(?<!\\S)/code-review(?=$|\\s)`:
+        whitespace on both sides, so a trailing period or a backtick silently
+        costs the run its second pass. `test_default_prompt_unlocks_code_review`
+        pins it.
         """
-        prefix = f"/tend-ci-runner:{skill}" if self.harness == "claude" else f"${skill}"
-        return f"{prefix} {args}".rstrip()
+        if self.harness != "claude":
+            return f"${skill} {args}".rstrip()
+        invocation = f"Run the tend-ci-runner:{skill} skill"
+        if args:
+            invocation += f" for {args}"
+        return (
+            f"{invocation}. Beyond the skills the Skill tool lists, "
+            "/code-review is available too."
+        )
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
