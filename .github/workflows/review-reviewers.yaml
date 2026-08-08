@@ -25,9 +25,15 @@ jobs:
   # legs find an existing issue instead of racing to create one. Without this,
   # the first cron tick of each new month produced N-1 duplicate tracking
   # issues (one per matrix leg that lost the find-or-create race).
+  #
+  # This is an optimisation, not a precondition: the skill still carries its own
+  # find-or-create fallback, so the matrix runs even when this job doesn't
+  # complete (see `if:` on the matrix job below).
   init-tracking:
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       issues: write
     steps:
@@ -53,6 +59,11 @@ jobs:
 
   review-reviewers:
     needs: init-tracking
+    # Run even when init-tracking failed or never got a runner — losing the
+    # race guard costs up to N-1 duplicate tracking issues on the first tick of
+    # a month, while gating on it costs the whole analysis window for every
+    # target repo. Not `always()`: a user cancelling the run should stop here.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -64,7 +75,9 @@ jobs:
           - max-sixty/worktrunk
           - numbagg/numbagg
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
@@ -77,7 +90,7 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: max-sixty/tend/claude@0.1.13
+      - uses: max-sixty/tend/claude@0.1.14
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

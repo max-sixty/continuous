@@ -82,7 +82,7 @@ GIST_DESC="review-reviewers evidence: $TARGET $MONTH"
 
 The tracking issue lives on tend (the current repo). It indexes gists via one comment per new gist — no per-run comments, no body edits.
 
-The workflow's `init-tracking` job runs before the matrix and creates the monthly tracking issue if absent, so matrix legs always find an existing one. The find-or-create logic below remains the fallback for ad-hoc invocations and as a safety net; sort lowest-numbered first in case a race ever does produce duplicates. `gh issue create` prints the new issue's URL; parse the number from its basename.
+The workflow's `init-tracking` job runs before the matrix and creates the monthly tracking issue if absent, so on a normal tick matrix legs find an existing one. It is not a precondition — the matrix runs even when that job fails or never gets a runner, so the find-or-create logic below is a live code path on the first tick of a month, not only a fallback for ad-hoc invocations. Sort lowest-numbered first so a lost race degrades to a duplicate rather than a crash. `gh issue create` prints the new issue's URL; parse the number from its basename.
 
 ```bash
 TRACKING_NUMBER=$(gh issue list --state open --label "$TRACKING_LABEL" \
@@ -232,6 +232,30 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > 1. Did the bot produce visible output (review, comment, issue action, commit)?
 > 2. If yes, was the output accepted or rejected?
 >
+> **Sweep the window repo-wide before mapping any run, and report the row counts.** The per-run mapping below walks run → branch → PR → endpoint; a break anywhere in that chain returns empty for *every* run at once, and uniform silence reads as a quiet hour rather than as a broken query. These calls take no run ID, so they fail independently of it:
+>
+> ```bash
+> WINDOW_START=<window start, ISO 8601>
+> WINDOW_END=<window end, ISO 8601>
+> IN_WINDOW="[.[] | select(.user.login == \"$BOT_LOGIN\")
+>   | select((.created_at // .submitted_at) >= \"$WINDOW_START\"
+>            and (.created_at // .submitted_at) <= \"$WINDOW_END\")] | length"
+>
+> gh api "repos/$ARGUMENTS/issues/comments?since=$WINDOW_START&per_page=100" --jq "$IN_WINDOW"
+> gh api "repos/$ARGUMENTS/pulls/comments?since=$WINDOW_START&per_page=100" --jq "$IN_WINDOW"
+>
+> CANDIDATES=$(gh -R $ARGUMENTS pr list --state all --limit 100 \
+>   --search "updated:>$WINDOW_START" --json number --jq '.[].number')
+> echo "$CANDIDATES"
+> for pr in $CANDIDATES; do
+>   gh api "repos/$ARGUMENTS/pulls/$pr/reviews?per_page=100" --jq "$IN_WINDOW"
+> done | jq -s add
+> ```
+>
+> Filter the comment calls on `created_at` at both ends. `since` is an `updated_at` floor with no ceiling, so unfiltered it also returns comments written days earlier and merely edited in the window, plus everything posted between the window end and now — this skill starts 20–40 min after its tick, so on a busy repo that is most windows. Those are rows the per-run walk was right not to reach, and a check that contradicts a correct walk every run stops being believed. Leave `CANDIDATES` unbounded above: `updated:` matches the PR's own `updated_at`, so a range drops any PR that got bot output inside the window and was touched after it, and over-inclusion in a candidate list costs nothing. `--limit 100` is load-bearing — `gh pr list` defaults to 30 and truncates silently.
+>
+> The comment endpoints cover conversation and inline-review comments only; neither returns review submissions, and an empty-body `APPROVE` is `tend-review`'s most common output. Without the fourth count an approvals-only window reports `0, 0` and satisfies the gate below with two zeros carrying no signal. Report all four numbers at the top of your summary. If the sweep found in-window rows your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
+>
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
 >   `gh -R $ARGUMENTS pr list --head <branch> --state all` → check bot reviews via
@@ -307,6 +331,8 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > <note if zero bot activity found across all runs — may indicate systemic failure>
 > ```
 
+A report of little or no bot output is only usable if it carries the repo-wide sweep counts — without them, run the sweep block yourself before believing it, because a silent window and a broken per-run walk produce the same summary. Absence is not a finding on its own either: don't reason from it toward a conclusion the sweep would contradict.
+
 Review the subagent's summary. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
 
 ## Step 3: Investigate concerning outcomes via cheap subagent
@@ -347,9 +373,12 @@ Before creating issues or PRs, check exhaustively for existing ones:
 ```bash
 gh issue list --state open --label claude-behavior --json number,title,body
 gh issue list --state open --json number,title,body  # also check unlabeled issues
-gh pr list --state open --json number,title,headRefName,body
 gh issue list --state closed --label claude-behavior --json number,title,closedAt --limit 30
+# --state all: a merged PR is the most common way a finding is already fixed
+gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body
 ```
+
+**A merged fix still reproduces on adopters.** Adopters call a pinned action ref, so a merged skill fix is dormant on their repos until the next release tags. Observing the bug is therefore not evidence the fix is missing — check merged PRs before filing, or the report is churn on something already landed.
 
 Search titles AND bodies for related keywords. Only comment on existing issues if you have material new cases that would change the approach or increase prioritization. Do not comment with progress updates, fix-PR status, or re-statements of evidence already in the issue.
 
@@ -357,7 +386,7 @@ Search titles AND bodies for related keywords. Only comment on existing issues i
 
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
-- **PR** (default): Branch `review-reviewers/review-$GITHUB_RUN_ID`, fix, commit, push, create with label `claude-behavior`. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
+- **PR** (default): Branch `review-reviewers/review-$GITHUB_RUN_ID-<target-repo-name>-<topic-slug>`, fix, commit, push, create with label `claude-behavior`. `$GITHUB_RUN_ID` alone is not a unique branch name: every matrix leg of a tick carries the same one, and a single leg may open two PRs (see the 2-PR limit below). The target's repo name (the part after the `/`) keeps two legs from racing the same ref; the topic slug keeps one leg's two PRs from doing the same. Put full analysis in PR description (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count). Don't also create a separate issue.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly. Include run ID, outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more findings, pick the highest-confidence ones and record the rest in the evidence gist.

@@ -5,7 +5,7 @@
     "email": "m@maxroos.com"
   },
   "metadata": {
-    "description": "An autonomous junior maintainer for GitHub repos, powered by Claude — reviews PRs, triages issues, fixes CI"
+    "description": "An autonomous junior maintainer for GitHub repos, powered by Claude or OpenAI Codex — reviews PRs, triages issues, fixes CI"
   },
   "plugins": [
     {

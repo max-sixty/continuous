@@ -15,7 +15,9 @@ on:
 jobs:
   review-runs:
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write

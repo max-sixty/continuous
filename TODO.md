@@ -10,48 +10,51 @@ naming an environment still reads repo-level secrets. Every adopter now has
 the environment, admitting only `main`, with `TEND_BOT_TOKEN` in it, and every
 generated workflow names it. What remains:
 
-1. **The model credential, every repo.** `CLAUDE_CODE_OAUTH_TOKEN` can't be
+1. **The model credential.** `CLAUDE_CODE_OAUTH_TOKEN` can't be
    read back and isn't stored anywhere locally, so it has to be pasted or
    re-minted with `claude setup-token`:
    `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <repo> --env tend`, then
    `gh secret delete CLAUDE_CODE_OAUTH_TOKEN --repo <repo>`. Only the
    generated workflows read it, and all of them name the environment, so
    nothing else breaks.
-2. **`max-sixty/worktrunk` and `PRQL/prql` keep a repo-level
-   `TEND_BOT_TOKEN`,** because hand-maintained workflows read it outside the
-   generated set. What each needs follows from its trigger, and the two repos
-   differ.
+2. **`PRQL/prql` keeps a repo-level `TEND_BOT_TOKEN`,** because
+   hand-maintained workflows read it outside the generated set.
 
    Jobs running at `refs/heads/main` are admitted by the policy as it stands,
-   so `environment: tend` is the whole change: worktrunk's benchmark gist
-   append and its two create-issue-on-failure jobs, prql's
-   `update-rust-toolchain` (all four `schedule`-only, and already `if`-gated
-   to it) and prql's backport. A `pull_request_target` run reports
+   so adding `environment: {name: tend, deployment: false}` is the whole
+   change: `update-rust-toolchain` (`schedule`-only, and already `if`-gated to
+   it) and backport. A `pull_request_target` run reports
    `GITHUB_REF=refs/heads/main` and is admitted — which also means the
    environment is not what gates that job.
 
-   worktrunk's release jobs run on a tag *push*, which is not bot-steerable,
-   and its all-tags ruleset is admin-gated — but the tag entry does not go on
-   the `tend` policy, whose shape `check_environment` pins to exactly the
-   protected branches and whose `--fix` deletes anything else. They get a
-   second environment (say `release`) whose policy admits the release tag
-   pattern, the shape `check_credential_environments` already credits under
-   that ruleset. Winget and homebrew move in too, and the repo-level copy
-   goes with no new credential.
-
-   prql's release jobs run on `release`, which is bot-steerable: creating a
+   The release jobs run on `release`, which is bot-steerable: creating a
    release against an existing tag takes no tag operation, so the tag ruleset
-   does not stop it and a tag entry would not gate it. One of — a required
-   reviewer on a release environment, costing an approval on every release; a
-   second fine-grained credential scoped to `PRQL/homebrew-prql` and the
-   winget fork, left at repo level and allowlisted; or moving the workflow to
-   a tag push, which makes it worktrunk's case. The second narrows furthest
-   only if `push-web-branch` can drop to `GITHUB_TOKEN`, so check whether
-   anything runs on the `web` branch — a `GITHUB_TOKEN` push fires no
-   workflow.
+   does not stop it and a tag entry would not gate it. One of:
 
-   Until one lands, `repo-secret-allowlist` fails on both, correctly.
+   - A required reviewer on a release environment, costing an approval on
+     every release.
+   - Moving the release workflow to a tag push. A tag push is not
+     bot-steerable and the all-tags ruleset gates it, so the release jobs take
+     a second environment whose policy admits the tag pattern — the shape
+     `check_credential_environments` credits under that ruleset — holding a
+     second copy of `TEND_BOT_TOKEN`, so no new credential. The tag entry does
+     not go on the `tend` policy, whose shape `check_environment` pins to
+     exactly the protected branches and whose `--fix` deletes anything else.
+     This is what `max-sixty/worktrunk` runs.
+   - A second credential, left at repo level and allowlisted. This narrows the
+     `homebrew-prql` half alone: `publish-winget` runs `winget-releaser`,
+     which supports only a *classic* PAT, and the `public_repo` scope it needs
+     is not per-repo — it carries write to every public repository the account
+     can reach, `PRQL/prql` included. It also needs `push-web-branch` down to
+     `GITHUB_TOKEN`, which costs nothing: `publish-web` subscribes to `push` on
+     `web`, but carries `release: [released]` for exactly this reason — a
+     `GITHUB_TOKEN` push fires no workflow, so the deploy already has a path
+     that does not depend on who pushed.
 
+   Until one lands, `repo-secret-allowlist` fails, correctly.
+
+`max-sixty/worktrunk` is done: both secrets are environment-scoped, `CODECOV_TOKEN`
+is the only thing left at repo level, and `tend check` passes every line.
 `numbagg/numbagg` and `max-sixty/cargo-affected` are done bar the model
 credential.
 
@@ -249,6 +252,30 @@ open a draft advisory for security-classified failures. Needs (a) the
 discrimination rule (fix narrows a credential's scope → security; fix
 updates config to reflect intent → drift), (b) `install-tend` enabling PVR
 at setup, (c) confirming the bot token can hit the reports endpoint.
+
+## Re-run the work a rate-limit trip refused
+
+The `tend-rate-limit` issue lists the runs the spike limit refused, and
+closing it approves the volume — but nothing re-runs them. `tend-review`
+fires only on `pull_request_target`, so a refused review stays missing until
+someone pushes to the PR again. Today the recovery is one
+`gh run rerun <id> --failed` per row.
+
+The shape: a generated workflow on `issues: closed`, filtered to the label
+and to a closer who isn't the bot (the same check the preflight makes),
+re-running rows from the last 24 hours whose run is still in `failure` —
+which makes it idempotent, and stops an old row resurrecting itself. It
+needs `actions: write` and, being generated, a template plus config
+plumbing and generator tests. A re-run re-executes the preflight, which now
+sees the approval and passes, so nothing loops.
+
+**Blocked on** confirming tend's re-runs work correctly in the first place.
+Building an automatic re-runner over a broken re-run path would bury that
+bug under a second mechanism: the symptom moves from "my review never came
+back" to "the recovery workflow ran and my review still never came back".
+
+The same gap covers `tend-outage`; #816 tracks it from that side, and the
+`review-runs` skill's drain recipe reads the same table format.
 
 ## Worker: Phase 2 LLM summary of `/activity`
 

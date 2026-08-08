@@ -195,8 +195,8 @@ why the Codex subscription `auth.json` path isn't supported;
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
 
-All other options — secret name overrides, setup steps, protected branches,
-workflow overrides, schedules — are documented in
+All other options — setup steps, protected branches, workflow overrides,
+schedules — are documented in
 [`docs/tend.example.yaml`](docs/tend.example.yaml).
 
 ## Project context

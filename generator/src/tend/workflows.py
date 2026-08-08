@@ -15,7 +15,14 @@ from jinja2 import Environment, PackageLoader, StrictUndefined
 from jinja2.runtime import Macro
 from ruamel.yaml import YAML
 
-from tend.config import Config, WorkflowConfig
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+    WorkflowConfig,
+)
 
 # Variable delimiters are swapped from `{{`/`}}` to `<<`/`>>` so GitHub
 # Actions expressions (`${{ github.foo }}`, ubiquitous in generated YAML)
@@ -83,6 +90,20 @@ TEND_ENVIRONMENT = "tend"
 _JINJA.globals["header"] = HEADER
 _JINJA.globals["tend_version"] = _TEND_VERSION
 _JINJA.globals["tend_environment"] = TEND_ENVIRONMENT
+# Secret names reach the templates as globals rather than literals so the
+# names `tend check` looks for and the names the workflows read cannot drift.
+_JINJA.globals["bot_token_secret"] = BOT_TOKEN_SECRET
+_JINJA.globals["claude_token_secret"] = CLAUDE_TOKEN_SECRET
+_JINJA.globals["anthropic_api_key_secret"] = ANTHROPIC_API_KEY_SECRET
+_JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
+# Labels tend puts on the issues it files about its own health. Workflows skip
+# issues carrying them, so the bot's own record-keeping cannot re-trigger it:
+# each row the rate-limit preflight appends is a comment, which would fire
+# tend-mention, whose handle job trips the same limit and appends another.
+# A global rather than a literal per template, so the next such label is added
+# in one place.
+BOOKKEEPING_LABELS = ("tend-outage", "tend-rate-limit")
+_JINJA.globals["bookkeeping_labels"] = BOOKKEEPING_LABELS
 
 
 # Register every macro defined in `macros.yaml.j2` as a Jinja global so

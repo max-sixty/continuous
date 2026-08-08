@@ -16,7 +16,9 @@ jobs:
   weekly:
     if: github.repository_owner == 'test-owner'
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
