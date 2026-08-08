@@ -240,12 +240,18 @@ case "$1" in
   issue)
     case "$2" in
       list)
-        # Fail from the Nth list call on, so the spike block's two reads can be
-        # failed independently: `1` fails both, `2` leaves the first standing.
+        # Fail the list calls in [FROM, UNTIL], so the spike block's two reads
+        # can be failed in any combination: FROM=1 alone fails both, FROM=2
+        # spares the first, and FROM=1 UNTIL=1 spares the re-read. UNTIL is
+        # unbounded by default, which keeps "the list is simply down" open
+        # ended rather than pinned to an exact call count.
         if [ -n "${FAIL_ISSUE_LIST_FROM:-}" ]; then
           n=$(( $(cat "$LIST_CALLS" 2>/dev/null || echo 0) + 1 ))
           echo "$n" > "$LIST_CALLS"
-          if [ "$n" -ge "$FAIL_ISSUE_LIST_FROM" ]; then exit 1; fi
+          if [ "$n" -ge "$FAIL_ISSUE_LIST_FROM" ] \
+            && { [ -z "${FAIL_ISSUE_LIST_UNTIL:-}" ] || [ "$n" -le "$FAIL_ISSUE_LIST_UNTIL" ]; }; then
+            exit 1
+          fi
         fi
         emit "$(cat "$PAUSE_ISSUES_JSON")"
         ;;
@@ -544,6 +550,28 @@ def test_rate_limit_still_files_when_only_the_re_read_fails(
     rate_limit_env["FAKE_TODAY_POSTS"] = "16"
     # Nothing open, so the first read is a clean "none"; only the re-read fails.
     rate_limit_env["FAIL_ISSUE_LIST_FROM"] = "2"
+
+    result = _run_preflight(rate_limit_env)
+
+    assert result.returncode == 1
+    assert any(c.startswith("issue create") for c in _calls(rate_limit_env))
+    assert "could not be read" not in result.stdout
+
+
+def test_rate_limit_files_when_only_the_first_read_fails(
+    rate_limit_env: dict[str, str],
+) -> None:
+    """The re-read's verdict counts when the first read never landed.
+
+    The mirror of the case above, and the reason the re-read raises the flag
+    rather than merely leaving it alone. Without that raise the run refuses,
+    files nothing, and points the maintainer at an open issue the re-read had
+    just established isn't there — the same dead end from the other side.
+    """
+    rate_limit_env["FAKE_TODAY_POSTS"] = "16"
+    # Only the first read fails; the re-read comes back clean and empty.
+    rate_limit_env["FAIL_ISSUE_LIST_FROM"] = "1"
+    rate_limit_env["FAIL_ISSUE_LIST_UNTIL"] = "1"
 
     result = _run_preflight(rate_limit_env)
 
