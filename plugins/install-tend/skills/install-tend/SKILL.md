@@ -82,18 +82,10 @@ bot_name: <bot-name>
 # effort: medium   # optional: low | medium | high | xhigh
 ```
 
-Check whether the repo already has a bot token secret under a non-default name:
+List the secrets the repo already holds:
 
 ```bash
 gh secret list --repo "$REPO" --json name --jq '.[].name'
-```
-
-If a bot-token-like secret exists (e.g., `GH_BOT_TOKEN`, `ROBOT_PAT`),
-suggest overriding the default name rather than creating a duplicate:
-
-```yaml
-secrets:
-  bot_token: GH_BOT_TOKEN
 ```
 
 Any repo-level secret not in `secrets.allowed` triggers a `tend check`
@@ -561,28 +553,50 @@ For **OAuth token**: before offering the CLI option, check:
 
 - `command -v claude` — if missing, only offer Manual (point them at
   `https://claude.com/claude-code` to install).
-- `uname` — the bundled wrapper depends on `bash` + `script(1)` and
-  has only been validated on macOS and Linux. On anything else
-  (`MINGW*`, `CYGWIN*`, `MSYS*`, `Windows_NT`, etc.), only offer Manual.
+- `uname` — the bundled wrapper needs `python3` and a pty, and has only
+  been validated on macOS and Linux. On anything else (`MINGW*`,
+  `CYGWIN*`, `MSYS*`, `Windows_NT`, etc.), only offer Manual.
 
 - **CLI (recommended on macOS/Linux when `claude` is on PATH)** — run
   the bundled wrapper, which invokes `claude setup-token` (OAuth 2.0
-  PKCE, opens browser):
+  PKCE, opens browser). **Run it in the background:** it prints the
+  authorize URL to stderr and then waits, and one of the two ways it
+  finishes needs you to act while it is still running. Piping straight
+  into `gh` keeps the token out of the transcript.
 
   ```bash
-  TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/oauth-token.sh")
+  TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/oauth_token.py" --code-file /tmp/tend-oauth-code)
+  [ -n "$TOKEN" ] && printf '%s' "$TOKEN" \
+    | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
   ```
+
+  The guard is load-bearing, and nothing writes the secret without it.
+  `gh secret set` stores empty stdin as an empty secret and exits 0, and
+  every check downstream reads names rather than values — `check_secrets`,
+  and this step's own pre-check above — so one failed run would leave a
+  `CLAUDE_CODE_OAUTH_TOKEN` that the next run reads as already set, skips,
+  and finishes green on.
+
+  Give the user the URL from stderr. Approving it either returns to the
+  CLI, which finishes the run on its own, or lands on a page showing a
+  `code#state` string. For the second, have them paste that string back
+  and write it to the same path — the wrapper types it into the prompt:
+
+  ```bash
+  printf '%s' '<code#state>' > /tmp/tend-oauth-code
+  ```
+
+  Each run generates a fresh PKCE challenge, so a code from an earlier
+  run is dead; a restart needs a fresh approval.
 
 - **Manual** — have the user run `claude setup-token` in their own
   terminal (any machine with Claude Code installed) and paste the
   `sk-ant-oat01-…` token back. Use this on Windows or when the
-  wrapper errors out.
+  wrapper errors out. Then store it:
 
-Then store the secret:
-
-```bash
-echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
-```
+  ```bash
+  printf '%s' "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
+  ```
 
 For **API key**:
 
@@ -732,10 +746,8 @@ rm -rf "$HOME/.config/gh-bots/<bot-name>"
 
 ### 8c. Push token to secret
 
-Copy the bot's token to the environment secret (`<secret-name>` is the
-`secrets.bot_token` value from §1, default `TEND_BOT_TOKEN`; trust
-this over any name an audit issue quotes) and verify the `Updated`
-timestamp is fresh:
+Copy the bot's token to the `TEND_BOT_TOKEN` environment secret and verify
+the `Updated` timestamp is fresh:
 
 ```bash
 BOT_GH_TOKEN=$(env -u GH_TOKEN -u GITHUB_TOKEN \
@@ -743,7 +755,7 @@ BOT_GH_TOKEN=$(env -u GH_TOKEN -u GITHUB_TOKEN \
 if [ -z "$BOT_GH_TOKEN" ]; then
   echo "bot token empty — fix step 8 first" >&2
 else
-  gh secret set <secret-name> --repo "$REPO" --env tend --body "$BOT_GH_TOKEN"
+  gh secret set TEND_BOT_TOKEN --repo "$REPO" --env tend --body "$BOT_GH_TOKEN"
   gh secret list --repo "$REPO" --env tend
 fi
 ```
@@ -839,7 +851,7 @@ line picks the row that matches the chosen harness):
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Harness auth (claude): `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret set
 - [ ] Harness auth (codex): `OPENAI_API_KEY` secret set
-- [ ] Bot token: the `secrets.bot_token` secret (default `TEND_BOT_TOKEN`) set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
+- [ ] Bot token: `TEND_BOT_TOKEN` set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
 - [ ] Bot access: repo collaborator with write access, invitation accepted
 - [ ] Bot bio: profile bio reflects the authorization stance
 - [ ] Committed (push requires explicit permission)

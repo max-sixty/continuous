@@ -46,7 +46,6 @@ def test_migrate_full_config_round_trips_through_config_load(tmp_path: Path) -> 
         model = "sonnet"
 
         [secrets]
-        bot_token = "MY_BOT_PAT"
         allowed = ["CODECOV_TOKEN"]
 
         [[setup]]
@@ -71,7 +70,6 @@ def test_migrate_full_config_round_trips_through_config_load(tmp_path: Path) -> 
     assert cfg.bot_name == "test-bot"
     assert cfg.protected_branches == ["v1", "v2"]
     assert cfg.model == "sonnet"
-    assert cfg.bot_token_secret == "MY_BOT_PAT"
     assert cfg.allowed_repo_secrets == ["CODECOV_TOKEN"]
     assert len(cfg.setup) == 2
     assert cfg.setup[0].fields == {"uses": "astral-sh/setup-uv@v6"}

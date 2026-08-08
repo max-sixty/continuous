@@ -8,7 +8,7 @@ on:
 jobs:
   notifications:
 <<fork_guard_if(cfg)>>    runs-on: ubuntu-24.04
-    environment: <<tend_environment>>
+<<environment()>>
     permissions:
 <<permissions()>>
     steps:
@@ -113,7 +113,7 @@ jobs:
             echo "$COUNT processable notification(s) — proceeding"
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
 
 <<checkout(cfg, ref=cfg.default_branch, if_condition=skip_condition)>>
 <<setup>><<agent_step(cfg, block_prompt(prompt), if_condition=skip_condition)>>

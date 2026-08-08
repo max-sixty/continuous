@@ -213,11 +213,7 @@ its secrets are in the environment and the repo-level copies are deleted —
 per-repo work `TODO.md` tracks. Until then it runs with its old exposure.
 
 This repo's own workflows name it too, including the hand-maintained ones
-the generator never touches. `claude-smoke` is the exception the gate
-can't cover — dispatching it on a feature branch is its purpose, and that
-ref is one the bot can push — so its secrets belong in a second
-environment, `tend-manual`, protected by a required reviewer rather than a
-branch policy: each run waits for a maintainer's approval.
+the generator never touches.
 
 ## Concurrency and filtering
 

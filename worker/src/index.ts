@@ -146,6 +146,7 @@ const USER_AGENT = "tend-website-worker";
 // internal record-keeping. A repo without a label just matches nothing.
 const BOOKKEEPING_LABELS = [
   "tend-outage",
+  "tend-rate-limit",
   "review-runs-tracking",
   "review-reviewers-tracking",
   "nightly-cleanup",
