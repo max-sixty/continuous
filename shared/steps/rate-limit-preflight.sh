@@ -225,7 +225,7 @@ if [ "$TODAY_POSTS" -gt "$SPIKE_LIMIT" ]; then
         # the create's own URL, so this needs a `gh issue create` that exits 0
         # while printing something other than an issue URL — not a state the
         # index lag produces any more. Kept because the alternative on an
-        # unparseable URL is an annotation that names `#`; the label points at
+        # unparsable URL is an annotation that names `#`; the label points at
         # the same issue just as uniquely.
         RECOVERY="Refused runs are listed in the open \`${PAUSE_LABEL}\` issue; closing it doubles the ceiling."
       fi
