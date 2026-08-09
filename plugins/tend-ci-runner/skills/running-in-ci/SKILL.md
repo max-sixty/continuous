@@ -145,7 +145,7 @@ When asked to create a PR, use `gh pr create` directly.
 Before creating a branch or PR, check for existing work:
 
 ```bash
-gh pr list --state open --json number,title,headRefName --jq '.[] | "#\(.number) [\(.headRefName)]: \(.title)"'
+gh pr list --state open --limit 200 --json number,title,headRefName --jq '.[] | "#\(.number) [\(.headRefName)]: \(.title)"'
 git branch -r --list 'origin/fix/*'
 ```
 
@@ -587,6 +587,8 @@ If you can't find source evidence for a specific detail, say so ("I'm not sure o
 
 **`--jq` projections must include the ID when downstream URLs cite individual items.** Composing `actions/runs/<id>`, `#issuecomment-<id>`, or `pull/<n>` URLs from `gh run list` / `gh api .../comments` / `gh pr list` results requires the ID field in the projection (`databaseId` for runs, `id` for comments, `number` for PRs/issues). If the projection kept only timestamps, titles, or bodies, the bot composes the URL from what it has and fabricates the missing ID — the link 404s. Re-query with the ID field rather than guessing.
 
+**`gh` list commands cap at 30 by default — pass `--limit` whenever the result set is the answer.** `gh issue list`, `gh pr list`, and `gh run list` return 30 items unless told otherwise, and nothing in the output says it truncated. Two shapes go wrong: a dedup scan misses the existing issue or PR sitting past the cap and opens a duplicate, and a survey ("check every open issue") reports complete coverage of the 30 it happened to see. A count that reads exactly 30 across repeated measurements is the signature — that's the cap, not a stable value. Set an explicit `--limit` above the plausible ceiling on any query used to dedup, survey, or count.
+
 **"Likely" is a stop-sign.** A hedge in a user-facing claim — "likely works", "probably parses as", "should behave like", "I think" — means it rests on an unverified guess. Two options: verify and replace the hedge with the answer, or hedge explicitly ("I haven't tested this — would appreciate if you can confirm") and don't dress up the guess as analysis. The shape is the tell, not the exact words: posting an unverified guess as confident-sounding analysis is the hallucination that erodes trust the fastest.
 
 **Never ship literal placeholders in user-visible content.** Strings like `<PLACEHOLDER>`, `PR #PLACEHOLDER`, `<SHA>`, `TBD`, `XXX`, or `<TODO(fill)>` in an issue body, PR body, or comment are corruption: a deferred substitution that never ran. They survive into the rendered output and read as broken. When a multi-step ask references an artifact that doesn't yet exist ("file an issue that references the PR I'm about to file"), sequence the work so the referenced artifact exists before the referencing body is composed: create the PR → read its number → compose the issue with the number filled in → file the issue. If the cross-reference can't be resolved before posting (e.g. the artifact is out of scope or deferred), omit it or rephrase ("a follow-up PR will…") rather than emit a placeholder. Before any `gh issue create`, `gh pr create`, or `gh ... comment --body-file`, grep the body file for `PLACEHOLDER`, `<SHA>`, `<TODO`, `TBD`, `XXX` and refuse to post if any match. A session that times out mid-sequence leaves an unsubstituted placeholder permanently visible — pre-substitute, don't post-substitute.
@@ -739,7 +741,7 @@ When the correction identifies a gap or bug in a **bundled** skill — the same 
 2. **Check for an existing open PR against the same skill.** Dedup by the target file, not by title — title conventions vary per repo:
    ```bash
    BOT_LOGIN=$(gh api user --jq '.login')
-   gh pr list --state open --author "$BOT_LOGIN" --json number,title,headRefName,files \
+   gh pr list --state open --author "$BOT_LOGIN" --limit 200 --json number,title,headRefName,files \
      --jq '.[] | select([.files[].path] | index(".claude/skills/running-tend/SKILL.md"))'
    ```
    If one is open, add to it instead of opening a second.

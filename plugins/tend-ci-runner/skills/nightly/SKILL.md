@@ -151,8 +151,8 @@ Read the project's CLAUDE.md before reviewing. Apply the review checklist below 
 ## Step 5: Check existing issues
 
 ```bash
-gh issue list --state open --json number,title
-gh pr list --state open --json number,title,headRefName
+gh issue list --state open --limit 200 --json number,title
+gh pr list --state open --limit 200 --json number,title,headRefName
 ```
 
 For each open issue, check whether recent commits or the current codebase state already resolve it. If resolved, comment with the evidence (commits, CI runs, or code state that resolves the issue). Close the issue with `gh issue close` when:
@@ -312,8 +312,8 @@ git worktree remove "/tmp/tend-update-workflows" --force
 Before acting on findings, check for duplicates and existing work:
 
 ```bash
-gh issue list --state open --json number,title
-gh pr list --state open --json number,title,headRefName
+gh issue list --state open --limit 200 --json number,title
+gh pr list --state open --limit 200 --json number,title,headRefName
 ```
 
 The default action is a PR, not an issue. If there's a plausible fix, make it — explain uncertainty in the PR description.

@@ -233,7 +233,7 @@ Write "no maintainer corrections" into the tracking issue only after that query 
 Before creating issues or PRs, check for existing ones:
 
 ```bash
-gh issue list --state open --json number,title,body
+gh issue list --state open --limit 200 --json number,title,body
 gh issue list --state closed --json number,title,closedAt --limit 30
 # --state all: a merged PR is the most common way a finding is already fixed
 gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body

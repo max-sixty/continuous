@@ -394,8 +394,8 @@ Evaluate the subagent's diagnosis against the repo-specific guidance from Step 1
 Before creating issues or PRs, check exhaustively for existing ones:
 
 ```bash
-gh issue list --state open --label claude-behavior --json number,title,body
-gh issue list --state open --json number,title,body  # also check unlabeled issues
+gh issue list --state open --label claude-behavior --limit 200 --json number,title,body
+gh issue list --state open --limit 200 --json number,title,body  # also check unlabeled issues
 gh issue list --state closed --label claude-behavior --json number,title,closedAt --limit 30
 # --state all: a merged PR is the most common way a finding is already fixed
 gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body
