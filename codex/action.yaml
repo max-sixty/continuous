@@ -53,13 +53,12 @@ inputs:
     default: danger-full-access
     description: Codex sandbox mode (workspace-write, read-only, danger-full-access)
   codex_version:
-    default: "0.131.0-alpha.22"
+    default: "0.147.0"
     description: >-
       `@openai/codex` npm version to install (e.g. `0.147.0`). Must ship
       the `codex plugin add` subcommand (PR #21396, first released in
       `rust-v0.131.0-alpha.17`). That was `alpha`-only when the pin was
-      set, which is why the default is still a prerelease; `latest` has
-      since caught up, so a bump tracks `latest`. CI's
+      first set; stable carries it now, so this tracks `latest`. CI's
       `test-codex-surface` job confirms whichever version is pinned.
   allowed_bots:
     default: "*"
@@ -113,11 +112,12 @@ runs:
 
     # Install the Codex CLI from npm. `@openai/codex` ships a prebuilt
     # per-platform binary, so this is ~3 s with no Rust toolchain. We pin
-    # an explicit version (`codex_version`) because tend needs `codex
-    # plugin add` (PR #21396, first in `rust-v0.131.0-alpha.17`), which
-    # was carried only by the `alpha` dist-tag when the pin was set. It
-    # is on stable now, so the bump target is `latest`; the pinned
-    # prerelease is a leftover, not a requirement.
+    # an explicit version (`codex_version`) rather than floating on
+    # `latest` so an adopter's run can't change engine mid-release. The
+    # pin sat on an `alpha` for a while because only prereleases carried
+    # `codex plugin add` (PR #21396, first in `rust-v0.131.0-alpha.17`);
+    # stable ships it now, so the pin tracks `latest` and drops back to a
+    # prerelease only for a fix that hasn't been released yet.
     - name: Install Codex CLI
       shell: bash
       run: |
