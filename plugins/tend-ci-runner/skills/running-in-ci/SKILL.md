@@ -90,9 +90,9 @@ A pushed fix isn't done until its required checks are terminal — see **CI Moni
 
 ## Filing Issues in This Repo
 
-An issue here is not a note to a maintainer — `tend-triage` fires on `issues` and does the work. Filing one for a fix you have already scoped hands your own analysis to a second agent run, which re-derives it from your issue body and opens the PR minutes later at full session cost, on a thread nobody needed.
+An issue here is not a note to a maintainer — where `tend-triage` is enabled (the default), it fires on `issues` and does the work. Filing one for a fix you have already scoped hands your own analysis to a second agent run, which re-derives it from your issue body and opens the PR minutes later at full session cost, on a thread nobody needed.
 
-So if you can open the PR in this run, open the PR. Reserve an issue for what you genuinely can't finish here: a problem too large or ambiguous to fix, one that needs a maintainer decision, or one whose verification is out of reach from CI.
+So if you can open the PR in this run, open the PR. Reserve an issue for what you genuinely can't finish here: a problem too large or ambiguous to fix, one that needs a maintainer decision, or one whose verification is out of reach from CI. Bookkeeping issues are a separate case, not this trade-off: `ci-fix`'s transient-diagnosis tracker carries `tend-outage`, which the generated `tend-triage` and `tend-mention` `if:` skip, so no conversion run fires.
 
 This governs your own repo only; filing into another repo follows the section below.
 
