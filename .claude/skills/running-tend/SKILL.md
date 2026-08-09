@@ -156,7 +156,7 @@ both.
 | `claude_version` | `claude/action.yaml` | track latest |
 | `mitmproxy_version` | `claude/action.yaml` | track latest |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml` | keep it on its prerelease line; bump it and let CI's surface job confirm it |
+| `codex_version` | `codex/action.yaml` | track latest; the surface job confirms the bump |
 
 ```bash
 yq '.inputs.claude_version.default' claude/action.yaml
@@ -166,7 +166,7 @@ yq '.inputs.mitmproxy_version.default' claude/action.yaml
 curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
 
 yq '.inputs.codex_version.default' codex/action.yaml
-npm view @openai/codex dist-tags.alpha
+npm view @openai/codex dist-tags.latest
 ```
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
@@ -183,9 +183,10 @@ only launches that mitmproxy and CI smokes the two together, so it needs no
 release stream of its own; move both in one PR, at whatever uv is latest then
 (`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
 
-`codex_version` has no release stream to track either — the bump moves it to
-whatever the `alpha` dist-tag holds. CI's `test-codex-surface` job installs the
-pinned version and asserts the flags `codex exec` is passed plus the
+`codex_version` was held to the `alpha` dist-tag because only prereleases
+carried `codex plugin add`; stable ships it now, so bump to `latest` and drop to
+`alpha` only for a fix not yet released. CI's `test-codex-surface` job installs
+the pinned version and asserts the flags `codex exec` is passed plus the
 `Installed plugin root: ` line the action parses, so a bump that breaks the CLI
 surface fails on its own PR. That is the whole of the confirmation reachable
 here: no `OPENAI_API_KEY` reaches this repo's runs, so an agent session — model
