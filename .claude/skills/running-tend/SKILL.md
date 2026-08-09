@@ -156,7 +156,7 @@ both.
 | `claude_version` | `claude/action.yaml` | track latest |
 | `mitmproxy_version` | `claude/action.yaml` | track latest |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml` | keep it on its prerelease line; bump only to a release confirmed to run under `codex exec` |
+| `codex_version` | `codex/action.yaml` | keep it on its prerelease line; bump it and let CI's surface job confirm it |
 
 ```bash
 yq '.inputs.claude_version.default' claude/action.yaml
@@ -164,6 +164,9 @@ npm view @anthropic-ai/claude-code dist-tags.latest
 
 yq '.inputs.mitmproxy_version.default' claude/action.yaml
 curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
+
+yq '.inputs.codex_version.default' codex/action.yaml
+npm view @openai/codex dist-tags.alpha
 ```
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
@@ -179,6 +182,16 @@ addon-related in its CHANGELOG against the `mitmdump` flags in
 only launches that mitmproxy and CI smokes the two together, so it needs no
 release stream of its own; move both in one PR, at whatever uv is latest then
 (`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
+
+`codex_version` has no release stream to track either — the bump moves it to
+whatever the `alpha` dist-tag holds. CI's `test-codex-surface` job installs the
+pinned version and asserts the flags `codex exec` is passed plus the
+`Installed plugin root: ` line the action parses, so a bump that breaks the CLI
+surface fails on its own PR. That is the whole of the confirmation reachable
+here: no `OPENAI_API_KEY` reaches this repo's runs, so an agent session — model
+selection, `model_reasoning_effort`, whether the final message lands in
+`--output-last-message` — stays unverified. Skim the codex CHANGELOG across the
+bump for those paths and note it in the PR.
 
 ### `uses:` refs
 
