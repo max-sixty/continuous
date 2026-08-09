@@ -15,7 +15,7 @@
 set -eo pipefail
 
 SHARED="$SYSTEM_PROMPT_FILE"
-CLAUDE_DIRECTIVE="Use /tend-ci-runner:running-in-ci before starting work."
+CLAUDE_DIRECTIVE="If the prompt names a tend-ci-runner skill, invoke it — it drives the whole run, and a run that skips it exits clean having done nothing. Use /tend-ci-runner:running-in-ci before starting work."
 AUTONOMY_DIRECTIVE="You are running in CI; no human is available to answer questions. Never prompt for clarification or approval. When uncertain, make the best reasonable choice from the available evidence and proceed. Permissions are pre-approved; tool calls execute without confirmation."
 BASE=$(BOT_NAME="$BOT_NAME" envsubst '$BOT_NAME' < "$SHARED")
 FULL="${CLAUDE_DIRECTIVE}"$'\n\n'"${AUTONOMY_DIRECTIVE}"$'\n\n'"${BASE}"

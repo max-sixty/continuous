@@ -222,15 +222,17 @@ Events pass through three layers before the bot does work:
 1. **GHA `if:` conditions** — evaluated by Actions before the job starts.
    A false condition skips the job entirely (never enters the concurrency
    group, never queues).
-2. **Custom `should_run` logic** (mention only) — a lightweight verify job
-   checks engagement before the expensive handle job runs.
+2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
+   whether the agent boots: mention's verify job checks engagement, review's
+   gate skips a live HEAD already stamped as examined, notifications' check
+   exits when the inbox is clear.
 3. **Concurrency groups** — at most one running job per group.
 
 Concurrency groups:
 
 | Workflow | Group key | Cancel-in-progress |
 |---|---|---|
-| review | `workflow-PR#` | yes — new push invalidates a review |
+| review | `workflow-PR#` | **no** — the session folds pushes in and stamps examined commits (`tend-review/<pr>` status); a pre-check skips the queued run when the live HEAD is stamped |
 | mention/relay | none | stateless — secretless job that re-posts review events as a `repository_dispatch` |
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
@@ -248,14 +250,16 @@ repo only) and `tend-mention`'s review-event paths already filter forks
 via `head.repo.full_name == github.repository`, so neither needs the
 guard.
 
-**GHA queue depth = 1.** With `cancel-in-progress: false` (mention/handle),
-when a third job arrives while one runs and one queues, the pending job is
-replaced. Mitigation lives in the skill prompts: dedup if the bot already
-responded to the triggering comment; self-heal earlier comments without a
-bot reply (oldest first). The workflow injects the queue-to-run time delta
-(seconds between event timestamp and job start) into the prompt — over
-~40 s indicates the job was queued behind another run, making conversation
-drift more likely.
+**GHA queue depth = 1.** With `cancel-in-progress: false` (mention/handle,
+review), when a third job arrives while one runs and one queues, the pending
+job is replaced. For mention, mitigation lives in the skill prompts: dedup if
+the bot already responded to the triggering comment; self-heal earlier
+comments without a bot reply (oldest first). The workflow injects the
+queue-to-run time delta (seconds between event timestamp and job start) into
+the prompt — over ~40 s indicates the job was queued behind another run,
+making conversation drift more likely. For review, replacement is loss-free
+by construction: the pre-check and the skill both judge the live HEAD, so
+whichever run executes covers the replaced event's commits.
 
 ## Skill design: bundled for everyone, overlay for one
 

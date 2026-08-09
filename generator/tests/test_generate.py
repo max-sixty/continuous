@@ -393,6 +393,53 @@ def test_custom_prompt(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     triage = workflows["tend-triage.yaml"]
     assert "Custom triage:" in triage.content
+    # An adopter's prompt replaces the whole thing, `code_review_notice` included,
+    # so it carries no /code-review token — what that property's docstring claims.
+    assert "/code-review" not in triage.content
+
+
+def test_default_prompt_unlocks_code_review(tmp_path: Path) -> None:
+    """Claude prompts stay eligible for the `/code-review` waiver; Codex is untouched.
+
+    The `Skill` tool waives `disable-model-invocation` only for a turn whose own
+    user message names the command, and it finds that name with this regex. A
+    prompt starting with `/` is stored wrapped in `<command-message>` and skipped
+    by the scan, so prose is what keeps the message eligible at all — and the
+    token then has to clear the regex, which a trailing period or a backtick
+    silently fails.
+    """
+    user_typed_this_turn = re.compile(r"(?<!\S)/code-review(?=$|\s)")
+
+    cfg = Config.load(_minimal_config(tmp_path))
+    for skill, args in [("review", "{pr_number}"), ("nightly", "")]:
+        prompt = cfg.default_prompt(skill, args)
+        assert not prompt.startswith("/"), (
+            f"{skill} prompt starts with '/', so Claude Code stores it as a "
+            "slash command and the scan skips it"
+        )
+        assert user_typed_this_turn.search(prompt), (
+            f"{skill} prompt does not carry a bare /code-review token: {prompt!r}"
+        )
+        assert f"/tend-ci-runner:{skill}" in prompt
+
+    codex = Config.load(_minimal_config(tmp_path, "harness: codex\n"))
+    assert codex.default_prompt("review", "{pr_number}") == "$review {pr_number}"
+    assert codex.code_review_notice == ""
+
+    # Rendering is where the token can lose its whitespace: the review prompt is
+    # the one that goes through `_escape_braces`, `''`-quoting and GHA `format()`,
+    # and `mention` is the one workflow whose prompt skips `default_prompt`.
+    claude = {wf.filename: wf for wf in generate_all(cfg)}
+    for name in ["tend-review.yaml", "tend-mention.yaml"]:
+        assert user_typed_this_turn.search(claude[name].content), (
+            f"{name} lost the bare /code-review token in rendering"
+        )
+
+    codex_workflows = {wf.filename: wf for wf in generate_all(codex)}
+    for name, wf in codex_workflows.items():
+        assert "/code-review" not in wf.content, (
+            f"{name} declares /code-review, which the Codex harness has no skill for"
+        )
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
@@ -524,6 +571,32 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert len(checkouts) == 1
     assert checkouts[0]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
     assert "clean" not in checkouts[0]["with"]
+
+
+def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
+    """A push mid-review queues a replacement run; the gate step decides
+    whether it boots an agent.
+
+    The running session folds the push in and stamps examined commits, so the
+    queued run's work is usually already done. That only holds if the gate is
+    the first step and everything after it — checkouts, setup, the agent — is
+    conditioned on its verdict; an ungated step would run (and bill) on every
+    replaced event.
+    """
+    extra = "setup:\n  - run: npm ci\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    job = data["jobs"]["review"]
+
+    assert job["concurrency"]["cancel-in-progress"] is False
+    steps = job["steps"]
+    assert steps[0].get("id") == "gate"
+    assert "tend-review/$PR" in steps[0]["run"]
+    for step in steps[1:]:
+        assert step.get("if") == "steps.gate.outputs.should_run == 'true'", (
+            f"ungated step after the gate: {step}"
+        )
 
 
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
