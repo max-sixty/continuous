@@ -33,17 +33,30 @@ set -euo pipefail
 # `set -o pipefail` is required: without it a curl failure passes empty
 # stdin to the downstream `bash -s --`, which exits 0, masking the
 # failure so the loop breaks after one attempt without retrying.
-for i in 1 2 3; do
+#
+# Five attempts backing off exponentially, not three at a flat 5s. The old
+# window spent all three attempts inside ~15s, which is short enough for one
+# CDN blip to take the whole run: the step goes red, and because `Report
+# failure` is gated on the agent step, a failure this early leaves no outage
+# row either, so the run disappears silently.
+#
+# Jittered, because the legs of a matrix workflow install concurrently from
+# one runner's egress address. A rate limit hits them together, and an
+# unjittered backoff has them retry together too — every leg reproducing the
+# burst that tripped it. The jitter spreads the retries out.
+ATTEMPTS=5
+for i in $(seq 1 "$ATTEMPTS"); do
   if timeout 60 bash -c "set -o pipefail; \
     curl -fsSL https://claude.ai/install.sh | bash -s -- '$CLAUDE_VERSION'"; then
     break
   fi
-  if [ "$i" = 3 ]; then
-    echo "::error::failed to install claude $CLAUDE_VERSION after 3 attempts"
+  if [ "$i" -eq "$ATTEMPTS" ]; then
+    echo "::error::failed to install claude $CLAUDE_VERSION after $ATTEMPTS attempts"
     exit 1
   fi
-  echo "Install attempt $i failed; retrying"
-  sleep $((i * 5))
+  BACKOFF=$((5 * 2 ** (i - 1) + RANDOM % 10))
+  echo "Install attempt $i failed; retrying in ${BACKOFF}s"
+  sleep "$BACKOFF"
 done
 EOF
 if ! sudo -u "$SANDBOX" test -x "$AGENT_HOME/.local/bin/claude"; then

@@ -1320,3 +1320,150 @@ def test_run_issue_reconcile_refuses_a_call_with_no_row(
     assert "the row for this run is required" in result.stderr, result.stderr
     calls = Path(report_failure_env["GH_CALLS"])
     assert not calls.exists(), f"reached gh before refusing: {calls.read_text()}"
+
+
+# ---------------------------------------------------------------------------
+# install-claude-binary.sh — the sandbox install, and the CDN blips it rides out
+# ---------------------------------------------------------------------------
+
+INSTALL_CLAUDE_BINARY = REPO_ROOT / "shared" / "steps" / "install-claude-binary.sh"
+
+# `sudo -u USER rest…` with the -u dropped: the test has no sandbox user, and
+# what is under test is the retry loop rather than the privilege drop.
+FAKE_SUDO = """#!/usr/bin/env bash
+[ "$1" = "-u" ] && shift 2
+exec "$@"
+"""
+
+# Fails with the CDN's 403 for the first $CURL_FAILURES attempts, then emits an
+# installer that plants a `claude` where the script looks for it. Counting in a
+# file rather than a variable because each attempt is a fresh process.
+FAKE_CURL = """#!/usr/bin/env bash
+n=$(cat "$CURL_ATTEMPTS" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$CURL_ATTEMPTS"
+if [ "$n" -le "${CURL_FAILURES:-0}" ]; then
+  echo "curl: (22) The requested URL returned error: 403" >&2
+  exit 22
+fi
+cat <<'INSTALLER'
+mkdir -p "$HOME/.local/bin"
+printf '#!/usr/bin/env bash\\necho claude %s\\n' "$1" > "$HOME/.local/bin/claude"
+chmod +x "$HOME/.local/bin/claude"
+INSTALLER
+"""
+
+# Records what the backoff asked for instead of waiting it out, so a test can
+# assert the shape of the delay without paying it. Distinct from the
+# discard-only FAKE_SLEEP above, which several fixtures share — same module,
+# so reusing that name would rebind theirs.
+FAKE_SLEEP_RECORDING = """#!/usr/bin/env bash
+printf '%s\\n' "$1" >> "$SLEEPS"
+"""
+
+
+@pytest.fixture
+def install_env(tmp_path: Path) -> dict[str, str]:
+    """Fake sudo/curl/sleep on PATH plus the env the install step is given."""
+    bindir = _fake_bin(
+        tmp_path, sudo=FAKE_SUDO, curl=FAKE_CURL, sleep=FAKE_SLEEP_RECORDING
+    )
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+
+    return {
+        "PATH": f"{bindir}:/usr/bin:/bin",
+        "SANDBOX": "tend-sandbox",
+        "AGENT_HOME": str(agent_home),
+        "CLAUDE_VERSION": "2.1.220",
+        "CURL_ATTEMPTS": str(tmp_path / "curl-attempts"),
+        "SLEEPS": str(tmp_path / "sleeps"),
+    }
+
+
+def _run_install(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(INSTALL_CLAUDE_BINARY)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _attempts(env: dict[str, str]) -> int:
+    return int(Path(env["CURL_ATTEMPTS"]).read_text().strip())
+
+
+def _sleeps(env: dict[str, str]) -> list[int]:
+    path = Path(env["SLEEPS"])
+    if not path.exists():
+        return []
+    return [int(line) for line in path.read_text().split()]
+
+
+def test_install_claude_binary_rides_out_a_403_burst(
+    install_env: dict[str, str],
+) -> None:
+    """Four straight 403s must not cost the run.
+
+    Observed in production: every attempt inside a ~15s window answered 403
+    while sibling matrix legs installed fine seconds either side. Three
+    attempts is too few to cross a blip that short, and the step failing this
+    early leaves no outage row, so the run vanishes without a trace.
+    """
+    install_env["CURL_FAILURES"] = "4"
+
+    result = _run_install(install_env)
+
+    assert result.returncode == 0, (
+        f"gave up on a blip it should have ridden out; stderr:\n{result.stderr}"
+    )
+    assert _attempts(install_env) == 5, _attempts(install_env)
+    assert (Path(install_env["AGENT_HOME"]) / ".local/bin/claude").exists()
+
+
+def test_install_claude_binary_backs_off_exponentially(
+    install_env: dict[str, str],
+) -> None:
+    """Each wait at least doubles, so the window spans a blip rather than a burst.
+
+    A flat delay spends every attempt inside the first few seconds, which is
+    the failure above. Only the floors are pinned — the jitter above each one
+    is deliberate and free to vary.
+    """
+    install_env["CURL_FAILURES"] = "99"
+
+    _run_install(install_env)
+
+    assert _sleeps(install_env) == pytest.approx([5, 10, 20, 40], abs=9), (
+        f"backoff did not double: {_sleeps(install_env)}"
+    )
+    assert all(
+        actual >= floor
+        for actual, floor in zip(_sleeps(install_env), [5, 10, 20, 40], strict=True)
+    ), f"slept less than the backoff floor: {_sleeps(install_env)}"
+
+
+def test_install_claude_binary_reddens_when_every_attempt_fails(
+    install_env: dict[str, str],
+) -> None:
+    """A CDN that stays down still fails the step, and says how hard it tried."""
+    install_env["CURL_FAILURES"] = "99"
+
+    result = _run_install(install_env)
+
+    assert result.returncode != 0, result.stdout
+    assert "after 5 attempts" in result.stdout, result.stdout
+    assert _attempts(install_env) == 5, _attempts(install_env)
+
+
+def test_install_claude_binary_installs_first_try_without_sleeping(
+    install_env: dict[str, str],
+) -> None:
+    """The happy path is one fetch and no delay — the retry must not cost it."""
+    result = _run_install(install_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _attempts(install_env) == 1, _attempts(install_env)
+    assert _sleeps(install_env) == [], _sleeps(install_env)
+    assert "claude 2.1.220" in result.stdout, result.stdout
