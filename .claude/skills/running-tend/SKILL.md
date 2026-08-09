@@ -170,7 +170,29 @@ A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
 target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
 between the two versions for anything touching the agent paths (first-run
 onboarding, `--model` alias resolution, headless `-p` result events, Stop-hook
-behavior) and note it in the PR.
+behavior, slash-command or `Skill`-tool handling) and note it in the PR.
+
+One of those paths has to be checked against the binary, not the CHANGELOG.
+Every generated Claude prompt carries a bare `/code-review` token
+(`code_review_notice` in `generator/src/tend/config.py`) to trip the `Skill`
+tool's `disable-model-invocation` waiver, and the scan reading it lives in the
+binary. `test_default_prompt_unlocks_code_review` pins only our side of that
+contract, so if the scan moves, nothing fails — every run just loses its second
+pass. Confirm both halves in the version being pinned and report them in the PR:
+
+```bash
+V=<version being pinned>
+curl -fsSL "https://downloads.claude.ai/claude-code-releases/$V/linux-x64/claude" -o "/tmp/claude-$V"
+# Scan regex: whitespace on both sides of a token built from the command name.
+grep -aoE '\(\?<!\\\\S\)/\$\{[^}]+\}\(\?=\$\|\\\\s\)' "/tmp/claude-$V"
+# Canonical command name, via its (minified, release-unstable) binding.
+grep -aoE 'CODE_REVIEW_WORKFLOW_NAME:\(\)=>[A-Za-z0-9_$]+.{0,60}' "/tmp/claude-$V"
+```
+
+Empty output from either grep means the shape moved; read the surrounding code
+before concluding the waiver still fires. That URL is the path the install
+actually takes — `claude.ai/install.sh` redirects to the same release bucket —
+so a version resolving on npm but not there fails the install.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
