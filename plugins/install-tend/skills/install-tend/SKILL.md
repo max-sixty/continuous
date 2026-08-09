@@ -365,9 +365,8 @@ Bot-deleting an admin-pushed tag is brief availability damage at worst;
 repos that need stronger protection against published-tag deletion can
 add a no-bypass `deletion` ruleset (see the publisher uplift below).
 
-**Environment ref policies.** A ruleset only helps once an Environment
-names the refs it protects. A new Environment defaults to
-`deployment_branch_policy: null`, which admits every ref — so a bot-pushed
+**Environment gates.** A new Environment admits every ref and requires no
+approval — `deployment_branch_policy: null`, no reviewers — so a bot-pushed
 branch or tag reaches its secrets and mints its OIDC token. Survey what
 exists, including environments GitHub created on the repo's behalf
 (`github-pages`) and ones that predate tend:
@@ -377,9 +376,15 @@ gh api "repos/$REPO/environments" \
   --jq '.environments[] | {name, deployment_branch_policy, rules: [.protection_rules[].type]}'
 ```
 
-Pin each environment that holds a secret, or that a job with
-`id-token: write` names, to the admin-gated refs its workflows actually
-use — all tags for a release, the default branch for a continuous deploy:
+Each environment that holds a secret, or that a job with `id-token: write`
+names, needs a gate: a deployment policy pinned to admin-gated refs, or
+required reviewers who exclude the bot. Either clears
+`credential-environments`, so an environment already behind reviewers
+stays as it is.
+
+Pin the policy to the admin-gated refs its workflows actually use — all
+tags for a release, the default branch for a continuous deploy. The
+rulesets above are what hold those refs out of the bot's reach:
 
 ```bash
 gh api "repos/$REPO/environments/$ENV" --method PUT --input - << 'EOF'
@@ -395,6 +400,18 @@ explicit list to the "protected branches only" setting, which admits any
 branch carrying a *classic* protection rule — a set that grows as
 branches are created, and that excludes a branch protected by the
 ruleset above.
+
+Name required reviewers where no ref list fits — a deploy running from a
+ref no policy can name, such as a preview published from
+`refs/pull/N/merge`. Approval holds whatever ref the run starts from. Ask
+which humans to name; the bot cannot be one of them:
+
+```bash
+ID=$(gh api "users/<login>" --jq .id)
+gh api "repos/$REPO/environments/$ENV" --method PUT --input - << EOF
+{"reviewers": [{"type": "User", "id": $ID}], "deployment_branch_policy": null}
+EOF
+```
 
 **Release/deploy workflow design.** Workflows that use release or deploy
 secrets must trigger on `push: tags:` (release) or `push: branches: [main]`
@@ -418,9 +435,8 @@ the bot.
 
 **More complicated approaches are possible** (per-pattern tag rulesets,
 mixed bypass actors, layered no-bypass immutability rulesets for repos
-that publish actions consumed via tag pins, required-reviewer environment
-gates for per-deploy human approval). Install-tend packages the recipe
-above because it is the simplest configuration that holds the chain;
+that publish actions consumed via tag pins). Install-tend packages the
+recipe above because it is the simplest configuration that holds the chain;
 adopters with stricter requirements can layer additional rulesets or
 environment protection rules on top.
 

@@ -2067,6 +2067,77 @@ def test_credential_environments_reusable_caller_job_is_not_ungated_oidc() -> No
     assert result.passed is True
 
 
+def test_credential_environments_absolute_self_call_inherits_caller_triggers() -> None:
+    """A repo calling its own reusable workflow by the `owner/repo/...@ref`
+    form reaches the same file as the relative one, so the callee inherits the
+    caller's triggers either way."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "dispatch.yaml": (
+                "on:\n"
+                "  repository_dispatch:\n"
+                "    types: [publish]\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: owner/repo/.github/workflows/publish.yaml@main\n"
+            ),
+            "publish.yaml": (
+                "on:\n  workflow_call:\njobs:\n  publish:\n    environment: pypi\n"
+            ),
+        },
+    )
+    assert result.passed is False
+    assert "`repository_dispatch`" in result.message
+
+
+def test_credential_environments_own_triggers_reach_a_callable_workflow() -> None:
+    """`workflow_call` alongside triggers of its own widens the way in rather
+    than replacing it: the workflow's own `on:` still starts it here, so an
+    uncallable-from-here verdict would skip a surface tend can read."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "tests.yaml": (
+                "on:\n"
+                "  pull_request:\n"
+                "  push:\n"
+                "    branches: [main]\n"
+                "  schedule:\n"
+                "    - cron: '49 10 * * *'\n"
+                "  workflow_dispatch:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  deploy:\n"
+                "    environment: pypi\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_unreached_through_a_caller_is_unverified() -> None:
+    """A caller that nothing here starts leaves its callee just as unreachable
+    — the chain has to anchor on a workflow with triggers of its own."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "wrapper.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: ./.github/workflows/publish.yaml\n"
+            ),
+            "publish.yaml": (
+                "on:\n  workflow_call:\njobs:\n  publish:\n    environment: pypi\n"
+            ),
+        },
+    )
+    assert result.passed is None
+    assert "publish.yaml is only reachable" in result.message
+
+
 def test_credential_environments_unreached_reusable_workflow_is_unverified() -> None:
     """Its callers may live in another repo, which this cannot enumerate."""
     result = _credential_check(

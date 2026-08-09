@@ -615,7 +615,7 @@ def check_environment_deployments(repo: str) -> CheckResult:
         f"{path} job '{job_id}'"
         for path, text in sorted(files.items())
         if text is not None
-        for job_id in sorted(_parse_workflow(path, text).filed_deployments)
+        for job_id in sorted(_parse_workflow(path, text, repo).filed_deployments)
     ]
     if offenders:
         return CheckResult(
@@ -703,7 +703,7 @@ class _WorkflowFacts:
 
     path: str
     steerable: frozenset[str]  # bot-steerable triggers it carries
-    reusable: bool  # declares `workflow_call`
+    call_only: bool  # `workflow_call` is the only thing that starts it
     calls: frozenset[str]  # local reusable workflows this one invokes
     environments: frozenset[str]  # environments its jobs deploy to
     oidc_environments: frozenset[str]  # …of those, ones a job mints OIDC in
@@ -721,7 +721,25 @@ def _permissions_grant_oidc(permissions: object) -> bool:
     return False
 
 
-def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
+def _called_workflow(uses: str, repo: str) -> str | None:
+    """The workflow file in this repo that a job-level `uses:` names, or None.
+
+    Two spellings reach the same file: the relative form, and the
+    `owner/repo/.github/workflows/x.yaml@ref` form a repo may use on its own
+    workflow to pin the ref it runs. Only a call landing in this repo is
+    followed — another repo's reusable workflow runs against that repo's
+    environments, not this one's.
+    """
+    relative = "./.github/workflows/"
+    if uses.startswith(relative):
+        return uses[len(relative) :]
+    absolute = f"{repo}/.github/workflows/"
+    if repo and uses.casefold().startswith(absolute.casefold()):
+        return uses[len(absolute) :].partition("@")[0]
+    return None
+
+
+def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
     """Read one workflow's triggers, environments, and OIDC use.
 
     Anything the parse cannot decide (an unparsable file, an environment named
@@ -775,8 +793,9 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
             # A job that calls another workflow declares no environment of its
             # own — the called workflow's jobs do, and those are parsed there.
             # Its `permissions:` only caps what the callee may request.
-            if isinstance(uses, str) and uses.startswith("./.github/workflows/"):
-                calls.add(uses.split("/")[-1])
+            called = _called_workflow(uses, repo) if isinstance(uses, str) else None
+            if called is not None:
+                calls.add(called)
             continue
         permissions = job.get("permissions", workflow_permissions)
         oidc = _permissions_grant_oidc(permissions)
@@ -809,7 +828,7 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     return _WorkflowFacts(
         path=path,
         steerable=frozenset(steerable),
-        reusable="workflow_call" in triggers,
+        call_only=triggers == {"workflow_call"},
         calls=frozenset(calls),
         environments=frozenset(environments),
         oidc_environments=frozenset(oidc_environments),
@@ -824,38 +843,45 @@ def _effective_triggers(
 ) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
     """Resolve each workflow's steerable triggers, following `workflow_call`.
 
-    A reusable workflow's own `on:` says only that it is callable; what can
+    `workflow_call` on its own says only that a workflow is callable; what can
     start it is whatever starts its callers. Callers within the repo are
-    followed to a fixpoint. A reusable workflow with no caller here is returned
-    as unreached — its callers may live in another repo, which this cannot
+    followed to a fixpoint, and a workflow no such chain reaches is returned as
+    unreached — its callers may live in another repo, which this cannot
     enumerate.
+
+    A workflow carrying triggers of its own anchors the chain: `workflow_call`
+    widens the way in rather than replacing it, so its own `on:` starts it here
+    whatever else calls it. A callable workflow is then reached when one of its
+    callers is, and unreached when every route to it runs through a workflow
+    only an outside caller can start.
     """
     resolved = {path: f.steerable for path, f in facts.items()}
+    reached = {path: not f.call_only for path, f in facts.items()}
     callers: dict[str, set[str]] = {path: set() for path in facts}
     for path, f in facts.items():
         for callee in f.calls:
             if callee in callers:
                 callers[callee].add(path)
 
-    # Each pass only adds triggers and the vocabulary is finite, so this
-    # settles; the iteration bound keeps a cyclic `uses:` graph from looping.
+    # Each pass only grows the trigger sets and only flips workflows to
+    # reached, so this settles; the iteration bound keeps a cyclic `uses:`
+    # graph from looping.
     for _ in range(len(facts) + 1):
         changed = False
         for path, sources in callers.items():
-            grown = (
-                resolved[path].union(*(resolved[s] for s in sources))
-                if sources
-                else resolved[path]
-            )
+            if not sources:
+                continue
+            grown = resolved[path].union(*(resolved[s] for s in sources))
             if grown != resolved[path]:
                 resolved[path] = grown
+                changed = True
+            if not reached[path] and any(reached[s] for s in sources):
+                reached[path] = True
                 changed = True
         if not changed:
             break
 
-    unreached = frozenset(
-        path for path, f in facts.items() if f.reusable and not callers[path]
-    )
+    unreached = frozenset(path for path, ok in reached.items() if not ok)
     return resolved, unreached
 
 
@@ -870,7 +896,9 @@ class _CredentialSurface:
     unresolved: tuple[str, ...]
 
 
-def _credential_surface(files: dict[str, str | None] | None) -> _CredentialSurface:
+def _credential_surface(
+    repo: str, files: dict[str, str | None] | None
+) -> _CredentialSurface:
     """Read the workflows into the facts the environment gates need.
 
     An unreadable tree yields an empty surface that says so, rather than no
@@ -891,7 +919,7 @@ def _credential_surface(files: dict[str, str | None] | None) -> _CredentialSurfa
         if text is None:
             unresolved.append(f"{path} could not be read")
             continue
-        parsed = _parse_workflow(path, text)
+        parsed = _parse_workflow(path, text, repo)
         facts[path] = parsed
         unresolved.extend(parsed.unresolved)
 
@@ -1088,7 +1116,7 @@ def check_credential_environments(
             name, None, f"Could not list environments: {listed.stderr.strip()}"
         )
 
-    surface = _credential_surface(_fetch_workflow_files(repo))
+    surface = _credential_surface(repo, _fetch_workflow_files(repo))
     tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
     ungated: list[str] = []
