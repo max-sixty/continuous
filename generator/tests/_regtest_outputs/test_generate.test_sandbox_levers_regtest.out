@@ -195,10 +195,10 @@ jobs:
           # comments on purpose: the pull_request_review *submission* kind is
           # deliberately left out, since a review the bot leaves on its own PR
           # is its reviewer role (the prompt is told to action it), not a
-          # self-loop. The self-review skips all sit below, and both are keyed
-          # on the review being terminal for the bot rather than on authorship:
-          # the empty-body APPROVED gate, and any bot review on a PR the bot
-          # did not author.
+          # self-loop. The two self-review skips below are author-keyed, but
+          # each is also narrowed to a case that leaves this run nothing to do:
+          # the empty-body APPROVED gate, and a bot review on a PR the bot did
+          # not author. Neither licenses a blanket self-review skip.
           if { [ "$KIND" = "issue_comment" ] || [ "$KIND" = "pull_request_review_comment" ]; } \
              && [ "$COMMENT_AUTHOR" = "test-bot" ]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -292,10 +292,12 @@ jobs:
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          # A review the bot leaves on someone else's PR is terminal for the
-          # bot: the findings are addressed to that PR's author, and pushing
-          # unbidden to another author's branch is barred by conduct rules, so
-          # there is no author role left to act in. The BOT_REVIEWS heuristic
+          # A review the bot leaves on someone else's PR leaves this run
+          # nothing to do: whatever the review warranted, the tend-review
+          # session that submitted it has already done ? left the findings for
+          # a human author to act on (pushing to their branch unbidden is
+          # barred by conduct rules), or, on a dependency-bot PR where no
+          # author will act, pushed the fix itself. The BOT_REVIEWS heuristic
           # below counts this very review, so without this gate the session
           # always starts and always exits silently. Keyed on author alone ?
           # the APPROVED + empty-body gate above is the same shape narrowed to

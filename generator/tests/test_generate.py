@@ -1103,12 +1103,14 @@ def test_mention_self_comment_skip_spares_review_submissions(
 
 
 def test_mention_skips_bot_review_on_another_authors_pr(tmp_path: Path) -> None:
-    """A review the bot leaves on a PR someone else authored is terminal for
-    the bot: the findings are addressed to that PR's author, and pushing
-    unbidden to another author's branch is barred by conduct rules, so there is
-    no author role left to act in. The BOT_REVIEWS heuristic counts this very
-    review, so without a gate every such review starts a session that can only
-    exit silently (#915). #747's gate covers only the empty-body APPROVED leg —
+    """A review the bot leaves on a PR someone else authored leaves the mention
+    run nothing to do: whatever the review warranted, the tend-review session
+    that submitted it has already done — left the findings for a human author
+    to act on (pushing to their branch unbidden is barred by conduct rules),
+    or, on a dependency-bot PR where no author will act, pushed the fix itself.
+    The BOT_REVIEWS heuristic counts this very review, so without a gate every
+    such review starts a session that can only exit silently (#915). #747's
+    gate covers only the empty-body APPROVED leg —
     the reviews observed here carry 455-1920 char bodies in APPROVED and
     COMMENTED states alike, so the gate must key on author alone.
 
@@ -1150,7 +1152,12 @@ def test_mention_skips_bot_review_on_another_authors_pr(tmp_path: Path) -> None:
     )
 
     # And an @-mention inside the review — body or inline comment — still wins.
-    assert run.index("reviews/$PAYLOAD_ID/comments") < run.index("BOT_REVIEWS=$(")
+    # Anchor the right-hand side to the gate itself, not to the heuristic below
+    # it: the inline fetch has always preceded BOT_REVIEWS, so that comparison
+    # would hold on the pre-change template and pin nothing.
+    assert run.index("reviews/$PAYLOAD_ID/comments") < run.index(
+        '[ "$REVIEW_AUTHOR" = "test-bot" ]', run.index("PR_AUTHOR=$(gh pr view")
+    )
 
 
 # ---------------------------------------------------------------------------
