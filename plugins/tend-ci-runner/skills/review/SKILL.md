@@ -53,7 +53,7 @@ LAST_REVIEW_SHA=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
          | last | .commit_id // empty')
 ```
 
-If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — exit silently. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
+If `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — finish at step 9 without posting. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
 
 If the bot reviewed a previous commit (`LAST_REVIEW_SHA` exists but differs from `HEAD_SHA`), judge what was pushed since. Read two signals, both leak-free against base-merges:
 
@@ -77,7 +77,7 @@ git fetch --no-tags --quiet origin "$BASE_SHA" 2>/dev/null || true
 git log --no-merges --numstat --format='%h %s' "$LAST_REVIEW_SHA..$HEAD_SHA" --not "$BASE_SHA"
 ```
 
-If the incremental changes are trivial, skip the full review — go directly to step 7 to resolve any bot threads addressed by the new changes. After resolving threads: if the most recent bot review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE with an empty body so the PR isn't left in limbo. Otherwise do not submit a new review — the existing one stands. Do NOT proceed to steps 2–6. Rough heuristic: changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow are typically trivial.
+If the incremental changes are trivial, skip the full review — go directly to step 7 to resolve any bot threads addressed by the new changes. After resolving threads: if the most recent bot review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE with an empty body so the PR isn't left in limbo. Otherwise do not submit a new review — the existing one stands. Do NOT proceed to steps 2–6; finish at step 9. Rough heuristic: changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow are typically trivial.
 
 **Commit and PR authorship do not affect review behavior.** Apply the same trivial-vs-substantive heuristic regardless of who pushed the new commits. When `tend-notifications` or `tend-ci-fix` pushes a fix to a human-authored PR, reviewing (and re-approving) the updated state is expected — the reviewer role is independent of commit authorship.
 
@@ -113,7 +113,7 @@ gh api graphql -F query=@/tmp/inline-prev.graphql -f owner="$OWNER" -f repo="$NA
         | {path, line, body}"
 ```
 
-**Apply the sibling-workflow dedup rule from `running-in-ci`** to both the review body and inline comments. If a prior bot comment in the conversation already covers a point — a previous review on this or an earlier commit, a `tend-mention` reply, a `tend-triage` post, anything from a tend workflow — omit it from this review and stick to diff-grounded findings. If that leaves no new diff-grounded finding on the incremental changes and the only outstanding concern is a still-unresolved thread from an earlier bot review, do not post a new review: that thread already blocks the PR, and restating "the prior thread still applies" on every push is noise. Resolve any bot threads the new commits addressed (step 7), then exit without posting. A fresh review is warranted only when the incremental diff introduces a new finding, or resolves the last open one (then approve with an empty body). When concurrent runs race (a new push while the first run is still responding), both see the same unanswered question — check whether a bot reply exists after the question's timestamp before answering. Address remaining unanswered questions in the review body (not via `gh pr comment`).
+**Apply the sibling-workflow dedup rule from `running-in-ci`** to both the review body and inline comments. If a prior bot comment in the conversation already covers a point — a previous review on this or an earlier commit, a `tend-mention` reply, a `tend-triage` post, anything from a tend workflow — omit it from this review and stick to diff-grounded findings. If that leaves no new diff-grounded finding on the incremental changes and the only outstanding concern is a still-unresolved thread from an earlier bot review, do not post a new review: that thread already blocks the PR, and restating "the prior thread still applies" on every push is noise. Resolve any bot threads the new commits addressed (step 7), then finish at step 9 without posting. A fresh review is warranted only when the incremental diff introduces a new finding, or resolves the last open one (then approve with an empty body). When concurrent runs race (a new push while the first run is still responding), both see the same unanswered question — check whether a bot reply exists after the question's timestamp before answering. Address remaining unanswered questions in the review body (not via `gh pr comment`).
 
 #### Draft mode
 
@@ -126,7 +126,7 @@ If `IS_DRAFT == "true"`, run a lighter review:
 - Skip step 6 (CI monitoring) — drafts churn; CI failures are the author's to chase.
 - Skip step 8 (push fixes) — never push to a WIP branch.
 
-Steps 1, 3, 4 (without duplication scan), 5 (COMMENT path), and 7 still apply. Stay silent if there's nothing actionable; don't post a "looks fine" comment.
+Steps 1, 3, 4 (without duplication scan), 5 (COMMENT path), 7, and 9 still apply. Stay silent if there's nothing actionable; don't post a "looks fine" comment.
 
 ### 2. Check for overlapping PRs
 
@@ -225,7 +225,7 @@ REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 BOT_LOGIN=$(gh api user --jq '.login')
 read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json commits,state \
   --jq '"\(.commits[-1].oid) \(.state)"')
-[ "$CURRENT_HEAD" != "$HEAD_SHA" ] && echo "HEAD moved — skipping" && exit 0
+[ "$CURRENT_HEAD" != "$HEAD_SHA" ] && echo "HEAD moved — fold in per step 9, then re-run these mechanics against $CURRENT_HEAD" && exit 0
 [ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
 
 # Same substantive-review filter as step 1, and for the same reason: a synthetic
@@ -241,34 +241,56 @@ ALREADY_POSTED=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
     'add | [.[] | select(.user.login == $bot and .commit_id == $head)
                 | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
          | last | .submitted_at // empty')
-[ -n "$ALREADY_POSTED" ] && echo "Already reviewed — skipping" && exit 0
+[ -n "$ALREADY_POSTED" ] && echo "Already reviewed — finish at step 9" && exit 0
 ```
 
 The state check matters because the maintainer may close (or another path may merge) the PR while a review is in flight — `pull_request_target` reviews routinely run for 5–10 minutes between fetching `HEAD_SHA` and posting the verdict, and HEAD doesn't move when the PR is closed. Approving a CLOSED or MERGED PR creates a confusing artifact (an approval timestamped after the close).
 
-**Before APPROVE specifically**, also peek the current check rollup on `HEAD_SHA`. If any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal:
+When HEAD moved, don't discard the assembled review — no other run will pick it up: the concurrency group holds the queued replacement until this session ends, and the pre-check skips it once step 9 stamps what this session examined. Instead judge the new commits with step 1's incremental logic, drop findings they addressed, fold in any new ones, and post one review against `$CURRENT_HEAD` (re-run these mechanics against it first).
+
+**Before APPROVE specifically**, also peek the current check rollup on `HEAD_SHA`. If any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal.
+
+Reduce the rollup to the **latest entry per check name and workflow** before reading it. When a concurrency-cancelled run is replaced, GitHub keeps *both* check runs on the commit, so an un-deduped scan reports the superseded `FAILURE` alongside the replacement's `SUCCESS` — and keeps reporting it forever. Key on `workflowName` as well as the name: two workflows can register the same check name, and collapsing those into one entry would hide a genuine red behind an unrelated green.
 
 ```bash
-FAILED=$(gh pr view <number> --json statusCheckRollup \
-  --jq '[.statusCheckRollup[]
+ROLLUP=$(gh pr view <number> --json statusCheckRollup \
+  --jq '[.statusCheckRollup[]] | group_by([.name // .context, .workflowName]) | map(max_by(.startedAt))')
+
+FAILED=$(jq -r '[.[]
          | select((.conclusion // .state) == "FAILURE")
-         | .name // .context // "unknown"] | join(", ")')
-PENDING=$(gh pr view <number> --json statusCheckRollup \
-  | jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
-      [.statusCheckRollup[]
+         | .name // .context // "unknown"] | join(", ")' <<<"$ROLLUP")
+PENDING=$(jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
+      [.[]
        | select((.detailsUrl // .targetUrl // "") | test($own) | not)
        | select((.workflowName // "") == $wf | not)
        | (.status // .state)
-       | select(IN(["IN_PROGRESS","QUEUED","PENDING","WAITING","REQUESTED","EXPECTED"][]))] | length')
+       | select(IN(["IN_PROGRESS","QUEUED","PENDING","WAITING","REQUESTED","EXPECTED"][]))] | length' <<<"$ROLLUP")
 ```
+
+`$ROLLUP` is shell state, and the poll the branches below prescribe is necessarily its own Bash call, so the variable is gone when you come back. **Re-run that whole block — not just the `FAILED=` line — after any poll.** Both stale reads fail toward approval and neither errors: `jq` over an empty `$ROLLUP` exits 0, so `$FAILED` reads clean, and the provenance loop iterates zero times, making its "every one `cancelled`" test vacuously true.
 
 **Don't treat a mid-flight rollup as settled.** A `FAILURE` co-existing with checks still in flight (`$PENDING > 0`) is often a *stale cancellation-cascade* artifact, not a real failure: when several events fire near-simultaneously (e.g. Dependabot opening a PR), the `tests` concurrency group cancels all but the latest, and a cancelled contributor makes an `if: always()` merge-gate omnibus (like PRQL's `check-ok-to-merge`) resolve to conclusion `FAILURE` — *not* `cancelled`, so it slips past the post-approve cancellation awareness below and reads as red. A fresh replacement run is already in flight and will re-register the omnibus. So decide on the **settled** rollup:
 
-- **`$FAILED` set and `$PENDING > 0`** — the rollup hasn't settled. Foreground-poll until non-own checks are terminal (the Step 6 / `running-in-ci` CI-monitoring loop), then re-peek `$FAILED`. Judge the settled state, not the mid-flight snapshot — a stale cancellation-cascade `FAILURE` clears once the replacement run's omnibus goes green.
-- **`$FAILED` set and `$PENDING == 0`** — genuine terminal red. Skip the close-out (`exit 0`). But if **no prior substantive bot review** stands on this PR, don't exit fully silent or leave only a `+1` reaction — a clean external-dependency bump then carries zero review signal. Post a brief COMMENT recording the diff assessment and why approval is held (e.g. "Diff is a correct, mechanical dependency bump; holding APPROVE because `check-ok-to-merge` is red."). Any earlier substantive review (e.g. a COMMENT with inline suggestions) already stands as the active verdict — leave it. On a bot PR where you intend to push the fix yourself (step 8), post that COMMENT **before** pushing — the push cancels this session.
+- **`$FAILED` set and `$PENDING > 0`** — the rollup hasn't settled. Foreground-poll until non-own checks are terminal (the Step 6 / `running-in-ci` CI-monitoring loop), then re-run the rollup block and read `$FAILED` off the fresh `$ROLLUP`. Judge the settled state, not the mid-flight snapshot — a stale cancellation-cascade `FAILURE` drops out of `$FAILED` once the replacement omnibus registers, but *only* via the reduction above; the superseded check run itself never leaves the commit.
+- **`$FAILED` set and the poll cap expired with `$PENDING > 0`** — settlement is out of reach this session; a release or nightly matrix routinely outlasts the cap. Re-run the rollup block first — the loop below reads `$ROLLUP`, and the expired poll was its own Bash call. Then decide on **provenance**, not on settlement: resolve each remaining `FAILURE` to its run and read that run's own conclusion.
+
+  ```bash
+  for url in $(jq -r '.[] | select((.conclusion // .state) == "FAILURE")
+                     | .detailsUrl // .targetUrl // empty' <<<"$ROLLUP"); do
+    RUN=$(sed -nE 's#.*/actions/runs/([0-9]+).*#\1#p' <<<"$url")
+    if [ -n "$RUN" ]; then
+      gh run view "$RUN" --json conclusion --jq '.conclusion'
+    else
+      echo "unresolved: $url"   # third-party status context, not an Actions run
+    fi
+  done
+  ```
+
+  Every one `cancelled` — the red is superseded, so APPROVE and name the still-unverified checks in the body. `cancelled` is the only conclusion that earns an approval here: a real `failure`, an empty conclusion (the run is still going, so the job failed on its own merits), or an unresolvable URL (a third-party status context like `codecov/patch`, never an Actions run) all take the terminal-red branch below. Don't leave this to improvisation: the same stale red must not draw an APPROVE on one PR and a withheld approval on the next.
+- **`$FAILED` set and `$PENDING == 0`** — genuine terminal red. Skip the close-out and finish at step 9. But if **no prior substantive bot review** stands on this PR, don't exit fully silent or leave only a `+1` reaction — a clean external-dependency bump then carries zero review signal. Post a brief COMMENT recording the diff assessment and why approval is held (e.g. "Diff is a correct, mechanical dependency bump; holding APPROVE because `check-ok-to-merge` is red."). Any earlier substantive review (e.g. a COMMENT with inline suggestions) already stands as the active verdict — leave it. On a bot PR where you intend to push the fix yourself (step 8), post that COMMENT before pushing, while the rollup it describes is still the current one.
 - **`$FAILED` empty** — proceed with APPROVE.
 
-Step 6's "approve, foreground-poll CI, dismiss if a check fails" pattern only recovers while the session is still alive — the job timeout or a poll cap can leave a post-approve failure undismissed and the PR carrying a misleading APPROVED state. A synchronous pre-APPROVE peek catches the case where the failure is already in the rollup — including non-required checks like `codecov/patch` that an overlay treats as a merge gate. Waiting for the rollup to settle before this peek is what keeps a superseded red from being mistaken for a real one.
+Step 6's "approve, foreground-poll CI, dismiss if a check fails" pattern only recovers while the session is still alive — the job timeout or a poll cap can leave a post-approve failure undismissed and the PR carrying a misleading APPROVED state. A synchronous pre-APPROVE peek catches the case where the failure is already in the rollup — including non-required checks like `codecov/patch` that an overlay treats as a merge gate. Reducing to the latest entry per name and workflow — and, when the cap expires first, checking each `FAILURE`'s run conclusion — is what keeps a superseded red from being mistaken for a real one.
 
 Post at most one review per run. Give a verdict (**approve** or **comment**, never "request changes") when this run has something to say: a new diff-grounded finding, or an approval because the last open concern is now resolved. If the dedup rule above left nothing new and a prior unresolved bot thread still stands, post nothing; the earlier review remains the active verdict. Use `gh pr review` for reviews, not `gh pr comment`. Note: `--comment` requires a non-empty body — if there's nothing to say and no prior concern stands, use the approve-with-empty-body pattern.
 
@@ -353,9 +375,9 @@ Prevention: before writing any inline comment, verify the target line falls insi
 
 ### 6. Monitor CI
 
-If you **stayed silent** (no review posted, nothing to dismiss), end the session — there's no follow-up gated on the CI result. Don't background-poll: per `/tend-ci-runner:running-in-ci` under "End the turn only when work is shipped", the completion notification isn't reliably delivered to a CI session.
+If you **stayed silent** (no review posted, nothing to dismiss), skip to step 9 — there's no follow-up gated on the CI result. Don't background-poll: per `/tend-ci-runner:running-in-ci` under "End the turn only when work is shipped", the completion notification isn't reliably delivered to a CI session.
 
-If you **approved**, the dismissal-on-failure is a gated follow-up. Foreground-poll using the recipe in `/tend-ci-runner:running-in-ci` under "CI Monitoring" (don't use `run_in_background`).
+If you **approved**, the dismissal-on-failure is a gated follow-up. Foreground-poll using the recipe in `/tend-ci-runner:running-in-ci` under "CI Monitoring" (don't use `run_in_background`). If the PR head moves while polling — a new push landed — stop polling the stale commit and fold the push in per step 9; resume monitoring on the new HEAD if it earns a verdict of its own.
 
 Then handle the outcome:
 
@@ -436,9 +458,7 @@ Outdated comments (null line) are best-effort — skip if the original context c
 
 ### 8. Push fixes
 
-**A push cancels this session — make it the last thing you do.** `tend-review` triggers on `synchronize` with `cancel-in-progress: true` on a per-PR group, so pushing to the branch under review starts a replacement run that cancels this one within seconds, mid-tool-call. The replacement run starts cold against the new HEAD and does not resume this review, so anything still pending at push time is lost. Submit the review (step 5) and resolve threads (step 7) **before** pushing, and say in the review body that the fix is coming rather than planning to review after.
-
-This is the one exception to `running-in-ci`'s "a pushed fix is always gated" rule: you cannot poll the pushed fix's CI, because the session ends before it settles — and nothing else reliably picks it up. The replacement run's pre-flight reads reviews and the diff, never the rollup, and a small fix commit takes the trivial-skip path that bypasses steps 2–6. So name the pushed fix as CI-unverified in the review body, which keeps the gap visible in the thread.
+Pushing to the branch under review fires `synchronize`, which queues a replacement run behind this session rather than cancelling it. Submit the review (step 5) and resolve threads (step 7) before pushing, so the review documents the code the fix responds to. Then treat your own push like any other fold-in (step 9): judge it with step 1's trivial-skip heuristic — you already know the increment — and poll its CI to green per `running-in-ci`'s "a pushed fix is always gated" before ending the session.
 
 **Bot PRs** (Dependabot, renovate, etc.): There is no human author to act on feedback, so a review that only describes the fix leaves the PR red and pushes the work onto a maintainer — the opposite of the point. If you can articulate the fix, apply it: commit and push it to the PR branch. "Not a one-token change" and "more than one syntactically valid form exists" are **not** reasons to defer — pick the option most consistent with the surrounding code and the repo's existing conventions, push it, and note any alternative in the review. The only bar for deferring is that *no defensible default exists*: a genuine semantic ambiguity that needs maintainer intent, not merely a fix that took thought to derive. If the review already worked out the answer, that answer is pushable. Rebase onto the latest target branch first if the branch is behind.
 
@@ -450,3 +470,24 @@ git add <files>
 git commit -m "fix: <description>"
 git push
 ```
+
+### 9. Stamp examined HEADs, then re-check for a new push
+
+Every session on an open PR ends here, whichever path it took — a posted review, an approval, a pushed fix, or silence. A PR found CLOSED or MERGED skips it: the workflow's pre-check already skips closed PRs, so a stamp there gates nothing.
+
+**Stamp each HEAD this session fully examined**, whatever the verdict was. Fully examined means the flow above ran against that commit; a stamp on a commit you only glanced at suppresses its review, which is worse than the redundant agent boot an unstamped examination costs.
+
+```bash
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+# HEAD_SHA: the commit this session examined — after a fold-in, re-point it at
+# the folded-in commit. Never derive it from the live head here: in the race
+# window a fresh push is a head this session hasn't reviewed.
+gh api "repos/$REPO/statuses/$HEAD_SHA" \
+  -f state=success -f context="tend-review/<number>" \
+  -f description="examined by tend-review" \
+  -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+```
+
+The generated workflow holds a replacement run queued by any mid-session push until this session ends; a pre-check then reads this stamp off the live HEAD and skips the agent when it's present. The context carries the PR number because one branch can be two open PRs with different bases — an examination of one must not gate the other.
+
+**Then re-fetch the live HEAD and draft state.** If the PR left draft mode during the session, run the full non-draft flow on the current HEAD before stamping it: the `ready_for_review` run that would have done so may sit queued behind this session and be replaced by a later push's run, which the stamp would gate out. If HEAD moved, fold the push in rather than leaving it to the queued run's cold start: judge the increment with step 1's incremental logic (the trivial-skip heuristic applies), act on the result — a review per step 5, thread resolution per step 7, or silence — stamp the commit, and re-check again. After three fold-ins, end the session leaving the newest HEAD unstamped; the queued run picks it up with a fresh view.
