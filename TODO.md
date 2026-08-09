@@ -280,11 +280,16 @@ The same gap covers `tend-outage`; #816 tracks it from that side, and the
 ## Decide whether the built-in `/code-review` replaces the vendored port
 
 `plugins/tend-ci-runner/skills/code-review/` is a copy of Claude Code's
-built-in `/code-review`, read out of the 2.1.220 binary `claude/action.yaml`
-pins. The two share their method almost verbatim — the same ten angles, the
-same three-verdict verify with "PLAUSIBLE by default", the same sweep — so the
-copy buys nothing on method and costs the usual: it drifts silently, and
-nothing re-checks it against the binary.
+built-in `/code-review`, taken from a 2.1.220 binary. The two share their
+method almost verbatim — the same ten angles, the same three-verdict verify
+with "PLAUSIBLE by default", the same sweep — so the copy buys nothing on
+method and costs the usual: it drifts silently, and nothing re-checks it
+against the binary.
+
+That drift is no longer hypothetical. `claude/action.yaml` now pins 2.1.226,
+which restructured the built-in without touching those texts, so the copy is
+already a version behind the binary CI runs — and the thing that changed is
+exactly what decides this question.
 
 Reaching the built-in is possible. It carries `disable-model-invocation`,
 which the `Skill` tool waives for a turn whose own user message names the

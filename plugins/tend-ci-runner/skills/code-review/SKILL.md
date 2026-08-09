@@ -8,7 +8,7 @@ metadata:
 
 # Code review
 
-A structured pass over a diff that returns ranked findings. Ported from Claude Code's built-in `/code-review`, read out of the 2.1.220 binary `claude/action.yaml` pins. The Codex harness has no built-in equivalent, and on Claude the built-in carries `disable-model-invocation`, which no tend prompt lifts. This copy is tend-owned: reachable from the model on either harness.
+A structured pass over a diff that returns ranked findings. Ported from Claude Code's built-in `/code-review`. The Codex harness has no built-in equivalent, and on Claude the built-in carries `disable-model-invocation`, which no tend prompt lifts. This copy is tend-owned: reachable from the model on either harness.
 
 **Return findings; don't act on them.** No review, comment, commit, or artifact from this skill — the caller folds the findings into its own single review.
 
