@@ -87,8 +87,7 @@ jobs:
           kill "$pid" 2>/dev/null || true
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
-  # `codex_version` is the one action pin with no upstream release stream to
-  # follow, and the weekly rule that governs it asked for a confirmation
+  # The weekly rule that governed `codex_version` asked for a confirmation
   # nothing here could produce ("bump only to a release confirmed to run under
   # `codex exec`"): no OPENAI_API_KEY reaches this repo's runs and no workflow
   # sets `harness: codex`, so the pin drifted by default rather than by
@@ -103,9 +102,9 @@ jobs:
   # .agents/plugins/marketplace.json or the plugin manifest that Codex can no
   # longer install fails here rather than in an adopter's job.
   #
-  # It does not cover an agent session: model selection,
-  # `model_reasoning_effort`, sandbox behavior, and whether the final message
-  # reaches --output-last-message all need a real key.
+  # It does not cover an agent session: sandbox behavior under a live model,
+  # and whether the final message reaches --output-last-message, both need a
+  # real key.
   test-codex-surface:
     runs-on: ubuntu-24.04
     steps:
@@ -149,6 +148,24 @@ jobs:
           # would break with the job still green.
           test -f "$root/skills/triage/SKILL.md"
           test -x "$root/scripts/list-recent-runs.sh"
+
+          # `model_reasoning_effort` is passed as a `-c` override, so a rename
+          # would be silently ignored rather than rejected — `--help` can't see
+          # it. `--strict-config` does validate `-c` keys, and both probes stop
+          # at the trusted-directory check before any network call, so this
+          # stays offline and fast. Run from a non-repo dir to hit that check.
+          probedir=$(mktemp -d)
+          probe() { (cd "$probedir" && codex exec --strict-config -c "$1" x </dev/null 2>&1); }
+          # Negative control: if this stops erroring, --strict-config no longer
+          # validates -c keys and the positive check below proves nothing.
+          if ! probe 'model_reasoning_effortZZZ="low"' | grep -q 'unknown configuration field'; then
+            echo "::error::codex $v no longer rejects unknown -c keys under --strict-config; the check below is void"
+            exit 1
+          fi
+          if probe 'model_reasoning_effort="low"' | grep -q 'unknown configuration field'; then
+            echo "::error::codex $v no longer accepts the model_reasoning_effort config key"
+            exit 1
+          fi
 
   # The OAuth wrapper ships inside the install-tend plugin rather than under
   # generator/, so the suites above never reach it. Its extractors decide what
