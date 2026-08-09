@@ -588,9 +588,21 @@ If you can't find source evidence for a specific detail, say so ("I'm not sure o
 Intermittent or inconsistent behavior — the same query returning different results within seconds, an API silently returning empty when records demonstrably exist, a CLI flag working sometimes — points more strongly at an active upstream incident than at a CLI or skill bug. Reproducing the flake confirms the symptom but not the cause; the cause is often a current incident on the upstream service, in which case the right disposition is to wait for resolution rather than commit a code workaround that outlives the incident. Before designing a workaround, check upstream status. For GitHub-side symptoms:
 
 ```bash
-curl -s 'https://www.githubstatus.com/api/v2/incidents/unresolved.json' \
-  | jq '.incidents[] | {created_at, name, impact, components: [.components[].name]}'
+# Fetch first, parse second. The endpoint sits behind an edge that sometimes
+# answers a CI runner with an HTML challenge page instead of JSON; piping that
+# straight into jq gives a parse error on stderr and an empty stdout, which
+# reads exactly like "no open incidents". `-f` turns the non-200 into a
+# non-zero exit, and capturing it means the pipeline's status is curl's, not
+# jq's (a bare `curl … | jq … || …` exits 0 on the challenge page).
+if ! INCIDENTS=$(curl -fsS 'https://www.githubstatus.com/api/v2/incidents/unresolved.json'); then
+  echo 'STATUS PROBE FAILED — upstream state unknown, not clear'
+else
+  echo "$INCIDENTS" \
+    | jq '.incidents[] | {created_at, name, impact, components: [.components[].name]}'
+fi
 ```
+
+**A failed probe is `unknown`, never `clear`.** Empty output from a successful query means no open incident; a probe that errored means you didn't check. Both resolve the same way — record the symptom in the evidence log and skip the workaround PR — so an unreachable status endpoint is not a reason to file one.
 
 If the response is non-empty and the components/timing match the symptom (e.g. Issues / Pull Requests / Actions during a search-degradation incident), record the symptom in the run's evidence log and exit without a PR. Sibling matrix legs that hit different surface symptoms of the same incident otherwise each open their own near-duplicate workaround PR — title and file dedup don't catch them because each leg picks a different command to mitigate.
 
