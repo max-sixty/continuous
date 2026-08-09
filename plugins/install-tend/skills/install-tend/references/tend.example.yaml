@@ -132,7 +132,7 @@ bot_name: my-project-bot
 # `uses` with action inputs and step-level env:
 #
 #     setup:
-#       - uses: actions/setup-node@v4
+#       - uses: actions/setup-node@v7
 #         name: Setup Node
 #         with:
 #           node-version-file: .node-version
@@ -140,7 +140,7 @@ bot_name: my-project-bot
 #           FORCE_COLOR: "1"
 #
 #     # renders as:
-#     #   - uses: actions/setup-node@v4
+#     #   - uses: actions/setup-node@v7
 #     #     name: Setup Node
 #     #     with:
 #     #       node-version-file: .node-version
