@@ -170,7 +170,7 @@ A separate mention on a different issue/PR can trigger a concurrent run asking f
 
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
-gh pr list --state all --author "$BOT_LOGIN" --limit 30 \
+gh pr list --state all --author "$BOT_LOGIN" --limit 200 \
   --json number,title,state,mergedAt,headRefName,createdAt
 ```
 
@@ -587,7 +587,7 @@ If you can't find source evidence for a specific detail, say so ("I'm not sure o
 
 **`--jq` projections must include the ID when downstream URLs cite individual items.** Composing `actions/runs/<id>`, `#issuecomment-<id>`, or `pull/<n>` URLs from `gh run list` / `gh api .../comments` / `gh pr list` results requires the ID field in the projection (`databaseId` for runs, `id` for comments, `number` for PRs/issues). If the projection kept only timestamps, titles, or bodies, the bot composes the URL from what it has and fabricates the missing ID — the link 404s. Re-query with the ID field rather than guessing.
 
-**`gh` list commands cap at 30 by default — pass `--limit` whenever the result set is the answer.** `gh issue list`, `gh pr list`, and `gh run list` return 30 items unless told otherwise, and nothing in the output says it truncated. Two shapes go wrong: a dedup scan misses the existing issue or PR sitting past the cap and opens a duplicate, and a survey ("check every open issue") reports complete coverage of the 30 it happened to see. A count that reads exactly 30 across repeated measurements is the signature — that's the cap, not a stable value. Set an explicit `--limit` above the plausible ceiling on any query used to dedup, survey, or count.
+**`gh` list commands truncate silently — pass `--limit` whenever the result set is the answer.** `gh issue list`, `gh pr list`, and `gh search` return 30 items unless told otherwise; `gh run list` returns 20. Nothing in the output says it truncated. Two shapes go wrong: a dedup scan misses the existing issue or PR sitting past the cap and opens a duplicate, and a survey ("check every open issue") reports complete coverage of the rows it happened to see. A count that reads exactly the default across repeated measurements is the signature — that's the cap, not a stable value. Set an explicit `--limit` above the plausible ceiling on any query used to dedup, survey, or count. Client-side filtering inside `--jq` is the worst variant: the filter hides the truncation, so a capped result reads as a legitimately short one.
 
 **"Likely" is a stop-sign.** A hedge in a user-facing claim — "likely works", "probably parses as", "should behave like", "I think" — means it rests on an unverified guess. Two options: verify and replace the hedge with the answer, or hedge explicitly ("I haven't tested this — would appreciate if you can confirm") and don't dress up the guess as analysis. The shape is the tell, not the exact words: posting an unverified guess as confident-sounding analysis is the hallucination that erodes trust the fastest.
 

@@ -203,7 +203,7 @@ mention, notifications, weekly, and review-reviewers runs get the same treatment
 
 ```bash
 # Bot PR dispositions — merged or closed in the window
-gh pr list --author "$BOT_LOGIN" --state all --json number,title,state,closedAt \
+gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,state,closedAt \
   --jq '.[] | select(.closedAt > "'$SINCE'")'
 ```
 

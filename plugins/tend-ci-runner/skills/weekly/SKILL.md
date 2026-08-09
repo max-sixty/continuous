@@ -14,7 +14,7 @@ Load `/tend-ci-runner:running-in-ci` first — it contains CI security rules, re
 ## Step 1: Find dependency PRs
 
 ```bash
-gh pr list --state open --json number,title,author,labels \
+gh pr list --state open --limit 200 --json number,title,author,labels \
   --jq '.[] | select(.author.login == "dependabot[bot]" or .author.login == "renovate[bot]" or (.labels | any(.name == "dependencies")))'
 ```
 
