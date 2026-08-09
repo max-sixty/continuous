@@ -194,8 +194,10 @@ runs:
     # plugins, and the run all execute as the sandbox user. Cache the proxy's
     # mitmproxy download (a sizeable dependency) in an isolated uv cache dir,
     # keyed on the pinned version. First run populates; every run after restores
-    # in seconds instead of a cold ~20s resolve. Scoped to the proxy's uv; a
-    # skill that installs its own uv gets that uv's default cache, untouched.
+    # instead of pulling ~100MB from PyPI again (measured 2026-08-09 on a
+    # GitHub-hosted runner: 2.2s cold, 0.5s restored — the saving is the reach,
+    # more than the seconds). Scoped to the proxy's uv; a skill that installs
+    # its own uv gets that uv's default cache, untouched.
     - name: Cache mitmproxy
       uses: actions/cache@v4
       with:

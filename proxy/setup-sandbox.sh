@@ -61,6 +61,12 @@ if [ -z "${MITMPROXY_VERSION:-}" ]; then
   exit 1
 fi
 
+# The window the pre-agent third-party reaches share; the mitmproxy cache warm
+# below is one of them. Sourced up here rather than at the point of use so a
+# wrong path fails now, ahead of the user creation and the workspace chown.
+# shellcheck source=../shared/steps/lib/retry.sh
+. "${ACTION_PATH}/shared/steps/lib/retry.sh"
+
 # 1. Non-sudo sandbox user. -m gives it /home/tend-sandbox (0755, so the
 #    runner can still read the session logs it writes).
 if ! id "$SANDBOX" >/dev/null 2>&1; then
@@ -309,14 +315,30 @@ chmod 700 "$CONFDIR"
 # Warm the uvx cache first so the backgrounded launch starts immediately and
 # the readiness wait below measures startup, not a cold dependency resolve.
 # Pinned + UV_CACHE_DIR (set by the action) point at the actions/cache-backed
-# dir, so this is a fast restore after the first run.
+# dir.
+#
+# On a miss this resolves and downloads mitmproxy from PyPI, which makes it the
+# proxy's own third-party reach, three steps ahead of the agent — so a blip
+# that isn't ridden out costs the whole run. The miss is scheduled rather than
+# rare: the cache key is version-scoped, so every mitmproxy_version bump misses
+# on each workflow's first run, which is when a lost run is most expensive (it
+# reddens the bump PR itself). Hence retry_install.
+#
+# The window covers the backgrounded launch below too: it shares UV_CACHE_DIR,
+# and a cache warmed here serves that same `--from` with no network at all
+# (checked with `uvx --offline`), so PyPI is off the launch path once this line
+# succeeds. Measured on a GitHub-hosted runner, 2026-08-09: 2.2s cold (43
+# packages, ~100MB) and 0.5s restored — far enough inside the 60s timeout that
+# this shares the lib's window rather than needing one of its own.
+#
 # $TEND_UV_DIR holds tend's own pinned uv (shared/steps/install-proxy-uv.sh),
 # addressed absolutely rather than through PATH: the binary that launches the
 # credential-holding process is tend's, not whatever the adopter's `setup:`
 # left on PATH.
 MITMPROXY="mitmproxy==${MITMPROXY_VERSION}"
 UVX="${TEND_UV_DIR}/uvx"
-"$UVX" --from "$MITMPROXY" mitmdump --version >/dev/null
+retry_install "mitmproxy ${MITMPROXY_VERSION}" \
+  "'$UVX' --from '$MITMPROXY' mitmdump --version >/dev/null"
 log "starting proxy"
 # The --allow-hosts regex scopes which hosts mitmproxy TLS-intercepts. It must
 # cover every host the addon injects into — keep it in sync with the

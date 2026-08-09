@@ -1691,3 +1691,79 @@ def test_install_codex_cli_installs_first_try_without_sleeping(
     )
     assert _sleeps(codex_cli_env) == [], _sleeps(codex_cli_env)
     assert "codex-cli 0.131.0-alpha.22" in result.stdout, result.stdout
+
+
+# ---------------------------------------------------------------------------
+# proxy/setup-sandbox.sh — the mitmproxy cache warm, the reach that isn't an
+# installer
+# ---------------------------------------------------------------------------
+
+SETUP_SANDBOX = REPO_ROOT / "proxy" / "setup-sandbox.sh"
+
+
+def _logical_lines(path: Path) -> list[str]:
+    """Script lines with backslash continuations folded, so a call reads as one."""
+    out: list[str] = []
+    buf = ""
+    for raw in path.read_text().splitlines():
+        stripped = raw.strip()
+        if stripped.endswith("\\"):
+            buf += stripped[:-1].rstrip() + " "
+            continue
+        out.append(buf + stripped)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
+def test_setup_sandbox_resolves_the_shared_retry_window() -> None:
+    """The lib path has to resolve from ACTION_PATH the way the action passes it.
+
+    The action points ACTION_PATH at the repo root, and the script runs under
+    `set -euo pipefail`, so a path that doesn't resolve doesn't degrade to an
+    unretried warm — it exits the step, and then every run is lost, not only
+    the ones that hit a blip. Sourcing the script's own line (matched by
+    content) is what makes this a check on the shipped path rather than on a
+    copy of it.
+    """
+    sources = [
+        line
+        for line in _logical_lines(SETUP_SANDBOX)
+        if line.startswith(". ") and "lib/retry.sh" in line
+    ]
+    assert len(sources) == 1, sources
+
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail; {sources[0]}; type -t retry_install"],
+        env={"PATH": "/usr/bin:/bin", "ACTION_PATH": str(REPO_ROOT)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "function", result.stdout
+
+
+def test_setup_sandbox_warms_the_mitmproxy_cache_through_the_window() -> None:
+    """The warm resolves mitmproxy from PyPI on a miss, so it rides the window.
+
+    A miss is scheduled rather than rare — the actions/cache key is scoped to
+    `mitmproxy_version`, so every bump misses on each workflow's first run —
+    and the warm sits three steps ahead of the agent, so a PyPI blip that isn't
+    ridden out costs the whole run, the failure the window exists for.
+
+    Asserted at the call site instead of by running the script: setup-sandbox.sh
+    creates the sandbox user, chowns the workspace and installs a CA before it
+    reaches this line, so the behavioural suites the three installers get don't
+    transfer. What the window itself does is covered there.
+    """
+    warms = [
+        line
+        for line in _logical_lines(SETUP_SANDBOX)
+        if "mitmdump --version" in line and not line.startswith("#")
+    ]
+    assert len(warms) == 1, warms
+    assert warms[0].startswith("retry_install "), (
+        f"the cache warm reaches PyPI outside the retry window: {warms[0]}"
+    )
