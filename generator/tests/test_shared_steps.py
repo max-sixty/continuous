@@ -1390,8 +1390,8 @@ def _run_install(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _attempts(env: dict[str, str]) -> int:
-    return int(Path(env["CURL_ATTEMPTS"]).read_text().strip())
+def _attempts(env: dict[str, str], key: str = "CURL_ATTEMPTS") -> int:
+    return int(Path(env[key]).read_text().strip())
 
 
 def _sleeps(env: dict[str, str]) -> list[int]:
@@ -1573,3 +1573,121 @@ def test_install_proxy_uv_installs_first_try_without_sleeping(
     assert _attempts(proxy_uv_env) == 1, _attempts(proxy_uv_env)
     assert _sleeps(proxy_uv_env) == [], _sleeps(proxy_uv_env)
     assert "uvx-fake" in result.stdout, result.stdout
+
+
+# ---------------------------------------------------------------------------
+# install-codex-cli.sh — the same retry contract, on the npm registry
+# ---------------------------------------------------------------------------
+
+INSTALL_CODEX_CLI = REPO_ROOT / "shared" / "steps" / "install-codex-cli.sh"
+
+# Same failure schedule as the curl fakes, answering with npm's registry-side
+# error instead. On the attempt that succeeds it plants a `codex` on PATH, so
+# the script's closing `codex --version` has something to run.
+FAKE_NPM = """#!/usr/bin/env bash
+n=$(cat "$NPM_ATTEMPTS" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$NPM_ATTEMPTS"
+if [ "$n" -le "${NPM_FAILURES:-0}" ]; then
+  echo "npm error code E503" >&2
+  echo "npm error 503 Service Unavailable - GET https://registry.npmjs.org/$3" >&2
+  exit 1
+fi
+printf '#!/usr/bin/env bash\\necho codex-cli %s\\n' "${3##*@}" > "$FAKE_BIN/codex"
+chmod +x "$FAKE_BIN/codex"
+"""
+
+
+@pytest.fixture
+def codex_cli_env(tmp_path: Path) -> dict[str, str]:
+    """A fake npm/sleep on PATH plus the env the codex install step is given."""
+    bindir = _fake_bin(tmp_path, npm=FAKE_NPM, sleep=FAKE_SLEEP_RECORDING)
+
+    return {
+        "PATH": f"{bindir}:/usr/bin:/bin",
+        "CODEX_VERSION": "0.131.0-alpha.22",
+        "FAKE_BIN": str(bindir),
+        "NPM_ATTEMPTS": str(tmp_path / "npm-attempts"),
+        "SLEEPS": str(tmp_path / "sleeps"),
+    }
+
+
+def _run_codex_cli(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(INSTALL_CODEX_CLI)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_install_codex_cli_rides_out_a_registry_burst(
+    codex_cli_env: dict[str, str],
+) -> None:
+    """The npm install is as exposed as the two CDN ones, and gets the window.
+
+    It is the codex action's only third-party reach, and it runs ahead of the
+    agent step, so a registry blip that exhausts its retries costs the whole
+    run — the sibling failure mode, with registry.npmjs.org in place of a CDN.
+    """
+    codex_cli_env["NPM_FAILURES"] = "4"
+
+    result = _run_codex_cli(codex_cli_env)
+
+    assert result.returncode == 0, (
+        f"gave up on a blip it should have ridden out; stderr:\n{result.stderr}"
+    )
+    assert _attempts(codex_cli_env, "NPM_ATTEMPTS") == 5, _attempts(
+        codex_cli_env, "NPM_ATTEMPTS"
+    )
+
+
+def test_install_codex_cli_backs_off_exponentially(
+    codex_cli_env: dict[str, str],
+) -> None:
+    """Each wait at least doubles; only the floors are pinned, jitter is free."""
+    codex_cli_env["NPM_FAILURES"] = "99"
+
+    _run_codex_cli(codex_cli_env)
+
+    assert _sleeps(codex_cli_env) == pytest.approx([5, 10, 20, 40], abs=9), (
+        f"backoff did not double: {_sleeps(codex_cli_env)}"
+    )
+    assert all(
+        actual >= floor
+        for actual, floor in zip(_sleeps(codex_cli_env), [5, 10, 20, 40], strict=True)
+    ), f"slept less than the backoff floor: {_sleeps(codex_cli_env)}"
+
+
+def test_install_codex_cli_reddens_when_every_attempt_fails(
+    codex_cli_env: dict[str, str],
+) -> None:
+    """A registry that stays down still fails the step, and says how hard it tried."""
+    codex_cli_env["NPM_FAILURES"] = "99"
+
+    result = _run_codex_cli(codex_cli_env)
+
+    assert result.returncode != 0, result.stdout
+    assert "after 5 attempts" in result.stdout, result.stdout
+    assert _attempts(codex_cli_env, "NPM_ATTEMPTS") == 5, _attempts(
+        codex_cli_env, "NPM_ATTEMPTS"
+    )
+
+
+def test_install_codex_cli_installs_first_try_without_sleeping(
+    codex_cli_env: dict[str, str],
+) -> None:
+    """The happy path is one install, no delay, and a codex that answers.
+
+    The version assertion is what keeps the pin honest: the step has to install
+    the `codex_version` it was handed, not npm's `latest`, which still predates
+    `codex plugin add`.
+    """
+    result = _run_codex_cli(codex_cli_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _attempts(codex_cli_env, "NPM_ATTEMPTS") == 1, _attempts(
+        codex_cli_env, "NPM_ATTEMPTS"
+    )
+    assert _sleeps(codex_cli_env) == [], _sleeps(codex_cli_env)
+    assert "codex-cli 0.131.0-alpha.22" in result.stdout, result.stdout

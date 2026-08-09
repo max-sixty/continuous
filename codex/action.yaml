@@ -110,18 +110,18 @@ runs:
           exit 1
         fi
 
-    # Install the Codex CLI from npm. `@openai/codex` ships a prebuilt
-    # per-platform binary, so this is ~3 s with no Rust toolchain. We pin
-    # an explicit version (`codex_version`, default a `0.131.0-alpha.*`)
-    # because tend needs `codex plugin add` (PR #21396, first in
-    # `rust-v0.131.0-alpha.17`) and as of 2026-05-15 npm's `latest`
-    # (0.130.0) still predates it — only the `alpha` dist-tag carries it.
-    # Bump the default once a stable npm release ships PR #21396.
+    # Install the Codex CLI from npm, on the retry window the other pre-agent
+    # installers share (shared/steps/lib/retry.sh). We pin an explicit version
+    # (`codex_version`, default a `0.131.0-alpha.*`) because tend needs
+    # `codex plugin add` (PR #21396, first in `rust-v0.131.0-alpha.17`) and as
+    # of 2026-05-15 npm's `latest` (0.130.0) still predates it — only the
+    # `alpha` dist-tag carries it. Bump the default once a stable npm release
+    # ships PR #21396.
     - name: Install Codex CLI
       shell: bash
-      run: |
-        npm install -g "@openai/codex@${{ inputs.codex_version }}"
-        codex --version
+      run: bash "${{ github.action_path }}/../shared/steps/install-codex-cli.sh"
+      env:
+        CODEX_VERSION: ${{ inputs.codex_version }}
 
     # Install the tend-ci-runner plugin from the action's own checkout.
     # `github.action_path` is .../<runner-cache>/max-sixty/tend/<ref>/codex/;

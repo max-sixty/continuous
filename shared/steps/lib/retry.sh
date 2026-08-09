@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# The retry window the pre-agent installers share: install-claude-binary.sh
-# and install-proxy-uv.sh both fetch from a CDN before the agent step exists,
-# so a blip that exhausts their retries costs the whole run — the step goes red
-# having done none of the work the trigger asked for. The lost run is what
-# justifies a window this wide, independent of how the failure is reported
-# afterwards.
+# The retry window the pre-agent installers share: install-claude-binary.sh,
+# install-proxy-uv.sh and install-codex-cli.sh each reach a third party — two
+# CDNs and the npm registry — before the agent step exists, so a blip that
+# exhausts their retries costs the whole run: the step goes red having done
+# none of the work the trigger asked for. The lost run is what justifies a
+# window this wide, independent of how the failure is reported afterwards.
 #
 # Sourced, not executed.
 
@@ -14,10 +14,10 @@
 # rate limit hits them together, and an unjittered backoff has them retry
 # together too.
 #
-# The inner `set -o pipefail` is required by both callers' `curl | sh`
-# shape: without it a curl failure passes empty stdin to the downstream
-# shell, which exits 0, masking the failure so the loop breaks after one
-# attempt without retrying.
+# The inner `set -o pipefail` is required by the `curl | sh` callers:
+# without it a curl failure passes empty stdin to the downstream shell,
+# which exits 0, masking the failure so the loop breaks after one attempt
+# without retrying.
 retry_install() {
   local label=$1 cmd=$2 attempts=5 i backoff
   for i in $(seq 1 "$attempts"); do
