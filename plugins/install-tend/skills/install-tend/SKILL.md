@@ -25,10 +25,12 @@ not have to ask "where do I do that?".
 ## Kickoff
 
 Read `.config/tend.yaml` first. Its presence says whether this is an install or
-a change to one, and where it exists it already names the harness.
+a change to one, and where it exists it settles the harness: the `harness` key,
+or Claude when the key is absent, which is how a Claude install is normally
+written.
 
-With a config in place, take `harness` from it, lay out only the steps the task
-touches, and start. The summary checklist at the end describes a finished
+With a config in place, take the harness from it, lay out only the steps the
+task touches, and start. The summary checklist at the end describes a finished
 install, so skip it.
 
 With no config yet, choose the harness and lay out the whole install:
