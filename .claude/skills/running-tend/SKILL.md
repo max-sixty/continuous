@@ -183,16 +183,23 @@ pass. Confirm both halves in the version being pinned and report them in the PR:
 ```bash
 V=<version being pinned>
 curl -fsSL "https://downloads.claude.ai/claude-code-releases/$V/linux-x64/claude" -o "/tmp/claude-$V"
-# Scan regex: whitespace on both sides of a token built from the command name.
+# Scan regex: whitespace on both sides of a token built from the invoked
+# skill's name, which the Skill tool passes in at runtime.
 grep -aoE '\(\?<!\\\\S\)/\$\{[^}]+\}\(\?=\$\|\\\\s\)' "/tmp/claude-$V"
-# Canonical command name, via its (minified, release-unstable) binding.
-grep -aoE 'CODE_REVIEW_WORKFLOW_NAME:\(\)=>[A-Za-z0-9_$]+.{0,60}' "/tmp/claude-$V"
+# Every binding of the name, with enough context to tell which is which.
+grep -aoE '.{90}"code-review".{40}' "/tmp/claude-$V"
 ```
 
-Empty output from either grep means the shape moved; read the surrounding code
-before concluding the waiver still fires. That URL is the path the install
-actually takes — `claude.ai/install.sh` redirects to the same release bucket —
-so a version resolving on npm but not there fails the install.
+The second grep prints several hits and only one is the half that matters: the
+bundled-skill name list, a run of `var` assignments with `dataviz` and
+`code-walkthrough` as neighbors. A `CODE_REVIEW_WORKFLOW_NAME` hit names the
+built-in code-review *workflow* instead — a skill-side rename need not move it,
+so reading that one as the answer reports "still fine" on exactly the failure
+this check exists to catch. Empty output from either grep means the shape
+moved; read the surrounding code before concluding the waiver still fires. That
+URL is the path the install actually takes — `claude.ai/install.sh` redirects
+to the same release bucket — so a version resolving on npm but not there fails
+the install.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
