@@ -591,10 +591,12 @@ Intermittent or inconsistent behavior — the same query returning different res
 # Fetch first, parse second. The endpoint sits behind an edge that sometimes
 # answers a CI runner with an HTML challenge page instead of JSON; piping that
 # straight into jq gives a parse error on stderr and an empty stdout, which
-# reads exactly like "no open incidents". `-f` turns the non-200 into a
-# non-zero exit, and capturing it means the pipeline's status is curl's, not
-# jq's (a bare `curl … | jq … || …` exits 0 on the challenge page).
-if ! INCIDENTS=$(curl -fsS 'https://www.githubstatus.com/api/v2/incidents/unresolved.json'); then
+# reads exactly like "no open incidents". `-f` catches a challenge served as a
+# non-200 and the `jq -e` probe catches one served as 200; capturing the body
+# means the status is curl's or jq's, not a pipeline's (a bare
+# `curl … | jq … || …` exits 0 on the challenge page).
+if ! INCIDENTS=$(curl -fsS 'https://www.githubstatus.com/api/v2/incidents/unresolved.json') \
+   || ! echo "$INCIDENTS" | jq -e . >/dev/null 2>&1; then
   echo 'STATUS PROBE FAILED — upstream state unknown, not clear'
 else
   echo "$INCIDENTS" \
