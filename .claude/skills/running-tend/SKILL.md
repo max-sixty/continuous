@@ -170,7 +170,7 @@ A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
 target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
 between the two versions for anything touching the agent paths (first-run
 onboarding, `--model` alias resolution, headless `-p` result events, Stop-hook
-behavior) and note it in the PR.
+behavior, slash-command or Skill-tool handling) and note it in the PR.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
