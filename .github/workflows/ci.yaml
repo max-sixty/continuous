@@ -11,8 +11,8 @@ jobs:
       run:
         working-directory: generator
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: uv run pytest
 
   # Tests for the shared credential-injection proxy addon. Run standalone (no
@@ -24,8 +24,8 @@ jobs:
       run:
         working-directory: proxy
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
       # Read the version from the Claude action's mitmproxy_version default so
       # the test exercises the version the production proxy runs. The addon
       # imports mitmproxy.test (an internal helper), so a second copy of the pin
@@ -97,8 +97,8 @@ jobs:
       run:
         working-directory: plugins/install-tend/skills/install-tend/scripts
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
       - run: uv run --no-project --with pytest pytest
 
   test-worker:
@@ -107,8 +107,8 @@ jobs:
       run:
         working-directory: worker
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -120,6 +120,6 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
       - uses: pre-commit/action@v3.0.1
