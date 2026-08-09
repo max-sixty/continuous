@@ -209,14 +209,15 @@ run_issue_create_and_reconcile() {
   # row would just duplicate it, differing only in its timestamp. The
   # cross-workflow race has distinct run ids, so it still carries over.
   # Anchor on the generated row's run link rather than the bare id, so a human
-  # comment mentioning the run cannot suppress the row. Read into a variable
-  # rather than piped to grep, which would close the pipe under `pipefail` and
-  # could report a match as a read failure.
-  local seen run_url
-  run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+  # comment mentioning the run cannot suppress the row — through
+  # `run_issue_anchor`, the one definition `run_issue_row` writes, so the row
+  # and the matcher cannot drift apart. Read into a variable rather than piped
+  # to grep, which would close the pipe under `pipefail` and could report a
+  # match as a read failure.
+  local seen
   seen=$(gh issue view "$keep" --json body,comments \
     --jq '.body + "\n" + ([.comments[].body] | join("\n"))' 2>/dev/null || true)
-  if ! grep -qF "[workflow run](${run_url})" <<< "$seen"; then
+  if ! grep -qF "$(run_issue_anchor)" <<< "$seen"; then
     printf '%s\n' "$row" | gh issue comment "$keep" -F - >&2 || true
   fi
 
