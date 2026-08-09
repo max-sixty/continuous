@@ -183,16 +183,12 @@ only launches that mitmproxy and CI smokes the two together, so it needs no
 release stream of its own; move both in one PR, at whatever uv is latest then
 (`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
 
-`codex_version` was held to the `alpha` dist-tag because only prereleases
-carried `codex plugin add`; stable ships it now, so bump to `latest` and drop to
-`alpha` only for a fix not yet released. CI's `test-codex-surface` job installs
-the pinned version and asserts the flags `codex exec` is passed plus the
-`Installed plugin root: ` line the action parses, so a bump that breaks the CLI
-surface fails on its own PR. That is the whole of the confirmation reachable
-here: no `OPENAI_API_KEY` reaches this repo's runs, so an agent session — model
-selection, `model_reasoning_effort`, whether the final message lands in
-`--output-last-message` — stays unverified. Skim the codex CHANGELOG across the
-bump for those paths and note it in the PR.
+Bump `codex_version` to `latest`; drop to `alpha` only for a fix not yet
+released. CI's `test-codex-surface` job installs whatever is pinned and asserts
+the CLI surface the action depends on, so a bump that breaks it fails on its own
+PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live agent session stays
+unverified — skim the codex CHANGELOG across the bump for sandbox behavior and
+`--output-last-message`, and note what you find in the PR.
 
 ### `uses:` refs
 
