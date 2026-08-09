@@ -1467,3 +1467,109 @@ def test_install_claude_binary_installs_first_try_without_sleeping(
     assert _attempts(install_env) == 1, _attempts(install_env)
     assert _sleeps(install_env) == [], _sleeps(install_env)
     assert "claude 2.1.220" in result.stdout, result.stdout
+
+
+# ---------------------------------------------------------------------------
+# install-proxy-uv.sh — the same retry contract, on the proxy's own installer
+# ---------------------------------------------------------------------------
+
+INSTALL_PROXY_UV = REPO_ROOT / "shared" / "steps" / "install-proxy-uv.sh"
+
+# Same failure schedule as FAKE_CURL, emitting astral's installer shape instead:
+# read on stdin by `sh -s --`, so it stays POSIX rather than bash.
+FAKE_CURL_UV = """#!/usr/bin/env bash
+n=$(cat "$CURL_ATTEMPTS" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$CURL_ATTEMPTS"
+if [ "$n" -le "${CURL_FAILURES:-0}" ]; then
+  echo "curl: (22) The requested URL returned error: 403" >&2
+  exit 22
+fi
+cat <<'INSTALLER'
+mkdir -p "$UV_INSTALL_DIR"
+printf '#!/usr/bin/env bash\\necho uvx-fake\\n' > "$UV_INSTALL_DIR/uvx"
+chmod +x "$UV_INSTALL_DIR/uvx"
+INSTALLER
+"""
+
+
+@pytest.fixture
+def proxy_uv_env(tmp_path: Path) -> dict[str, str]:
+    """A fake curl/sleep on PATH plus the env the proxy-uv install step is given."""
+    bindir = _fake_bin(tmp_path, curl=FAKE_CURL_UV, sleep=FAKE_SLEEP_RECORDING)
+
+    return {
+        "PATH": f"{bindir}:/usr/bin:/bin",
+        "UV_VERSION": "0.9.9",
+        "TEND_UV_DIR": str(tmp_path / "tend-uv"),
+        "CURL_ATTEMPTS": str(tmp_path / "curl-attempts"),
+        "SLEEPS": str(tmp_path / "sleeps"),
+    }
+
+
+def _run_proxy_uv(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(INSTALL_PROXY_UV)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_install_proxy_uv_rides_out_a_403_burst(proxy_uv_env: dict[str, str]) -> None:
+    """The uv install is as exposed as the claude one, and gets the same window.
+
+    It runs in the same job and equally ahead of the agent step, so a blip that
+    exhausts its retries loses the run with no outage row — the sibling failure
+    mode, with astral.sh in place of claude.ai.
+    """
+    proxy_uv_env["CURL_FAILURES"] = "4"
+
+    result = _run_proxy_uv(proxy_uv_env)
+
+    assert result.returncode == 0, (
+        f"gave up on a blip it should have ridden out; stderr:\n{result.stderr}"
+    )
+    assert _attempts(proxy_uv_env) == 5, _attempts(proxy_uv_env)
+
+
+def test_install_proxy_uv_backs_off_exponentially(
+    proxy_uv_env: dict[str, str],
+) -> None:
+    """Each wait at least doubles; only the floors are pinned, jitter is free."""
+    proxy_uv_env["CURL_FAILURES"] = "99"
+
+    _run_proxy_uv(proxy_uv_env)
+
+    assert _sleeps(proxy_uv_env) == pytest.approx([5, 10, 20, 40], abs=9), (
+        f"backoff did not double: {_sleeps(proxy_uv_env)}"
+    )
+    assert all(
+        actual >= floor
+        for actual, floor in zip(_sleeps(proxy_uv_env), [5, 10, 20, 40], strict=True)
+    ), f"slept less than the backoff floor: {_sleeps(proxy_uv_env)}"
+
+
+def test_install_proxy_uv_reddens_when_every_attempt_fails(
+    proxy_uv_env: dict[str, str],
+) -> None:
+    """A CDN that stays down still fails the step, and says how hard it tried."""
+    proxy_uv_env["CURL_FAILURES"] = "99"
+
+    result = _run_proxy_uv(proxy_uv_env)
+
+    assert result.returncode != 0, result.stdout
+    assert "after 5 attempts" in result.stdout, result.stdout
+    assert _attempts(proxy_uv_env) == 5, _attempts(proxy_uv_env)
+
+
+def test_install_proxy_uv_installs_first_try_without_sleeping(
+    proxy_uv_env: dict[str, str],
+) -> None:
+    """The happy path is one fetch, no delay, and a uvx that answers."""
+    result = _run_proxy_uv(proxy_uv_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _attempts(proxy_uv_env) == 1, _attempts(proxy_uv_env)
+    assert _sleeps(proxy_uv_env) == [], _sleeps(proxy_uv_env)
+    assert "uvx-fake" in result.stdout, result.stdout
