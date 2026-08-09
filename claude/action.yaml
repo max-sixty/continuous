@@ -197,7 +197,7 @@ runs:
     # in seconds instead of a cold ~20s resolve. Scoped to the proxy's uv; a
     # skill that installs its own uv gets that uv's default cache, untouched.
     - name: Cache mitmproxy
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/tend-mitmproxy-uv
         key: tend-mitmproxy-${{ runner.os }}-${{ inputs.mitmproxy_version }}
