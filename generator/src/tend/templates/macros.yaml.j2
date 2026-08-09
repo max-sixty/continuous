@@ -177,14 +177,24 @@
    event's own commit. So it is by construction the tree the composite loaded
    from, whatever branch the event put there. Every main step runs ahead of
    every POST step, so any position below the tree switch is early enough.
-   `paths` is empty for a `setup:` that names no local action, rendering this
-   away. #}
-{% macro restore_local_actions(run_body) %}
+   `run_body` is empty for a `setup:` that names no local action, rendering this
+   away.
+
+   `always()` runs the step past a *skip* as well as a failure, so a caller
+   whose earlier steps sit behind a gate has to thread that gate in through
+   `if_condition`: on a gate-skipped run nothing checked out, the restore finds
+   no repository, and the `||` emits a warning about cleanup that was never
+   going to happen. On a persistent workspace (self-hosted) it doesn't warn — it
+   succeeds against whatever the previous job left behind — so the condition is
+   what makes the step mean the same thing on both. Mention's handle job gates
+   at the job level — every step runs or the job doesn't — so it passes nothing.
+   #}
+{% macro restore_local_actions(run_body, if_condition='') %}
 {% if run_body %}
 
 
       - name: Restore local setup actions for POST cleanup
-        if: always()
+        if: always()<< " && (" ~ if_condition ~ ")" if if_condition else "" >>
         run: |
 <<run_body|indent(10, first=True)>>
 {%- endif %}

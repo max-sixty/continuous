@@ -149,7 +149,7 @@ jobs:
             ${{ format('Run the /tend-ci-runner:review skill for {0}. Beyond the skills the Skill tool lists, /code-review is available too.', github.event.pull_request.number) }}
 
       - name: Restore local setup actions for POST cleanup
-        if: always()
+        if: always() && (steps.gate.outputs.should_run == 'true')
         run: |
           dir=.github/actions/tend-setup
           git checkout "$GITHUB_SHA" -- "$dir" ||

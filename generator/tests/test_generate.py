@@ -98,15 +98,21 @@ def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
 
 
 @pytest.mark.parametrize(
-    ("name", "job", "switch"),
+    ("name", "job", "switch", "gate"),
     [
         (
             "review",
             "review",
             lambda s: s.get("uses", "").startswith("actions/checkout")
             and "ref" in s.get("with", {}),
+            "steps.gate.outputs.should_run",
         ),
-        ("mention", "handle", lambda s: "gh pr checkout" in str(s.get("run", ""))),
+        (
+            "mention",
+            "handle",
+            lambda s: "gh pr checkout" in str(s.get("run", "")),
+            None,
+        ),
     ],
 )
 def test_local_setup_action_restored_for_post_cleanup(
@@ -114,13 +120,19 @@ def test_local_setup_action_restored_for_post_cleanup(
     name: str,
     job: str,
     switch: object,
+    gate: str | None,
 ) -> None:
     """review and mention land the PR's tree over the workspace a local `setup:`
     composite was loaded from. To dispatch the POST steps of the actions nested
     inside it the runner re-reads that file and matches it against the step list
     it cached at load time, so a PR that resizes or deletes the file fails
     cleanup (actions/runner#2816). Put the loaded version back before the POST
-    chain walks."""
+    chain walks.
+
+    `always()` covers a skip as well as a failure, so where the caller gates its
+    earlier steps the restore carries that gate too: a gate-skipped run checked
+    nothing out, and an unconditional restore would warn about cleaning up a
+    composite that never loaded."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
@@ -128,9 +140,16 @@ def test_local_setup_action_restored_for_post_cleanup(
     idx = _restore_step_index(steps)
     assert idx is not None, f"{name}: nothing restores the local setup action"
     assert ".github/actions/tend-setup" in str(steps[idx]["run"])
-    assert steps[idx].get("if") == "always()", (
+    condition = str(steps[idx].get("if", ""))
+    assert condition.startswith("always()"), (
         f"{name}: the restore has to run even when the session fails"
     )
+    if gate is None:
+        assert condition == "always()", f"{name}: gates at the job level"
+    else:
+        assert gate in condition, (
+            f"{name}: the restore has to skip with the steps it restores for"
+        )
     switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
