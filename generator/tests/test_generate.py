@@ -13,7 +13,13 @@ import click
 from click.testing import CliRunner
 
 from tend.cli import main
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
@@ -357,20 +363,33 @@ def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
         assert "\n\n\n" not in wf.content, f"{wf.filename} has triple blank lines"
 
 
-def test_custom_secrets(tmp_path: Path) -> None:
-    extra = dedent("""\
-        secrets:
-          bot_token: MY_BOT_PAT
-          claude_token: MY_CLAUDE
-          anthropic_api_key: MY_API_KEY
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_workflows_read_only_the_operational_secrets(
+    tmp_path: Path, harness: str
+) -> None:
+    """Every stored secret a workflow reads is one `tend check` verifies.
+
+    The names are fixed constants shared by the templates and the checks, so
+    the failure this guards is a template naming a secret that nothing
+    provisions — which surfaces only as an empty token at run time. The set
+    is per harness because the checks are: `check_claude_auth` verifies the
+    Claude pair and `check_codex_auth` the OpenAI key, so a claude workflow
+    reading `secrets.OPENAI_API_KEY` is unprovisioned as surely as one
+    reading a name nothing defines. `secrets.GITHUB_TOKEN` is
+    workflow-scoped rather than stored, so it is outside the set."""
+    verified = {BOT_TOKEN_SECRET} | (
+        {CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET}
+        if harness == "claude"
+        else {OPENAI_KEY_SECRET}
+    )
+    cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}\n"))
     for wf in generate_all(cfg):
-        assert "MY_BOT_PAT" in wf.content, f"{wf.filename} missing custom bot token"
-        assert "MY_CLAUDE" in wf.content, f"{wf.filename} missing custom claude token"
-        assert "MY_API_KEY" in wf.content, (
-            f"{wf.filename} missing custom anthropic_api_key secret"
+        read = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", wf.content))
+        assert read - {"GITHUB_TOKEN"} <= verified, (
+            f"{wf.filename} reads a secret the {harness} harness does not "
+            f"provision: {sorted(read - {'GITHUB_TOKEN'} - verified)}"
         )
+        assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
 
 
 def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:
@@ -433,13 +452,20 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
                 for s in _strings(job)
                 for ref in re.findall(r"secrets\.[A-Za-z0-9_]+", s)
             )
-            assert (job.get("environment") == "tend") == reads_secret, (
-                f"{wf.filename}:{job_name} "
-                + (
-                    "reads an operational secret without naming the environment"
-                    if reads_secret
-                    else "names the environment but holds no secret"
-                )
+            # `deployment: false` is part of the asserted shape, not just the
+            # name: dropping it leaves the gate working and costs only a
+            # deployment record per run, which GitHub posts as a "<bot>
+            # deployed to tend" line on every PR the run belongs to. Nothing
+            # else would fail, so this is where it gets caught.
+            names_environment = job.get("environment") == {
+                "name": "tend",
+                "deployment": False,
+            }
+            assert names_environment == reads_secret, f"{wf.filename}:{job_name} " + (
+                "reads an operational secret without naming the environment "
+                "as `{name: tend, deployment: false}`"
+                if reads_secret
+                else "names the environment but holds no secret"
             )
 
 
@@ -453,6 +479,53 @@ def test_custom_prompt(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     triage = workflows["tend-triage.yaml"]
     assert "Custom triage:" in triage.content
+    # An adopter's prompt replaces the whole thing, `code_review_notice` included,
+    # so it carries no /code-review token — what that property's docstring claims.
+    assert "/code-review" not in triage.content
+
+
+def test_default_prompt_unlocks_code_review(tmp_path: Path) -> None:
+    """Claude prompts stay eligible for the `/code-review` waiver; Codex is untouched.
+
+    The `Skill` tool waives `disable-model-invocation` only for a turn whose own
+    user message names the command, and it finds that name with this regex. A
+    prompt starting with `/` is stored wrapped in `<command-message>` and skipped
+    by the scan, so prose is what keeps the message eligible at all — and the
+    token then has to clear the regex, which a trailing period or a backtick
+    silently fails.
+    """
+    user_typed_this_turn = re.compile(r"(?<!\S)/code-review(?=$|\s)")
+
+    cfg = Config.load(_minimal_config(tmp_path))
+    for skill, args in [("review", "{pr_number}"), ("nightly", "")]:
+        prompt = cfg.default_prompt(skill, args)
+        assert not prompt.startswith("/"), (
+            f"{skill} prompt starts with '/', so Claude Code stores it as a "
+            "slash command and the scan skips it"
+        )
+        assert user_typed_this_turn.search(prompt), (
+            f"{skill} prompt does not carry a bare /code-review token: {prompt!r}"
+        )
+        assert f"/tend-ci-runner:{skill}" in prompt
+
+    codex = Config.load(_minimal_config(tmp_path, "harness: codex\n"))
+    assert codex.default_prompt("review", "{pr_number}") == "$review {pr_number}"
+    assert codex.code_review_notice == ""
+
+    # Rendering is where the token can lose its whitespace: the review prompt is
+    # the one that goes through `_escape_braces`, `''`-quoting and GHA `format()`,
+    # and `mention` is the one workflow whose prompt skips `default_prompt`.
+    claude = {wf.filename: wf for wf in generate_all(cfg)}
+    for name in ["tend-review.yaml", "tend-mention.yaml"]:
+        assert user_typed_this_turn.search(claude[name].content), (
+            f"{name} lost the bare /code-review token in rendering"
+        )
+
+    codex_workflows = {wf.filename: wf for wf in generate_all(codex)}
+    for name, wf in codex_workflows.items():
+        assert "/code-review" not in wf.content, (
+            f"{name} declares /code-review, which the Codex harness has no skill for"
+        )
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
@@ -584,6 +657,32 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert len(checkouts) == 1
     assert checkouts[0]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
     assert "clean" not in checkouts[0]["with"]
+
+
+def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
+    """A push mid-review queues a replacement run; the gate step decides
+    whether it boots an agent.
+
+    The running session folds the push in and stamps examined commits, so the
+    queued run's work is usually already done. That only holds if the gate is
+    the first step and everything after it — checkouts, setup, the agent — is
+    conditioned on its verdict; an ungated step would run (and bill) on every
+    replaced event.
+    """
+    extra = "setup:\n  - run: npm ci\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    job = data["jobs"]["review"]
+
+    assert job["concurrency"]["cancel-in-progress"] is False
+    steps = job["steps"]
+    assert steps[0].get("id") == "gate"
+    assert "tend-review/$PR" in steps[0]["run"]
+    for step in steps[1:]:
+        assert step.get("if") == "steps.gate.outputs.should_run == 'true'", (
+            f"ungated step after the gate: {step}"
+        )
 
 
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
@@ -787,6 +886,51 @@ def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> No
     assert mention_idx < bot_guard_idx < pr_author_idx, (
         "bot-comment guard must run after the @-mention check and before the "
         "PR-author short-circuit"
+    )
+
+
+def test_mention_verify_engagement_lookups_survive_pagination(
+    tmp_path: Path,
+) -> None:
+    """Engagement lookups must not reduce inside a `--paginate`d `--jq`.
+
+    `gh api --paginate` applies `--jq` once per page, so `--jq '[...] | length'`
+    emits one count per page instead of one overall. Past 100 records the
+    variable holds `100\\n7`, the `[ "$X" -gt "0" ]` guard below it errors with
+    `integer expression expected` and returns 2, and the failed test falls
+    through to should_run=false — the bot stops answering participants on
+    exactly the threads where it has engaged the most, with nothing going red.
+
+    Keep the filter a per-element stream, capture it bare, and test it for
+    emptiness. Reducing the stream through a pipe (`| wc -l`) would fix the
+    count but move the substitution's exit status off `gh`, so under the step's
+    default `bash -e` a failed API call would read as "no engagement" on a green
+    job — the same silent-quiet failure, relocated."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-mention.yaml"].content)
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    run = check_step["run"]
+
+    # Every `--jq` under `--paginate` must stay a streaming filter. `--slurp` is
+    # not an escape hatch: `gh api` rejects it alongside `--jq`. Join
+    # backslash-continued lines first — the `--jq` sits on its own line.
+    for line in run.replace("\\\n", " ").splitlines():
+        if "--paginate" not in line or "--jq" not in line:
+            continue
+        assert "| length" not in line, (
+            f"reduction inside a --paginate'd --jq runs per page: {line.strip()}"
+        )
+
+    assert run.count("| .id')") == 3, (
+        "the three engagement lookups (issue comments, PR reviews, PR comments) "
+        "must capture the raw stream, so a failing `gh api` still trips errexit"
+    )
+    assert '-gt "0" ]' not in run, (
+        "guard on an empty stream (`[ -n ... ]`) — a numeric comparison is what "
+        "a split count breaks"
     )
 
 

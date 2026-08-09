@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 from click.testing import CliRunner
@@ -14,6 +15,7 @@ from tend.checks import (
     admitted_refs,
     check_credential_environments,
     check_environment,
+    check_environment_deployments,
     fix_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
@@ -30,7 +32,13 @@ from tend.checks import (
     run_all_checks,
 )
 from tend.cli import main
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import TEND_ENVIRONMENT
 
 
@@ -39,8 +47,6 @@ def _config(
     bot_name: str = "bot",
     default_branch: str = "main",
     protected_branches: list[str] | None = None,
-    bot_token_secret: str = "T1",
-    claude_token_secret: str = "T2",
     harness: str = "claude",
     model: str = "opus",
 ) -> Config:
@@ -49,10 +55,6 @@ def _config(
         bot_name=bot_name,
         default_branch=default_branch,
         protected_branches=protected_branches or [],
-        bot_token_secret=bot_token_secret,
-        claude_token_secret=claude_token_secret,
-        anthropic_api_key_secret="ANTHROPIC_API_KEY",
-        openai_key_secret="OPENAI_API_KEY",
         harness=harness,
         model=model,
         effort="",
@@ -67,6 +69,13 @@ def _make_completed(
     return subprocess.CompletedProcess(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr
     )
+
+
+def _secret_names(args: tuple, *names: str) -> str:
+    """A secrets listing in whichever shape the caller asked for: objects for
+    `gh secret list --json name`, bare names for the `--jq` reads."""
+    listed = [{"name": n} for n in names] if "--json" in args else list(names)
+    return json.dumps(listed) + "\n"
 
 
 def _write_config(tmp_path: Path, content: str = "bot_name: test-bot") -> Path:
@@ -885,7 +894,11 @@ def _gh_all_pass(*admitted: str):
             # Two callers read this path with different `--jq` shapes: the
             # membership check wants a JSON array, the environment sweep one
             # name per line. The fake answers whichever was asked for.
-            names = ["T1", "T2"] if url.endswith(f"{TEND_ENVIRONMENT}/secrets") else []
+            names = (
+                [BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET]
+                if url.endswith(f"{TEND_ENVIRONMENT}/secrets")
+                else []
+            )
             if any(a.startswith("[.secrets") for a in args):
                 return _make_completed(json.dumps(names))
             return _make_completed("\n".join(names) + "\n")
@@ -952,7 +965,7 @@ def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
     def gh_with_repo_level_copy(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         url = args[1]
         if "environments/tend/secrets" not in url and url.endswith("actions/secrets"):
-            return _make_completed('["T1"]\n')
+            return _make_completed(json.dumps([BOT_TOKEN_SECRET]) + "\n")
         return _gh_all_pass()(*args, **kwargs)
 
     with (
@@ -966,7 +979,7 @@ def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
         "a repo-level copy of the bot token must be flagged — it is readable "
         "from any branch the bot can push"
     )
-    assert "T1" in allowlist[0].message
+    assert BOT_TOKEN_SECRET in allowlist[0].message
 
 
 def test_run_all_checks_allowlist_catches_unexpected() -> None:
@@ -1011,9 +1024,9 @@ def test_run_all_checks_with_protected_branches() -> None:
             _config(protected_branches=["v1", "v2"]),
             repo="owner/repo",
         )
-    # default + v1 + v2 + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 9
-    assert len(results) == 9
+    # default + v1 + v2 + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 10
+    assert len(results) == 10
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 3
     assert {r.name for r in bp_results} == {
@@ -1038,9 +1051,9 @@ def test_codex_engine_passes_with_openai_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"},{"name":"OPENAI_API_KEY"}]\n')
-            return _make_completed('["T1","OPENAI_API_KEY"]\n')
+            return _make_completed(
+                _secret_names(args, BOT_TOKEN_SECRET, OPENAI_KEY_SECRET)
+            )
         return _make_completed(returncode=1)
 
     with (
@@ -1051,7 +1064,7 @@ def test_codex_engine_passes_with_openai_key() -> None:
     codex_check = [r for r in results if r.name == "codex-auth"]
     assert len(codex_check) == 1
     assert codex_check[0].passed is True
-    assert "OPENAI_API_KEY" in codex_check[0].message
+    assert OPENAI_KEY_SECRET in codex_check[0].message
 
 
 def test_codex_engine_fails_when_no_auth() -> None:
@@ -1068,9 +1081,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"}]\n')
-            return _make_completed('["T1"]\n')
+            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1080,7 +1091,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         results = run_all_checks(_config(harness="codex"), repo="owner/repo")
     codex_check = [r for r in results if r.name == "codex-auth"]
     assert codex_check[0].passed is False
-    assert "OPENAI_API_KEY" in codex_check[0].message
+    assert OPENAI_KEY_SECRET in codex_check[0].message
 
 
 def test_claude_engine_omits_codex_auth_check() -> None:
@@ -1095,7 +1106,6 @@ def test_claude_engine_omits_codex_auth_check() -> None:
 
 def test_claude_engine_passes_with_oauth_token() -> None:
     """Engine=claude with the OAuth token secret set passes claude-auth."""
-    # _gh_all_pass returns ["T1","T2"] — T2 is claude_token_secret.
     with (
         patch("shutil.which", return_value="/usr/bin/gh"),
         patch("tend.checks._gh", side_effect=_gh_all_pass()),
@@ -1104,7 +1114,7 @@ def test_claude_engine_passes_with_oauth_token() -> None:
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert len(claude_check) == 1
     assert claude_check[0].passed is True
-    assert "T2" in claude_check[0].message
+    assert CLAUDE_TOKEN_SECRET in claude_check[0].message
 
 
 def test_claude_engine_passes_with_api_key() -> None:
@@ -1121,9 +1131,9 @@ def test_claude_engine_passes_with_api_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"},{"name":"ANTHROPIC_API_KEY"}]\n')
-            return _make_completed('["T1","ANTHROPIC_API_KEY"]\n')
+            return _make_completed(
+                _secret_names(args, BOT_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET)
+            )
         return _make_completed(returncode=1)
 
     with (
@@ -1133,7 +1143,7 @@ def test_claude_engine_passes_with_api_key() -> None:
         results = run_all_checks(_config(), repo="owner/repo")
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert claude_check[0].passed is True
-    assert "ANTHROPIC_API_KEY" in claude_check[0].message
+    assert ANTHROPIC_API_KEY_SECRET in claude_check[0].message
 
 
 def test_claude_engine_fails_when_no_auth() -> None:
@@ -1150,9 +1160,7 @@ def test_claude_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"}]\n')
-            return _make_completed('["T1"]\n')
+            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1162,8 +1170,8 @@ def test_claude_engine_fails_when_no_auth() -> None:
         results = run_all_checks(_config(), repo="owner/repo")
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert claude_check[0].passed is False
-    assert "T2" in claude_check[0].message
-    assert "ANTHROPIC_API_KEY" in claude_check[0].message
+    assert CLAUDE_TOKEN_SECRET in claude_check[0].message
+    assert ANTHROPIC_API_KEY_SECRET in claude_check[0].message
 
 
 def test_run_all_checks_deduplicates_default_branch() -> None:
@@ -1176,9 +1184,9 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             _config(protected_branches=["main", "v1"]),
             repo="owner/repo",
         )
-    # main (deduped) + v1 + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 8
-    assert len(results) == 8
+    # main (deduped) + v1 + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 9
+    assert len(results) == 9
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 2
     assert {r.name for r in bp_results} == {
@@ -1434,16 +1442,20 @@ def _credential_env_gh(
             if url.endswith(f"/rulesets/{ruleset_id}"):
                 return _make_completed(json.dumps(detail))
         for env_name, (secrets, detail, policies) in environments.items():
-            if url.endswith(f"/environments/{env_name}/deployment-branch-policies"):
+            # Matched percent-encoded, as GitHub answers: a name is one path
+            # segment, so a caller that interpolates it raw addresses another
+            # environment (or none) once the name holds a `/`.
+            seg = quote(env_name, safe="")
+            if url.endswith(f"/environments/{seg}/deployment-branch-policies"):
                 entries = [
                     dict(zip(("type", "name"), line.split(" ", 1)))
                     for line in policies.splitlines()
                     if line
                 ]
                 return _make_completed("\n".join(json.dumps(e) for e in entries) + "\n")
-            if url.endswith(f"/environments/{env_name}/secrets"):
+            if url.endswith(f"/environments/{seg}/secrets"):
                 return _make_completed("\n".join(secrets) + "\n")
-            if url.endswith(f"/environments/{env_name}"):
+            if url.endswith(f"/environments/{seg}"):
                 return _make_completed(json.dumps(detail))
         return _make_completed(returncode=1)
 
@@ -1478,6 +1490,80 @@ _CUSTOM_POLICY = {
         "custom_branch_policies": True,
     }
 }
+
+
+_GENERATED_JOB = """\
+name: tend-review
+on: pull_request_target
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
+    steps:
+      - run: echo hello
+"""
+
+
+def test_environment_deployments_passes_on_the_generated_shape() -> None:
+    """The block the `environment()` macro emits files no deployment."""
+    with patch(
+        "tend.checks._fetch_workflow_files",
+        return_value={"tend-review.yaml": _GENERATED_JOB},
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is True
+
+
+def test_environment_deployments_flags_the_shorthand() -> None:
+    """`environment: tend` gates the job exactly as well, so nothing else in
+    the repo fails — the only symptom is a deployment record posted on every
+    push to every PR, which is why this check exists at all."""
+    text = _GENERATED_JOB.replace(
+        "    environment:\n      name: tend\n      deployment: false\n",
+        "    environment: tend\n",
+    )
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"tend-review.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is False
+    assert "tend-review.yaml job 'review'" in result.message
+
+
+def test_environment_deployments_flags_deployment_true() -> None:
+    """Spelling the default out loud files the same record."""
+    text = _GENERATED_JOB.replace("deployment: false", "deployment: true")
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"tend-review.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is False
+
+
+def test_environment_deployments_leaves_real_deploy_targets_alone() -> None:
+    """A release environment deploys something, so its record is the point.
+    The check is the operational-secret environment's, not every job's."""
+    text = _GENERATED_JOB.replace(
+        "      name: tend\n      deployment: false\n", "      name: release\n"
+    )
+    # Without this the substitution could silently miss and leave a compliant
+    # `tend` job behind, which passes for the wrong reason.
+    assert "      name: release\n" in text and "      name: tend\n" not in text
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"release.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is True
+
+
+def test_environment_deployments_unreadable_does_not_pass() -> None:
+    """A workflow tend could not read holds jobs it cannot vouch for, so the
+    claim is withheld rather than granted."""
+    with patch("tend.checks._fetch_workflow_files", return_value={"opaque.yaml": None}):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is None
 
 
 def test_credential_environments_none_holding_secrets_passes() -> None:
@@ -1527,6 +1613,36 @@ def test_credential_environments_is_keyed_on_secrets_not_on_the_name() -> None:
         result = check_credential_environments("owner/repo", _config(), ["main"])
     assert result.passed is False
     assert "smoke-secrets" in result.message
+
+
+def test_credential_environments_reads_a_name_containing_a_space() -> None:
+    """GitHub admits a space in an environment name, and the list endpoint
+    returns one name per line. Splitting on whitespace instead made two names
+    that exist nowhere; both 404, and the first 404 returned the whole check
+    as skipped-for-want-of-admin — so a repo could hold an ungated credential
+    and read PASS-adjacent silence."""
+    fake = _credential_env_gh(
+        {"staging deploy": (["T1"], {"protection_rules": []}, "")}
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False, result.message
+    assert "staging deploy" in result.message
+
+
+def test_credential_environments_reads_a_name_containing_a_slash() -> None:
+    """The other half of the same failure: GitHub admits `/` in an environment
+    name too, and a name is one path segment. Interpolating it raw addressed a
+    path that 404s, which is the same skipped-for-want-of-admin return as the
+    split above — so the name survives the read only to be lost on the way back
+    out. Verified against live GitHub: an environment named `a/b probe` lists
+    under that name, `gh api repos/<r>/environments/a/b probe/secrets` exits 1
+    with 404, and the percent-encoded path resolves."""
+    fake = _credential_env_gh({"a/b probe": (["T1"], {"protection_rules": []}, "")})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False, result.message
+    assert "a/b probe" in result.message
 
 
 def test_credential_environments_accepts_a_human_reviewer() -> None:

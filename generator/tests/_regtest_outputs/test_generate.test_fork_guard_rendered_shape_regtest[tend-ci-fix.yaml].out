@@ -17,7 +17,9 @@ jobs:
   fix-ci:
     if: github.repository_owner == 'test-owner' && github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
@@ -38,7 +40,7 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: |
-            /tend-ci-runner:ci-fix ${{ github.event.workflow_run.id }}
+            Run the /tend-ci-runner:ci-fix skill for ${{ github.event.workflow_run.id }}. Beyond the skills the Skill tool lists, /code-review is available too.
             - Run URL: ${{ github.event.workflow_run.html_url }}
             - Commit: ${{ github.event.workflow_run.head_sha }}
             - Commit message: ${{ github.event.workflow_run.head_commit.message }}

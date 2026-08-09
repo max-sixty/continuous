@@ -226,7 +226,9 @@ def test_anthropic_lookalike_host_is_untouched(injector: CredentialInjector) -> 
     assert "Authorization" not in flow.request.headers
 
 
-def test_anthropic_mixed_case_host_gets_credential(injector: CredentialInjector) -> None:
+def test_anthropic_mixed_case_host_gets_credential(
+    injector: CredentialInjector,
+) -> None:
     flow = _flow("Api.Anthropic.Com", {"Authorization": "Bearer sk-ant-oat01-dummy"})
     injector.request(flow)
     assert flow.request.headers["Authorization"] == "Bearer sk-ant-oat01-REAL"

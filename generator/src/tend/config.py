@@ -40,14 +40,32 @@ KNOWN_TOP_LEVEL = {
     "workflows",
 }
 KNOWN_HARNESSES = {"claude", "codex"}
-# Claude harness reads claude_token (OAuth) and anthropic_api_key (console.
-# anthropic.com) — adopters set one. Codex harness reads openai_key.
-KNOWN_SECRETS_KEYS = {
-    "bot_token",
-    "claude_token",
-    "anthropic_api_key",
-    "openai_key",
-    "allowed",
+KNOWN_SECRETS_KEYS = {"allowed"}
+
+# The operational secrets, by fixed name. Claude reads the OAuth token
+# (subscription) or the API key (console.anthropic.com) — adopters set one;
+# Codex reads the OpenAI key. Not configurable: `install-tend` creates the
+# `tend` environment and fills it from scratch, so there is no pre-existing
+# secret whose name an adopter would want to keep.
+BOT_TOKEN_SECRET = "TEND_BOT_TOKEN"
+CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"
+ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY"
+OPENAI_KEY_SECRET = "OPENAI_API_KEY"
+OPERATIONAL_SECRETS = {
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    ANTHROPIC_API_KEY_SECRET,
+    OPENAI_KEY_SECRET,
+}
+# Keys that once renamed those secrets. A leftover one is refused rather
+# than warned past: ignoring it would generate workflows reading the fixed
+# name while the adopter's secret still answers to the old one, and every
+# job would fail on an empty token.
+REMOVED_SECRETS_KEYS = {
+    "bot_token": BOT_TOKEN_SECRET,
+    "claude_token": CLAUDE_TOKEN_SECRET,
+    "anthropic_api_key": ANTHROPIC_API_KEY_SECRET,
+    "openai_key": OPENAI_KEY_SECRET,
 }
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 # POSIX-ish env var name: letters, digits, underscore; not starting with a digit.
@@ -160,10 +178,6 @@ class Config:
     bot_name: str
     default_branch: str
     protected_branches: list[str]
-    bot_token_secret: str
-    claude_token_secret: str
-    anthropic_api_key_secret: str
-    openai_key_secret: str
     harness: str
     model: str
     effort: str
@@ -186,18 +200,53 @@ class Config:
     sandbox_env: dict[str, str] = field(default_factory=dict)
     sandbox_setup: list[str] = field(default_factory=list)
 
+    @property
+    def code_review_notice(self) -> str:
+        """Sentence declaring the built-in `/code-review`; empty off the Claude harness.
+
+        Every generated Claude prompt carries it, including `mention`, whose prompt
+        `mention.yaml.j2` builds rather than `default_prompt` — but not an adopter's
+        `workflows.<name>.prompt`, which replaces the whole prompt. One definition, so
+        the two can't drift — and the token's regex (see `default_prompt`) is
+        fragile enough that a second copy is a second way to break it.
+        """
+        if self.harness != "claude":
+            return ""
+        return "Beyond the skills the Skill tool lists, /code-review is available too."
+
     def default_prompt(self, skill: str, args: str = "") -> str:
         """Default prompt invoking a tend-ci-runner skill in harness-native syntax.
 
-        Claude resolves `/tend-ci-runner:NAME` as a slash command. Codex resolves
-        `$NAME` as a skill mention (or matches by description); the
+        Codex resolves `$NAME` as a skill mention (or matches by description); the
         `tend-ci-runner` namespace prefix isn't needed at the prompt site because
         skill names within the plugin are unique. `args` is appended raw so
         callers can splice their own placeholders (`{pr_number}` etc.) and run
         the existing replace step.
+
+        Claude's prompt is prose naming the skill, rather than the bare
+        `/tend-ci-runner:NAME` slash command it also resolves, so that the
+        built-in `/code-review` is reachable. That skill carries
+        `disable-model-invocation`, which the `Skill` tool waives only for a turn
+        whose own user message names the command; a prompt *starting* with `/` is
+        stored wrapped in `<command-message>` and is skipped by that scan, so no
+        eligible message ever exists. Prose leaves the prompt eligible, and the
+        `/code-review` token in it unlocks the skill for the whole run.
+
+        Only the leading position routes a prompt to the slash-command path, so
+        the skill mention keeps its own `/` — the invocable form, and the same
+        shape as the `/code-review` beside it.
+
+        The token has to survive that scan's regex, `(?<!\\S)/code-review(?=$|\\s)`:
+        whitespace on both sides, so a trailing period or a backtick silently
+        costs the run its second pass. `test_default_prompt_unlocks_code_review`
+        pins it.
         """
-        prefix = f"/tend-ci-runner:{skill}" if self.harness == "claude" else f"${skill}"
-        return f"{prefix} {args}".rstrip()
+        if self.harness != "claude":
+            return f"${skill} {args}".rstrip()
+        invocation = f"Run the /tend-ci-runner:{skill} skill"
+        if args:
+            invocation += f" for {args}"
+        return f"{invocation}. {self.code_review_notice}"
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
@@ -272,7 +321,17 @@ class Config:
             )
 
         secrets = raw.get("secrets", {}) or {}
-        unknown_secrets = set(secrets.keys()) - KNOWN_SECRETS_KEYS
+        removed = sorted(set(secrets) & set(REMOVED_SECRETS_KEYS))
+        if removed:
+            renames = ", ".join(
+                f"secrets.{key} → {REMOVED_SECRETS_KEYS[key]}" for key in removed
+            )
+            raise click.ClickException(
+                f"Removed secret name override(s): {renames}. The operational "
+                "secret names are fixed — rename each secret to the name shown "
+                "and drop the key."
+            )
+        unknown_secrets = set(secrets) - KNOWN_SECRETS_KEYS
         for key in sorted(unknown_secrets):
             click.echo(f"Warning: unknown secrets key '{key}'", err=True)
 
@@ -509,21 +568,12 @@ class Config:
                 'e.g. allowed: ["CODECOV_TOKEN"]'
             )
 
-        bot_token_secret = secrets.get("bot_token", "TEND_BOT_TOKEN")
-        claude_token_secret = secrets.get("claude_token", "CLAUDE_CODE_OAUTH_TOKEN")
-        anthropic_api_key_secret = secrets.get("anthropic_api_key", "ANTHROPIC_API_KEY")
-        openai_key_secret = secrets.get("openai_key", "OPENAI_API_KEY")
         # The allowlist is the one deliberate exception to "no repo-level
         # secrets", for tokens whose exposure the maintainer accepts. The
         # operational secrets are never that: allowlisting one would let a
         # repo-level copy pass `tend check`, handing any workflow the bot
         # pushes exactly what the environment gate denies.
-        blessed = {
-            bot_token_secret,
-            claude_token_secret,
-            anthropic_api_key_secret,
-            openai_key_secret,
-        } & set(allowed)
+        blessed = OPERATIONAL_SECRETS & set(allowed)
         if blessed:
             raise click.ClickException(
                 f"secrets.allowed must not include {', '.join(sorted(blessed))}: "
@@ -536,10 +586,6 @@ class Config:
             bot_name=bot_name,
             default_branch="main",
             protected_branches=protected_branches,
-            bot_token_secret=bot_token_secret,
-            claude_token_secret=claude_token_secret,
-            anthropic_api_key_secret=anthropic_api_key_secret,
-            openai_key_secret=openai_key_secret,
             harness=harness,
             model=model,
             effort=effort,

@@ -105,8 +105,9 @@ resolve bot identity. They differ in how the agent runs:
 - **Claude harness** — runs the official `claude` binary headless
   (`claude -p`) as a non-sudo sandbox user behind a local
   credential-injecting proxy, so the bot token and Anthropic credential
-  never enter the agent's environment. Each workflow's prompt is a slash
-  command (`/tend-ci-runner:review`) that loads the matching skill.
+  never enter the agent's environment. Each workflow's prompt names the
+  skill to run in prose rather than as a leading slash command, which
+  keeps the built-in `/code-review` reachable during the run.
 - **Codex harness** — installs the `@openai/codex` CLI on the runner and
   shells out to `codex exec`. An AGENTS.md staged into `$CODEX_HOME`
   teaches Codex to resolve `/tend-ci-runner:NAME` references to the
@@ -195,8 +196,8 @@ why the Codex subscription `auth.json` path isn't supported;
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
 
-All other options — secret name overrides, setup steps, protected branches,
-workflow overrides, schedules — are documented in
+All other options — setup steps, protected branches, workflow overrides,
+schedules — are documented in
 [`docs/tend.example.yaml`](docs/tend.example.yaml).
 
 ## Project context

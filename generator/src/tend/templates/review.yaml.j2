@@ -15,17 +15,29 @@ jobs:
   review:
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+      # A push mid-review queues a replacement run rather than killing the
+      # session: the running review folds the push in and stamps the commits
+      # it examined, and the gate step below lets the queued run exit without
+      # booting an agent when its HEAD is already covered.
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
-    environment: <<tend_environment>>
+<<environment()>>
     permissions:
 <<permissions()>>
     steps:
+      - name: Skip when the live HEAD is already examined
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
+          PR: ${{ github.event.pull_request.number }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+<<gate_script|indent(10, first=True)>>
 {% if has_setup %}
       # Two checkouts: `setup:` runs against the base tree, and the PR's own
       # tree lands after it. Setup executes as the runner user, outside the
       # containment the harness builds for the contributor's code.
-<<checkout(cfg)>>
+<<checkout(cfg, if_condition=skip_condition)>>
 <<setup>>
 {% endif %}
       # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
@@ -35,8 +47,9 @@ jobs:
       # tree.
       - name: Resolve PR checkout ref
         id: pr_ref
+        if: <<skip_condition>>
         env:
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           PR: ${{ github.event.pull_request.number }}
         run: |
           if gh api "repos/${{ github.repository }}/git/ref/pull/$PR/merge" --silent 2>/dev/null; then
@@ -45,6 +58,6 @@ jobs:
             echo "ref=refs/pull/$PR/head" >> "$GITHUB_OUTPUT"
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
-<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True, clean=not has_setup)>>
+<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', if_condition=skip_condition, allow_unsafe_pr_checkout=True, clean=not has_setup)>>
 
-<<agent_step(cfg, prompt_body)>><<restore_local_actions(local_actions)>>
+<<agent_step(cfg, prompt_body, if_condition=skip_condition)>><<restore_local_actions(local_actions)>>

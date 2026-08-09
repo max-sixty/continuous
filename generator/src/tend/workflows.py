@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import importlib.resources
 import io
 import shlex
 import textwrap
@@ -16,7 +17,14 @@ from jinja2 import Environment, PackageLoader, StrictUndefined
 from jinja2.runtime import Macro
 from ruamel.yaml import YAML
 
-from tend.config import Config, WorkflowConfig
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+    WorkflowConfig,
+)
 
 # Variable delimiters are swapped from `{{`/`}}` to `<<`/`>>` so GitHub
 # Actions expressions (`${{ github.foo }}`, ubiquitous in generated YAML)
@@ -84,6 +92,20 @@ TEND_ENVIRONMENT = "tend"
 _JINJA.globals["header"] = HEADER
 _JINJA.globals["tend_version"] = _TEND_VERSION
 _JINJA.globals["tend_environment"] = TEND_ENVIRONMENT
+# Secret names reach the templates as globals rather than literals so the
+# names `tend check` looks for and the names the workflows read cannot drift.
+_JINJA.globals["bot_token_secret"] = BOT_TOKEN_SECRET
+_JINJA.globals["claude_token_secret"] = CLAUDE_TOKEN_SECRET
+_JINJA.globals["anthropic_api_key_secret"] = ANTHROPIC_API_KEY_SECRET
+_JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
+# Labels tend puts on the issues it files about its own health. Workflows skip
+# issues carrying them, so the bot's own record-keeping cannot re-trigger it:
+# each row the rate-limit preflight appends is a comment, which would fire
+# tend-mention, whose handle job trips the same limit and appends another.
+# A global rather than a literal per template, so the next such label is added
+# in one place.
+BOOKKEEPING_LABELS = ("tend-outage", "tend-rate-limit")
+_JINJA.globals["bookkeeping_labels"] = BOOKKEEPING_LABELS
 
 
 # Register every macro defined in `macros.yaml.j2` as a Jinja global so
@@ -132,7 +154,7 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
             if "if" in fields:
                 click.echo(
                     "Warning: setup step has an explicit `if:`; the "
-                    "notifications pre-check guard will not be added. "
+                    "workflow's pre-check guard will not be added. "
                     "The step runs based on your condition alone.",
                     err=True,
                 )
@@ -247,11 +269,18 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     else:
         prompt_expr = f"'{escaped}'"
 
+    skip_condition = "steps.gate.outputs.should_run == 'true'"
+    gate_script = (
+        importlib.resources.files("tend") / "templates" / "review-gate.sh"
+    ).read_text()
+
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=skip_condition),
         local_actions=_restore_local_actions_run(eff),
         prompt_expr=prompt_expr,
+        skip_condition=skip_condition,
+        gate_script=gate_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 
@@ -373,6 +402,9 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     skip_condition = (
         "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'"
     )
+    check_script = (
+        importlib.resources.files("tend") / "templates" / "notifications-check.sh"
+    ).read_text()
 
     content = _NOTIFICATIONS_TMPL.render(
         cfg=eff,
@@ -380,6 +412,7 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
         skip_condition=skip_condition,
         setup=_setup_yaml(eff, condition=skip_condition),
         prompt=prompt,
+        check_script=check_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-notifications.yaml", content=content)
 

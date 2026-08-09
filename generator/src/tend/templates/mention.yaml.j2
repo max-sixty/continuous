@@ -18,7 +18,9 @@
               || (contains(github.event.comment.body, '@<<cfg.bot_name>>')
                 && format('You were mentioned in a comment ({0}). Read the full context and respond. If changes are requested, make them, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({0}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between other participants, exit silently.', github.event.comment.html_url)
-            }}{%- endset -%}
+            }}{% if cfg.code_review_notice %}
+
+            <<cfg.code_review_notice>>{% endif %}{%- endset -%}
 <<header>>
 name: tend-mention
 on:
@@ -104,22 +106,22 @@ jobs:
             -f "client_payload[id]=${{ github.event.review.id || github.event.comment.id }}"
 
   verify:
-    # Skip comments on `tend-outage` issues: the action's Report-failure step
-    # auto-comments on those when Claude invocation fails, and without this
-    # guard those comments re-trigger tend-mention during a persistent outage
-    # (e.g. Anthropic 401), producing a self-sustaining ~1 run/minute loop
-    # until the outage clears. The prompt's self-loop guard can't help here
-    # because the model never executes — the action fails before Claude starts.
-    # A relayed review enters as `repository_dispatch` and is judged in the
-    # check step below, against the record the API holds.
+    # Skip comments on the issues tend files about its own health: the action
+    # auto-comments on those when a run fails or is refused, and without this
+    # guard those comments re-trigger tend-mention, producing a
+    # self-sustaining ~1 run/minute loop until the underlying condition
+    # clears. The prompt's self-loop guard can't help here because the model
+    # never executes — the action fails before Claude starts. A relayed review
+    # enters as `repository_dispatch` and is judged in the check step below,
+    # against the record the API holds.
     if: |
       github.event_name == 'repository_dispatch' ||
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@<<cfg.bot_name>>')) ||
       (github.event_name == 'issue_comment' &&
-        !contains(github.event.issue.labels.*.name, 'tend-outage'))
+        <<not_bookkeeping()>>)
     runs-on: ubuntu-24.04
-    environment: <<tend_environment>>
+<<environment()>>
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       reason: ${{ steps.check.outputs.reason }}
@@ -275,9 +277,17 @@ jobs:
               if printf '%s\n' "$ISSUE_BODY" | grep -qF '@<<cfg.bot_name>>'; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
+              # Don't reduce inside jq: `gh api --paginate` applies `--jq` once
+              # per page, so `| length` emits one count per page rather than one
+              # overall. Past 100 comments the variable holds e.g. `100\n7`, a
+              # numeric test on it errors with `integer expression expected`,
+              # and the failed test falls through to should_run=false — the bot
+              # goes quiet on its most-engaged threads. Capture the per-element
+              # stream and test it for emptiness — the bare substitution also
+              # keeps a failing `gh api` fatal under GHA's default `bash -e`.
               BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-                --jq '[.[] | select(.user.login == "<<cfg.bot_name>>")] | length')
-              if [ "$BOT_COMMENTS" -gt "0" ]; then
+                --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id')
+              if [ -n "$BOT_COMMENTS" ]; then
                 echo "should_run=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
               echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
@@ -294,23 +304,24 @@ jobs:
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
+          # Captured, not counted — see the note on the issue-comment lookup above.
           BOT_REVIEWS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
-            --jq '[.[] | select(.user.login == "<<cfg.bot_name>>")] | length')
-          if [ "$BOT_REVIEWS" -gt "0" ]; then
+            --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id')
+          if [ -n "$BOT_REVIEWS" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           BOT_COMMENTS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            --jq '[.[] | select(.user.login == "<<cfg.bot_name>>")] | length')
-          if [ "$BOT_COMMENTS" -gt "0" ]; then
+            --jq '.[] | select(.user.login == "<<cfg.bot_name>>") | .id')
+          if [ -n "$BOT_COMMENTS" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           echo "should_run=false" >> "$GITHUB_OUTPUT"
         env:
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           EVENT_NAME: ${{ github.event_name }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
@@ -339,7 +350,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id || github.event.client_payload.id }}
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
 
   handle:
     needs: verify
@@ -348,7 +359,7 @@ jobs:
       group: ${{ github.workflow }}-handle-${{ github.event.issue.number || github.event.client_payload.pr }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    environment: <<tend_environment>>
+<<environment()>>
     permissions:
 <<permissions()>>
     steps:
@@ -366,7 +377,7 @@ jobs:
             echo "::warning::PR is $PR_STATE — staying on default branch"
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.client_payload.pr }}
 
       - name: Compute queue delay
@@ -403,4 +414,4 @@ jobs:
           REPO: ${{ github.repository }}
           COMMENT_ID: ${{ github.event.comment.id || github.event.client_payload.id }}
           BOT_NAME: <<cfg.bot_name>>
-          GITHUB_TOKEN: ${{ secrets.<<cfg.bot_token_secret>> }}
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}

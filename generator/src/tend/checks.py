@@ -21,11 +21,18 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from functools import cache
+from urllib.parse import quote
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import TEND_ENVIRONMENT
 
 
@@ -448,6 +455,19 @@ def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
         return None, "Could not parse environment secrets response"
 
 
+def _env_path(env_name: str) -> str:
+    """An environment name as one path segment.
+
+    GitHub admits `/` in an environment name, and `gh api` treats the path it
+    is given as already-formed — it percent-encodes a space but passes a slash
+    through as a separator, so `a/b` addresses an environment that does not
+    exist. Every such 404 reads to the callers below as a token without admin
+    access, which returns the whole credential check as skipped. `safe=""`
+    encodes the separator too; `gh` does not re-encode what it is handed.
+    """
+    return quote(env_name, safe="")
+
+
 def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
     """An environment's deployment branch policies, or None if unlistable.
 
@@ -457,7 +477,7 @@ def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
     listed = _gh(
         "api",
         "--paginate",
-        f"repos/{repo}/environments/{env_name}/deployment-branch-policies",
+        f"repos/{repo}/environments/{_env_path(env_name)}/deployment-branch-policies",
         "--jq",
         ".branch_policies[]",
     )
@@ -563,6 +583,60 @@ def check_environment(repo: str, admitted: list[str]) -> CheckResult:
     )
 
 
+def check_environment_deployments(repo: str) -> CheckResult:
+    """No job files a GitHub deployment for the operational-secret environment.
+
+    The environment is a secret scope rather than a deploy target, but GitHub
+    files a deployment for every job that names one, against whatever the run
+    belongs to — under `pull_request_target` that is the pull request itself,
+    so a single omission puts a "<bot> deployed to <env>" line on every push
+    to every PR. `deployment: false` is the only lever: the environment object
+    takes `wait_timer`, `prevent_self_review`, `reviewers` and
+    `deployment_branch_policy`, and nothing there suppresses the record.
+
+    Generated workflows take the block from one macro that a generator test
+    pins, so this is the same invariant for the workflows tend did not write —
+    a repo's own hand-maintained jobs, where the omission is invisible to
+    whoever makes it. The gate still holds and the secrets still arrive; the
+    only symptom is noise in someone else's timeline, which is why nothing
+    else catches it.
+    """
+    name = "environment-deployments"
+
+    files = _fetch_workflow_files(repo)
+    if files is None:
+        return CheckResult(
+            name, None, ".github/workflows could not be read from the default branch"
+        )
+    offenders = [
+        f"{path} job '{job_id}'"
+        for path, text in sorted(files.items())
+        if text is not None
+        for job_id in sorted(_parse_workflow(path, text).filed_deployments)
+    ]
+    if offenders:
+        return CheckResult(
+            name,
+            False,
+            f"Jobs name the '{TEND_ENVIRONMENT}' environment without "
+            f"`deployment: false`, so GitHub files a deployment record for "
+            f"every run and posts it on the pull request: {', '.join(offenders)}. "
+            "Add `deployment: false` beside the environment's `name:` — a "
+            "generated `tend-*.yaml` takes it from `uvx tend@latest init` "
+            "instead of a hand edit.",
+        )
+    unread = sorted(path for path, text in files.items() if text is None)
+    if unread:
+        return CheckResult(
+            name, None, f"Workflows could not be read: {', '.join(unread)}"
+        )
+    return CheckResult(
+        name,
+        True,
+        f"No job files a deployment for the '{TEND_ENVIRONMENT}' environment",
+    )
+
+
 _WORKFLOWS_QUERY = """
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -631,6 +705,7 @@ class _WorkflowFacts:
     environments: frozenset[str]  # environments its jobs deploy to
     oidc_environments: frozenset[str]  # …of those, ones a job mints OIDC in
     oidc_without_environment: frozenset[str]  # job ids minting OIDC ungated
+    filed_deployments: frozenset[str]  # job ids naming tend that file a record
     unresolved: tuple[str, ...]
 
 
@@ -656,11 +731,11 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
         data = YAML(typ="safe").load(io.StringIO(text))
     except (YAMLError, ValueError):
         return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, unparsable
+            path, empty, False, empty, empty, empty, empty, empty, unparsable
         )
     if not isinstance(data, dict):
         return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, unparsable
+            path, empty, False, empty, empty, empty, empty, empty, unparsable
         )
 
     # YAML 1.1 documents (`%YAML 1.1`) turn the `on:` key into the boolean
@@ -686,6 +761,7 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     environments: set[str] = set()
     oidc_environments: set[str] = set()
     oidc_without_environment: set[str] = set()
+    filed_deployments: set[str] = set()
     unresolved: list[str] = []
 
     for job_id, job in jobs.items():
@@ -702,9 +778,12 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
         permissions = job.get("permissions", workflow_permissions)
         oidc = _permissions_grant_oidc(permissions)
 
-        environment = job.get("environment")
-        if isinstance(environment, dict):
-            environment = environment.get("name")
+        declared = job.get("environment")
+        environment = declared
+        deployment = None
+        if isinstance(declared, dict):
+            environment = declared.get("name")
+            deployment = declared.get("deployment")
         if environment is None:
             if oidc:
                 oidc_without_environment.add(str(job_id))
@@ -715,6 +794,12 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
             )
             continue
         environments.add(environment)
+        # The operational-secret environment is a secret scope, so a job naming
+        # it deploys nothing and the record GitHub would file for it is pure
+        # noise on whatever the run belongs to. Only the shorthand and an
+        # explicit `deployment: true` file one; both are the same mistake.
+        if environment == TEND_ENVIRONMENT and deployment is not False:
+            filed_deployments.add(str(job_id))
         if oidc:
             oidc_environments.add(environment)
 
@@ -726,6 +811,7 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
         environments=frozenset(environments),
         oidc_environments=frozenset(oidc_environments),
         oidc_without_environment=frozenset(oidc_without_environment),
+        filed_deployments=frozenset(filed_deployments),
         unresolved=tuple(unresolved),
     )
 
@@ -961,11 +1047,20 @@ def check_credential_environments(
 
     ungated: list[str] = []
     holders: list[str] = []
-    for env_name in listed.stdout.split():
+    # One name per line, not one per whitespace-separated token: GitHub admits
+    # a space in an environment name, and splitting on whitespace turns one
+    # such environment into two names that exist nowhere. Each answers 404,
+    # which is the `returncode != 0` below, so the whole check reports itself
+    # skipped for want of admin access — a credential check that stops
+    # verifying and blames the token. The real environment goes unexamined
+    # either way.
+    for env_name in listed.stdout.splitlines():
+        if not env_name:
+            continue
         secrets = _gh(
             "api",
             "--paginate",
-            f"repos/{repo}/environments/{env_name}/secrets",
+            f"repos/{repo}/environments/{_env_path(env_name)}/secrets",
             "--jq",
             ".secrets[].name",
         )
@@ -980,7 +1075,7 @@ def check_credential_environments(
         holders.append(env_name)
         if env_name == TEND_ENVIRONMENT:
             continue  # Gated by its branch policy; `environment` verifies that.
-        detail = _gh("api", f"repos/{repo}/environments/{env_name}")
+        detail = _gh("api", f"repos/{repo}/environments/{_env_path(env_name)}")
         if detail is None or detail.returncode != 0:
             return CheckResult(name, None, f"Could not read environment '{env_name}'")
         try:
@@ -1016,9 +1111,11 @@ def check_credential_environments(
             False,
             "A run the bot can cause reaches a credential: "
             f"{'; '.join(ungated)}. Gate each environment with a required "
-            "reviewer that is not the bot, or a deployment policy naming only "
-            "verified refs (protected branches, or tags under an admin-only "
-            "all-tags ruleset); move an OIDC job into such an environment.",
+            "reviewer that is not the bot, or a deployment policy listing "
+            "only verified refs — branches this run confirmed the bot cannot "
+            "write, or tags under an admin-only all-tags ruleset; move an "
+            "OIDC job into such an environment. The policy's 'protected "
+            "branches' setting is not one of them.",
         )
     if surface.unresolved:
         return CheckResult(
@@ -1349,7 +1446,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
 
     # The engine-specific auth secret is verified by check_claude_auth /
     # check_codex_auth below, which name the relevant one in their message.
-    required_secrets = [cfg.bot_token_secret]
+    required_secrets = [BOT_TOKEN_SECRET]
 
     # The operational secrets are deliberately absent from `allowed`: they
     # belong to the environment, and a copy left at repo level is readable by
@@ -1364,17 +1461,18 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     results.append(check_bot_permission(repo, cfg.bot_name))
     admitted = admitted_refs(results)
     results.append(check_environment(repo, admitted))
+    results.append(check_environment_deployments(repo))
     results.append(check_credential_environments(repo, cfg, admitted))
     results.append(check_secrets(repo, required_secrets))
     if cfg.harness == "claude":
-        results.append(check_claude_auth(repo, cfg))
+        results.append(check_claude_auth(repo))
     else:
-        results.append(check_codex_auth(repo, cfg))
+        results.append(check_codex_auth(repo))
     results.append(check_repo_secret_allowlist(repo, allowed))
     return results
 
 
-def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
+def check_claude_auth(repo: str) -> CheckResult:
     """Claude needs either CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY —
     both being absent is the failure mode. Both being set is fine; the
     action prefers the OAuth token.
@@ -1382,41 +1480,35 @@ def check_claude_auth(repo: str, cfg: Config) -> CheckResult:
     names, err = _env_secret_names(repo)
     if names is None:
         return CheckResult("claude-auth", None, err)
-    has_oauth = cfg.claude_token_secret in names
-    has_key = cfg.anthropic_api_key_secret in names
-    if has_oauth or has_key:
-        which = []
-        if has_oauth:
-            which.append(cfg.claude_token_secret)
-        if has_key:
-            which.append(cfg.anthropic_api_key_secret)
+    which = [s for s in (CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET) if s in names]
+    if which:
         return CheckResult(
             "claude-auth", True, f"Claude auth secret present: {', '.join(which)}"
         )
     return CheckResult(
         "claude-auth",
         False,
-        f"Claude harness selected but neither {cfg.claude_token_secret} nor "
-        f"{cfg.anthropic_api_key_secret} is set in the '{TEND_ENVIRONMENT}' environment.",
+        f"Claude harness selected but neither {CLAUDE_TOKEN_SECRET} nor "
+        f"{ANTHROPIC_API_KEY_SECRET} is set in the '{TEND_ENVIRONMENT}' environment.",
     )
 
 
-def check_codex_auth(repo: str, cfg: Config) -> CheckResult:
+def check_codex_auth(repo: str) -> CheckResult:
     """Codex needs OPENAI_API_KEY — absence is the failure mode. The
     subscription auth.json path is not supported.
     """
     names, err = _env_secret_names(repo)
     if names is None:
         return CheckResult("codex-auth", None, err)
-    if cfg.openai_key_secret in names:
+    if OPENAI_KEY_SECRET in names:
         return CheckResult(
             "codex-auth",
             True,
-            f"Codex auth secret present: {cfg.openai_key_secret}",
+            f"Codex auth secret present: {OPENAI_KEY_SECRET}",
         )
     return CheckResult(
         "codex-auth",
         False,
-        f"Codex harness selected but {cfg.openai_key_secret} "
+        f"Codex harness selected but {OPENAI_KEY_SECRET} "
         f"is not set in the '{TEND_ENVIRONMENT}' environment.",
     )

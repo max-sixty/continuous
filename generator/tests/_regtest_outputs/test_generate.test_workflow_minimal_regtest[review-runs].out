@@ -15,7 +15,9 @@ on:
 jobs:
   review-runs:
     runs-on: ubuntu-24.04
-    environment: tend
+    environment:
+      name: tend
+      deployment: false
     permissions:
       contents: write
       pull-requests: write
@@ -37,4 +39,4 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: |
-            /tend-ci-runner:review-runs
+            Run the /tend-ci-runner:review-runs skill. Beyond the skills the Skill tool lists, /code-review is available too.
