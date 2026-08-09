@@ -1584,16 +1584,21 @@ INSTALL_CODEX_CLI = REPO_ROOT / "shared" / "steps" / "install-codex-cli.sh"
 # Same failure schedule as the curl fakes, answering with npm's registry-side
 # error instead. On the attempt that succeeds it plants a `codex` on PATH, so
 # the script's closing `codex --version` has something to run.
+#
+# The package spec is read off the last argument rather than a fixed position,
+# so a flag added to the install command doesn't silently turn the version the
+# fake echoes into `-g`.
 FAKE_NPM = """#!/usr/bin/env bash
+spec=${*: -1}
 n=$(cat "$NPM_ATTEMPTS" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" > "$NPM_ATTEMPTS"
 if [ "$n" -le "${NPM_FAILURES:-0}" ]; then
   echo "npm error code E503" >&2
-  echo "npm error 503 Service Unavailable - GET https://registry.npmjs.org/$3" >&2
+  echo "npm error 503 Service Unavailable - GET https://registry.npmjs.org/$spec" >&2
   exit 1
 fi
-printf '#!/usr/bin/env bash\\necho codex-cli %s\\n' "${3##*@}" > "$FAKE_BIN/codex"
+printf '#!/usr/bin/env bash\\necho codex-cli %s\\n' "${spec##*@}" > "$FAKE_BIN/codex"
 chmod +x "$FAKE_BIN/codex"
 """
 
