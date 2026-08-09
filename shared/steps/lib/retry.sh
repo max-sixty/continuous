@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The retry window the pre-agent installers share: install-claude-binary.sh
 # and install-proxy-uv.sh both fetch from a CDN before the agent step exists,
-# so a blip that exhausts their retries loses the run with no outage row
-# (`Report failure` is gated on the agent step's own outcome).
+# so a blip that exhausts their retries costs the whole run — the step goes red
+# having done none of the work the trigger asked for. The lost run is what
+# justifies a window this wide, independent of how the failure is reported
+# afterwards.
 #
 # Sourced, not executed.
 

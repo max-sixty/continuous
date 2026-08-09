@@ -1408,8 +1408,8 @@ def test_install_claude_binary_rides_out_a_403_burst(
 
     Observed in production: every attempt inside a ~15s window answered 403
     while sibling matrix legs installed fine seconds either side. Three
-    attempts is too few to cross a blip that short, and the step failing this
-    early leaves no outage row, so the run vanishes without a trace.
+    attempts is too few to cross a blip that short, and the step fails ahead of
+    the agent, so the run is lost having done none of the work it was for.
     """
     install_env["CURL_FAILURES"] = "4"
 
@@ -1520,8 +1520,8 @@ def test_install_proxy_uv_rides_out_a_403_burst(proxy_uv_env: dict[str, str]) ->
     """The uv install is as exposed as the claude one, and gets the same window.
 
     It runs in the same job and equally ahead of the agent step, so a blip that
-    exhausts its retries loses the run with no outage row — the sibling failure
-    mode, with astral.sh in place of claude.ai.
+    exhausts its retries costs the whole run — the sibling failure mode, with
+    astral.sh in place of claude.ai.
     """
     proxy_uv_env["CURL_FAILURES"] = "4"
 
