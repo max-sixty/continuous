@@ -5,11 +5,12 @@ description: Sets up tend — an autonomous junior maintainer for a GitHub repo,
 
 # Install Tend
 
-Set up tend on the current repo. If the user hasn't supplied a bot name,
-get one via `AskUserQuestion` before step 1 using the candidate-generation
-pattern from step 6 (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`, parallel
-availability check, present available ones). The user can pick "Other"
-to supply a custom name.
+Set up tend on the current repo, or change an installation it already has.
+When installing and the user hasn't supplied a bot name, get one via
+`AskUserQuestion` before step 1 using the candidate-generation pattern from
+step 6 (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`, parallel availability
+check, present available ones). The user can pick "Other" to supply a custom
+name.
 
 When asking the user questions during these steps, use the `AskUserQuestion`
 tool — present concrete options when there are clear choices (e.g. bio
@@ -23,7 +24,14 @@ not have to ask "where do I do that?".
 
 ## Kickoff
 
-Before running step 1, choose the harness and lay out the plan:
+Read `.config/tend.yaml` first. Its presence says whether this is an install or
+a change to one, and where it exists it already names the harness.
+
+With a config in place, take `harness` from it, lay out only the steps the task
+touches, and start. The summary checklist at the end describes a finished
+install, so skip it.
+
+With no config yet, choose the harness and lay out the whole install:
 
 - Ask via `AskUserQuestion` which harness to use:
   - **Claude (Anthropic)** — uses a Claude Code OAuth token (recommended
