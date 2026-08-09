@@ -208,6 +208,8 @@ Don't explain what the code does — the author wrote it. Don't nitpick formatti
 
 **When confidence is low**, go beyond checking the implementation — question the approach: "Does this bypass or duplicate an existing API?" "What does this change *not* handle?" If the design involves a judgment call, flag it for human review as a COMMENT.
 
+**Attribute a withheld approval to whatever actually decided it.** Cite repo guidance only when you can name the file and heading it lives in; a reader who goes looking for "this repo's review policy" and finds nothing written starts doubting the rest of the review too. When the call is your own judgment, say so plainly — "I'd want a human on this one, it changes what `--force` will delete" rather than "per this repo's review policy this is a hold-for-human surface". Judgment is a sufficient reason on its own; borrowed authority that doesn't exist is not.
+
 **Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Still perform the full review (steps 2-3) — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt `gh pr review --approve` — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 6. Always post CI failure analysis as a COMMENT, even on self-authored PRs.
 
 **Not confident enough to approve** (unfamiliar module, subtle logic): Add a `+1` reaction instead — no review needed unless there are specific observations.
