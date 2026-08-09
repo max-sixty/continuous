@@ -102,9 +102,9 @@ jobs:
   # .agents/plugins/marketplace.json or the plugin manifest that Codex can no
   # longer install fails here rather than in an adopter's job.
   #
-  # It does not cover an agent session: sandbox behavior under a live model,
-  # and whether the final message reaches --output-last-message, both need a
-  # real key.
+  # It does not cover an agent session: model selection, sandbox behavior
+  # under a live model, and whether the final message reaches
+  # --output-last-message all need a real key.
   test-codex-surface:
     runs-on: ubuntu-24.04
     steps:

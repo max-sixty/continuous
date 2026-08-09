@@ -187,8 +187,8 @@ Bump `codex_version` to `latest`; drop to `alpha` only for a fix not yet
 released. CI's `test-codex-surface` job installs whatever is pinned and asserts
 the CLI surface the action depends on, so a bump that breaks it fails on its own
 PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live agent session stays
-unverified — skim the codex CHANGELOG across the bump for sandbox behavior and
-`--output-last-message`, and note what you find in the PR.
+unverified — skim the codex CHANGELOG across the bump for model availability,
+sandbox behavior, and `--output-last-message`, and note what you find in the PR.
 
 ### `uses:` refs
 
