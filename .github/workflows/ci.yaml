@@ -142,7 +142,13 @@ jobs:
             echo "::error::codex $v no longer prints a parseable 'Installed plugin root: <path>'"
             exit 1
           fi
+          # Both trees skills reach for through CLAUDE_PLUGIN_ROOT. Only
+          # `skills/` is declared in plugin.json, so `scripts/` materializing
+          # is a packaging side effect that a release could stop honouring —
+          # and every skill shelling out to ${CLAUDE_PLUGIN_ROOT}/scripts/
+          # would break with the job still green.
           test -f "$root/skills/triage/SKILL.md"
+          test -x "$root/scripts/list-recent-runs.sh"
 
   # The OAuth wrapper ships inside the install-tend plugin rather than under
   # generator/, so the suites above never reach it. Its extractors decide what
