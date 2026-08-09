@@ -1046,9 +1046,11 @@ def test_mention_self_comment_skip_spares_review_submissions(
     role speaking, not a self-loop — the prompt is told to action it. That
     signal arrives as a `pull_request_review` submission event, distinct from
     the `pull_request_review_comment` inline-comment event the skip covers, so
-    it must still reach the actionable path. The only self-review that is
-    skipped is the terminal empty-body APPROVED case (see
-    test_mention_skips_bot_approved_review).
+    it must still reach the actionable path. The self-reviews that are skipped
+    are skipped for being terminal for the bot, not for being self-authored:
+    the empty-body APPROVED case (see test_mention_skips_bot_approved_review)
+    and a review on a PR the bot did not author (see
+    test_mention_skips_bot_review_on_another_authors_pr).
 
     This pins the boundary against a later "skip self-authored reviews too, for
     consistency" edit that would silently break the review -> fix loop: the
@@ -1081,16 +1083,74 @@ def test_mention_self_comment_skip_spares_review_submissions(
         "submission kind — a bot self-review is actionable reviewer signal"
     )
 
-    # The sole author-keyed skip for a review submission is the terminal
-    # empty-body APPROVED gate; a COMMENTED / non-empty-body bot self-review
-    # falls through to the actionable PR_AUTHOR == bot short-circuit.
-    review_skip = run[run.index('[ "$KIND" = "pull_request_review" ]') :]
-    assert '[ "$REVIEW_STATE" = "approved" ]' in review_skip
-    assert '[ -z "$COMMENT_BODY" ]' in review_skip
+    # Slice to the terminal empty-body APPROVED gate alone — it ends at the
+    # inline-comment fetch, ahead of the other-authors-PR gate that
+    # test_mention_skips_bot_review_on_another_authors_pr pins — so this stays
+    # discriminating rather than passing on either. A COMMENTED /
+    # non-empty-body bot self-review that is neither falls through to the
+    # actionable PR_AUTHOR == bot short-circuit.
+    approved_skip = run[
+        run.index('[ "$KIND" = "pull_request_review" ]') : run.index(
+            "reviews/$PAYLOAD_ID/comments"
+        )
+    ]
+    assert '[ "$REVIEW_STATE" = "approved" ]' in approved_skip
+    assert '[ -z "$COMMENT_BODY" ]' in approved_skip
     assert '[ "$PR_AUTHOR" = "test-bot" ]' in run, (
         "a bot self-review that isn't the terminal empty approval must reach "
         "the actionable PR_AUTHOR == bot short-circuit"
     )
+
+
+def test_mention_skips_bot_review_on_another_authors_pr(tmp_path: Path) -> None:
+    """A review the bot leaves on a PR someone else authored is terminal for
+    the bot: the findings are addressed to that PR's author, and pushing
+    unbidden to another author's branch is barred by conduct rules, so there is
+    no author role left to act in. The BOT_REVIEWS heuristic counts this very
+    review, so without a gate every such review starts a session that can only
+    exit silently (#915). #747's gate covers only the empty-body APPROVED leg —
+    the reviews observed here carry 455-1920 char bodies in APPROVED and
+    COMMENTED states alike, so the gate must key on author alone.
+
+    Placement is the whole design, in both directions:
+
+    - *After* the PR_AUTHOR short-circuit, which exits should_run=true when the
+      PR is the bot's own. A review the bot leaves on its own PR is the reviewer
+      role handing work to the author role, and must keep firing (#166, #761) —
+      an author-keyed gate placed any earlier would swallow it.
+    - *After* the review-body and inline-comment @-mention scans, so an explicit
+      summons the bot quotes still wins.
+    - *Before* the BOT_REVIEWS heuristic, which is what misreads the triggering
+      review as prior engagement.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    wf = generate_mention(cfg)
+    data = yaml.safe_load(wf.content)
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    run = check_step["run"]
+
+    # The window between the PR-author resolution and the engagement heuristic
+    # is the only place the gate can sit and still satisfy all three orderings.
+    gate = run[run.index("PR_AUTHOR=$(gh pr view") : run.index("BOT_REVIEWS=$(")]
+    assert '[ "$KIND" = "pull_request_review" ]' in gate
+    assert '[ "$REVIEW_AUTHOR" = "test-bot" ]' in gate
+
+    # Keyed on author alone. Reusing #747's state/body clauses here would let
+    # every review in #915's evidence through, since they are non-empty and
+    # mostly COMMENTED.
+    assert '[ "$REVIEW_STATE"' not in gate
+    assert '[ -z "$COMMENT_BODY" ]' not in gate
+
+    # The bot's own PR still reaches the actionable short-circuit, because that
+    # check exits before the gate is read.
+    assert run.index('[ "$PR_AUTHOR" = "test-bot" ]') < run.index(
+        '[ "$KIND" = "pull_request_review" ]', run.index("PR_AUTHOR=$(gh pr view")
+    )
+
+    # And an @-mention inside the review — body or inline comment — still wins.
+    assert run.index("reviews/$PAYLOAD_ID/comments") < run.index("BOT_REVIEWS=$(")
 
 
 # ---------------------------------------------------------------------------
