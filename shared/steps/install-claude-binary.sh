@@ -19,7 +19,7 @@ set -eo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # Retry transient 403s/5xxs from the installer CDN, on the window lib/retry.sh
-# holds for both pre-agent installers. The lib is concatenated onto the front
+# holds for the pre-agent installers. The lib is concatenated onto the front
 # of the sandbox script rather than sourced from inside it: nothing grants the
 # sandbox UID read access to the action's own checkout — setup-sandbox.sh
 # grants traversal (o+x) on the workspace's ancestors only — whereas stdin is a
