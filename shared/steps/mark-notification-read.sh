@@ -39,8 +39,14 @@ esac
 # timestamp the `updated_at <= started` guard can't be evaluated, and marking
 # unconditionally would swallow activity that arrived mid-run — so skip this
 # cycle and leave the thread unread for the scheduled poll to pick up.
+#
+# `null` counts as absent: a 200 whose body lacks the field leaves `gh --jq`
+# printing the literal string, which is non-empty and so passes `-z`. It then
+# reaches the jq guard below as a *string*, and every ISO-8601 timestamp sorts
+# before `null` by codepoint — so `updated_at <= $started` holds for everything
+# and the run marks read exactly the mid-run activity it means to preserve.
 if ! RUN_STARTED_AT=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-  --jq '.run_started_at') || [ -z "$RUN_STARTED_AT" ]; then
+  --jq '.run_started_at') || [ -z "$RUN_STARTED_AT" ] || [ "$RUN_STARTED_AT" = "null" ]; then
   echo "::warning::Could not read run_started_at; leaving notification unread (non-fatal)"
   exit 0
 fi

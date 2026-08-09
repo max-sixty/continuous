@@ -41,4 +41,4 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: |
-            /tend-ci-runner:nightly
+            Run the /tend-ci-runner:nightly skill. Beyond the skills the Skill tool lists, /code-review is available too.

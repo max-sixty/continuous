@@ -181,14 +181,14 @@ Always use `git push` without specifying a remote — `gh pr checkout` configure
 
 If pushing fails (fork PR with edits disabled), fall back to posting code snippets in a comment. Don't reference commit SHAs from temporary branches — post code inline.
 
-### Batch the push — every push restarts the reviewer
+### Batch the push — every push costs a reviewer round
 
-`tend-review` triggers on `synchronize` under a per-PR concurrency group at `cancel-in-progress: true`, so each push to a PR starts a fresh review run and cancels the one already running. Push twice in quick succession and the first reviewer is killed at startup having produced nothing; push after several minutes and it dies with whatever review it had assembled unsubmitted.
+`tend-review` triggers on `synchronize` under a per-PR concurrency group without cancel-in-progress: a push while a review session runs queues a replacement run, and the running session folds the push into its review before ending (review skill, step 9). Nothing is killed, but each push still costs a round — a fold-in extends the live session, and an unabsorbed push boots a fresh one.
 
 - **Commit everything before `gh pr create`.** Changelog entries, test pins, and formatting fixups belong in the initial push, not a follow-up thirty seconds later.
 - **Make the commits, then push once** — not a push after each commit. Amends and rebases count: a force-push fires `synchronize` too.
 
-A follow-up push that acts on information the session didn't have at push time — review feedback, a red check — *should* invalidate the running review; that one is correct. What's wasteful is splitting work you already have into several pushes.
+A follow-up push that acts on information the session didn't have at push time — review feedback, a red check — earns its round. What's wasteful is splitting work you already have into several pushes.
 
 ### Re-check PR state before pushing a follow-up commit
 
@@ -391,10 +391,10 @@ If you are responding to your own prior comment or review (not a human's reply t
 
 ## Recheck Before Posting
 
-**Before posting any comment, review, or inline reply**, re-fetch the conversation and check whether the response would duplicate something already there. Two duplication paths:
+**Before posting any comment, review, or inline reply**, re-fetch the conversation and check whether the response would duplicate something already there. Run the re-fetch **as the last step before the post**, the same way the `gh pr create` dedup above does — composing the body, grepping it for placeholders, and checking its links all take time, and a sibling's comment landing in that gap is invisible to a check that ran before them. Two duplication paths:
 
 - **New entries arrived during the session.** Other participants may comment while the bot works. Compare counts against what was read at session start.
-- **A sibling tend workflow already responded.** `tend-mention`, `tend-triage`, and `tend-review` all post as the same bot account; a comment from one can pre-empt another (a `tend-mention` reply followed by a `synchronize`-triggered `tend-review` is the common pattern). The earlier comment may already be in the conversation at session start, so a stale-count check alone is not enough — scan for prior bot comments newer than the maintainer message being responded to.
+- **A sibling tend workflow already responded.** Every workflow posts as the same bot account, so the pre-empting comment can come from an event-triggered run (`tend-mention`, `tend-triage`, `tend-review`) or from a scheduled sweep that reaches the same thread (`tend-nightly`, `tend-review-runs`, `tend-notifications`, plus any non-`tend-*` workflow the repo's `running-tend` skill lists). A freshly-opened issue is the sharpest case: `tend-triage` fires on `issues: opened` and owns it, while a sweep already in session may find the same issue and answer it independently. The earlier comment may already be in the conversation at session start, so a stale-count check alone is not enough — scan for prior bot comments newer than the maintainer message being responded to.
 
 ```bash
 # For issues
@@ -712,7 +712,7 @@ When the correction identifies a gap or bug in a **bundled** skill — the same 
      --jq '.[] | select([.files[].path] | index(".claude/skills/running-tend/SKILL.md"))'
    ```
    If one is open, add to it instead of opening a second.
-3. **Draft a minimal edit.** One short rule, in the maintainer's words where practical. Place it under an appropriate heading. New SKILL.md files start with YAML frontmatter:
+3. **Draft a minimal edit.** State the rule, not the incident that produced it — no verbatim quotes of the maintainer's comment, no reconstruction of the exchange. A few lines of instruction is the target; step 4's PR body is where the case history goes. Place it under an appropriate heading. New SKILL.md files start with YAML frontmatter:
    ```markdown
    ---
    name: running-tend

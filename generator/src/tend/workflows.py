@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import importlib.resources
 import io
 import textwrap
 from collections.abc import Callable
@@ -152,7 +153,7 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
             if "if" in fields:
                 click.echo(
                     "Warning: setup step has an explicit `if:`; the "
-                    "notifications pre-check guard will not be added. "
+                    "workflow's pre-check guard will not be added. "
                     "The step runs based on your condition alone.",
                     err=True,
                 )
@@ -227,10 +228,17 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     else:
         prompt_expr = f"'{escaped}'"
 
+    skip_condition = "steps.gate.outputs.should_run == 'true'"
+    gate_script = (
+        importlib.resources.files("tend") / "templates" / "review-gate.sh"
+    ).read_text()
+
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=skip_condition),
         prompt_expr=prompt_expr,
+        skip_condition=skip_condition,
+        gate_script=gate_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 
@@ -348,6 +356,9 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     skip_condition = (
         "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'"
     )
+    check_script = (
+        importlib.resources.files("tend") / "templates" / "notifications-check.sh"
+    ).read_text()
 
     content = _NOTIFICATIONS_TMPL.render(
         cfg=eff,
@@ -355,6 +366,7 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
         skip_condition=skip_condition,
         setup=_setup_yaml(eff, condition=skip_condition),
         prompt=prompt,
+        check_script=check_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-notifications.yaml", content=content)
 
