@@ -205,11 +205,8 @@ Run the token report script to get per-run token counts:
 
 ```bash
 # Whole hours back to Step 1's anchor, rounded up so the whole band is priced.
-# A literal `24` here reopens the same gap Step 1 closed, and clips a wider band
-# than Step 1 did because `now` moved on during the session. Re-read the anchor
-# from Step 1's file: `$SINCE` was set in a different Bash call and is empty
-# here, and `date -d ""` is today's midnight rather than an error, so the
-# arithmetic would quietly yield hours-since-midnight instead.
+# A literal `24` reopens the gap Step 1 closed. The `cat` isn't optional: an
+# unset `$SINCE` makes `date -d ""` today's midnight, not an error.
 SINCE=$(cat /tmp/review-runs-since)
 HOURS=$(( ( $(date -u +%s) - $(date -u -d "$SINCE" +%s) + 3599 ) / 3600 ))
 "${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "$HOURS" > /tmp/token-report.json
