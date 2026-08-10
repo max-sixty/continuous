@@ -126,11 +126,32 @@ Never replace the body — prior entries contain per-run evidence needed for gat
 
 ## Step 1: Find recent runs
 
-List tend CI runs that completed in the past 24 hours (the cron runs daily):
+List tend CI runs that completed since the previous `review-runs` run (nominally 24 hours — the cron runs daily):
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+# Anchor the window on the predecessor's start, not on a duration back from
+# `now`. A `date -u -d '24 hours ago'` resolves when the *agent* runs it — the
+# run's start plus container boot and skill loading — so it opens strictly after
+# the predecessor started and drops every run in that band, which is exactly
+# the work the predecessor triggered. Anchoring makes consecutive windows tile,
+# and every later step reads the same `$SINCE` instead of recomputing a
+# duration that has drifted further by then.
+#
+# Derive the workflow id from this run rather than assuming the file name;
+# exclude this run, because a re-run attempt of it can already read as
+# completed and anchoring on itself collapses the window to zero.
+# `status=success` reaches past a predecessor that died before its census, so
+# that band still gets covered. Clamp a stale or missing anchor (an outage, or
+# a fresh repo with no predecessor) so the window can recover one skipped day
+# without pulling in a week — Step 5 dedups whatever a widened window sees
+# twice.
+WF_ID=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq '.workflow_id')
+PREV_START=$(gh api "repos/$REPO/actions/workflows/$WF_ID/runs?status=success&per_page=10" \
+  --jq "[.workflow_runs[] | select(.id != ${GITHUB_RUN_ID:-0}) | .created_at] | max // empty")
+SINCE=${PREV_START:-$(date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ)}
+FLOOR=$(date -u -d '49 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+if [[ "$SINCE" < "$FLOOR" ]]; then SINCE=$FLOOR; fi
 # Add the repo's extra prefixes from its `running-tend` skill: any workflow
 # running the tend action is in scope, not just the generated `tend-*` ones.
 # Step 2 prices the same list.
@@ -175,10 +196,14 @@ After retrieving the timeout cap from the workflow file, flag any job whose dura
 Run the token report script to get per-run token counts:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 > /tmp/token-report.json
+# Whole hours back to Step 1's anchor, rounded up so the whole band is priced.
+# A literal `24` here reopens the same gap Step 1 closed, and clips a wider band
+# than Step 1 did because `now` moved on during the session.
+HOURS=$(( ( $(date -u +%s) - $(date -u -d "$SINCE" +%s) + 3599 ) / 3600 ))
+"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "$HOURS" > /tmp/token-report.json
 ```
 
-Pass the same extra prefixes Step 1 censuses, so the two steps agree on what the fleet is — the repo's `running-tend` skill is the source for both (e.g. `review-` for a `review-reviewers` workflow that uses the tend action but isn't named `tend-*`).
+Pass the same extra prefixes Step 1 censuses (after `$HOURS`, which the script reads as its first positional arg), so the two steps agree on what the fleet is — the repo's `running-tend` skill is the source for both (e.g. `review-` for a `review-reviewers` workflow that uses the tend action but isn't named `tend-*`).
 
 Include the totals and per-workflow breakdown in the summary (Step 7). Flag any runs with unusually high token usage for closer inspection in Step 3.
 
