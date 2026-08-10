@@ -80,9 +80,12 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **notifications** | Every 15 minutes           | Polls GitHub notifications, responds to unhandled mentions, marks handled threads as read.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
 
-Scheduled workflows also support manual dispatch for testing. All are
-enabled by default except **ci-fix**, which requires `watched_workflows`
-to be configured. Any can be disabled:
+Scheduled workflows also support manual dispatch for testing. GitHub runs
+`schedule` triggers on a best-effort basis and drops ticks under load, so
+the intervals above are the requested cadence rather than a guarantee —
+observed gaps between runs are routinely longer. All are enabled by
+default except **ci-fix**, which requires `watched_workflows` to be
+configured. Any can be disabled:
 
 ```yaml
 workflows:

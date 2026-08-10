@@ -211,6 +211,9 @@ bot_name: my-project-bot
 # - `prompt` (string) — override the default skill invocation
 #
 # Scheduled workflows also accept `cron` to override their default schedule.
+# GitHub runs `schedule` triggers on a best-effort basis and drops ticks under
+# load, so a cron is the requested cadence rather than a guarantee — observed
+# gaps between runs are routinely longer than the interval.
 #
 # workflows:
 #   notifications:
