@@ -23,6 +23,7 @@ from tend.config import (
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
+    GeneratedWorkflow,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -393,6 +394,54 @@ def test_custom_prompt(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     triage = workflows["tend-triage.yaml"]
     assert "Custom triage:" in triage.content
+
+
+def _review_prompt(review: GeneratedWorkflow) -> str:
+    """The `prompt:` input the review job hands the harness action."""
+    steps = yaml.safe_load(review.content)["jobs"]["review"]["steps"]
+    step = next(
+        s for s in steps if s.get("uses", "").startswith("max-sixty/tend/claude@")
+    )
+    return step["with"]["prompt"]
+
+
+def test_review_prompt_without_placeholder_keeps_literal_braces(
+    tmp_path: Path,
+) -> None:
+    """A review prompt with braces but no `{pr_number}` reaches the agent verbatim.
+
+    The review prompt is the only one emitted inside a GHA expression. With the
+    placeholder it goes through `format()`, which needs every other brace
+    doubled; without it, it is a bare string literal that GHA never collapses,
+    so doubling there would ship `{{...}}` to the agent.
+    """
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review this PR. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "{generated}" in prompt
+    assert "{{generated}}" not in prompt
+    assert "format(" not in prompt
+
+
+def test_review_prompt_with_placeholder_escapes_other_braces(tmp_path: Path) -> None:
+    """With `{pr_number}` present the prompt goes through `format()`, so the
+    placeholder becomes `{0}` and every other brace is doubled for it."""
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review PR {pr_number}. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "format(" in prompt
+    assert "{0}" in prompt
+    assert "{{generated}}" in prompt
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
