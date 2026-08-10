@@ -939,9 +939,7 @@ def _credential_surface(
         if text is None:
             unresolved.append(f"{path} could not be read")
             continue
-        parsed = _parse_workflow(path, text, repo)
-        facts[path] = parsed
-        unresolved.extend(parsed.unresolved)
+        facts[path] = _parse_workflow(path, text, repo)
 
     resolved, unreached = _effective_triggers(facts)
     env_steerable: dict[str, set[str]] = {}
@@ -950,9 +948,12 @@ def _credential_surface(
     for path, f in facts.items():
         if path in unreached:
             # Nothing here starts it, and the outside caller that does spends
-            # its own repo's credentials, not this one's — so its environments
-            # and its OIDC jobs are not this repo's surface to gate.
+            # its own repo's credentials, not this one's — so neither what its
+            # jobs name nor what it leaves unreadable is this repo's surface to
+            # gate. A file that would not parse is never unreached: nothing
+            # read `workflow_call` off it, so its own unknown still reports.
             continue
+        unresolved.extend(f.unresolved)
         for env in f.environments:
             env_steerable.setdefault(env, set()).update(resolved[path])
         oidc_environments |= f.oidc_environments

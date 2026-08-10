@@ -2094,9 +2094,10 @@ def test_credential_environments_absolute_self_call_inherits_caller_triggers() -
 def test_credential_environments_own_triggers_reach_a_callable_workflow() -> None:
     """`workflow_call` alongside triggers of its own widens the way in rather
     than replacing it: the workflow's own `on:` still starts it here, so an
-    uncallable-from-here verdict would skip a surface tend can read."""
+    uncallable-from-here verdict would walk past an ungated credential this
+    repo really can spend."""
     result = _credential_check(
-        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        {"pypi": ([], {"protection_rules": []}, "")},
         workflows={
             "tests.yaml": (
                 "on:\n"
@@ -2110,10 +2111,13 @@ def test_credential_environments_own_triggers_reach_a_callable_workflow() -> Non
                 "jobs:\n"
                 "  deploy:\n"
                 "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
             )
         },
     )
-    assert result.passed is True, result.message
+    assert result.passed is False, result.message
+    assert "pypi" in result.message
 
 
 def test_credential_environments_unreached_through_a_caller_spends_nothing() -> None:
@@ -2160,6 +2164,26 @@ def test_credential_environments_unreached_reusable_workflow_spends_nothing() ->
                 "    environment: pypi\n"
                 "    permissions:\n"
                 "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_unreached_dynamic_environment_spends_nothing() -> None:
+    """What an unreachable workflow leaves unreadable is not this repo's to
+    gate either. A reusable deploy parameterised by its caller's input names no
+    environment tend can resolve, and reporting that would hold the check at
+    unverified for as long as the adopter keeps the workflow."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: ${{ inputs.environment }}\n"
             )
         },
     )
