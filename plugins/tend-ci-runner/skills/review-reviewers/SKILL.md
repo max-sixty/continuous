@@ -258,6 +258,12 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 >   `gh api repos/$ARGUMENTS/pulls/<pr>/reviews`
 > - `tend-notifications`: check for recent bot comments/issue-close events in the past hour
 > - `tend-mention`: map run to issue/PR from triggering comment, check for bot replies
+> - `tend-mention` on `repository_dispatch` (the relay path for review events): there is no triggering comment and `headBranch` is the default branch, so neither route above resolves it. Read the target off the `verify` job's log, where the step env block prints the relayed payload:
+>   ```bash
+>   JOB=$(gh api "repos/$ARGUMENTS/actions/runs/<run-id>/jobs" --jq '.jobs[] | select(.name == "verify") | .id')
+>   gh api "repos/$ARGUMENTS/actions/jobs/$JOB/logs" | grep -E 'PAYLOAD_(KIND|PR|ID):'
+>   ```
+>   `PAYLOAD_PR` is the issue/PR number and `PAYLOAD_KIND` is the relayed event (`pull_request_review`, `pull_request_review_comment`). If the `verify` job shows `React to mention: skipped`, the engagement gate declined and no agent booted — expected silence, not missing output.
 > - `tend-ci-fix`: map run → PR via `headBranch`, check for bot commits
 >
 > **Negative outcome signals** — report any sign the bot's output was rejected, corrected, or ignored. Common shapes (use judgment for signals not listed):
