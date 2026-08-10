@@ -38,9 +38,13 @@ Pass extra prefixes when running token reports or listing runs so these
 workflows are included:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 "review-"
+"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "${HOURS:-24}" "review-"
 TARGET_REPO=max-sixty/tend "${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh" "tend-" "review-"
 ```
+
+Under `review-runs`, `$HOURS` is the lookback derived from its Step 1 anchor —
+passing a literal `24` there reopens the window gap that anchor closes. The
+default keeps an ad-hoc invocation working.
 
 ## Labels
 
