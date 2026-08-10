@@ -144,7 +144,7 @@ Scale depth to the change. A docs-only PR or a mechanical rename needs a skim fo
 
 Check the project's CLAUDE.md for language-specific review criteria and conventions. Load any project-specific review skill if available.
 
-Review the diff two ways at once: the manual checks below, plus a `/tend-ci-runner:code-review` pass over the PR's merged tree. That skill is a structured second pass — correctness and cleanup angles, then a verify pass — and it returns findings rather than posting anything. **Every review that reaches this step runs it**, trivial diffs included — the depth-scaling above sets how deep the pass goes, never whether it happens. Scale its depth to how core the change is:
+**Every review that reaches this step runs a `/tend-ci-runner:code-review` pass over the PR's merged tree** — trivial diffs included; the depth-scaling above sets how deep the pass goes, never whether it happens. It's a structured second pass — correctness and cleanup angles, then a verify pass — that returns findings rather than posting anything, and it runs alongside the manual checks below rather than replacing them. Scale its depth to how core the change is:
 
 - Peripheral or mechanical (docs, config, dependency bumps, test-only): tell it the change is peripheral, so it runs the short angle set in one pass.
 - The project's core logic: tell it the change is core, so it fans the angles out and sweeps for gaps.
