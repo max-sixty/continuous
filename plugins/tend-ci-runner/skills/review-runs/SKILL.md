@@ -132,7 +132,8 @@ List tend CI runs that completed since the previous `review-runs` run (nominally
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 # Anchor on the predecessor's start: a `date -d '24 hours ago'` resolves when
 # the agent runs it, so the window opens after the predecessor started and
-# drops the band in between. Later steps read this same `$SINCE`.
+# drops the band in between. Steps 2 and 4 re-read the anchor from the file
+# written below; shell variables don't survive between Bash tool calls.
 #
 # Derive the workflow id from this run rather than assuming the file name;
 # exclude this run, because a re-run attempt of it can already read as
@@ -148,6 +149,7 @@ PREV_START=$(gh api "repos/$REPO/actions/workflows/$WF_ID/runs?status=success&pe
 SINCE=${PREV_START:-$(date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ)}
 FLOOR=$(date -u -d '49 hours ago' +%Y-%m-%dT%H:%M:%SZ)
 if [[ "$SINCE" < "$FLOOR" ]]; then SINCE=$FLOOR; fi
+echo "$SINCE" > /tmp/review-runs-since
 # Add the repo's extra prefixes from its `running-tend` skill: any workflow
 # running the tend action is in scope, not just the generated `tend-*` ones.
 # Step 2 prices the same list.
@@ -204,7 +206,11 @@ Run the token report script to get per-run token counts:
 ```bash
 # Whole hours back to Step 1's anchor, rounded up so the whole band is priced.
 # A literal `24` here reopens the same gap Step 1 closed, and clips a wider band
-# than Step 1 did because `now` moved on during the session.
+# than Step 1 did because `now` moved on during the session. Re-read the anchor
+# from Step 1's file: `$SINCE` was set in a different Bash call and is empty
+# here, and `date -d ""` is today's midnight rather than an error, so the
+# arithmetic would quietly yield hours-since-midnight instead.
+SINCE=$(cat /tmp/review-runs-since)
 HOURS=$(( ( $(date -u +%s) - $(date -u -d "$SINCE" +%s) + 3599 ) / 3600 ))
 "${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "$HOURS" > /tmp/token-report.json
 ```
@@ -231,7 +237,10 @@ For each analyzed run, compare what the bot did against what happened next. The 
 mention, notifications, weekly, and review-reviewers runs get the same treatment: find the bot's output and check whether it was accepted.
 
 ```bash
-# Example: check if a bot PR was merged or closed
+# Example: check if a bot PR was merged or closed. Re-read Step 1's anchor —
+# unset here, an empty string compares less than every non-null `closedAt` and
+# the check silently stops being windowed at all.
+SINCE=$(cat /tmp/review-runs-since)
 gh pr list --author "$BOT_LOGIN" --state all --json number,title,state,closedAt \
   --jq '.[] | select(.closedAt > "'$SINCE'")'
 ```
