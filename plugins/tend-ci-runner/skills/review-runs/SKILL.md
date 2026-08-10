@@ -130,13 +130,9 @@ List tend CI runs that completed since the previous `review-runs` run (nominally
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-# Anchor the window on the predecessor's start, not on a duration back from
-# `now`. A `date -u -d '24 hours ago'` resolves when the *agent* runs it — the
-# run's start plus container boot and skill loading — so it opens strictly after
-# the predecessor started and drops every run in that band, which is exactly
-# the work the predecessor triggered. Anchoring makes consecutive windows tile,
-# and every later step reads the same `$SINCE` instead of recomputing a
-# duration that has drifted further by then.
+# Anchor on the predecessor's start: a `date -d '24 hours ago'` resolves when
+# the agent runs it, so the window opens after the predecessor started and
+# drops the band in between. Later steps read this same `$SINCE`.
 #
 # Derive the workflow id from this run rather than assuming the file name;
 # exclude this run, because a re-run attempt of it can already read as
@@ -163,15 +159,25 @@ if [[ "$SINCE" < "$FLOOR" ]]; then SINCE=$FLOOR; fi
 # applying it per page is harmless.
 PREFIXES=("tend-")
 PREFIX_RE="^($(IFS='|'; echo "${PREFIXES[*]}"))"
+# Census on *completion*, which is the axis that tiles. A run created before
+# `$SINCE` may still have been in progress at the predecessor's census, so
+# `status=completed` dropped it there — filtering on `created` here would drop
+# it again and nobody would ever see it, and those are the long-running runs
+# Step 3 goes on to hunt. So over-fetch by `created` and filter on
+# `updated_at`, as `list-recent-runs.sh` does. The floor is a run's whole
+# lifetime, not its job cap: `created_at` starts at queue time, and a
+# `cancel-in-progress: false` group can hold a run queued for many hours
+# before its 6h of execution even begins.
+FETCH_FROM=$(date -u -d "$SINCE - 24 hours" +%Y-%m-%dT%H:%M:%SZ)
 for workflow in $(gh api --paginate repos/$REPO/actions/workflows --jq ".workflows[] | select(.name | test(\"$PREFIX_RE\")) | .id"); do
-  gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?created=>=$SINCE&status=completed&per_page=100" \
-    --jq '.workflow_runs[] | {databaseId: .id, conclusion, createdAt: .created_at, name: .name}'
+  gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?created=>=$FETCH_FROM&status=completed&per_page=100" \
+    --jq ".workflow_runs[] | select(.updated_at >= \"$SINCE\") | {databaseId: .id, conclusion, createdAt: .created_at, updatedAt: .updated_at, name: .name}"
 done
 ```
 
 If no runs found, report "no runs to review" and exit.
 
-Report the run census as the count this returns. Cross-check any workflow whose count lands on a round page boundary (30, 100) against `.total_count` before trusting it — a count that equals the page size is the signature of a page that was never followed.
+Report the run census as the count this returns. `.total_count` counts the wider `FETCH_FROM` fetch, so it bounds the census from above rather than matching it — but a census that lands on a round page boundary (30, 100) is still the signature of a page that was never followed, so check that one against `.total_count` before trusting it.
 
 Then, for each run ID from above, pull its jobs and classify them:
 
