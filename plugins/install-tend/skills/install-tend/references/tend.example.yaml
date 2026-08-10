@@ -190,7 +190,8 @@ bot_name: my-project-bot
 #     `https_proxy`, `no_proxy`
 #   - CA trust — `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`
 #   - dummy credentials — `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`,
-#     `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_REMOTE`
+#     `CLAUDE_CODE_OAUTH_TOKEN`
+#   - prompt suppression — `CLAUDE_CODE_REMOTE`
 #   - the sandbox's own locations — `HOME`, `PATH`, `XDG_CONFIG_HOME`,
 #     `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`
 #

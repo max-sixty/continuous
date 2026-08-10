@@ -157,9 +157,13 @@ repos:
             # The adopter only meets this set as a rejection at `init`, so the
             # `sandbox_env` docs have to name every member — a key reserved in
             # code but absent from the docs reads as settable right up until
-            # the run fails.
+            # the run fails. Scope the search to that bullet: file-wide, an
+            # unrelated mention elsewhere (the auth section names
+            # ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN) would stand in for
+            # the list entry and hide the drift this leg exists to catch.
             docs = open("docs/tend.example.yaml").read()
-            documented = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", docs))
+            section = re.search(r"^# - `sandbox_env`:(.*?)^# - `", docs, re.S | re.M).group(1)
+            documented = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", section))
 
             problems = []
             for name in sorted(config_set - shell_set):
