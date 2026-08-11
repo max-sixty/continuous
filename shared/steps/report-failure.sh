@@ -46,7 +46,18 @@ if ! EXISTING=$(run_issue_canonical "$LABEL" open "$TITLE"); then
 fi
 
 if [ -n "$EXISTING" ]; then
-  printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -
+  # The common path once a tracker is open — every failure after the first in
+  # one incident appends through here — and it can 5xx like any other write.
+  # Left bare it aborts under `set -e`, which drops the row without saying so:
+  # the tracker then under-reports the outage, and a run stranded by it reads
+  # as one that never happened. Warning costs the same single row a failed
+  # read above costs, and the next failure records normally. The create below
+  # keeps the opposite policy deliberately: with no tracker open there is no
+  # other record of the outage, so a failed create has to redden the step.
+  # The rate-limit caller draws the same line between its two writes.
+  if ! printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -; then
+    echo "::warning::Could not append this run's row to #${EXISTING}."
+  fi
 else
   printf '%s\n\n%s\n\n%s\n' \
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \

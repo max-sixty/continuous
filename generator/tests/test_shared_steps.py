@@ -1064,7 +1064,12 @@ case "$1 $2" in
     ;;
   "issue create") echo "https://github.com/owner/repo/issues/${FAKE_NEW_ISSUE}" ;;
   "issue view") emit "$(cat "$KEEPER_JSON")" ;;
-  "issue comment") cat >> "$COMMENT_BODIES" ;;
+  "issue comment")
+    cat >> "$COMMENT_BODIES"
+    # Bare `[ -n ... ] && exit 1` would leave the failing test as the case
+    # body's status and so fail every call; keep it an `if`.
+    if [ -n "${FAIL_ISSUE_COMMENT:-}" ]; then exit 1; fi
+    ;;
   "issue close" | "label create") ;;
   *)
     case "$2" in
@@ -1182,6 +1187,36 @@ def test_report_failure_files_nothing_when_the_issue_list_cannot_be_read(
     calls = _calls(report_failure_env)
     assert not any(c.startswith("issue create") for c in calls), calls
     assert "::warning::" in result.stdout
+
+
+def test_report_failure_survives_a_failed_append_to_the_open_tracker(
+    report_failure_env: dict[str, str],
+) -> None:
+    """A 5xx on the append must not abort the step.
+
+    This is the common write path — once a tracker is open, every later
+    failure in the same incident appends through it. Left bare under `set -e`
+    the abort costs a second red step on an already-failing run and drops the
+    row silently, so the tracker under-reports the outage and a run stranded
+    by it reads as one that never happened.
+
+    The paired `..._propagates_a_failed_create` below asserts the opposite for
+    the other branch, and the asymmetry is the point: an append has a tracker
+    already carrying the incident, a create has nothing to fall back to.
+    """
+    Path(report_failure_env["OPEN_ISSUES_JSON"]).write_text(
+        json.dumps([{"number": 8, "title": OUTAGE_TITLE}])
+    )
+    report_failure_env["FAIL_ISSUE_COMMENT"] = "1"
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" in result.stdout, result.stdout
+    calls = _calls(report_failure_env)
+    assert not any(c.startswith("issue create") for c in calls), (
+        f"filed a second tracker after the append failed: {calls}"
+    )
 
 
 def test_report_failure_carries_its_row_onto_the_racing_sibling(
