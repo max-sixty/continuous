@@ -197,11 +197,14 @@ If the PR is merged, the work is superseded. Comment if a real gap remains; do n
 A PR another tend session opened keeps that session alive polling its checks, and closing a red gate is exactly the follow-up it stays alive for — so a sibling commit can land on the branch while you edit it. Find that out at `git push` and the suite you just ran was scoped against a stale head, so the whole verify cycle is paid again after the rebase. Record the head before editing and re-check it immediately before each expensive step — full test suite, coverage or snapshot regeneration, a long build:
 
 ```bash
-BASE_OID=$(gh pr view <N> --json headRefOid --jq '.headRefOid')
+HEAD_OID=$(gh pr view <N> --json headRefOid --jq '.headRefOid')
 # ...edits...
-[ "$(gh pr view <N> --json headRefOid --jq '.headRefOid')" = "$BASE_OID" ] \
-  || echo "sibling pushed — fetch and re-scope before verifying"
+read -r NOW_OID NOW_STATE < <(gh pr view <N> --json headRefOid,state --jq '"\(.headRefOid) \(.state)"')
+[ "$NOW_OID" = "$HEAD_OID" ] && [ "$NOW_STATE" = "OPEN" ] \
+  || echo "sibling pushed or PR closed — fetch and re-scope before verifying"
 ```
+
+`state` rides along on the same call because a merged or closed PR freezes `headRefOid` at its merge-time value (see above) — the OID comparison alone passes and the expensive step runs on work that is already superseded. On a non-`OPEN` state, stop per the subsection above rather than re-scoping.
 
 If it moved, `git fetch` and read the new commits before verifying: drop whatever the sibling already landed, rebase what's left, and verify once against the new head. Expect the overlap rather than treating it as a surprise — a reviewer and a coverage gate reading the same new code ask for the same missing test. The runs API can't substitute for this check: a `schedule` or `repository_dispatch` run reports `head_branch: main`, not the branch it is editing, so a live sibling is invisible there.
 
@@ -303,12 +306,6 @@ Invoke this Bash call with `timeout: 600000` (10 min). The default 2-min Bash ti
 3. Once terminal, do the follow-up: ship a green fix, comment an unresolved failure, or dismiss your approval on red.
 4. If the cap hits with checks still running, comment the still-pending checks as unverified before ending — don't exit as if done.
 
-### A review that lands while you poll is not yours to action
-
-`tend-review` fires on any PR you open, so its review often arrives while you are still polling that PR's checks. Don't act on it. `tend-mention` is dispatched on `pull_request_review` for every PR the bot authored, and that dispatch runs whether or not you also respond — so a session that starts editing is racing a run already making the same edits and running the same suite. The loser only finds out at `git push`, discards its commit, and the whole fix-and-verify cycle is paid twice for one review.
-
-Poll your checks to terminal, do the follow-up you were gated on, and exit; name the outstanding review in your summary. This covers a review that arrives *while* you work — a session dispatched to answer a specific review owns that review and actions it normally.
-
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
 ```bash
@@ -317,6 +314,12 @@ gh api "repos/{owner}/{repo}/actions/runs?branch=main&status=completed&per_page=
 ```
 
 If you cannot verify, say "I haven't confirmed whether these failures are pre-existing."
+
+### A review that lands while you poll is not yours to action
+
+`tend-review` fires on any PR you open, so its review often arrives while you are still polling that PR's checks. Don't act on it. `tend-mention` is dispatched on `pull_request_review` for every PR the bot authored, and that dispatch runs whether or not you also respond — so a session that starts editing is racing a run already making the same edits and running the same suite. The loser only finds out at `git push`, discards its commit, and the whole fix-and-verify cycle is paid twice for one review.
+
+Poll your checks to terminal, do the follow-up you were gated on, and exit; name the outstanding review in your summary. This covers a review that arrives *while* you work — a session dispatched to answer a specific review owns that review and actions it normally.
 
 ### Polling `gh run rerun --failed`
 
