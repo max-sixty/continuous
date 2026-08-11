@@ -105,12 +105,14 @@ grep -qF "$GITHUB_RUN_ID" /tmp/findings.md || {
 }
 
 if [ -n "$EXISTING_COMMENT" ]; then
-  # Append to existing comment if it fits. GitHub rejects bodies over 65536
-  # characters — start a new comment when the existing one is too large.
+  # Append to the existing comment if the *combined* body fits. GitHub rejects
+  # bodies over 65536 characters and the PATCH has no fallback, so a 422 loses
+  # the leg's findings while the run still reports success. Size what you are
+  # about to POST: a fixed existing-size threshold assumes a maximum append,
+  # and appends have measured over 16 KB.
   gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" --jq '.body' > /tmp/existing.md
-  EXISTING_SIZE=$(wc -c < /tmp/existing.md)
-  if [ "$EXISTING_SIZE" -lt 50000 ]; then
-    cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
+  cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
+  if [ "$(wc -c < /tmp/combined.md)" -lt 60000 ]; then
     gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" -X PATCH -F body=@/tmp/combined.md
   else
     gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
