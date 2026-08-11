@@ -82,33 +82,23 @@ Don't filter `gh pr list --json mergeable` on `== "CONFLICTING"`. `mergeable` is
 BOT_LOGIN=$(gh api user --jq '.login')
 git fetch --quiet origin main
 for author in "$BOT_LOGIN" app/dependabot app/renovate; do
-  out="/tmp/prs-${author//\//-}.json"   # `app/dependabot` has a slash; strip it
-  # `--limit 100` is load-bearing: `gh pr list` defaults to 30 and truncates
-  # silently, so PR 31 onward would never be test-merged.
-  gh pr list --author "$author" --limit 100 --json number,title,headRefName,author > "$out"
-  # A failed query leaves `$out` empty, which reads as "no conflicts" — the
-  # same silent-miss shape. `[]` (no open PRs) is 3 bytes, a failure is 0.
-  [ -s "$out" ] || { echo "query for $author never landed — conflicts unverified"; continue; }
+  # A failed query and "no open PRs" both print nothing; only the first is a
+  # reason to stop. --limit 100 because the default 30 truncates silently.
+  prs=$(gh pr list --author "$author" --limit 100 --json number,title) \
+    || { echo "query for $author never landed — conflicts unverified"; continue; }
   # One fetch for every head, forced because bot branches get force-pushed.
-  # `refs/pull/N/head` also covers PRs opened from a fork.
-  mapfile -t refs < <(jq -r '.[].number | "refs/pull/\(.)/head:refs/tend/pr/\(.)"' "$out")
-  [ "${#refs[@]}" -eq 0 ] || git fetch --quiet --force origin "${refs[@]}"
-  jq -r '.[] | "\(.number)\t\(.title)"' "$out" | while IFS=$'\t' read -r n title; do
-    # Clean merge: exit 0. Conflict: non-zero with the tree OID and conflicted
-    # paths on stdout. Anything else (ref never fetched, bad revision): non-zero
-    # with stdout empty — so test `$tree`, not the exit status alone.
-    if tree=$(git merge-tree --write-tree origin/main "refs/tend/pr/$n" 2>/dev/null); then
-      continue
-    elif [ -n "$tree" ]; then
-      echo "CONFLICTING: $author #$n $title"
-    else
-      echo "merge test never ran, conflicts unverified: $author #$n $title"
-    fi
+  mapfile -t refs < <(jq -r '.[].number | "refs/pull/\(.)/head:refs/tend/pr/\(.)"' <<<"$prs")
+  [ "${#refs[@]}" -eq 0 ] && continue
+  git fetch --quiet --force origin "${refs[@]}"
+  # Conflict, missing ref, unreadable ref: all non-zero, all need a look.
+  jq -r '.[] | [.number, .title] | @tsv' <<<"$prs" | while IFS=$'\t' read -r n title; do
+    git merge-tree --write-tree origin/main "refs/tend/pr/$n" >/dev/null \
+      || echo "needs a rebase: $author #$n $title"
   done
 done
 ```
 
-Skip the rest of this step only when every query landed and nothing printed. A PR whose merge test never ran is not a clean one — investigate it and report it as unverified rather than counting it clean.
+Skip the rest of this step only when every query landed and nothing printed.
 
 ### Upstream dependency bots: trigger the bot's own rebase
 
