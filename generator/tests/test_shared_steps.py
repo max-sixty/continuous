@@ -93,6 +93,18 @@ def _comments(env: dict[str, str]) -> str:
     return Path(env["COMMENT_BODIES"]).read_text()
 
 
+def _output(env: dict[str, str], key: str) -> str:
+    """The value a pre-check wrote to `$GITHUB_OUTPUT` under *key*.
+
+    Exactly one write: a second would leave the step's consumers reading
+    whichever line Actions kept, so two is a defect rather than a last-wins.
+    """
+    lines = Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
+    values = [line.split("=", 1)[1] for line in lines if line.startswith(f"{key}=")]
+    assert len(values) == 1, f"expected exactly one {key}, got: {lines}"
+    return values[0]
+
+
 # The Run cell of a row generated under the fixtures' GITHUB_RUN_ID. What a
 # carried-over row is recognised by, on either record.
 RUN_LINK = "[workflow run](https://github.com/owner/repo/actions/runs/12345)"
@@ -938,13 +950,6 @@ def _run_gate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _should_run(env: dict[str, str]) -> str:
-    lines = Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
-    values = [line.split("=", 1)[1] for line in lines if line.startswith("should_run=")]
-    assert len(values) == 1, f"expected exactly one should_run, got: {lines}"
-    return values[0]
-
-
 def _stamp(env: dict[str, str], *statuses: dict[str, str]) -> None:
     Path(env["STATUS_JSON"]).write_text(json.dumps({"statuses": list(statuses)}))
 
@@ -956,7 +961,7 @@ def test_review_gate_skips_a_stamped_head(gate_env: dict[str, str]) -> None:
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "false"
+    assert _output(gate_env, "should_run") == "false"
 
 
 def test_review_gate_runs_when_head_is_unstamped(gate_env: dict[str, str]) -> None:
@@ -973,7 +978,7 @@ def test_review_gate_runs_when_head_is_unstamped(gate_env: dict[str, str]) -> No
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
 
 
 def test_review_gate_only_gates_synchronize(gate_env: dict[str, str]) -> None:
@@ -985,7 +990,7 @@ def test_review_gate_only_gates_synchronize(gate_env: dict[str, str]) -> None:
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
     assert not Path(gate_env["GH_CALLS"]).exists(), "ungated event still hit the API"
 
 
@@ -998,7 +1003,7 @@ def test_review_gate_skips_closed_prs(gate_env: dict[str, str]) -> None:
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "false"
+    assert _output(gate_env, "should_run") == "false"
 
 
 @pytest.mark.parametrize("failure", ["FAIL_PR", "FAIL_STATUS"])
@@ -1012,7 +1017,7 @@ def test_review_gate_fails_open_on_api_errors(
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
 
 
 def test_review_gate_fails_open_on_an_html_200(gate_env: dict[str, str]) -> None:
@@ -1026,7 +1031,7 @@ def test_review_gate_fails_open_on_an_html_200(gate_env: dict[str, str]) -> None
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -1167,13 +1172,6 @@ def _run_check(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _count(env: dict[str, str]) -> str:
-    lines = Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
-    values = [line.split("=", 1)[1] for line in lines if line.startswith("count=")]
-    assert len(values) == 1, f"expected exactly one count, got: {lines}"
-    return values[0]
-
-
 def _marked_read(env: dict[str, str]) -> list[str]:
     return Path(env["READ_THREADS"]).read_text().split()
 
@@ -1188,7 +1186,7 @@ def test_notifications_check_reports_no_work_on_an_empty_inbox(
     result = _run_check(notifications_env)
 
     assert result.returncode == 0, result.stderr
-    assert _count(notifications_env) == "0"
+    assert _output(notifications_env, "count") == "0"
     assert _marked_read(notifications_env) == []
 
 
@@ -1216,7 +1214,7 @@ def test_notifications_check_defers_only_fresh_same_repo_work(
     result = _run_check(notifications_env)
 
     assert result.returncode == 0, result.stderr
-    assert _count(notifications_env) == expected
+    assert _output(notifications_env, "count") == expected
 
 
 def test_notifications_check_clears_what_a_recent_tend_run_covered(
@@ -1258,7 +1256,7 @@ def test_notifications_check_clears_what_a_recent_tend_run_covered(
 
     assert result.returncode == 0, result.stderr
     assert _marked_read(notifications_env) == ["11"]
-    assert _count(notifications_env) == "1"
+    assert _output(notifications_env, "count") == "1"
 
 
 def test_notifications_check_clears_the_bots_own_closed_prs(
@@ -1287,7 +1285,7 @@ def test_notifications_check_clears_the_bots_own_closed_prs(
 
     assert result.returncode == 0, result.stderr
     assert _marked_read(notifications_env) == ["11"]
-    assert _count(notifications_env) == "3"
+    assert _output(notifications_env, "count") == "3"
 
 
 def test_notifications_check_gives_up_cleanly_when_the_fetch_keeps_failing(
@@ -1306,7 +1304,7 @@ def test_notifications_check_gives_up_cleanly_when_the_fetch_keeps_failing(
     result = _run_check(notifications_env)
 
     assert result.returncode == 0, result.stderr
-    assert _count(notifications_env) == "0"
+    assert _output(notifications_env, "count") == "0"
     assert _marked_read(notifications_env) == []
 
 
@@ -1325,7 +1323,7 @@ def test_notifications_check_retries_a_transient_fetch_failure(
     result = _run_check(notifications_env)
 
     assert result.returncode == 0, result.stderr
-    assert _count(notifications_env) == "1"
+    assert _output(notifications_env, "count") == "1"
 
 
 def test_notifications_check_tolerates_an_html_200(
@@ -1342,7 +1340,7 @@ def test_notifications_check_tolerates_an_html_200(
     result = _run_check(notifications_env)
 
     assert result.returncode == 0, result.stderr
-    assert _count(notifications_env) == "0"
+    assert _output(notifications_env, "count") == "0"
 
 
 def test_notifications_check_counts_from_the_snapshot_when_the_recount_fails(
@@ -1355,14 +1353,25 @@ def test_notifications_check_counts_from_the_snapshot_when_the_recount_fails(
     _write_json(
         notifications_env,
         "NOTIFICATIONS_JSON",
-        [_notif("999", "issues", 7, NOTIF_SETTLED)],
+        [
+            _notif("11", "pulls", 1, NOTIF_SETTLED),
+            _notif("999", "issues", 7, NOTIF_SETTLED),
+        ],
+    )
+    # Layer C clears this one, so a recount that ran would have returned 1 —
+    # which is what separates the fallback from a quietly successful recount.
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [{"number": 1, "user": {"login": "tend-agent"}, "state": "closed"}],
     )
     notifications_env["FAIL_NOTIFS_FROM"] = "2"
 
     result = _run_check(notifications_env)
 
     assert result.returncode == 0, result.stderr
-    assert _count(notifications_env) == "1"
+    assert _marked_read(notifications_env) == ["11"]
+    assert _output(notifications_env, "count") == "2"
 
 
 REPORT_FAILURE = REPO_ROOT / "shared" / "steps" / "report-failure.sh"
