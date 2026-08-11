@@ -192,6 +192,19 @@ STATE=$(gh pr view <N> --json state --jq '.state')
 
 If the PR is merged, the work is superseded. Comment if a real gap remains; do not push to the now-orphan branch. After merge, `gh pr view <N> --json headRefOid` returns the SHA at merge time and never advances — polling it for a new push is a guaranteed deadlock.
 
+### Re-check the head SHA before the expensive verify, not just before the push
+
+A PR another tend session opened keeps that session alive polling its checks, and closing a red gate is exactly the follow-up it stays alive for — so a sibling commit can land on the branch while you edit it. Find that out at `git push` and the suite you just ran was scoped against a stale head, so the whole verify cycle is paid again after the rebase. Record the head before editing and re-check it immediately before each expensive step — full test suite, coverage or snapshot regeneration, a long build:
+
+```bash
+BASE_OID=$(gh pr view <N> --json headRefOid --jq '.headRefOid')
+# ...edits...
+[ "$(gh pr view <N> --json headRefOid --jq '.headRefOid')" = "$BASE_OID" ] \
+  || echo "sibling pushed — fetch and re-scope before verifying"
+```
+
+If it moved, `git fetch` and read the new commits before verifying: drop whatever the sibling already landed, rebase what's left, and verify once against the new head. Expect the overlap rather than treating it as a surprise — a reviewer and a coverage gate reading the same new code ask for the same missing test. The runs API can't substitute for this check: a `schedule` or `repository_dispatch` run reports `head_branch: main`, not the branch it is editing, so a live sibling is invisible there.
+
 ## Merging Upstream into PR Branches
 
 When asked to merge the default branch into a PR branch:
