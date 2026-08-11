@@ -451,7 +451,8 @@ So before `gh pr close`, a revert, or a force-push, re-read the branch itself ra
 
 ```bash
 gh pr view <N> --json headRefOid,commits,comments,reviews \
-  --jq '{head: .headRefOid, commits: [.commits[].oid], comments: (.comments | length)}'
+  --jq '{head: .headRefOid, commits: [.commits[].oid],
+         comments: (.comments | length), reviews: (.reviews | length)}'
 ```
 
 If the head moved past the SHA you last pushed, a sibling acted on this PR while you waited — read its commits before deciding. Usually it applied one of the remedies you were weighing, which changes what the close is *for*, not whether to close: a PR whose premise a review invalidated is still yours to withdraw, and the session holding the PR is the one that can. Say what the sibling landed and why the close stands anyway, so the thread reads as one decision instead of two contradictory ones, and drop `--delete-branch` so that work stays reachable.
