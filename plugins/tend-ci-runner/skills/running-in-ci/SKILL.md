@@ -441,6 +441,19 @@ If the author resolved the issue, acknowledge it rather than post stale analysis
 
 **A new entry may be a directive, not a duplicate.** The re-fetch above guards against redundant posts, but a comment that arrived while you worked can also be a maintainer follow-up that *changes the work* — a second instruction, a correction, a narrowed scope. The window is widest after a long edit→commit→push sequence: minutes pass between the session-start read and the post, and that gap is exactly when a maintainer adds to the thread. So the re-fetch isn't only a dedup check — read what landed, and if it's a new directive, fold it into the same run rather than shipping a reply (or a commit) against the stale instruction. Treating the task as done is itself a kind of post: re-fetch before ending the turn, not only before commenting.
 
+### A terminal action collides with branch state, not comments
+
+The re-fetch above counts comments and reviews, because that is what a duplicate *post* collides with. Closing a PR, reverting it, or force-pushing over it collides with **commits** instead, and a sibling session's pushed, CI-green commit is invisible to all three checks a session typically runs first: a comments-and-reviews re-fetch, the `state == OPEN` check under **Re-check PR state before pushing a follow-up commit**, and a re-read of the review bodies that prompted the action. `--delete-branch` turns that blind spot destructive — the branch ref goes and the commit survives only through the PR ref.
+
+So before `gh pr close`, a revert, or a force-push, re-read the branch itself rather than the thread:
+
+```bash
+gh pr view <N> --json headRefOid,commits,comments,reviews \
+  --jq '{head: .headRefOid, commits: [.commits[].oid], comments: (.comments | length)}'
+```
+
+If the head moved past the SHA you last pushed, a sibling acted on this PR while you waited — read its commits before deciding. Usually it applied one of the remedies you were weighing, which changes what the close is *for*, not whether to close: a PR whose premise a review invalidated is still yours to withdraw, and the session holding the PR is the one that can. Say what the sibling landed and why the close stands anyway, so the thread reads as one decision instead of two contradictory ones, and drop `--delete-branch` so that work stays reachable.
+
 ### Dedup check for inline review comment replies
 
 A single PR review can fire both `pull_request_review` and `pull_request_review_comment` events, triggering separate workflow runs (serialized by the concurrency group, not truly concurrent). Before replying to an inline review comment, check whether the bot already replied:
