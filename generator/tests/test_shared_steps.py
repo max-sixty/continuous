@@ -292,9 +292,13 @@ esac
 # The script is written for the Ubuntu runners' GNU date; macOS ships BSD
 # date, which has no `-d`. Fixed values also make the day-scoping assertions
 # deterministic: "today" is 2026-01-02.
+# The relative offsets come first: every call also carries a format string, so
+# matching that branch first would collapse them all onto one timestamp.
 FAKE_DATE = r"""#!/usr/bin/env bash
 case "$*" in
+  *"30 minutes ago"*) echo "2026-01-02T11:30:00Z" ;;
   *"20 minutes ago"*) echo "2026-01-02T11:40:00Z" ;;
+  *"10 minutes ago"*) echo "2026-01-02T11:50:00Z" ;;
   *"yesterday"*) echo "2026-01-01" ;;
   *"6 days ago"*) echo "2025-12-27" ;;
   *"%Y-%m-%dT%H:%M:%SZ"*) echo "2026-01-02T12:00:00Z" ;;
@@ -302,8 +306,8 @@ case "$*" in
 esac
 """
 
-# The preflight jitters before its check-then-act; a real sleep would add up
-# to 30s per test.
+# The preflight jitters before its check-then-act, and the notifications
+# pre-check backs off between fetch attempts; real sleeps would add up.
 FAKE_SLEEP = "#!/usr/bin/env bash\nexit 0\n"
 
 TODAY = "2026-01-02"
@@ -1023,6 +1027,342 @@ def test_review_gate_fails_open_on_an_html_200(gate_env: dict[str, str]) -> None
 
     assert result.returncode == 0, result.stderr
     assert _should_run(gate_env) == "true"
+
+
+# ---------------------------------------------------------------------------
+# notifications-check.sh — the tend-notifications pre-check
+# ---------------------------------------------------------------------------
+
+NOTIFICATIONS_CHECK = (
+    REPO_ROOT / "generator" / "src" / "tend" / "templates" / "notifications-check.sh"
+)
+
+# `gh` stand-in for the notifications pre-check. Fixtures in, the script's own
+# `--jq` doing the filtering — the tend-workflow name regex and the PR
+# author/state read are the behaviour under test, so a pre-filtered fake would
+# assert nothing.
+FAKE_GH_NOTIFICATIONS = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALLS"
+
+jq_expr=""
+prev=""
+for arg in "$@"; do
+  [ "$prev" = "--jq" ] && jq_expr="$arg"
+  prev="$arg"
+done
+
+emit() {
+  if [ -n "$jq_expr" ]; then
+    printf '%s' "$1" | jq -r "$jq_expr"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+case "$2" in
+  notifications)
+    # The script's diagnostic re-fetch on a failed attempt. The real one exits
+    # non-zero on an error status, which is what its `|| true` tolerates.
+    [ "$3" = "-i" ] && { echo "HTTP/2.0 502 Bad Gateway"; exit 1; }
+    # Fail the fetches in [FROM, UNTIL], so each consumer of the fetch can be
+    # failed on its own: FROM=1 fails every attempt, FROM=1 UNTIL=1 leaves the
+    # retry to succeed, and FROM=2 fails only the Layer-D recount.
+    if [ -n "${FAIL_NOTIFS_FROM:-}" ]; then
+      n=$(( $(cat "$FETCH_CALLS" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$FETCH_CALLS"
+      if [ "$n" -ge "$FAIL_NOTIFS_FROM" ] \
+        && { [ -z "${FAIL_NOTIFS_UNTIL:-}" ] || [ "$n" -le "$FAIL_NOTIFS_UNTIL" ]; }; then
+        exit 1
+      fi
+    fi
+    # A 200 carrying something other than JSON, verbatim.
+    if [ -n "${RAW_BODY:-}" ]; then cat "$RAW_BODY"; exit 0; fi
+    # A thread marked read leaves the unread listing, so a later fetch must not
+    # return it — which is what the Layer-D recount exists to observe.
+    jq -c --rawfile done "$READ_THREADS" \
+      '($done | split("\n")) as $d | [.[] | select(.id | IN($d[]) | not)]' \
+      "$NOTIFICATIONS_JSON"
+    ;;
+  notifications/threads/*)
+    echo "${2##*/}" >> "$READ_THREADS"
+    ;;
+  repos/*/actions/runs*) emit "$(cat "$RUNS_JSON")" ;;
+  repos/*/pulls/*)
+    # 404 for a PR the fixture doesn't carry, which the script's `|| continue`
+    # has to survive under `bash -e`.
+    pr=$(jq -c --argjson n "${2##*/}" \
+      'map(select(.number == $n)) | .[0] // empty' "$PULLS_JSON")
+    [ -n "$pr" ] || exit 1
+    emit "$pr"
+    ;;
+  *) exit 1 ;;
+esac
+"""
+
+# The fake `date` puts "now" at 12:00, so Layer D's 10-minute deferral window
+# opens at 11:50 and Layer B's shadowed-run lookback at 11:30.
+NOTIF_FRESH = "2026-01-02T11:55:00Z"
+NOTIF_SETTLED = "2026-01-02T11:45:00Z"
+
+
+def _notif(
+    tid: str, kind: str, number: int, updated_at: str, repo: str = "owner/repo"
+) -> dict:
+    """One unread notification as `GET /notifications` returns it.
+
+    *kind* is the subject's path segment: `pulls` or `issues`.
+    """
+    return {
+        "id": tid,
+        "updated_at": updated_at,
+        "repository": {"full_name": repo},
+        "subject": {
+            "url": f"https://api.github.com/repos/{repo}/{kind}/{number}",
+            "type": "PullRequest" if kind == "pulls" else "Issue",
+        },
+    }
+
+
+@pytest.fixture
+def notifications_env(tmp_path: Path) -> dict[str, str]:
+    """Fake gh/date/sleep on PATH, plus the workflow env the pre-check reads."""
+    bindir = _fake_bin(
+        tmp_path, gh=FAKE_GH_NOTIFICATIONS, date=FAKE_DATE, sleep=FAKE_SLEEP
+    )
+
+    # Both the fake gh and the script itself shell out to jq.
+    jq = shutil.which("jq")
+    assert jq, "jq is required for these tests"
+
+    notifications = tmp_path / "notifications.json"
+    notifications.write_text("[]")
+    runs = tmp_path / "runs.json"
+    runs.write_text(json.dumps({"workflow_runs": []}))
+    pulls = tmp_path / "pulls.json"
+    pulls.write_text("[]")
+    read_threads = tmp_path / "read-threads"
+    read_threads.write_text("")
+
+    return {
+        "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
+        "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "FETCH_CALLS": str(tmp_path / "fetch-calls"),
+        "READ_THREADS": str(read_threads),
+        "GITHUB_OUTPUT": str(tmp_path / "output.txt"),
+        "GITHUB_REPOSITORY": "owner/repo",
+        "BOT_NAME": "tend-agent",
+        "NOTIFICATIONS_JSON": str(notifications),
+        "RUNS_JSON": str(runs),
+        "PULLS_JSON": str(pulls),
+    }
+
+
+def _run_check(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
+    return subprocess.run(
+        ["bash", "-e", str(NOTIFICATIONS_CHECK)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _count(env: dict[str, str]) -> str:
+    lines = Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
+    values = [line.split("=", 1)[1] for line in lines if line.startswith("count=")]
+    assert len(values) == 1, f"expected exactly one count, got: {lines}"
+    return values[0]
+
+
+def _marked_read(env: dict[str, str]) -> list[str]:
+    return Path(env["READ_THREADS"]).read_text().split()
+
+
+def _write_json(env: dict[str, str], key: str, value: object) -> None:
+    Path(env[key]).write_text(json.dumps(value))
+
+
+def test_notifications_check_reports_no_work_on_an_empty_inbox(
+    notifications_env: dict[str, str],
+) -> None:
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _count(notifications_env) == "0"
+    assert _marked_read(notifications_env) == []
+
+
+@pytest.mark.parametrize(
+    ("updated_at", "repo", "expected"),
+    [
+        # A dedicated workflow (review/mention/triage/ci-fix) is likely still
+        # mid-flight on this one, so processing it now would duplicate its work.
+        (NOTIF_FRESH, "owner/repo", "0"),
+        (NOTIF_SETTLED, "owner/repo", "1"),
+        # No dedicated workflow covers another repo, so there is nothing to wait
+        # for however fresh the notification is.
+        (NOTIF_FRESH, "other/repo", "1"),
+    ],
+)
+def test_notifications_check_defers_only_fresh_same_repo_work(
+    notifications_env: dict[str, str], updated_at: str, repo: str, expected: str
+) -> None:
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif("999", "issues", 7, updated_at, repo=repo)],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _count(notifications_env) == expected
+
+
+def test_notifications_check_clears_what_a_recent_tend_run_covered(
+    notifications_env: dict[str, str],
+) -> None:
+    """A dedicated run that failed before its post-step leaves the notification
+    unread; clearing it here saves an agent turn rediscovering it. Matched on
+    the tend workflow names, so a run of the repo's own CI clears nothing.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [
+            _notif("11", "pulls", 7, NOTIF_SETTLED),
+            _notif("22", "pulls", 8, NOTIF_SETTLED),
+        ],
+    )
+    _write_json(
+        notifications_env,
+        "RUNS_JSON",
+        {
+            "workflow_runs": [
+                {"name": "tend-review", "pull_requests": [{"number": 7}]},
+                {"name": "ci", "pull_requests": [{"number": 8}]},
+            ]
+        },
+    )
+    # Open, and someone else's, so Layer C leaves both alone.
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [
+            {"number": 7, "user": {"login": "human"}, "state": "open"},
+            {"number": 8, "user": {"login": "human"}, "state": "open"},
+        ],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_read(notifications_env) == ["11"]
+    assert _count(notifications_env) == "1"
+
+
+def test_notifications_check_clears_the_bots_own_closed_prs(
+    notifications_env: dict[str, str],
+) -> None:
+    """The bot auto-subscribes to its own PRs, so one that's closed is noise.
+    Someone else's closed PR, the bot's still-open PR, and a PR that can't be
+    read at all each stay unread and countable.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif(str(n * 11), "pulls", n, NOTIF_SETTLED) for n in (1, 2, 3, 4)],
+    )
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [
+            {"number": 1, "user": {"login": "tend-agent"}, "state": "closed"},
+            {"number": 2, "user": {"login": "human"}, "state": "closed"},
+            {"number": 3, "user": {"login": "tend-agent"}, "state": "open"},
+        ],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_read(notifications_env) == ["11"]
+    assert _count(notifications_env) == "3"
+
+
+def test_notifications_check_gives_up_cleanly_when_the_fetch_keeps_failing(
+    notifications_env: dict[str, str],
+) -> None:
+    """The step is `bash -e`, so an untolerated `gh` failure would fail the job
+    red. A cycle that can't enumerate just skips — the next one picks it up.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif("999", "issues", 7, NOTIF_SETTLED)],
+    )
+    notifications_env["FAIL_NOTIFS_FROM"] = "1"
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _count(notifications_env) == "0"
+    assert _marked_read(notifications_env) == []
+
+
+def test_notifications_check_retries_a_transient_fetch_failure(
+    notifications_env: dict[str, str],
+) -> None:
+    """One failed attempt costs the cycle nothing: the retry enumerates."""
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif("999", "issues", 7, NOTIF_SETTLED)],
+    )
+    notifications_env["FAIL_NOTIFS_FROM"] = "1"
+    notifications_env["FAIL_NOTIFS_UNTIL"] = "1"
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _count(notifications_env) == "1"
+
+
+def test_notifications_check_tolerates_an_html_200(
+    notifications_env: dict[str, str], tmp_path: Path
+) -> None:
+    """A GitHub blip can answer 200 with an HTML error page: `gh` exits zero and
+    the body isn't JSON. Without the parse guard the run would carry on against
+    a non-JSON snapshot and fail the step.
+    """
+    body = tmp_path / "body.html"
+    body.write_text("<html>unicorn</html>")
+    notifications_env["RAW_BODY"] = str(body)
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _count(notifications_env) == "0"
+
+
+def test_notifications_check_counts_from_the_snapshot_when_the_recount_fails(
+    notifications_env: dict[str, str],
+) -> None:
+    """A failed recount over-counts by whatever Layers B/C cleared, spending one
+    agent run — the alternative, a zero count, would strand real work until the
+    next cycle.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif("999", "issues", 7, NOTIF_SETTLED)],
+    )
+    notifications_env["FAIL_NOTIFS_FROM"] = "2"
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _count(notifications_env) == "1"
 
 
 REPORT_FAILURE = REPO_ROOT / "shared" / "steps" / "report-failure.sh"

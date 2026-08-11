@@ -109,13 +109,14 @@ bot_name: my-project-bot
 # `sandbox_setup:` below, which runs inside the Claude harness's sandbox. Under
 # codex there is no such lever; the agent installs what it needs itself.
 #
-# `tend-notifications` injects an `if:` guard on every step so setup is
-# skipped when the pre-check finds no work. A user-supplied `if:` is passed
-# through unchanged (with a generation-time warning) — your condition wins.
+# `tend-notifications` and `tend-review` decide up front whether the agent
+# needs to boot, and inject an `if:` guard on every setup step so a run that
+# found no work does no setup either. A user-supplied `if:` is passed through
+# unchanged (with a generation-time warning) — your condition wins.
 #
 # Each form below shows the config and the YAML it produces inside the
-# `steps:` block. The `if:` guard injected in `tend-notifications` is shown
-# on the first example; it's added the same way on every step.
+# `steps:` block. The guard is shown on the first example; it's added the same
+# way on every step.
 #
 # `uses`:
 #
@@ -125,6 +126,10 @@ bot_name: my-project-bot
 #     # renders as (in tend-notifications):
 #     #   - uses: astral-sh/setup-uv@v9.0.0
 #     #     if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
+#     #
+#     # in tend-review:
+#     #   - uses: astral-sh/setup-uv@v9.0.0
+#     #     if: steps.gate.outputs.should_run == 'true'
 #     #
 #     # and in other workflows:
 #     #   - uses: astral-sh/setup-uv@v9.0.0
