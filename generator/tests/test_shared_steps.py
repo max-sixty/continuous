@@ -688,8 +688,6 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
         tmp_path, gh=FAKE_GH_RATE_LIMIT, date=FAKE_DATE, sleep=FAKE_SLEEP
     )
 
-    # Both the fake gh and the script itself shell out to jq.
-
     event = tmp_path / "event.json"
     event.write_text(json.dumps({"pull_request": {"number": 851}}))
 
@@ -1451,8 +1449,6 @@ def notifications_env(tmp_path: Path) -> dict[str, str]:
     bindir = _fake_bin(
         tmp_path, gh=FAKE_GH_NOTIFICATIONS, date=FAKE_DATE, sleep=FAKE_SLEEP
     )
-
-    # Both the fake gh and the script itself shell out to jq.
 
     notifications = tmp_path / "notifications.json"
     notifications.write_text("[]")
