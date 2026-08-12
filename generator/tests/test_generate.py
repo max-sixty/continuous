@@ -1200,6 +1200,16 @@ def test_mention_skips_third_party_bare_approval(tmp_path: Path) -> None:
         '&& [ -z "$INLINE" ]'
     ), "the third-party skip must key on state, empty body, and zero inline comments"
 
+    # `[ -z "$INLINE" ]` only means "zero inline comments" below the fetch that
+    # populates it, and that property is positional rather than textual, so the
+    # equality above does not pin it. Hoisting the gate above the fetch — the
+    # shape the bot-authored approval gate deliberately takes, one API call
+    # cheaper — leaves `$INLINE` unset, which reads as empty and silently skips
+    # exactly the approvals-with-inline-nits this gate must let through.
+    assert run.index("INLINE=$(") < run.index('[ -z "$INLINE" ]'), (
+        "the third-party skip must sit below the inline-comment fetch"
+    )
+
     # And it precedes the engagement heuristic that would otherwise count the
     # triggering review as prior participation.
     assert run.index('[ -z "$INLINE" ]') < run.index("BOT_REVIEWS=$(")
