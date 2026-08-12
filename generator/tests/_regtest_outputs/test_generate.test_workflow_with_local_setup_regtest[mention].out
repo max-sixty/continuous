@@ -195,8 +195,11 @@ jobs:
           # comments on purpose: the pull_request_review *submission* kind is
           # deliberately left out, since a review the bot leaves on its own PR
           # is its reviewer role (the prompt is told to action it), not a
-          # self-loop. The only self-review skip is the terminal empty-body
-          # APPROVED gate below.
+          # self-loop. The three self-review skips below are author-keyed, but
+          # each is also narrowed to a case that leaves this run nothing to do:
+          # the terminal empty-body APPROVED gate, the synthetic reply
+          # container, and a bot review on a PR the bot did not author. None of
+          # them licenses a blanket self-review skip.
           if { [ "$KIND" = "issue_comment" ] || [ "$KIND" = "pull_request_review_comment" ]; } \
              && [ "$COMMENT_AUTHOR" = "test-bot" ]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -242,12 +245,56 @@ jobs:
           # A review's record includes review.body (checked above) but NOT the
           # bodies of the inline comments attached to the review. Fetch them
           # so a first-contact @-mention inside an inline comment is detected
-          # on PRs where the bot has no prior engagement.
+          # on PRs where the bot has no prior engagement. One object per line,
+          # so `--paginate` concatenates pages instead of reducing within one.
+          # Keep the `{body, in_reply_to_id}` construction: `in_reply_to_id` is
+          # an *optional* property, absent rather than null on a fresh comment,
+          # and building the object normalizes absent to null so the `== null`
+          # select below counts both shapes. A bare `.in_reply_to_id` stream
+          # would emit nothing for a fresh comment and skip every container.
           if [ "$KIND" = "pull_request_review" ]; then
-            if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID/comments" \
-                 --jq '.[].body' | grep -qF '@test-bot'; then
+            INLINE=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID/comments" \
+              --jq '.[] | {body, in_reply_to_id}')
+
+            if printf '%s\n' "$INLINE" | jq -r '.body' | grep -qF '@test-bot'; then
               echo "should_run=true" >> "$GITHUB_OUTPUT"
               echo "reason=mention" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Replying to a review thread wraps the reply in a synthetic
+            # zero-body COMMENTED review, so the bot's own inline reply arrives
+            # here as a `pull_request_review` submission as well as the
+            # `pull_request_review_comment` the skip above already drops. Same
+            # artifact, second event path: without this the engagement heuristic
+            # below sees a bot-authored PR (or BOT_REVIEWS > 0) and spins up a
+            # full handle job that the prompt's self-loop guard then exits.
+            # Narrower than the comment skip on purpose ? a real review the bot
+            # submits with inline comments and no body carries actionable signal,
+            # so require that *every* inline comment be a reply
+            # (`in_reply_to_id` set). A container with any fresh inline comment
+            # still fires.
+            if [ "$REVIEW_AUTHOR" = "test-bot" ] \
+               && [ -z "$COMMENT_BODY" ] \
+               && [ "$(printf '%s\n' "$INLINE" | jq -s '[.[] | select(.in_reply_to_id == null)] | length')" = "0" ]; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Somebody else's content-free approval is terminal too. The gate
+            # above is author-keyed, so a human's bare APPROVED falls through to
+            # the PR-author short-circuit (on a bot-authored PR) or to
+            # BOT_REVIEWS (on one the bot has reviewed) and starts a session
+            # whose only possible outcome is a silent exit: an approval with no
+            # body and no inline comments asks for nothing, and the bot cannot
+            # merge on its own. Unlike the bot-authored gates this one requires
+            # `$INLINE` to be empty rather than reply-only ? an approval whose
+            # nits live inline is a request to the PR's author, which on a
+            # bot-authored PR is a role the bot has to act in.
+            if [ "$REVIEW_STATE" = "approved" ] \
+               && [ -z "$COMMENT_BODY" ] \
+               && [ -z "$INLINE" ]; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
@@ -288,6 +335,26 @@ jobs:
           if [ "$PR_AUTHOR" = "test-bot" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # A review the bot leaves on someone else's PR leaves this run
+          # nothing to do: whatever the review warranted, the tend-review
+          # session that submitted it has already done ? left the findings for
+          # a human author to act on (pushing to their branch unbidden is
+          # barred by conduct rules), or, on a dependency-bot PR where no
+          # author will act, pushed the fix itself. The BOT_REVIEWS heuristic
+          # below counts this very review, so without this gate the session
+          # always starts and always exits silently. Keyed on author alone ?
+          # the APPROVED + empty-body gate above is the same shape narrowed to
+          # its one terminal leg, and reusing those clauses here would let every
+          # bodied COMMENTED review through. Placement carries the rest of the
+          # design: *after* the PR_AUTHOR short-circuit, which has already
+          # exited when the PR is the bot's own, so the reviewer-to-author
+          # handoff on a bot PR still fires; *after* the body and inline
+          # @-mention scans, so an explicit summons still wins.
+          if [ "$KIND" = "pull_request_review" ] \
+             && [ "$REVIEW_AUTHOR" = "test-bot" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           # Captured, not counted ? see the note on the issue-comment lookup above.
@@ -419,7 +486,6 @@ jobs:
                 && format('You were mentioned in a comment ({0}). Read the full context and respond. If changes are requested, make them, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({0}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between other participants, exit silently.', github.event.comment.html_url)
             }}
-            Beyond the skills the Skill tool lists, /code-review is available too.
 
       - name: Restore local setup actions for POST cleanup
         if: always()

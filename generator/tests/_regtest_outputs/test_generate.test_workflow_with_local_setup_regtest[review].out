@@ -146,7 +146,7 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: >-
-            ${{ format('Run the /tend-ci-runner:review skill for {0}. Beyond the skills the Skill tool lists, /code-review is available too.', github.event.pull_request.number) }}
+            ${{ format('/tend-ci-runner:review {0}', github.event.pull_request.number) }}
 
       - name: Restore local setup actions for POST cleanup
         if: always() && (steps.gate.outputs.should_run == 'true')

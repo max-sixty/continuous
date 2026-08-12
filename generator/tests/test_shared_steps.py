@@ -1780,7 +1780,10 @@ case "$1 $2" in
         # the oldest 100 alone. Both go through `emit`, so a caller passing
         # `--jq` has its own filter applied to what it actually received.
         if [ -n "$slurp" ]; then
-          emit "$(jq -c '[_nwise(100)]' "$ISSUE_COMMENTS_JSON")"
+          # Sliced by index rather than with `_nwise`, which jq 1.8 dropped.
+          # An empty list still pages as `[[]]`, the shape real `gh` returns.
+          emit "$(jq -c '. as $a | [range(0; ([($a|length),1]|max); 100) | $a[.:.+100]]' \
+            "$ISSUE_COMMENTS_JSON")"
         else
           emit "$(jq -c '.[0:100]' "$ISSUE_COMMENTS_JSON")"
         fi
