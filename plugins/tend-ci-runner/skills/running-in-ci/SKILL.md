@@ -250,22 +250,7 @@ If it moved, `git fetch` and read the new commits before verifying: drop whateve
 
 ## Merging Upstream into PR Branches
 
-When asked to merge the default branch into a PR branch:
-
-1. **Never use `--allow-unrelated-histories`.** If `git merge` fails because git can't find a merge base, the checkout is broken — investigate rather than forcing the merge. `--allow-unrelated-histories` treats both sides as disconnected, creating add/add conflicts in every file.
-
-2. **Handle untracked file conflicts properly.** If `git merge origin/main` fails because untracked files would be overwritten by tracked files, stash them first — don't delete them:
-   ```bash
-   git stash --include-untracked
-   git merge origin/main
-   git stash pop
-   ```
-
-3. **Verify merge base exists** before merging:
-   ```bash
-   git merge-base origin/main HEAD
-   ```
-   If this fails, the branch history is disconnected. Re-checkout the PR with full history (`fetch-depth: 0`) before retrying.
+When merging the default branch into a PR branch, **never use `--allow-unrelated-histories`**: if `git merge` fails because no merge base exists, the checkout is broken (usually shallow — re-checkout with `fetch-depth: 0`), and forcing the merge creates add/add conflicts in every file. If the merge fails because untracked files would be overwritten, stash them (`git stash --include-untracked`, merge, `git stash pop`) rather than deleting them.
 
 ## CI Monitoring
 
@@ -275,76 +260,20 @@ After pushing, what to do depends on whether a red result creates a follow-up.
 
 **Nothing gated** (review-only, a reply, a no-op): end, stating anything still in flight. Don't background-poll — the completion notification isn't reliably delivered to a CI session.
 
+Poll with the bundled script, pinned to the commit this session is accountable for — never the PR's current head: another actor can advance the head while the loop sleeps, and a poll that follows it reports *their* commit's results as yours:
+
 ```bash
-# Foreground poll — invoke Bash without run_in_background.
-#
-# Poll statusCheckRollup — every check-run + status context on the commit.
-# Exit when all non-own items are terminal.
-#
-# Why rollup, not `gh pr checks --required`:
-# `--required` only returns required contexts that are ALREADY registered on
-# the commit. An `if: always()` omnibus with a long `needs:` list (e.g.
-# PRQL's `check-ok-to-merge`) only registers once every dependency has
-# reached terminal. With `--required`, the loop would see only fast required
-# contexts (e.g. `pre-commit.ci - pr`), exit green, and miss the matrix
-# entirely. The rollup shows matrix jobs as IN_PROGRESS while they run, so
-# we correctly wait for them, then for the omnibus once it registers.
-#
-# The 30s grace re-check handles actual registration lag: when the matrix's
-# last `needs:` job finishes, the omnibus check-run registers within a
-# second or two. A poll in that narrow window might see PENDING=0; the
-# grace re-check catches the newly-IN_PROGRESS omnibus. Long observed gaps
-# between PENDING=0 and the omnibus registering are NOT registration lag —
-# matrix jobs are visibly IN_PROGRESS in the rollup while they run.
-#
-# Filter out the current run ($GITHUB_RUN_ID) — its own CheckRun is
-# IN_PROGRESS for the whole loop. Match on the run URL, not the check name:
-# `gh pr checks` shows the job name (e.g. "review"), which does not match
-# $GITHUB_WORKFLOW ("tend-review").
-#
-# Also exclude same-workflow check runs ($GITHUB_WORKFLOW). When the current
-# session pushes a commit or replies to an inline review comment, GitHub
-# fires events that trigger a *sibling* run of the same workflow on the same
-# PR. For workflows whose handle job uses `cancel-in-progress: false` (e.g.
-# tend-mention's `tend-mention-handle-{PR#}` group), the sibling's handle job
-# queues behind the current one — its CheckRun shows PENDING in the rollup
-# but it can't start until the current run exits. Polling for it deadlocks
-# until the loop cap breaks it. For workflows
-# with `cancel-in-progress: true`, the older sibling is cancelled and
-# wouldn't gate polling anyway, so this filter is a no-op there.
-#
-# Don't use mergeStateStatus as an exit signal. BLOCKED is a catch-all:
-# required checks pending, branch out of date (`type: update` rulesets),
-# required reviews missing, or our own check still running — all produce
-# BLOCKED, indistinguishable without admin scope on branch protection.
-pending() {
-  gh pr view <number> --json statusCheckRollup \
-    | jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
-      [.statusCheckRollup[]
-       | select((.detailsUrl // .targetUrl // "") | test($own) | not)
-       | select((.workflowName // "") == $wf | not)
-       | (.status // .state)
-       | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING" or . == "REQUESTED" or . == "EXPECTED")
-      ] | length'
-}
-for i in $(seq 1 9); do
-  sleep 60
-  [ "$(pending)" -gt 0 ] && continue
-  sleep 30
-  [ "$(pending)" -eq 0 ] || continue
-  gh pr checks <number>
-  exit 0
-done
-echo "CI still running after 9 minutes"
-exit 1
+# After your own push:
+PINNED_SHA=$(git rev-parse HEAD)
+# In a review session, HEAD is the ephemeral refs/pull/N/merge commit, which
+# carries no rollup at all; pin the PR head instead:
+#   PINNED_SHA=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
+${CLAUDE_PLUGIN_ROOT}/scripts/poll-pr-checks.sh <number> "$PINNED_SHA"
 ```
 
-Invoke this Bash call with `timeout: 600000` (10 min). The default 2-min Bash timeout would kill the loop early; the 9-iteration cap is sized to fit inside the harness's 10-min Bash maximum, so a longer loop would auto-background and the gated follow-up wouldn't fire.
+Invoke this Bash call in the foreground (no `run_in_background`) with `timeout: 600000` (10 min) — the poll runs up to ~9.5 minutes, and the default 2-min Bash timeout would kill it early.
 
-1. Poll every 60 seconds (up to ~9 minutes) until all non-own check-runs on the commit are terminal. **Filter out the current run's URL (`/runs/$GITHUB_RUN_ID/`)** — the current workflow's own check is always pending while polling and must be excluded to avoid a deadlock. **Also filter same-workflow check runs (`$GITHUB_WORKFLOW`)** — sibling runs of the same workflow on the same PR are subject to concurrency rules (queueing or cancel-in-progress) and don't represent independent CI signals. The 30s grace re-check catches late-registering omnibus checks.
-2. If a required check fails, diagnose with `gh run view <run-id> --log-failed`, fix, commit, push, repeat.
-3. Once terminal, do the follow-up: ship a green fix, comment an unresolved failure, or dismiss your approval on red.
-4. When the cap hits with checks still running, end — don't re-enter the loop. The cap is the whole poll budget, not one attempt: `pending()` counts advisory jobs too, so where a nightly or benchmark matrix runs for an hour it can never reach 0. Comment the still-pending checks as unverified rather than exiting as if done, marking each required or advisory — `gh pr checks <number> --required` lists the required contexts already registered on the commit, and an omnibus that hasn't registered yet is required too.
+Exit 0 is green. Exit 1 is red, with the failing checks and their run URLs — diagnose with `gh run view <run-id> --log-failed`, fix, commit, push, and poll the new commit. Any other exit is **unverified, not green**: no rollup exists for the SHA, or checks were still pending at the cap. The cap is the whole poll budget — the pending count includes advisory jobs (an hourly benchmark matrix never reaches zero), so don't re-enter the loop; report the still-pending checks as unverified, marking each required or advisory (`gh pr checks <number> --required` lists the required contexts already registered on the commit; an omnibus that hasn't registered yet is required too).
 
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
@@ -363,47 +292,14 @@ Poll your checks to terminal, do the follow-up you were gated on, and exit; name
 
 ### Polling `gh run rerun --failed`
 
-After `gh run rerun <run-id> --failed`, poll the rerun jobs directly. The parent run's `.status` stays `in_progress` until every sibling job finishes, including unrelated long-running ones, and the `pending()` recipe above also doesn't help — sibling check-runs on the head SHA still appear pending. Polling specific job IDs is the only fix.
+After `gh run rerun <run-id> --failed`, poll the rerun's jobs directly — the parent run's `.status` stays `in_progress` until every sibling job finishes, including unrelated long-running ones, and sibling check runs keep the commit rollup pending too:
 
 ```bash
-gh run rerun <run-id> --failed --repo "$REPO"
-
-# New attempt records take a few seconds to surface; without this sleep,
-# the next query can see only the prior `failure` rows and exit immediately.
-sleep 10
-
-# `?filter=latest` returns each job's most recent attempt.
-JOB_IDS=$(gh api "repos/$REPO/actions/runs/<run-id>/jobs?filter=latest" \
-  --jq '.jobs[] | select(.status != "completed") | .id')
-
-# Rollup poll: one pass checks all reran jobs together and exits when the
-# last one is terminal.
-pending_jobs() {
-  local n=0
-  for id in $JOB_IDS; do
-    s=$(gh api "repos/$REPO/actions/jobs/$id" --jq '.status')
-    [ "$s" = "completed" ] || n=$((n + 1))
-  done
-  echo "$n"
-}
-[ -n "$JOB_IDS" ] || { echo "No rerun attempt surfaced — jobs were not re-queued"; exit 1; }
-for i in $(seq 1 9); do
-  if [ "$(pending_jobs)" -eq 0 ]; then
-    # `completed` is not `success`. Print each conclusion — a rerun that failed
-    # again is the case the follow-up turns on, and the loop above only ever
-    # asked whether the jobs stopped.
-    for id in $JOB_IDS; do
-      gh api "repos/$REPO/actions/jobs/$id" --jq '"\(.conclusion)\t\(.name)"'
-    done
-    exit 0
-  fi
-  sleep 60
-done
-echo "Rerun jobs still running after 9 minutes"
-exit 1
+gh run rerun <run-id> --failed
+${CLAUDE_PLUGIN_ROOT}/scripts/poll-rerun-jobs.sh <run-id>
 ```
 
-As with the CI Monitoring loop above, invoke this Bash call with `timeout: 600000` (10 min) — the default 2-min Bash timeout would kill the loop early, and the 9-iteration cap is sized to fit inside the harness's 10-min Bash maximum. On the cap, treat it as the whole poll budget — don't re-enter — and report the still-running jobs as unverified.
+Same foreground invocation and 10-min `timeout` as above. Exit 0 prints each job's conclusion — `completed` is not `success`; the follow-up turns on the conclusions. Any other exit means the jobs never re-queued or are still running at the cap: report them as unverified rather than re-entering.
 
 ## Replying to Comments
 
@@ -510,32 +406,7 @@ If `EXISTING` is greater than 0, **do not post** — another run already handled
 gh issue comment "$ISSUE" --body-file /tmp/comment-body.md
 ```
 
-**Line wrapping:** GitHub renders newlines literally in issue bodies, PR descriptions, and comments — a line break in the source becomes a `<br>` in the output. Write each paragraph as a single long line and let the browser reflow.
-
-<example>
-<bad reason="Paragraph hard-wrapped at ~72 chars; GitHub renders each newline as `<br>`, producing mid-sentence breaks">
-
-Content of `/tmp/pr-body.md`:
-
-```
-This PR refactors the `poll_jobs` helper to take a list of job IDs and
-return only those still pending. The previous version queried the run
-endpoint, which lagged behind the per-job endpoint after a rerun.
-```
-
-</bad>
-<good reason="Each paragraph is one long line; GitHub reflows to the reader's window width">
-
-Content of `/tmp/pr-body.md`:
-
-```
-This PR refactors the `poll_jobs` helper to take a list of job IDs and return only those still pending. The previous version queried the run endpoint, which lagged behind the per-job endpoint after a rerun.
-```
-
-</good>
-</example>
-
-Code blocks, bullet lists, and tables keep their newlines as-is — only prose paragraphs need to be unwrapped.
+**Line wrapping:** GitHub renders newlines literally in issue bodies, PR descriptions, and comments — a line break in the source becomes a `<br>` in the output, so a paragraph hard-wrapped at ~72 chars ships with mid-sentence breaks. Write each paragraph as a single long line and let the browser reflow. Code blocks, bullet lists, and tables keep their newlines as-is.
 
 Keep comments concise. Put supporting detail inside `<details>` tags — the reader should get the gist without expanding. Don't collapse content that *is* the answer (e.g., a requested analysis).
 
@@ -743,20 +614,7 @@ Some checks need hardware or an environment CI doesn't have (Windows, a GPU, a p
 3. **Ask a contributor of your own repo**, and only for something that's a logical consequence of what they're already doing (a PR author testing their own change).
 4. **Escalate to your own repo's maintainer** that you're blocked and need help.
 
-Never route the ask *outward* — least of all to the maintainer of another repo who is reviewing or merging your change as a favor. State the gap honestly and take rung 2 back home instead of handing them work.
-
-<example>
-<bad reason="Asked an upstream maintainer, mid-review of the bot's own PR, to run a verification the bot couldn't do">
-
-Bad: Bot upstreams a fix to a dependency; the fix touches a Windows-only code path the bot verified by source inspection. In the PR thread it closes with "If you can confirm on a real Windows terminal I'd appreciate it" — handing work to the maintainer who's doing the bot a favor by reviewing the change.
-
-</bad>
-<good reason="Stated the gap honestly and fixed it back home instead of asking the upstream maintainer">
-
-Good: Same fix. Bot writes "I verified the Windows path by source inspection, not on hardware" and stops — no ask to the upstream maintainer. Back in its own repo it opens a follow-up to add a Windows CI job that exercises the path, so the gap closes without anyone's favor.
-
-</good>
-</example>
+Never route the ask *outward* — least of all to the maintainer of another repo who is reviewing or merging your change as a favor. Closing an upstream PR with "if you can confirm on a real Windows terminal I'd appreciate it" hands them work; state the gap honestly ("verified by source inspection, not on hardware") and take rung 2 back home instead.
 
 ### Rewriting is authoring
 
@@ -807,56 +665,7 @@ When the correction identifies a gap or bug in a **bundled** skill — the same 
 
 ### How to propose
 
-1. **Complete the current task first.** The skill update is always a separate PR.
-2. **Check for an existing open PR against the same skill.** Dedup by the target file, not by title — title conventions vary per repo:
-   ```bash
-   BOT_LOGIN=$(gh api user --jq '.login')
-   gh pr list --state open --author "$BOT_LOGIN" --limit 200 --json number,title,headRefName,files \
-     --jq '.[] | select([.files[].path] | index(".claude/skills/running-tend/SKILL.md"))'
-   ```
-   If one is open, add to it instead of opening a second.
-3. **Draft a minimal edit.** State the rule, not the incident that produced it — no verbatim quotes of the maintainer's comment, no reconstruction of the exchange. A few lines of instruction is the target; step 4's PR body is where the case history goes. Place it under an appropriate heading. New SKILL.md files start with YAML frontmatter:
-   ```markdown
-   ---
-   name: running-tend
-   description: Project-specific guidance for tend workflows running on this repo.
-   ---
-   ```
-
-   The checkout's `.claude/` directory is bind-mounted **read-only** under the sandbox (protecting bots from modifying their own skills in place), so edits to `.claude/skills/` files in the working tree fail with `Read-only file system`. Claude Code's harness adds a second restriction on top of the read-only mount: `Edit`, `Write`, and Bash commands with `.claude/skills/` as a write-target argument are denied regardless of filesystem permissions ([anthropics/claude-code#37157](https://github.com/anthropics/claude-code/issues/37157)). The guard checks argument text, so `Write(/tmp/…)` and `Bash(mv /tmp/… SKILL.md)` both pass — the second because `SKILL.md` is a bare filename inside the `cd`'d directory.
-
-   Do the edit, commit, and push from a git worktree under `/tmp`, which is writable and sits outside the harness's `.claude/skills/` write-guard. (Don't write `$TMPDIR/...` — GitHub Actions runners leave `$TMPDIR` unset, so the path expands to `/skill-fix`, which the runner user can't create.)
-
-   <!-- TODO(anthropics/claude-code#37157): once the harness exempts .claude/skills/ as
-        documented, replace the /tmp-then-mv dance below with direct `Write` to the worktree path. -->
-
-   Base the skill branch on the repo's default branch, **not `HEAD`**. When this skill runs from `tend-mention` on a PR, the workflow has already done `gh pr checkout` so `HEAD` is the PR branch — basing on it carries that PR's WIP commits into the skill PR and ships a multi-concern PR that mixes the skill change with unrelated code. Fetch and base off `origin/<default>` instead:
-
-   ```bash
-   DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
-   git fetch origin "$DEFAULT_BRANCH"
-   git worktree add "/tmp/skill-fix" -b "skills/<topic>-$GITHUB_RUN_ID" "origin/$DEFAULT_BRANCH"
-
-   # Use the Write tool to author the new skill file to /tmp/running-tend-new.md.
-   # Then move it into place from inside the worktree. mkdir -p covers the
-   # new-skill case where .claude/skills/<name>/ doesn't yet exist in the
-   # default branch:
-   mkdir -p "/tmp/skill-fix/.claude/skills/running-tend"
-   cd "/tmp/skill-fix/.claude/skills/running-tend" && mv /tmp/running-tend-new.md SKILL.md
-
-   cd "/tmp/skill-fix"
-   git add .claude/skills/
-   # Set git identity first if you haven't already this session — see
-   # "Configure git identity before the first commit" above. A fresh worktree
-   # has no identity and the commit below fails with `Author identity unknown`.
-   git commit -m "skills(running-tend): ..."
-   git push -u origin skills/<topic>-$GITHUB_RUN_ID
-   gh pr create --title "..." --body-file /tmp/pr-body.md --head skills/<topic>-$GITHUB_RUN_ID
-   cd -
-   git worktree remove "/tmp/skill-fix" --force
-   ```
-4. **Open as a separate PR.** Follow the repo's PR title conventions (conventional commits, Jira prefix, or whatever the repo uses — check recent merged PRs or `CONTRIBUTING.md`). The body quotes the triggering feedback and links the thread (PR/issue/comment URL).
-5. **Open and exit — don't merge, don't wait.** The PR itself is the review request; a maintainer lands it (or doesn't) in their own time. Don't post a separate comment pinging for review, and don't block the session waiting. This open-and-exit is for skill proposals only; a code fix follows **CI Monitoring**.
+Follow `references/skill-pr-workflow.md` in this skill's directory. It carries the whole recipe: dedup by target file against the bot's open PRs, drafting rules (state the rule, not the incident), the workaround for the read-only `.claude/skills/` mount, and the branch/PR mechanics. Open the PR and exit — don't merge, don't wait, don't ping for review.
 
 ## Tone
 
