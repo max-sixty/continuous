@@ -186,8 +186,8 @@ shape — headless sessions losing a long-lived `CLAUDE_CODE_OAUTH_TOKEN` to a
 stored short-lived one, the startup connectivity check hanging behind an HTTPS
 proxy. `stable` would not even keep un-promoted code out of the job:
 `install.sh` always fetches the `latest` build as its bootstrap installer before
-handing off to the pinned target. Pin an exact version either way — the marker
-only picks the number.
+handing off to the pinned target — only the agent session runs the pinned
+version. Pin an exact version either way — the marker only picks the number.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
