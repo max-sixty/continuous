@@ -313,6 +313,10 @@ After pushing, what to do depends on whether a red result creates a follow-up.
 # and collapsing those would hide a genuine red behind an unrelated green.
 # `startedAt` is populated at queue time, so a still-queued replacement wins the
 # reduction over its settled predecessor and the pending signal survives.
+# The reduction presumes later supersedes earlier — true for a cancellation
+# cascade, false for two independent runs of a workflow with no concurrency
+# group, where it discards one run's real result. Resolve a red to its own run's
+# conclusion (`review`'s cap-expiry path) when that distinction has to be exact.
 #
 # Don't use mergeStateStatus as an exit signal. BLOCKED is a catch-all:
 # required checks pending, branch out of date (`type: update` rulesets),
