@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests import BASH
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARK_NOTIFICATION_READ = REPO_ROOT / "shared" / "steps" / "mark-notification-read.sh"
@@ -78,7 +79,7 @@ def gh_env(tmp_path: Path) -> dict[str, str]:
 
 def _run(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(MARK_NOTIFICATION_READ)],
+        [BASH, str(MARK_NOTIFICATION_READ)],
         env=env,
         capture_output=True,
         text=True,
@@ -308,7 +309,7 @@ def _cancelled_stream(tmp_path: Path) -> Path:
 
 def _usage(tmp_path: Path, *, stream: Path | None, logs_dir: Path) -> dict[str, object]:
     result = subprocess.run(
-        ["bash", str(COMPUTE_TOKEN_USAGE)],
+        [BASH, str(COMPUTE_TOKEN_USAGE)],
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "MODEL": "opus",
@@ -730,7 +731,7 @@ def rate_limit_env(tmp_path: Path) -> dict[str, str]:
 
 def _run_preflight(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(RATE_LIMIT_PREFLIGHT)],
+        [BASH, str(RATE_LIMIT_PREFLIGHT)],
         env=env,
         capture_output=True,
         text=True,
@@ -1262,7 +1263,7 @@ def gate_env(tmp_path: Path) -> dict[str, str]:
 def _run_gate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
     return subprocess.run(
-        ["bash", "-e", str(REVIEW_GATE)],
+        [BASH, "-e", str(REVIEW_GATE)],
         env=env,
         capture_output=True,
         text=True,
@@ -1484,7 +1485,7 @@ def notifications_env(tmp_path: Path) -> dict[str, str]:
 def _run_check(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
     return subprocess.run(
-        ["bash", "-e", str(NOTIFICATIONS_CHECK)],
+        [BASH, "-e", str(NOTIFICATIONS_CHECK)],
         env=env,
         capture_output=True,
         text=True,
@@ -1792,7 +1793,7 @@ def report_failure_env(tmp_path: Path) -> dict[str, str]:
 
 def _run_report_failure(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(REPORT_FAILURE)], env=env, capture_output=True, text=True
+        [BASH, str(REPORT_FAILURE)], env=env, capture_output=True, text=True
     )
 
 
@@ -2005,7 +2006,7 @@ def test_run_issue_reconcile_refuses_a_call_with_no_row(
     """
     result = subprocess.run(
         [
-            "bash",
+            BASH,
             "-c",
             f'. "{RUN_ISSUE_LIB}"'
             f"; run_issue_create_and_reconcile {OUTAGE_LABEL} {OUTAGE_TITLE!r}"
