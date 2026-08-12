@@ -308,10 +308,13 @@ def _cancelled_stream(tmp_path: Path) -> Path:
 
 
 def _usage(tmp_path: Path, *, stream: Path | None, logs_dir: Path) -> dict[str, object]:
+    jq = shutil.which("jq")
+    assert jq, "jq is required for these tests"
+
     result = subprocess.run(
         [BASH, str(COMPUTE_TOKEN_USAGE)],
         env={
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "PATH": f"{Path(jq).parent}:/usr/bin:/bin",
             "MODEL": "opus",
             "LOGS_DIR": str(logs_dir),
             "STREAM_JSON": str(stream) if stream else "",

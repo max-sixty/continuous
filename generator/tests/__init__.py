@@ -9,6 +9,7 @@ from importlib.metadata import version
 # the PATH each test sets for its fake binaries, reaching macOS's /bin/bash 3.2
 # — which lacks builtins the runner's bash 5 has (`mapfile`).
 BASH = shutil.which("bash")
+assert BASH, "bash is required for these tests"
 
 # The generator pins the action ref to its own release version
 # (tend.workflows._action_ref). Tests derive the expected ref the same way so
