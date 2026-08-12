@@ -303,6 +303,17 @@ After pushing, what to do depends on whether a red result creates a follow-up.
 # with `cancel-in-progress: true`, the older sibling is cancelled and
 # wouldn't gate polling anyway, so this filter is a no-op there.
 #
+# Reduce to the latest entry per (check name, workflow) before reading the
+# buckets. A concurrency-cancelled run's check runs stay on the commit forever,
+# and an `if: always()` merge-gate omnibus whose dependency was cancelled
+# concludes FAILURE rather than CANCELLED — so the bucket below doesn't exclude
+# it. Un-reduced, the loop breaks once the replacement settles, reads that
+# superseded red, and reports red on a commit whose replacement went green.
+# Key on the workflow name too: two workflows can register the same check name,
+# and collapsing those would hide a genuine red behind an unrelated green.
+# `startedAt` is populated at queue time, so a still-queued replacement wins the
+# reduction over its settled predecessor and the pending signal survives.
+#
 # Don't use mergeStateStatus as an exit signal. BLOCKED is a catch-all:
 # required checks pending, branch out of date (`type: update` rulesets),
 # required reviews missing, or our own check still running — all produce
@@ -321,9 +332,9 @@ rollup() {
     query($owner: String!, $name: String!, $oid: GitObjectID!) {
       repository(owner: $owner, name: $name) {
         object(oid: $oid) { ... on Commit { statusCheckRollup { contexts(first: 100) { nodes {
-          ... on CheckRun { name status conclusion detailsUrl
+          ... on CheckRun { name status conclusion startedAt detailsUrl
                             checkSuite { workflowRun { workflow { name } } } }
-          ... on StatusContext { context state targetUrl }
+          ... on StatusContext { context state createdAt targetUrl }
         } } } } }
       }
     }' -F owner="${GITHUB_REPOSITORY%/*}" -F name="${GITHUB_REPOSITORY#*/}" -F oid="$PINNED_SHA" \
@@ -332,6 +343,8 @@ rollup() {
       | [ .[]
        | select(((.detailsUrl // .targetUrl // "") | test($own)) | not)
        | select((.checkSuite.workflowRun.workflow.name // "") != $wf)]
+      | group_by([(.name // .context), (.checkSuite.workflowRun.workflow.name // "")])
+      | map(max_by(.startedAt // .createdAt))
       | {pending: [.[] | (.status // .state)
                    | select(IN("IN_PROGRESS","QUEUED","PENDING","WAITING","REQUESTED","EXPECTED"))] | length,
          failed:  [.[] | select((.conclusion // .state) | IN("FAILURE","TIMED_OUT","ERROR","STARTUP_FAILURE","ACTION_REQUIRED"))
