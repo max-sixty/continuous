@@ -12,7 +12,7 @@ second server on a different port instead of reusing the one listening.
 
 ```sh
 wt list statusline --format json | jq -r '.[].url'   # the URL to open
-ls .git/wt/logs/                                     # dev-server output
+wt config state logs                                 # dev-server output
 ```
 
 Outside a `wt` worktree — a plain clone, or CI — start it by hand and open
