@@ -57,6 +57,17 @@ gh issue view <number> --json title,body,comments,state
 
 Read the triggering comment, the PR/issue description, the diff (for PRs), and recent comments to understand the full conversation before taking action.
 
+### A review's inline comments are a separate fetch
+
+Neither `gh pr view --json reviews` nor `GET /pulls/<n>/reviews/<id>` returns a review's inline comments — both hand back the review body alone, with no field signalling that more exists, so a read that stops there looks complete. A one-line review body routinely sits on top of the maintainer's actual instructions. Whenever the trigger names a review ID, fetch them as part of reading context — not only when you already intend to reply inline:
+
+```bash
+gh api "repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/comments" \
+  --jq '.[] | {id, path, line, body}'
+```
+
+An instruction found there constrains the whole response, including any code the reply quotes or carries into another PR.
+
 ### Triggering issue/PR already closed
 
 If the trigger is a comment on an issue or PR and the target is **closed** by the time the job starts, the requested work was likely handled by a sibling run during the queue delay. Long `tend-mention` queues (hours, not minutes) make this common. Before starting work:
