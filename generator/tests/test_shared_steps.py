@@ -1767,6 +1767,10 @@ case "$1 $2" in
     # (`--paginate`, `-X DELETE`) where the path would otherwise sit.
     case "$*" in
       *"/comments?per_page=100"*)
+        if [ -n "${FAIL_COMMENT_LIST:-}" ]; then
+          echo "gh: 502 server error" >&2
+          exit 1
+        fi
         # Paged the way the endpoint pages, whether or not the caller asked
         # for every page: `--slurp` gets the array of pages, a plain read gets
         # the oldest 100 alone. Both go through `emit`, so a caller passing
@@ -2202,6 +2206,35 @@ def test_report_failure_reconciles_past_the_first_page(
     assert _deleted(report_failure_env) == ["140"], (
         f"the reconcile did not reach past the first page of comments; deleted "
         f"{_deleted(report_failure_env)}"
+    )
+
+
+def test_report_failure_survives_a_failed_reconcile_read(
+    report_failure_env: dict[str, str],
+) -> None:
+    """A 5xx on the reconcile's read must not redden a step whose row landed.
+
+    The reconcile is best-effort cleanup and the last statement in the append
+    branch, so left bare under `set -eo pipefail` a failed read takes the whole
+    script's status with it — *after* the write succeeded. That reddens the
+    `Report failure` step with no annotation naming why, on precisely the job
+    someone is about to diagnose. Duplicate rows on the tracker are the better
+    failure: the append immediately above warns and continues for the same
+    reason.
+    """
+    _open_tracker(report_failure_env)
+    _seen_by_the_guard(report_failure_env, "nothing recorded yet")
+    report_failure_env["FAIL_COMMENT_LIST"] = "1"
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, (
+        f"a failed reconcile read reddened the step; stdout:\n{result.stdout}"
+    )
+    assert "::warning::" in result.stdout, result.stdout
+    assert RUN_LINK in _comments(report_failure_env), (
+        f"lost the row the reconcile was cleaning up after: "
+        f"{_comments(report_failure_env)!r}"
     )
 
 

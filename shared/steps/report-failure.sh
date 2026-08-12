@@ -103,6 +103,12 @@ if [ -n "$EXISTING" ]; then
   # keeper. `--slurp` refuses `--jq`, hence the filter moved downstream, with
   # `add` flattening the array of pages. On an issue with no comments `--slurp`
   # yields `[[]]`, so `add` gives `[]` and the filter emits nothing.
+  #
+  # Guarded like the append above, and for the same reason: this is the last
+  # statement in the branch, so a 5xx on the read would take the script's exit
+  # status with it *after* the row landed — a red step carrying no annotation
+  # to say why, on the job someone is about to diagnose. Best-effort cleanup
+  # failing leaves duplicate rows on the tracker, which is the cheaper loss.
   sleep 5
   gh api --paginate --slurp \
     "repos/${GITHUB_REPOSITORY}/issues/${EXISTING}/comments?per_page=100" \
@@ -110,7 +116,7 @@ if [ -n "$EXISTING" ]; then
     | while read -r DUP_ID; do
         [ -z "$DUP_ID" ] && continue
         gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${DUP_ID}" 2>/dev/null || true
-      done
+      done || echo "::warning::Could not reconcile duplicate rows on #${EXISTING}; this run's row is recorded."
 else
   printf '%s\n\n%s\n\n%s\n' \
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
