@@ -366,12 +366,22 @@ pending_jobs() {
   echo "$n"
 }
 for i in $(seq 1 9); do
-  [ "$(pending_jobs)" -eq 0 ] && break
+  if [ "$(pending_jobs)" -eq 0 ]; then
+    # `completed` is not `success`. Print each conclusion — a rerun that failed
+    # again is the case the follow-up turns on, and the loop above only ever
+    # asked whether the jobs stopped.
+    for id in $JOB_IDS; do
+      gh api "repos/$REPO/actions/jobs/$id" --jq '"\(.conclusion)\t\(.name)"'
+    done
+    exit 0
+  fi
   sleep 60
 done
+echo "Rerun jobs still running after 9 minutes"
+exit 1
 ```
 
-As with the CI Monitoring loop above, invoke this Bash call with `timeout: 600000` (10 min) — the default 2-min Bash timeout would kill the loop early, and the 9-iteration cap is sized to fit inside the harness's 10-min Bash maximum.
+As with the CI Monitoring loop above, invoke this Bash call with `timeout: 600000` (10 min) — the default 2-min Bash timeout would kill the loop early, and the 9-iteration cap is sized to fit inside the harness's 10-min Bash maximum. Exit terminally in both directions for the same reason that loop does: a bare `break` leaves "every job finished" and "the budget ran out with jobs still pending" looking identical in the transcript, and the next step reads the silence as a green rerun. On the cap, treat it as the whole poll budget — don't re-enter — and report the still-running jobs as unverified.
 
 ## Replying to Comments
 
