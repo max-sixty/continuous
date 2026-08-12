@@ -126,6 +126,12 @@ Between a generator commit and the next release the committed workflows lag
 the in-tree generator; that is expected, and the gap closes at the next
 release (which tags `X.Y.Z` before regenerating, so the pin always resolves).
 
+`claude_version` in `claude/action.yaml` is an exact version taken from npm's
+`latest` dist-tag, not `stable`. `stable` lags several releases, and pinning it
+wouldn't keep un-promoted code out of the job anyway: `install.sh` always
+downloads the `latest` build as its bootstrap installer, and only the agent
+session runs the pin.
+
 ## Generator vs adopter ownership
 
 | Aspect | Owner | Lives in |
