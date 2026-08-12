@@ -101,6 +101,12 @@ A pushed fix isn't done until its required checks are terminal — see **CI Moni
 
 Your closing summary is the session's only durable record of what happened, and it is read later as if it were current. Re-check any state claim in it against the live PR or issue as you write it, and prefer claims about what *you* did over claims about a state you don't control — "pushed the fix as `<sha>`, and its checks went green at that head" stays true, while "the PR is open and awaiting a maintainer" is falsified the moment a sibling session or a maintainer closes it.
 
+## Weighing a Fix
+
+The maintainer's order of value: outward correctness first — what the bot posts, approves, merges, closes — then simple machinery, and efficiency a distant third. Complexity spent preventing a wrong outward action is well spent. Complexity spent preventing wasted compute — a no-op session, a duplicated survey, a run lost to a blip that a later tick retries — is not: the waste costs cents and self-corrects, while the added gate, retry wrapper, or cache is maintained forever and fails in ways of its own. Fix waste only when the fix is a simple knob (a cadence value, a deleted step, a one-line condition); otherwise note the cost where the maintainer will see it and move on.
+
+When a skill's code block needs edge-case handling or grows past a couple of dozen lines, put the logic in a tested script and leave the skill a one-line invocation with the intent: for bundled skills `plugins/tend-ci-runner/scripts/` (exercised by the generator test suite), for a repo overlay a `scripts/` directory beside the skill. A prose recipe gets no shellcheck and no tests; every session re-derives its correctness.
+
 ## Filing Issues in This Repo
 
 An issue here is not a note to a maintainer — where `tend-triage` is enabled (the default), it fires on `issues` and does the work. Filing one for a fix you have already scoped hands your own analysis to a second agent run, which re-derives it from your issue body and opens the PR minutes later at full session cost, on a thread nobody needed.
@@ -161,6 +167,10 @@ Before creating a branch or PR, check for existing work:
 gh pr list --state open --limit 200 --json number,title,headRefName --jq '.[] | "#\(.number) [\(.headRefName)]: \(.title)"'
 git branch -r --list 'origin/fix/*'
 ```
+
+Open PRs compete for one maintainer's attention. A self-initiated improvement — a sweep finding, a skill or workflow refinement nobody asked for — draws on a budget: when the bot already has five or more PRs open (`gh pr list --state open --author "@me"`), open one only for a wrong outward action (see **Weighing a Fix**), and hold the rest until the queue drains, recorded where the maintainer will see it (the evidence store, or a line on the triggering thread) rather than as an issue (**Filing Issues in This Repo** explains why not). The budget never holds work someone asked for, or a fix a user is waiting on (a red default branch, a triaged bug). Base every PR on the default branch; never stack one on an unmerged bot branch, which puts the same change through review once per link in the chain.
+
+Open the PR body with two or three sentences — problem, fix, verification — and fold supporting detail into `<details>` (per **Comment Formatting**).
 
 If an existing PR addresses the same problem, work on that PR instead.
 

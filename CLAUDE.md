@@ -8,6 +8,16 @@ and composite actions those workflows run.
 No backward compatibility. When a config format or API changes, cut over
 completely — old formats should fail with a clear error, not silently parse.
 
+Simplicity outranks efficiency. Complexity earns its place by preventing
+wrong outward actions — what the bot posts, approves, merges, or closes —
+never by saving compute. Wasted compute (a no-op session, a duplicated
+survey, a run lost to a blip that a later tick retries) costs cents and
+self-corrects; the gate, retry wrapper, or scheduling arithmetic that would
+have prevented it has to be understood and maintained forever. Fix waste
+only when the fix is a simple knob — a cadence value, a deleted step, a
+one-line condition — and otherwise leave it. Prefer deleting a mechanism
+over refining it.
+
 ## Commands
 
 ```bash
@@ -319,7 +329,11 @@ for Codex). When adding new capability, split work along this line:
 - **Actions gate whether the agent runs at all.** Agent invocations cost
   tokens; gating them in YAML is cheap. Pre-check steps that early-exit
   the job (e.g. `tend-notifications`'s "Check for unread notifications")
-  save an entire agent run when there's nothing to do.
+  save an entire agent run when there's nothing to do. A gate stays cheap
+  only while it stays trivial: one pre-check against a frequent no-op (an
+  empty inbox every cron tick) earns its place; a run of bespoke gates,
+  each skipping one rare event shape, is machinery that costs more than
+  the boots it saves.
 
 Don't build deterministic YAML steps for work that happens *inside* an
 agent run. Extend the skill instead.
