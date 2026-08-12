@@ -27,7 +27,7 @@ The script prints `key=value` lines. Act on `STATUS`:
 
 - `STATUS=ok`: all scopes present. Search open issues for a PAT scope audit tracking issue (`gh issue list --state open --search "PAT in:title"`); if found, close it with a comment noting the scopes are now granted.
 - `STATUS=fine-grained`: no `X-OAuth-Scopes` header. Fine-grained PATs have no documented self-introspection endpoint — skip.
-- `STATUS=missing`: open or update a tracking issue. Use a title containing "PAT" (e.g. `Bot PAT: missing scopes`) so future runs can dedup by title search. Before creating, run `gh issue list --state open --search "PAT in:title"` and update the existing issue with `gh issue edit` if one is already open. The body lists the values from `MISSING=`, names the secret to update by its real name (the `secrets.bot_token` value from `.config/tend.yaml`, default `TEND_BOT_TOKEN` — never a placeholder), and links step 8 of the `install-tend` skill for remediation: https://github.com/max-sixty/tend/blob/main/plugins/install-tend/skills/install-tend/SKILL.md#8-bot-token-and-secret
+- `STATUS=missing`: open or update a tracking issue. Use a title containing "PAT" (e.g. `Bot PAT: missing scopes`) so future runs can dedup by title search. Before creating, run `gh issue list --state open --search "PAT in:title"` and update the existing issue with `gh issue edit` if one is already open. The body lists the values from `MISSING=`, names the secret to update (`TEND_BOT_TOKEN`), and links step 8 of the `install-tend` skill for remediation: https://github.com/max-sixty/tend/blob/main/plugins/install-tend/skills/install-tend/SKILL.md#8-bot-token-and-secret
 
 ## Step 2: Check tend configuration drift
 
@@ -76,15 +76,29 @@ a one-line reason) plus a `_Last refreshed: <YYYY-MM-DD>_` footer. Updates:
 
 Find conflicted PRs from this bot and from upstream dependency bots:
 
+Don't filter `gh pr list --json mergeable` on `== "CONFLICTING"`. `mergeable` is computed lazily: the first query after `main` moves returns `UNKNOWN` and only *enqueues* the computation, so a cold read reports a conflicted PR as clean. There is no blocking read — [the REST docs](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request) prescribe resubmitting the request until the value settles. Test-merge locally instead: `git merge-tree` answers the same question synchronously, in-process, with no retry loop.
+
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
+git fetch --quiet origin main
 for author in "$BOT_LOGIN" app/dependabot app/renovate; do
-  gh pr list --author "$author" --json number,title,mergeable,headRefName,author \
-    --jq '.[] | select(.mergeable == "CONFLICTING")'
+  # A failed query and "no open PRs" both print nothing; only the first is a
+  # reason to stop. --limit 100 because the default 30 truncates silently.
+  prs=$(gh pr list --author "$author" --limit 100 --json number,title) \
+    || { echo "query for $author never landed — conflicts unverified"; continue; }
+  # One fetch for every head, forced because bot branches get force-pushed.
+  mapfile -t refs < <(jq -r '.[].number | "refs/pull/\(.)/head:refs/tend/pr/\(.)"' <<<"$prs")
+  [ "${#refs[@]}" -eq 0 ] && continue
+  git fetch --quiet --force origin "${refs[@]}"
+  # Conflict, missing ref, unreadable ref: all non-zero, all need a look.
+  jq -r '.[] | [.number, .title] | @tsv' <<<"$prs" | while IFS=$'\t' read -r n title; do
+    git merge-tree --write-tree origin/main "refs/tend/pr/$n" >/dev/null \
+      || echo "needs a rebase: $author #$n $title"
+  done
 done
 ```
 
-Skip the rest of this step if none of the queries return anything.
+Skip the rest of this step only when every query landed and nothing printed.
 
 ### Upstream dependency bots: trigger the bot's own rebase
 
@@ -151,13 +165,13 @@ Read the project's CLAUDE.md before reviewing. Apply the review checklist below 
 ## Step 5: Check existing issues
 
 ```bash
-gh issue list --state open --json number,title
-gh pr list --state open --json number,title,headRefName
+gh issue list --state open --limit 200 --json number,title
+gh pr list --state open --limit 200 --json number,title,headRefName
 ```
 
 For each open issue, check whether recent commits or the current codebase state already resolve it. If resolved, comment with the evidence (commits, CI runs, or code state that resolves the issue). Close the issue with `gh issue close` when:
 
-- The bot opened the issue itself to report a transient condition (e.g., a "Nightly tests failed" report from a prior run) and the condition has clearly resolved — the fix PR is merged and the relevant CI on `main` is passing. Skip this case if the issue body contains "Do not close manually"; those are recurring tracking issues (e.g., monthly review-runs trackers) with their own lifecycle.
+- The bot opened the issue itself to report a transient condition (e.g., a "Nightly tests failed" report from a prior run) and the condition has clearly resolved — the fix PR is merged and the relevant CI on `main` is passing. Skip this case where closing the issue is itself a signal rather than a record of resolution: a body containing "Do not close manually" (recurring trackers with their own lifecycle), or the `tend-rate-limit` label, where a maintainer's close is what lifts the bot past its own rate limit. Closing that one as the bot lifts nothing — the preflight counts only closes by a person — but it clears a decision still waiting on one.
 - The repo's guidance (e.g., `running-tend` skill) explicitly authorizes closing issues.
 
 Otherwise, leave it open for a maintainer to close.
@@ -312,15 +326,15 @@ git worktree remove "/tmp/tend-update-workflows" --force
 Before acting on findings, check for duplicates and existing work:
 
 ```bash
-gh issue list --state open --json number,title
-gh pr list --state open --json number,title,headRefName
+gh issue list --state open --limit 200 --json number,title
+gh pr list --state open --limit 200 --json number,title,headRefName
 ```
 
 The default action is a PR, not an issue. If there's a plausible fix, make it — explain uncertainty in the PR description.
 
 For each finding:
 
-1. **Create a PR** — branch, fix, run full test suite, commit, push, create PR, poll CI. **Every bug fix must include a regression test that would have failed before the fix.** If a test is not feasible (e.g., pure documentation changes), note why in the PR description. When uncertain about the approach, explain the trade-offs in the description.
+1. **Create a PR** — branch, fix, run full test suite, commit, push, create PR, then poll CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`. Your job ends when those checks are terminal: a review posted on the PR while you poll belongs to `tend-mention`. **Every bug fix must include a regression test that would have failed before the fix.** If a test is not feasible (e.g., pure documentation changes), note why in the PR description. When uncertain about the approach, explain the trade-offs in the description.
 2. **Create an issue only when there's no obvious fix** — design questions, problems needing maintainer input, or findings requiring investigation beyond what the survey can provide.
 
 ## Optional steps

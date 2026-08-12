@@ -13,10 +13,17 @@ import click
 from click.testing import CliRunner
 
 from tend.cli import main
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
+    GeneratedWorkflow,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -271,20 +278,33 @@ def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
         assert "\n\n\n" not in wf.content, f"{wf.filename} has triple blank lines"
 
 
-def test_custom_secrets(tmp_path: Path) -> None:
-    extra = dedent("""\
-        secrets:
-          bot_token: MY_BOT_PAT
-          claude_token: MY_CLAUDE
-          anthropic_api_key: MY_API_KEY
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_workflows_read_only_the_operational_secrets(
+    tmp_path: Path, harness: str
+) -> None:
+    """Every stored secret a workflow reads is one `tend check` verifies.
+
+    The names are fixed constants shared by the templates and the checks, so
+    the failure this guards is a template naming a secret that nothing
+    provisions — which surfaces only as an empty token at run time. The set
+    is per harness because the checks are: `check_claude_auth` verifies the
+    Claude pair and `check_codex_auth` the OpenAI key, so a claude workflow
+    reading `secrets.OPENAI_API_KEY` is unprovisioned as surely as one
+    reading a name nothing defines. `secrets.GITHUB_TOKEN` is
+    workflow-scoped rather than stored, so it is outside the set."""
+    verified = {BOT_TOKEN_SECRET} | (
+        {CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET}
+        if harness == "claude"
+        else {OPENAI_KEY_SECRET}
+    )
+    cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}\n"))
     for wf in generate_all(cfg):
-        assert "MY_BOT_PAT" in wf.content, f"{wf.filename} missing custom bot token"
-        assert "MY_CLAUDE" in wf.content, f"{wf.filename} missing custom claude token"
-        assert "MY_API_KEY" in wf.content, (
-            f"{wf.filename} missing custom anthropic_api_key secret"
+        read = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", wf.content))
+        assert read - {"GITHUB_TOKEN"} <= verified, (
+            f"{wf.filename} reads a secret the {harness} harness does not "
+            f"provision: {sorted(read - {'GITHUB_TOKEN'} - verified)}"
         )
+        assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
 
 
 def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:
@@ -347,13 +367,20 @@ def test_operational_secrets_imply_environment(tmp_path: Path) -> None:
                 for s in _strings(job)
                 for ref in re.findall(r"secrets\.[A-Za-z0-9_]+", s)
             )
-            assert (job.get("environment") == "tend") == reads_secret, (
-                f"{wf.filename}:{job_name} "
-                + (
-                    "reads an operational secret without naming the environment"
-                    if reads_secret
-                    else "names the environment but holds no secret"
-                )
+            # `deployment: false` is part of the asserted shape, not just the
+            # name: dropping it leaves the gate working and costs only a
+            # deployment record per run, which GitHub posts as a "<bot>
+            # deployed to tend" line on every PR the run belongs to. Nothing
+            # else would fail, so this is where it gets caught.
+            names_environment = job.get("environment") == {
+                "name": "tend",
+                "deployment": False,
+            }
+            assert names_environment == reads_secret, f"{wf.filename}:{job_name} " + (
+                "reads an operational secret without naming the environment "
+                "as `{name: tend, deployment: false}`"
+                if reads_secret
+                else "names the environment but holds no secret"
             )
 
 
@@ -367,6 +394,54 @@ def test_custom_prompt(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     triage = workflows["tend-triage.yaml"]
     assert "Custom triage:" in triage.content
+
+
+def _review_prompt(review: GeneratedWorkflow) -> str:
+    """The `prompt:` input the review job hands the harness action."""
+    steps = yaml.safe_load(review.content)["jobs"]["review"]["steps"]
+    step = next(
+        s for s in steps if s.get("uses", "").startswith("max-sixty/tend/claude@")
+    )
+    return step["with"]["prompt"]
+
+
+def test_review_prompt_without_placeholder_keeps_literal_braces(
+    tmp_path: Path,
+) -> None:
+    """A review prompt with braces but no `{pr_number}` reaches the agent verbatim.
+
+    The review prompt is the only one emitted inside a GHA expression. With the
+    placeholder it goes through `format()`, which needs every other brace
+    doubled; without it, it is a bare string literal that GHA never collapses,
+    so doubling there would ship `{{...}}` to the agent.
+    """
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review this PR. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "{generated}" in prompt
+    assert "{{generated}}" not in prompt
+    assert "format(" not in prompt
+
+
+def test_review_prompt_with_placeholder_escapes_other_braces(tmp_path: Path) -> None:
+    """With `{pr_number}` present the prompt goes through `format()`, so the
+    placeholder becomes `{0}` and every other brace is doubled for it."""
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review PR {pr_number}. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "format(" in prompt
+    assert "{0}" in prompt
+    assert "{{generated}}" in prompt
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
@@ -498,6 +573,32 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert len(checkouts) == 1
     assert checkouts[0]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
     assert "clean" not in checkouts[0]["with"]
+
+
+def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
+    """A push mid-review queues a replacement run; the gate step decides
+    whether it boots an agent.
+
+    The running session folds the push in and stamps examined commits, so the
+    queued run's work is usually already done. That only holds if the gate is
+    the first step and everything after it — checkouts, setup, the agent — is
+    conditioned on its verdict; an ungated step would run (and bill) on every
+    replaced event.
+    """
+    extra = "setup:\n  - run: npm ci\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    job = data["jobs"]["review"]
+
+    assert job["concurrency"]["cancel-in-progress"] is False
+    steps = job["steps"]
+    assert steps[0].get("id") == "gate"
+    assert "tend-review/$PR" in steps[0]["run"]
+    for step in steps[1:]:
+        assert step.get("if") == "steps.gate.outputs.should_run == 'true'", (
+            f"ungated step after the gate: {step}"
+        )
 
 
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
@@ -704,6 +805,51 @@ def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> No
     )
 
 
+def test_mention_verify_engagement_lookups_survive_pagination(
+    tmp_path: Path,
+) -> None:
+    """Engagement lookups must not reduce inside a `--paginate`d `--jq`.
+
+    `gh api --paginate` applies `--jq` once per page, so `--jq '[...] | length'`
+    emits one count per page instead of one overall. Past 100 records the
+    variable holds `100\\n7`, the `[ "$X" -gt "0" ]` guard below it errors with
+    `integer expression expected` and returns 2, and the failed test falls
+    through to should_run=false — the bot stops answering participants on
+    exactly the threads where it has engaged the most, with nothing going red.
+
+    Keep the filter a per-element stream, capture it bare, and test it for
+    emptiness. Reducing the stream through a pipe (`| wc -l`) would fix the
+    count but move the substitution's exit status off `gh`, so under the step's
+    default `bash -e` a failed API call would read as "no engagement" on a green
+    job — the same silent-quiet failure, relocated."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-mention.yaml"].content)
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    run = check_step["run"]
+
+    # Every `--jq` under `--paginate` must stay a streaming filter. `--slurp` is
+    # not an escape hatch: `gh api` rejects it alongside `--jq`. Join
+    # backslash-continued lines first — the `--jq` sits on its own line.
+    for line in run.replace("\\\n", " ").splitlines():
+        if "--paginate" not in line or "--jq" not in line:
+            continue
+        assert "| length" not in line, (
+            f"reduction inside a --paginate'd --jq runs per page: {line.strip()}"
+        )
+
+    assert run.count("| .id')") == 3, (
+        "the three engagement lookups (issue comments, PR reviews, PR comments) "
+        "must capture the raw stream, so a failing `gh api` still trips errexit"
+    )
+    assert '-gt "0" ]' not in run, (
+        "guard on an empty stream (`[ -n ... ]`) — a numeric comparison is what "
+        "a split count breaks"
+    )
+
+
 def test_mention_verify_skips_self_authored_comments(tmp_path: Path) -> None:
     """The bot's own comments must not spin up a handle session.
 
@@ -902,9 +1048,10 @@ def test_mention_self_comment_skip_spares_review_submissions(
     role speaking, not a self-loop — the prompt is told to action it. That
     signal arrives as a `pull_request_review` submission event, distinct from
     the `pull_request_review_comment` inline-comment event the skip covers, so
-    it must still reach the actionable path. The only self-review that is
-    skipped is the terminal empty-body APPROVED case (see
-    test_mention_skips_bot_approved_review).
+    it must still reach the actionable path. The only self-reviews that are
+    skipped are the terminal empty-body APPROVED case (see
+    test_mention_skips_bot_approved_review) and the synthetic reply container
+    (see test_mention_skips_bot_reply_container).
 
     This pins the boundary against a later "skip self-authored reviews too, for
     consistency" edit that would silently break the review -> fix loop: the
@@ -937,16 +1084,80 @@ def test_mention_self_comment_skip_spares_review_submissions(
         "submission kind — a bot self-review is actionable reviewer signal"
     )
 
-    # The sole author-keyed skip for a review submission is the terminal
-    # empty-body APPROVED gate; a COMMENTED / non-empty-body bot self-review
-    # falls through to the actionable PR_AUTHOR == bot short-circuit.
-    review_skip = run[run.index('[ "$KIND" = "pull_request_review" ]') :]
-    assert '[ "$REVIEW_STATE" = "approved" ]' in review_skip
-    assert '[ -z "$COMMENT_BODY" ]' in review_skip
+    # Two author-keyed skips exist for a review submission — the terminal
+    # empty-body APPROVED gate here, and the reply-container gate pinned by
+    # test_mention_skips_bot_reply_container. Slice to the APPROVED one alone
+    # (it ends at the INLINE fetch the container gate reuses), so this assertion
+    # keeps discriminating rather than passing on either. A COMMENTED /
+    # non-empty-body bot self-review that is not one of those two falls through
+    # to the actionable PR_AUTHOR == bot short-circuit.
+    approved_skip = run[
+        run.index('[ "$KIND" = "pull_request_review" ]') : run.index("INLINE=$(")
+    ]
+    assert '[ "$REVIEW_STATE" = "approved" ]' in approved_skip
+    assert '[ -z "$COMMENT_BODY" ]' in approved_skip
     assert '[ "$PR_AUTHOR" = "test-bot" ]' in run, (
         "a bot self-review that isn't the terminal empty approval must reach "
         "the actionable PR_AUTHOR == bot short-circuit"
     )
+
+
+def test_mention_skips_bot_reply_container(tmp_path: Path) -> None:
+    """Replying to a review thread wraps the reply in a synthetic zero-body
+    COMMENTED review, so the bot's own inline reply reaches verify a second
+    time as a `pull_request_review` submission — the kind the self-authored
+    comment skip deliberately spares. That container is the same comment on a
+    second event path, not a review, so the gate must drop it before the
+    engagement heuristic counts it (BOT_REVIEWS > 0) or short-circuits on the
+    bot-authored PR and spins up a handle job the prompt's self-loop guard
+    then exits with nothing posted.
+
+    The gate is narrower than the comment skip on purpose, and the narrowing is
+    load-bearing in both directions:
+
+    - `REVIEW_AUTHOR` — `pull_request_review_comment` subscribes to `edited`
+      only, so the container is the *sole* path by which a human's freshly
+      created inline reply reaches the bot. Widening this gate to be
+      authorship-agnostic silences the bot on every human reply to its own
+      review threads, with no test failing and no red run to notice.
+    - every inline comment being a reply — an empty-body bot review that owns a
+      *fresh* inline comment still carries actionable signal, so it must fire.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    wf = generate_mention(cfg)
+    data = yaml.safe_load(wf.content)
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    run = check_step["run"]
+
+    # `in_reply_to_id` is an *optional* property on the review-comments
+    # endpoint: it is absent, not null, on a fresh comment. Constructing
+    # `{body, in_reply_to_id}` is what normalizes absent to null so the
+    # `== null` select catches both shapes — a bare `.in_reply_to_id` stream
+    # would drop fresh comments from the count entirely and skip every
+    # container. It also keeps one object per line, so `--paginate`, which
+    # applies `--jq` once per page, concatenates rather than reducing within a
+    # page (#839).
+    assert "--jq '.[] | {body, in_reply_to_id}'" in run
+
+    count = "jq -s '[.[] | select(.in_reply_to_id == null)] | length'"
+    assert count in run, "the skip must key on there being no *fresh* comment"
+
+    # Author and an empty review body are both required, so a human's reply
+    # container and a bot container carrying a body each still fire.
+    reply_gate = run[run.index("INLINE=$(") :]
+    assert '[ "$REVIEW_AUTHOR" = "test-bot" ]' in reply_gate
+    assert '[ -z "$COMMENT_BODY" ]' in reply_gate
+
+    # The @-mention scan over the inline bodies runs first, so a mention the
+    # bot quotes inside a reply still summons it.
+    inline_scan = "printf '%s\\n' \"$INLINE\" | jq -r '.body' | grep -qF '@test-bot'"
+    assert run.index(inline_scan) < run.index(count)
+
+    # And the skip precedes the engagement heuristic that would otherwise count
+    # this very container as prior participation.
+    assert run.index(count) < run.index("BOT_REVIEWS=$(")
 
 
 # ---------------------------------------------------------------------------

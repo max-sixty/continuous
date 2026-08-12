@@ -14,7 +14,7 @@ Load `/tend-ci-runner:running-in-ci` first — it contains CI security rules, re
 ## Step 1: Find dependency PRs
 
 ```bash
-gh pr list --state open --json number,title,author,labels \
+gh pr list --state open --limit 200 --json number,title,author,labels \
   --jq '.[] | select(.author.login == "dependabot[bot]" or .author.login == "renovate[bot]" or (.labels | any(.name == "dependencies")))'
 ```
 
@@ -34,9 +34,12 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    if [ "$LAST_APPROVAL_SHA" = "$HEAD_SHA" ]; then
      echo "Already approved on this commit; skipping."
    else
-     # Compose a one-line review body naming the package, bump type, and what you
-     # checked — e.g. "ruff 0.13 → 0.14 (patch), CI green, no API changes".
-     gh pr review <number> --approve --body "$REVIEW_BODY"
+     # Use the Write tool to compose /tmp/review-body.md — one line naming the
+     # package, bump type, and what you checked, e.g. "ruff 0.13 → 0.14 (patch),
+     # CI green, no API changes". Write it to a file rather than an inline
+     # --body: a package name written as inline code puts a backtick in a
+     # double-quoted argument, and bash runs the span as a command.
+     gh pr review <number> --approve --body-file /tmp/review-body.md
    fi
    ```
 4. If CI is failing, comment with the failure summary and skip

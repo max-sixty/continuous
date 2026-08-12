@@ -8,70 +8,62 @@
 # issues after the fact, when the run has completed and the APIs return stable
 # data.
 #
+# A closed outage issue is left closed and a fresh one filed: closing it means
+# the outage was resolved, and reopening would fold the next incident into a
+# stale record. The rate-limit issue takes the opposite policy, for reasons in
+# lib/run-issue.sh.
+#
 # Inputs (env): GITHUB_TOKEN (for gh), GITHUB_SERVER_URL, GITHUB_REPOSITORY,
 # GITHUB_RUN_ID, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH (from Actions).
 set -eo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/run-issue.sh
+. "${SCRIPT_DIR}/lib/run-issue.sh"
+
 LABEL="tend-outage"
 TITLE="Bot temporarily unavailable"
-RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-# Build a one-line reference to the triggering context
-REF=""
-if [ "$GITHUB_EVENT_NAME" = "pull_request_target" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review" ] || [ "$GITHUB_EVENT_NAME" = "pull_request_review_comment" ]; then
-  PR_NUM=$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")
-  REF="#${PR_NUM}"
-elif [ "$GITHUB_EVENT_NAME" = "issues" ] || [ "$GITHUB_EVENT_NAME" = "issue_comment" ]; then
-  ISSUE_NUM=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
-  REF="#${ISSUE_NUM}"
-elif [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
-  REF="CI fix for workflow run"
+ROW=$(run_issue_row)
+
+run_issue_ensure_label "$LABEL" "Tracks bot outage incidents" "d93f0b"
+
+# Jittered backoff before the check-then-act narrows the race window when a
+# matrix workflow's legs fail at near-identical times (e.g. model-API 5xx
+# responses exhausting the retry budget across every leg within a few
+# seconds). Without this, every leg reads $EXISTING as empty in parallel and
+# each files its own outage issue.
+sleep $((RANDOM % 30))
+# A failed read is not "nothing is open". Filing on it is how a repo ends up
+# with two open trackers, and the reconcile does not clean this one up — it
+# probes the ten numbers below the issue it just filed, and an already-open
+# tracker is normally much older. Two of them scatter later rows across both,
+# so no tracker carries the complete set the drain sweep needs. Skipping costs
+# this one row on a transient failure, and the next failure records normally.
+if ! EXISTING=$(run_issue_canonical "$LABEL" open "$TITLE"); then
+  echo "::warning::Could not read this repo's ${LABEL} issues, so this run was not recorded on the outage tracker."
+  exit 0
 fi
 
-TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-# One row per failure, in the same table format whether it seeds the issue
-# body (first failure) or is appended as a comment (every later failure), so
-# both render identically.
-TABLE=$(printf '%s\n%s\n%s' \
-  "| When | Run | Trigger |" \
-  "|------|-----|---------|" \
-  "| ${TIMESTAMP} | [workflow run](${RUN_URL}) | ${REF:-N/A} |")
-
-gh label create "$LABEL" --description "Tracks bot outage incidents" --color "d93f0b" 2>/dev/null || true
-
-# Jittered backoff before the check-then-act narrows the race window
-# when a matrix workflow's legs fail at near-identical times (e.g.
-# model-API 5xx responses exhausting the retry budget across every leg
-# within a few seconds). Without this, every leg reads $EXISTING as empty
-# in parallel and each files its own outage issue.
-sleep $((RANDOM % 30))
-EXISTING=$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
-
 if [ -n "$EXISTING" ]; then
-  printf '%s\n' "$TABLE" > /tmp/comment.md
-  gh issue comment "$EXISTING" -F /tmp/comment.md
+  # The common path once a tracker is open — every failure after the first in
+  # one incident appends through here — and it can 5xx like any other write.
+  # Left bare it aborts under `set -e`, which drops the row without saying so:
+  # the tracker then under-reports the outage, and a run stranded by it reads
+  # as one that never happened. Warning costs the same single row a failed
+  # read above costs, and the next failure records normally. The create below
+  # keeps the opposite policy deliberately: with no tracker open there is no
+  # other record of the outage, so a failed create has to redden the step.
+  # The rate-limit caller guards both of its writes instead: a failed create
+  # there must still reach the annotation that names what to close, where here
+  # the create is the last statement and the red step is all that is left.
+  if ! printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -; then
+    echo "::warning::Could not append this run's row to #${EXISTING}."
+  fi
 else
   printf '%s\n\n%s\n\n%s\n' \
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
-    "$TABLE" \
-    "This issue was created automatically. Close it once the outage is resolved." > /tmp/body.md
-  gh issue create --title "$TITLE" --label "$LABEL" -F /tmp/body.md
-
-  # The jitter above only narrows the create-create race; it can't close it.
-  # Two legs can still both read $EXISTING empty (jitter collision within the
-  # few-second window the list index takes to reflect a fresh create), so each
-  # files its own issue. Reconcile after creating: settle for the index, list
-  # every open tend-outage issue, keep the lowest-numbered, and close the rest
-  # as duplicates. Idempotent and convergent — every racing leg computes the
-  # same keeper, so a second leg closing an already-closed dup is a no-op.
-  sleep 5
-  OPEN=$(gh issue list --label "$LABEL" --state open --json number --jq 'sort_by(.number) | .[].number')
-  KEEP=$(echo "$OPEN" | head -1)
-  echo "$OPEN" | tail -n +2 | while read -r DUP; do
-    [ -z "$DUP" ] && continue
-    gh issue close "$DUP" \
-      --comment "Duplicate of #${KEEP} (concurrent matrix-leg failure); consolidating outage tracking there." \
-      2>/dev/null || true
-  done
+    "$ROW" \
+    "This issue was created automatically. Close it once the outage is resolved." \
+    | run_issue_create_and_reconcile "$LABEL" "$TITLE" "$ROW" > /dev/null
 fi

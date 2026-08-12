@@ -111,9 +111,10 @@ because the workflow files are public.
 
 ```bash
 # 1. Discover consumer repos via code search. Generated workflows pin a
-#    version tag (`max-sixty/tend@X.Y.Z`, or `/codex@X.Y.Z`), so search the
-#    bare `max-sixty/tend` token (version-agnostic; GitHub code search does
-#    not index `@` or `/`, so this matches both the Claude and Codex refs).
+#    version tag (`max-sixty/tend/claude@X.Y.Z`, or `/codex@X.Y.Z`), so
+#    search the bare `max-sixty/tend` token (version-agnostic; GitHub code
+#    search does not index `@` or `/`, so this matches both the Claude and
+#    Codex refs).
 #    `--extension yaml` is required: without it, README/CLAUDE.md/TODO.md
 #    hits on `max-sixty/tend` itself crowd out tend's own workflow files
 #    past the 100-result cap, dropping tend from its own consumers.json.
@@ -155,7 +156,7 @@ both.
 | `claude_version` | `claude/action.yaml` | track latest |
 | `mitmproxy_version` | `claude/action.yaml` | track latest |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml` | keep it on its prerelease line; bump only to a release confirmed to run under `codex exec` |
+| `codex_version` | `codex/action.yaml` | track latest; the surface job confirms the bump |
 
 ```bash
 yq '.inputs.claude_version.default' claude/action.yaml
@@ -163,13 +164,16 @@ npm view @anthropic-ai/claude-code dist-tags.latest
 
 yq '.inputs.mitmproxy_version.default' claude/action.yaml
 curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
+
+yq '.inputs.codex_version.default' codex/action.yaml
+npm view @openai/codex dist-tags.latest
 ```
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
 target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
 between the two versions for anything touching the agent paths (first-run
 onboarding, `--model` alias resolution, headless `-p` result events, Stop-hook
-behavior) and note it in the PR.
+behavior, slash-command or Skill-tool handling) and note it in the PR.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
@@ -178,6 +182,13 @@ addon-related in its CHANGELOG against the `mitmdump` flags in
 only launches that mitmproxy and CI smokes the two together, so it needs no
 release stream of its own; move both in one PR, at whatever uv is latest then
 (`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
+
+Bump `codex_version` to `latest`; drop to `alpha` only for a fix not yet
+released. CI's `test-codex-surface` job installs whatever is pinned and asserts
+the CLI surface the action depends on, so a bump that breaks it fails on its own
+PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live agent session stays
+unverified — skim the codex CHANGELOG across the bump for model availability,
+sandbox behavior, and `--output-last-message`, and note what you find in the PR.
 
 ### `uses:` refs
 

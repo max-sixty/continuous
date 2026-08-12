@@ -404,9 +404,9 @@ def test_check_full_pipeline_with_mocked_gh(
 
     assert result.exit_code == 0, result.output
     assert "FAIL" not in result.output
-    # branch-protection + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 7
-    assert result.output.count("PASS") == 7
+    # branch-protection + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 8
+    assert result.output.count("PASS") == 8
 
 
 def test_check_full_pipeline_branch_not_protected(
@@ -756,7 +756,9 @@ def test_install_test_workflow_shape(
     # Version is pinned from the committed header (not `@latest`) so a release
     # mid-PR doesn't fail the drift check for an irrelevant reason.
     assert 'uvx "tend@$TEND_VERSION" init --with-install-test' in content
-    assert "astral-sh/setup-uv@v6" in content
+    # Version-agnostic: the exact pin is covered by the regtest output, and
+    # weekly bumps shouldn't have to edit two places.
+    assert "astral-sh/setup-uv@" in content
 
     # Default-branch probe: must not use `git remote set-head origin --auto`,
     # which errors on the default shallow `actions/checkout@v7` (only the PR

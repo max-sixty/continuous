@@ -46,7 +46,6 @@ def test_migrate_full_config_round_trips_through_config_load(tmp_path: Path) -> 
         model = "sonnet"
 
         [secrets]
-        bot_token = "MY_BOT_PAT"
         allowed = ["CODECOV_TOKEN"]
 
         [[setup]]
@@ -71,7 +70,6 @@ def test_migrate_full_config_round_trips_through_config_load(tmp_path: Path) -> 
     assert cfg.bot_name == "test-bot"
     assert cfg.protected_branches == ["v1", "v2"]
     assert cfg.model == "sonnet"
-    assert cfg.bot_token_secret == "MY_BOT_PAT"
     assert cfg.allowed_repo_secrets == ["CODECOV_TOKEN"]
     assert len(cfg.setup) == 2
     assert cfg.setup[0].fields == {"uses": "astral-sh/setup-uv@v6"}
@@ -155,6 +153,41 @@ def test_init_auto_migrates_legacy_toml(
     wf_dir = tmp_path / ".github" / "workflows"
     assert (wf_dir / "tend-ci-fix.yaml").exists()
     assert (wf_dir / "tend-review.yaml").exists()
+
+
+def test_init_dry_run_previews_the_migration_without_performing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`init --dry-run` writes nothing — including the migration.
+
+    The preview run is the one an adopter makes to see what the upgrade would
+    do, so performing the migration there converts the config behind their
+    back and deletes the TOML they were still deciding about.
+    """
+    _write_toml(
+        tmp_path,
+        dedent("""\
+        bot_name = "test-bot"
+        [workflows.ci-fix]
+        watched_workflows = ["ci"]
+    """),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["init", "--dry-run"])
+    assert result.exit_code == 0, result.output
+
+    # Neither config file moved.
+    assert (tmp_path / ".config" / "tend.toml").exists()
+    assert not (tmp_path / ".config" / "tend.yaml").exists()
+    # …and no workflows were written either.
+    assert not (tmp_path / ".github" / "workflows").exists()
+
+    # The preview still reports the migration and renders the workflows the
+    # migrated config would produce — otherwise it previews nothing useful.
+    assert "would migrate" in result.output
+    assert "tend-review.yaml" in result.output
+    assert "test-bot" in result.output
 
 
 def test_init_does_not_touch_yaml_when_both_exist(

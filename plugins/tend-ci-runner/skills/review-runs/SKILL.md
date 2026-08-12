@@ -83,15 +83,18 @@ Also check last month's tracking issue (if it exists) for recent carry-over.
 
 ### Recording below-threshold findings
 
-After analysis, find **the bot's existing comment** on the tracking issue and **append** new findings to it. If no bot comment exists yet, create one. This avoids notification spam from frequent runs.
+After analysis, find **this skill's own evidence comment** on the tracking issue and **append** new findings to it. If it doesn't exist yet, create one. This avoids notification spam from frequent runs.
 
 The guard must run **before any posting path** — append-existing and create-new both publish a comment that needs to embed the real run ID, and a guard placed inside one branch silently no-ops on the other. The first run after a monthly tracking issue is created always takes the create-new branch, so the guard belongs above the branch:
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 BOT_LOGIN=$(gh api user --jq '.login')
+# Match the evidence log by its `## Run <id>` heading, not by "newest bot
+# comment" — other skills (nightly) post their own comments on this issue, and
+# the newest one is often not the log.
 EXISTING_COMMENT=$(gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\")] | last | .id // empty")
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and (.body | test(\"^## Run [0-9]\")))] | last | .id // empty")
 
 # Verify the run heading references this run's $GITHUB_RUN_ID literally —
 # fabricated round numbers produce dead Workflow links, see @review-gates.md.
@@ -102,18 +105,21 @@ grep -qF "$GITHUB_RUN_ID" /tmp/findings.md || {
 }
 
 if [ -n "$EXISTING_COMMENT" ]; then
-  # Append to existing comment if it fits. GitHub rejects bodies over 65536
-  # characters — start a new comment when the existing one is too large.
+  # Append only if the *combined* body fits. GitHub rejects bodies over 65536
+  # characters and the PATCH has no fallback, so a 422 loses the leg's findings
+  # while the run still reports success — size what you are about to POST, not
+  # the existing comment. `wc -c` counts bytes, which is >= the character
+  # count, so 60000 is a conservative bound.
   gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" --jq '.body' > /tmp/existing.md
-  EXISTING_SIZE=$(wc -c < /tmp/existing.md)
-  if [ "$EXISTING_SIZE" -lt 50000 ]; then
-    cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
+  cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
+  if [ "$(wc -c < /tmp/combined.md)" -lt 60000 ]; then
     gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" -X PATCH -F body=@/tmp/combined.md
   else
     gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
   fi
 else
-  # No prior bot comment on this month's tracking issue — create the first one.
+  # No prior evidence-log comment on this month's tracking issue — create the
+  # first one. Other bot comments may exist; they aren't append targets.
   gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
 fi
 ```
@@ -127,20 +133,33 @@ List tend CI runs that completed in the past 24 hours (the cron runs daily):
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-for workflow in $(gh api repos/$REPO/actions/workflows --jq '.workflows[] | select(.name | startswith("tend-")) | .id'); do
-  gh api "repos/$REPO/actions/workflows/$workflow/runs?created=>=$SINCE&status=completed" \
+# Add the repo's extra prefixes from its `running-tend` skill: any workflow
+# running the tend action is in scope, not just the generated `tend-*` ones.
+# Step 2 prices the same list.
+#
+# `--paginate` on both calls. Both endpoints page at 30 by default and return
+# runs newest-first, so without it the census silently covers only the most
+# recent 30 runs per workflow — on a busy repo that is the last hour, not the
+# last 24. Each `--jq` here is a per-element projection, so `--paginate`
+# applying it per page is harmless.
+PREFIXES=("tend-")
+PREFIX_RE="^($(IFS='|'; echo "${PREFIXES[*]}"))"
+for workflow in $(gh api --paginate repos/$REPO/actions/workflows --jq ".workflows[] | select(.name | test(\"$PREFIX_RE\")) | .id"); do
+  gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?created=>=$SINCE&status=completed&per_page=100" \
     --jq '.workflow_runs[] | {databaseId: .id, conclusion, createdAt: .created_at, name: .name}'
 done
 ```
 
 If no runs found, report "no runs to review" and exit.
 
+Report the run census as the count this returns. Cross-check any workflow whose count lands on a round page boundary (30, 100) against `.total_count` before trusting it — a count that equals the page size is the signature of a page that was never followed.
+
 Then, for each run ID from above, pull its jobs and classify them:
 
 - **Long-running** (>30 min): Tend runs typically finish in single-digit minutes. Anything over 30 is worth a look — download session logs in Step 3 and diagnose where the time went (long background waits, push-wait-fix cycles, a stuck tool call).
 - **Near-timeout** (within 90% of the cap): A job that consumed most of its timeout budget is one slow external check away from being killed. These are **structural** failures: one occurrence is enough to act on.
 
-To determine the timeout cap for a workflow, read `timeout-minutes` from the workflow YAML file (`.github/workflows/tend-*.yaml`). Tend's generated workflows do not set `timeout-minutes`, so GitHub's 360-minute default applies unless the adopter has overridden it via `workflows.<name>.jobs.<job>.timeout-minutes` in `.config/tend.yaml`.
+To determine the timeout cap for a workflow, read `timeout-minutes` from that workflow's own file under `.github/workflows/` — the census admits workflows named outside the `tend-` prefix, so don't glob for one. Tend's generated workflows do not set `timeout-minutes`, so GitHub's 360-minute default applies unless the adopter has overridden it via `workflows.<name>.jobs.<job>.timeout-minutes` in `.config/tend.yaml`.
 
 ```bash
 # Flag long-running and near-timeout jobs
@@ -153,6 +172,38 @@ gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
 
 After retrieving the timeout cap from the workflow file, flag any job whose duration exceeded 90% of it as a near-timeout. For the default 360-min cap, that threshold is 324 min.
 
+### Drain stranded triggers
+
+A run that fails files a row on a `tend-outage`-labelled **"Bot temporarily unavailable"** issue, naming the run and the trigger it stranded. Nothing re-runs those triggers — `tend-review` fires only on `pull_request_target`, so a PR whose one review attempt died stays unreviewed until someone pushes. Drain the open issue as part of this sweep.
+
+```bash
+# Usually empty; no open outage issue means nothing stranded.
+OUTAGE=$(gh issue list --state open --label tend-outage --json number,title \
+  --jq '[.[] | select(.title == "Bot temporarily unavailable")][0].number // empty')
+gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
+  | grep -oE 'runs/[0-9]+|\| #[0-9]+'
+```
+
+**Diagnose first.** The nightly enrichment comment names the cause when it can. When it doesn't, read the session log — quota exhaustion surfaces as a `<synthetic>` assistant message:
+
+```bash
+gh run download <run-id> --pattern '*session-logs*' --dir /tmp/outage
+jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/outage/*/*/*.jsonl
+# → You've hit your weekly limit · resets 12am (UTC)
+```
+
+A cluster of these is quota exhaustion, not a bug — don't open a fix PR, and read the reset off the message: a weekly limit can strand most of a day.
+
+**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. Re-running the bot's own failed workflow needs no maintainer approval.
+
+```bash
+gh pr view <n> --json state,headRefOid,reviews \
+  --jq '{state, headRefOid, reviewers: [.reviews[].author.login]}'
+gh run rerun <run-id> --failed
+```
+
+Close the issue once every row is drained (`gh issue close "$OUTAGE"`); one left open folds the next outage into a stale incident.
+
 ## Step 2: Token usage report
 
 Run the token report script to get per-run token counts:
@@ -161,7 +212,7 @@ Run the token report script to get per-run token counts:
 "${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 > /tmp/token-report.json
 ```
 
-Pass additional workflow prefixes to include non-`tend-*` workflows that use the tend action (e.g., `review-reviewers`). Check the repo's `running-tend` skill for the list.
+Pass the same extra prefixes Step 1 censuses, so the two steps agree on what the fleet is — the repo's `running-tend` skill is the source for both (e.g. `review-` for a `review-reviewers` workflow that uses the tend action but isn't named `tend-*`).
 
 Include the totals and per-workflow breakdown in the summary (Step 7). Flag any runs with unusually high token usage for closer inspection in Step 3.
 
@@ -183,22 +234,50 @@ For each analyzed run, compare what the bot did against what happened next. The 
 mention, notifications, weekly, and review-reviewers runs get the same treatment: find the bot's output and check whether it was accepted.
 
 ```bash
-# Example: check if a bot PR was merged or closed
-gh pr list --author "$BOT_LOGIN" --state all --json number,title,state,closedAt \
+# Bot PR dispositions — merged or closed in the window
+gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,state,closedAt \
   --jq '.[] | select(.closedAt > "'$SINCE'")'
 ```
+
+Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, leaving labels and state untouched, is equally a correction, and on an issue-heavy repo it is the most common one. No disposition query can see it. Read the threads where the bot commented in the window and count a contradiction as a finding:
+
+```bash
+# Human replies in the window, on any issue or PR thread. Both endpoints are
+# repo-wide and take `since`, so this is two calls regardless of thread count.
+# `--paginate` is required, not cosmetic: the response is ascending by
+# `created_at`, so a single 100-item page drops the *newest* comments — the
+# ones a fresh correction sits in. The bot's own comments consume that budget
+# before the filter runs, so a busy day truncates with nothing in the output
+# to say so.
+for endpoint in issues pulls; do
+  gh api --paginate "repos/$REPO/$endpoint/comments?since=$SINCE&per_page=100" \
+    --jq '.[] | select(.user.login != "'"$BOT_LOGIN"'")
+          | {created: .created_at, updated: .updated_at, url: .html_url, body: .body[0:300]}'
+done
+```
+
+`since` filters on `updated_at`, not `created_at`, so results include older comments edited inside the window — a comment created days before `$SINCE` is a real hit, not a broken filter. That is worth having (an edited claim is still a correction); the projection reports both timestamps so the reason a row qualified is visible.
+
+Write "no maintainer corrections" into the tracking issue only after that query ran — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate.
 
 ## Step 5: Deduplicate
 
 Before creating issues or PRs, check for existing ones:
 
 ```bash
-gh issue list --state open --json number,title,body
-gh pr list --state open --json number,title,headRefName,body
+gh issue list --state open --limit 200 --json number,title,body
 gh issue list --state closed --json number,title,closedAt --limit 30
+# --state all: a merged PR is the most common way a finding is already fixed
+gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body
+# Bundled-skill defects are filed upstream (Step 6), and the queries above only
+# see this repo — dedup against tend before filing there.
+gh pr list --repo max-sixty/tend --state all --limit 40 --json number,title,state,mergedAt,body
+gh issue list --repo max-sixty/tend --state all --limit 40 --json number,title,body
 ```
 
 Search titles AND bodies for related keywords.
+
+**A fix merged upstream still reproduces here.** The action ref is pinned per release, so a skill fix that merged in `max-sixty/tend` stays dormant on this repo until the next release tags. Observing the bug is therefore not evidence the fix is missing — check tend's merged PRs before filing, or the report is churn on something already landed.
 
 ## Step 6: Act on findings
 

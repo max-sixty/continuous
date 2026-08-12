@@ -194,7 +194,7 @@ describe("refreshActivity", () => {
   // mirrors BOOKKEEPING_LABELS in src/index.ts. Coupling is deliberate: a
   // change to that list is a behaviour change and should break this test.
   const ISSUE_FILTER =
-    "-label:tend-outage -label:review-runs-tracking -label:review-reviewers-tracking -label:nightly-cleanup";
+    "-label:tend-outage -label:tend-rate-limit -label:review-runs-tracking -label:review-reviewers-tracking -label:nightly-cleanup";
 
   it("fans out one Search query per bucket per bot — sums counts, merges + sorts recent, counts this week", async () => {
     const { __test } = await import("../src/index");

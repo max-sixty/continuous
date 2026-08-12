@@ -10,9 +10,9 @@ concurrency:
 
 jobs:
   triage:
-    if: <<fork_guard_prefix(cfg)>>contains(github.event.issue.labels.*.name, 'tend-outage') == false
+    if: <<fork_guard_prefix(cfg)>><<not_bookkeeping()>>
     runs-on: ubuntu-24.04
-    environment: <<tend_environment>>
+<<environment()>>
     permissions:
 <<permissions()>>
     steps:
