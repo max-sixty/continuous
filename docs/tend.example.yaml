@@ -188,8 +188,19 @@ bot_name: my-project-bot
 #       - ~/.cargo/bin
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
-#   keys (proxy routing, CA trust, dummy credentials, PATH) are rejected — use
-#   `sandbox_path` for PATH:
+#   keys are rejected at `init`, and again inside the sandbox so a hand-edited
+#   workflow can't smuggle one past:
+#
+#   - proxy routing — `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `http_proxy`,
+#     `https_proxy`, `no_proxy`
+#   - CA trust — `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`
+#   - dummy credentials — `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`,
+#     `CLAUDE_CODE_OAUTH_TOKEN`
+#   - prompt suppression — `CLAUDE_CODE_REMOTE`
+#   - the sandbox's own locations — `HOME`, `PATH`, `XDG_CONFIG_HOME`,
+#     `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`
+#
+#   Use `sandbox_path` to extend PATH:
 #
 #     sandbox_env:
 #       RUST_BACKTRACE: "1"

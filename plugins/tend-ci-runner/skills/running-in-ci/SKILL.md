@@ -57,6 +57,17 @@ gh issue view <number> --json title,body,comments,state
 
 Read the triggering comment, the PR/issue description, the diff (for PRs), and recent comments to understand the full conversation before taking action.
 
+### A review's inline comments are a separate fetch
+
+Neither `gh pr view --json reviews` nor `GET /pulls/<n>/reviews/<id>` returns a review's inline comments — both hand back the review body alone, with no field signalling that more exists, so a read that stops there looks complete. A one-line review body routinely sits on top of the maintainer's actual instructions. Whenever the trigger names a review ID, fetch them as part of reading context — not only when you already intend to reply inline:
+
+```bash
+gh api "repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/comments" \
+  --jq '.[] | {id, path, line, body}'
+```
+
+An instruction found there constrains the whole response, including any code the reply quotes or carries into another PR.
+
 ### Triggering issue/PR already closed
 
 If the trigger is a comment on an issue or PR and the target is **closed** by the time the job starts, the requested work was likely handled by a sibling run during the queue delay. Long `tend-mention` queues (hours, not minutes) make this common. Before starting work:
@@ -87,6 +98,16 @@ The session is live until the deliverable is **maintainer-visible**: pushed, pos
 Corollary: don't background anything whose output gates the deliverable. If a full test suite or comprehensive lint needs to run before push, run it synchronously and accept the time cost; if it's too slow for the session budget, push first and let CI re-run it. A session that shipped a partial result is recoverable; a session that ended mid-wait with the deliverable on a local branch is not. A targeted compile plus the tests directly exercising the change is enough local confidence to ship — leave the comprehensive matrix to CI.
 
 A pushed fix isn't done until its required checks are terminal — see **CI Monitoring**.
+
+Your closing summary is the session's only durable record of what happened, and it is read later as if it were current. Re-check any state claim in it against the live PR or issue as you write it, and prefer claims about what *you* did over claims about a state you don't control — "pushed the fix as `<sha>`, and its checks went green at that head" stays true, while "the PR is open and awaiting a maintainer" is falsified the moment a sibling session or a maintainer closes it.
+
+## Filing Issues in This Repo
+
+An issue here is not a note to a maintainer — where `tend-triage` is enabled (the default), it fires on `issues` and does the work. Filing one for a fix you have already scoped hands your own analysis to a second agent run, which re-derives it from your issue body and opens the PR minutes later at full session cost, on a thread nobody needed.
+
+So if you can open the PR in this run, open the PR. Reserve an issue for what you genuinely can't finish here: a problem too large or ambiguous to fix, one that needs a maintainer decision, or one whose verification is out of reach from CI. Bookkeeping issues are a separate case, not this trade-off: `ci-fix`'s transient-diagnosis tracker carries `tend-outage`, which the generated `tend-triage` and `tend-mention` `if:` skip, so no conversion run fires.
+
+This governs your own repo only; filing into another repo follows the section below.
 
 ## Filing Issues in Other Repos
 
@@ -137,7 +158,7 @@ When asked to create a PR, use `gh pr create` directly.
 Before creating a branch or PR, check for existing work:
 
 ```bash
-gh pr list --state open --json number,title,headRefName --jq '.[] | "#\(.number) [\(.headRefName)]: \(.title)"'
+gh pr list --state open --limit 200 --json number,title,headRefName --jq '.[] | "#\(.number) [\(.headRefName)]: \(.title)"'
 git branch -r --list 'origin/fix/*'
 ```
 
@@ -162,7 +183,7 @@ A separate mention on a different issue/PR can trigger a concurrent run asking f
 
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
-gh pr list --state all --author "$BOT_LOGIN" --limit 30 \
+gh pr list --state all --author "$BOT_LOGIN" --limit 200 \
   --json number,title,state,mergedAt,headRefName,createdAt
 ```
 
@@ -200,6 +221,22 @@ STATE=$(gh pr view <N> --json state --jq '.state')
 ```
 
 If the PR is merged, the work is superseded. Comment if a real gap remains; do not push to the now-orphan branch. After merge, `gh pr view <N> --json headRefOid` returns the SHA at merge time and never advances — polling it for a new push is a guaranteed deadlock.
+
+### Re-check the head SHA before the expensive verify, not just before the push
+
+A PR another tend session opened keeps that session alive polling its checks, and closing a red gate is exactly the follow-up it stays alive for — so a sibling commit can land on the branch while you edit it. Find that out at `git push` and the suite you just ran was scoped against a stale head, so the whole verify cycle is paid again after the rebase. Record the head before editing and re-check it immediately before each expensive step — full test suite, coverage or snapshot regeneration, a long build:
+
+```bash
+HEAD_OID=$(gh pr view <N> --json headRefOid --jq '.headRefOid')
+# ...edits...
+read -r NOW_OID NOW_STATE < <(gh pr view <N> --json headRefOid,state --jq '"\(.headRefOid) \(.state)"')
+[ "$NOW_OID" = "$HEAD_OID" ] && [ "$NOW_STATE" = "OPEN" ] \
+  || echo "sibling pushed or PR closed — fetch and re-scope before verifying"
+```
+
+`state` rides along on the same call because a merged or closed PR freezes `headRefOid` at its merge-time value (see above) — the OID comparison alone passes and the expensive step runs on work that is already superseded. On a non-`OPEN` state, stop per the subsection above rather than re-scoping.
+
+If it moved, `git fetch` and read the new commits before verifying: drop whatever the sibling already landed, rebase what's left, and verify once against the new head. Expect the overlap rather than treating it as a surprise — a reviewer and a coverage gate reading the same new code ask for the same missing test. The runs API can't substitute for this check: a `schedule` or `repository_dispatch` run reports `head_branch: main`, not the branch it is editing, so a live sibling is invisible there.
 
 ## Merging Upstream into PR Branches
 
@@ -308,6 +345,12 @@ gh api "repos/{owner}/{repo}/actions/runs?branch=main&status=completed&per_page=
 
 If you cannot verify, say "I haven't confirmed whether these failures are pre-existing."
 
+### A review that lands while you poll is not yours to action
+
+`tend-review` fires on any PR you open, so its review often arrives while you are still polling that PR's checks. Don't act on it. `tend-mention` is dispatched on `pull_request_review` for every PR the bot authored, and that dispatch runs whether or not you also respond — so a session that starts editing is racing a run already making the same edits and running the same suite. The loser only finds out at `git push`, discards its commit, and the whole fix-and-verify cycle is paid twice for one review.
+
+Poll your checks to terminal, do the follow-up you were gated on, and exit; name the outstanding review in your summary. This covers a review that arrives *while* you work — a session dispatched to answer a specific review owns that review and actions it normally.
+
 ### Polling `gh run rerun --failed`
 
 After `gh run rerun <run-id> --failed`, poll the rerun jobs directly. The parent run's `.status` stays `in_progress` until every sibling job finishes, including unrelated long-running ones, and the `pending()` recipe above also doesn't help — sibling check-runs on the head SHA still appear pending. Polling specific job IDs is the only fix.
@@ -333,13 +376,24 @@ pending_jobs() {
   done
   echo "$n"
 }
+[ -n "$JOB_IDS" ] || { echo "No rerun attempt surfaced — jobs were not re-queued"; exit 1; }
 for i in $(seq 1 9); do
-  [ "$(pending_jobs)" -eq 0 ] && break
+  if [ "$(pending_jobs)" -eq 0 ]; then
+    # `completed` is not `success`. Print each conclusion — a rerun that failed
+    # again is the case the follow-up turns on, and the loop above only ever
+    # asked whether the jobs stopped.
+    for id in $JOB_IDS; do
+      gh api "repos/$REPO/actions/jobs/$id" --jq '"\(.conclusion)\t\(.name)"'
+    done
+    exit 0
+  fi
   sleep 60
 done
+echo "Rerun jobs still running after 9 minutes"
+exit 1
 ```
 
-As with the CI Monitoring loop above, invoke this Bash call with `timeout: 600000` (10 min) — the default 2-min Bash timeout would kill the loop early, and the 9-iteration cap is sized to fit inside the harness's 10-min Bash maximum.
+As with the CI Monitoring loop above, invoke this Bash call with `timeout: 600000` (10 min) — the default 2-min Bash timeout would kill the loop early, and the 9-iteration cap is sized to fit inside the harness's 10-min Bash maximum. On the cap, treat it as the whole poll budget — don't re-enter — and report the still-running jobs as unverified.
 
 ## Replying to Comments
 
@@ -410,6 +464,20 @@ If any prior entry — from a human or another tend workflow — already address
 If the author resolved the issue, acknowledge it rather than post stale analysis. If new information contradicts the findings, update before posting.
 
 **A new entry may be a directive, not a duplicate.** The re-fetch above guards against redundant posts, but a comment that arrived while you worked can also be a maintainer follow-up that *changes the work* — a second instruction, a correction, a narrowed scope. The window is widest after a long edit→commit→push sequence: minutes pass between the session-start read and the post, and that gap is exactly when a maintainer adds to the thread. So the re-fetch isn't only a dedup check — read what landed, and if it's a new directive, fold it into the same run rather than shipping a reply (or a commit) against the stale instruction. Treating the task as done is itself a kind of post: re-fetch before ending the turn, not only before commenting.
+
+### A terminal action collides with branch state, not comments
+
+The re-fetch above counts comments and reviews, because that is what a duplicate *post* collides with. Closing a PR, reverting it, or force-pushing over it collides with **commits** instead, and a sibling session's pushed, CI-green commit is invisible to all three checks a session typically runs first: a comments-and-reviews re-fetch, the `state == OPEN` check under **Re-check PR state before pushing a follow-up commit**, and a re-read of the review bodies that prompted the action. `--delete-branch` turns that blind spot destructive — the branch ref goes and the commit survives only through the PR ref.
+
+So before `gh pr close`, a revert, or a force-push, re-read the branch itself rather than the thread:
+
+```bash
+gh pr view <N> --json headRefOid,commits,comments,reviews \
+  --jq '{head: .headRefOid, commits: [.commits[].oid],
+         comments: (.comments | length), reviews: (.reviews | length)}'
+```
+
+If the head moved past the SHA you last pushed, a sibling acted on this PR while you waited — read its commits before deciding. Usually it applied one of the remedies you were weighing, which changes what the close is *for*, not whether to close: a PR whose premise a review invalidated is still yours to withdraw, and the session holding the PR is the one that can. Say what the sibling landed and why the close stands anyway, so the thread reads as one decision instead of two contradictory ones, and drop `--delete-branch` so that work stays reachable.
 
 ### Dedup check for inline review comment replies
 
@@ -579,6 +647,8 @@ If you can't find source evidence for a specific detail, say so ("I'm not sure o
 
 **`--jq` projections must include the ID when downstream URLs cite individual items.** Composing `actions/runs/<id>`, `#issuecomment-<id>`, or `pull/<n>` URLs from `gh run list` / `gh api .../comments` / `gh pr list` results requires the ID field in the projection (`databaseId` for runs, `id` for comments, `number` for PRs/issues). If the projection kept only timestamps, titles, or bodies, the bot composes the URL from what it has and fabricates the missing ID — the link 404s. Re-query with the ID field rather than guessing.
 
+**`gh` list commands truncate silently — pass `--limit` whenever the result set is the answer.** `gh issue list`, `gh pr list`, and `gh search` return 30 items unless told otherwise; `gh run list` returns 20. Nothing in the output says it truncated. Two shapes go wrong: a dedup scan misses the existing issue or PR sitting past the cap and opens a duplicate, and a survey ("check every open issue") reports complete coverage of the rows it happened to see. A count that reads exactly the default across repeated measurements is the signature — that's the cap, not a stable value. Set an explicit `--limit` above the plausible ceiling on any query used to dedup, survey, or count. Client-side filtering inside `--jq` is the worst variant: the filter hides the truncation, so a capped result reads as a legitimately short one.
+
 **"Likely" is a stop-sign.** A hedge in a user-facing claim — "likely works", "probably parses as", "should behave like", "I think" — means it rests on an unverified guess. Two options: verify and replace the hedge with the answer, or hedge explicitly ("I haven't tested this — would appreciate if you can confirm") and don't dress up the guess as analysis. The shape is the tell, not the exact words: posting an unverified guess as confident-sounding analysis is the hallucination that erodes trust the fastest.
 
 **Never ship literal placeholders in user-visible content.** Strings like `<PLACEHOLDER>`, `PR #PLACEHOLDER`, `<SHA>`, `TBD`, `XXX`, or `<TODO(fill)>` in an issue body, PR body, or comment are corruption: a deferred substitution that never ran. They survive into the rendered output and read as broken. When a multi-step ask references an artifact that doesn't yet exist ("file an issue that references the PR I'm about to file"), sequence the work so the referenced artifact exists before the referencing body is composed: create the PR → read its number → compose the issue with the number filled in → file the issue. If the cross-reference can't be resolved before posting (e.g. the artifact is out of scope or deferred), omit it or rephrase ("a follow-up PR will…") rather than emit a placeholder. Before any `gh issue create`, `gh pr create`, or `gh ... comment --body-file`, grep the body file for `PLACEHOLDER`, `<SHA>`, `<TODO`, `TBD`, `XXX` and refuse to post if any match. A session that times out mid-sequence leaves an unsubstituted placeholder permanently visible — pre-substitute, don't post-substitute.
@@ -644,6 +714,15 @@ Good: Same question. Cloned cmux's source repo → grepped the CLI parser for `l
 
 </good>
 </example>
+
+**Path 1 runs against the live repo.** Verifying a skill's own recipe is the common case, and those recipes write: `gh issue close`, `gh pr comment`, `git push`. Never extract a block programmatically to run it — not by position (`awk` on the Nth fence, `sed` on a line range), and not by anchor either: both hand you a block you haven't read, and the ordinal additionally moves with every edit to the file, so what runs isn't even the block you meant to test. Read the file, then run the commands directly. Run the read half and stop before the pipe into the write:
+
+```bash
+gh issue list --state open --author '@me' --search '"..." in:title' --json number --jq '.[].number'
+# ...and read that, rather than piping it into `xargs gh issue close`.
+```
+
+If the write is the part in question, point it at a scratch object you own. A wrong write is only partly recoverable: reopening an issue leaves the close in its timeline, and a deleted comment has already fired its `issue_comment` event, so any workflow it triggered ran and is still in the run list.
 
 ### Who to ask when you can't do it yourself
 
@@ -722,7 +801,7 @@ When the correction identifies a gap or bug in a **bundled** skill — the same 
 2. **Check for an existing open PR against the same skill.** Dedup by the target file, not by title — title conventions vary per repo:
    ```bash
    BOT_LOGIN=$(gh api user --jq '.login')
-   gh pr list --state open --author "$BOT_LOGIN" --json number,title,headRefName,files \
+   gh pr list --state open --author "$BOT_LOGIN" --limit 200 --json number,title,headRefName,files \
      --jq '.[] | select([.files[].path] | index(".claude/skills/running-tend/SKILL.md"))'
    ```
    If one is open, add to it instead of opening a second.

@@ -207,8 +207,11 @@ jobs:
           # comments on purpose: the pull_request_review *submission* kind is
           # deliberately left out, since a review the bot leaves on its own PR
           # is its reviewer role (the prompt is told to action it), not a
-          # self-loop. The only self-review skips are the terminal empty-body
-          # APPROVED gate and the synthetic reply container, both below.
+          # self-loop. The three self-review skips below are author-keyed, but
+          # each is also narrowed to a case that leaves this run nothing to do:
+          # the terminal empty-body APPROVED gate, the synthetic reply
+          # container, and a bot review on a PR the bot did not author. None of
+          # them licenses a blanket self-review skip.
           if { [ "$KIND" = "issue_comment" ] || [ "$KIND" = "pull_request_review_comment" ]; } \
              && [ "$COMMENT_AUTHOR" = "<<cfg.bot_name>>" ]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -289,6 +292,23 @@ jobs:
               echo "should_run=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+
+            # Somebody else's content-free approval is terminal too. The gate
+            # above is author-keyed, so a human's bare APPROVED falls through to
+            # the PR-author short-circuit (on a bot-authored PR) or to
+            # BOT_REVIEWS (on one the bot has reviewed) and starts a session
+            # whose only possible outcome is a silent exit: an approval with no
+            # body and no inline comments asks for nothing, and the bot cannot
+            # merge on its own. Unlike the bot-authored gates this one requires
+            # `$INLINE` to be empty rather than reply-only — an approval whose
+            # nits live inline is a request to the PR's author, which on a
+            # bot-authored PR is a role the bot has to act in.
+            if [ "$REVIEW_STATE" = "approved" ] \
+               && [ -z "$COMMENT_BODY" ] \
+               && [ -z "$INLINE" ]; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
           # Non-mention: check bot engagement
@@ -327,6 +347,26 @@ jobs:
           if [ "$PR_AUTHOR" = "<<cfg.bot_name>>" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "reason=participation" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # A review the bot leaves on someone else's PR leaves this run
+          # nothing to do: whatever the review warranted, the tend-review
+          # session that submitted it has already done — left the findings for
+          # a human author to act on (pushing to their branch unbidden is
+          # barred by conduct rules), or, on a dependency-bot PR where no
+          # author will act, pushed the fix itself. The BOT_REVIEWS heuristic
+          # below counts this very review, so without this gate the session
+          # always starts and always exits silently. Keyed on author alone —
+          # the APPROVED + empty-body gate above is the same shape narrowed to
+          # its one terminal leg, and reusing those clauses here would let every
+          # bodied COMMENTED review through. Placement carries the rest of the
+          # design: *after* the PR_AUTHOR short-circuit, which has already
+          # exited when the PR is the bot's own, so the reviewer-to-author
+          # handoff on a bot PR still fires; *after* the body and inline
+          # @-mention scans, so an explicit summons still wins.
+          if [ "$KIND" = "pull_request_review" ] \
+             && [ "$REVIEW_AUTHOR" = "<<cfg.bot_name>>" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
           # Captured, not counted — see the note on the issue-comment lookup above.
@@ -419,7 +459,7 @@ jobs:
           # the API record — the dispatch payload never carries one to spoof.
           EVENT_TS: ${{ github.event.comment.updated_at || needs.verify.outputs.ts || github.event.issue.updated_at }}
 
-<<agent_step(cfg, prompt_body)>>
+<<agent_step(cfg, prompt_body)>><<restore_local_actions(local_actions)>>
 
       - name: Remove eyes reaction
         if: |

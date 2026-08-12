@@ -122,6 +122,7 @@ runs:
     # and runs the script (reached via ../shared/steps, since this action is
     # one level deep).
     - name: Security preflight
+      id: security
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/security-preflight.sh"
       env:
@@ -605,8 +606,27 @@ runs:
           "*Cost at API list prices — a large multiple of the effective rate on Claude Code subscriptions.*"
         ' <<< "$USAGE" >> "$GITHUB_STEP_SUMMARY"
 
+    # Gate on the job being red, not on the agent step specifically. A dozen
+    # steps run before `claude` — the rate-limit preflight, auth validation,
+    # the proxy and sandbox build, the adopter's `sandbox_setup:` — and any of
+    # them failing strands the same work, so each needs to reach the outage
+    # tracker. Keying on `steps.claude.outcome` meant a pre-agent failure went
+    # out as a red run and nothing else; a rate-limit preflight abort held
+    # every workflow on this repo for a full UTC day without filing a thing.
+    #
+    # The security preflight is the one exclusion, and what carves it out is
+    # that reporting would have the bot write to the repo (`gh issue create`,
+    # and `gh issue close` on the reconcile path) with its PAT immediately
+    # after the security gate refused to let it operate there. Its failure is
+    # also persistent — red until a human fixes branch protection, so an issue
+    # titled "Bot temporarily unavailable" would collect a row per trigger —
+    # but that argument doesn't single it out: `Validate auth configured` and
+    # the adopter's `sandbox_setup:` fail the same way and stay in. Bounding
+    # that repeated append belongs in `report-failure.sh`, where it covers
+    # every such step at once (#859); enumerating more step ids here would go
+    # stale as steps move.
     - name: Report failure
-      if: failure() && steps.claude.outcome == 'failure'
+      if: failure() && steps.security.outcome != 'failure'
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
       env:

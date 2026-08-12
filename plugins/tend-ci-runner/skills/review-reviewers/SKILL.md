@@ -218,6 +218,8 @@ The script discovers `tend-*` workflows by default. Pass additional prefixes as 
 
 If empty, record the run as all-clear per "Recording below-threshold findings" above, then skip to Step 6.
 
+If the script printed a `WARNING:` on stderr, the list is known-incomplete — the window was clamped, no anchor was found, or a workflow hit the fetch limit. Record a coverage gap naming the missing span instead of an all-clear, whether or not the list came back empty; the next run's floor advances past that span regardless, so an unrecorded gap is never revisited.
+
 ## Step 2: Survey outcomes via cheap subagent
 
 Spawn a cheap subagent to check outcomes across all runs from Step 1. The subagent does the token-heavy work of mapping runs to PRs/issues and checking acceptance signals.
@@ -362,6 +364,26 @@ Review the subagent's summary, and verify any actor attribution before it enters
 
 For runs with negative outcome signals (or suspicious lack of output), spawn another cheap subagent to download and inspect the specific session logs.
 
+**Also escalate whenever a finding will name *which run* produced an output.** A timestamp falling inside a run's start/end span does not attribute the output to it: several runs are live at once — a long scheduled run that opened the PR, the event-triggered handle answering a review on it, a racing sibling — and any of them can post. Attributing by wall-clock inclusion credits the wrong run, and the run ID then ships in a public comment. Confirm from the posting run's own log before a run ID enters a finding.
+
+Grep for the write *shape*, not the endpoint — `/comments` and `/reviews` are the GET paths too, and reading the thread is the first thing nearly every run does. Don't truncate the tool input: a `git push` or `gh issue comment` often sits hundreds of characters into a longer command. Scan every `*.jsonl` under the run directory, since a subagent posts from its own `subagents/agent-*.jsonl`.
+
+```bash
+WRITES='gh (pr|issue) (comment|review|create|edit)|--method (POST|PATCH|PUT)|-X (POST|PATCH|PUT)|comments/[0-9]+/replies|git push|resolveReviewThread'
+
+# Claude logs
+for f in $(find /tmp/session-logs/<run-id> -name '*.jsonl'); do
+  jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | "\(.name): \(.input | tostring)"' "$f"
+done | grep -E "$WRITES"
+
+# Codex logs — same idea against the rollout schema (/install-tend:debug-tend-run)
+for f in $(find /tmp/session-logs/<run-id> -name '*.jsonl'); do
+  jq -r 'select(.payload.type == "function_call") | "\(.payload.name): \(.payload.arguments)"' "$f"
+done | grep -E "$WRITES"
+```
+
+The run whose log contains the posting call is the author. Presence is the strong signal; before concluding a run posted *nothing*, confirm you ran the variant matching the artifact you downloaded — the wrong one returns empty regardless of what the run did — and that the write you're chasing has a shape `WRITES` covers.
+
 Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 
 > Investigate session logs for run <run-id> on `$ARGUMENTS`.
@@ -369,6 +391,8 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > Download: `gh run download <run-id> -R $ARGUMENTS --pattern 'claude-session-logs*' --pattern 'codex-session-logs*' --dir /tmp/session-logs/<run-id>/` (both patterns are passed because the artifact prefix depends on the target repo's harness — Claude uploads `claude-session-logs*`, Codex uploads `codex-session-logs*`)
 >
 > The concerning outcome was: <signal from Step 2>.
+>
+> If your answer will name **which run produced an output**, say which output and confirm it from the log before answering — run <paste the `WRITES` recipe above> over every `*.jsonl` under the download directory, and quote the matching tool call verbatim rather than summarising it. Don't use the truncated query below for this: the write often sits hundreds of characters into a longer command.
 >
 > **JSONL parsing** — each line has a `type` field (`user`, `assistant`, `system`). Key queries:
 > ```
@@ -394,8 +418,8 @@ Evaluate the subagent's diagnosis against the repo-specific guidance from Step 1
 Before creating issues or PRs, check exhaustively for existing ones:
 
 ```bash
-gh issue list --state open --label claude-behavior --json number,title,body
-gh issue list --state open --json number,title,body  # also check unlabeled issues
+gh issue list --state open --label claude-behavior --limit 200 --json number,title,body
+gh issue list --state open --limit 200 --json number,title,body  # also check unlabeled issues
 gh issue list --state closed --label claude-behavior --json number,title,closedAt --limit 30
 # --state all: a merged PR is the most common way a finding is already fixed
 gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body

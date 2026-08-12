@@ -51,6 +51,17 @@ run_issue_ref() {
   printf '%s' "${num:+#${num}}"
 }
 
+# The Run cell's link to this run, as it appears in a row. One definition
+# because two things have to agree on it exactly: the row `run_issue_row`
+# writes, and the dedup that recognises a row already recorded for this run.
+# Whole anchor rather than the bare URL, so a human comment merely mentioning
+# the run can't be mistaken for a generated row, and a longer run id carrying
+# this one as a prefix can't match it.
+run_issue_anchor() {
+  printf '[workflow run](%s/%s/actions/runs/%s)' \
+    "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+}
+
 # One row per incident, in the same table format whether it seeds an issue
 # body (first one) or is appended as a comment (every later one), so both
 # render identically. Stamps the time when called — capture it once per run.
@@ -60,7 +71,7 @@ run_issue_row() {
   printf '%s\n%s\n%s' \
     "| When | Run | Trigger |" \
     "|------|-----|---------|" \
-    "| $(date -u +%Y-%m-%dT%H:%M:%SZ) | [workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) | ${ref:-N/A} |"
+    "| $(date -u +%Y-%m-%dT%H:%M:%SZ) | $(run_issue_anchor) | ${ref:-N/A} |"
 }
 
 # Every issue this bot filed under one title carrying one label, lowest number
@@ -198,14 +209,15 @@ run_issue_create_and_reconcile() {
   # row would just duplicate it, differing only in its timestamp. The
   # cross-workflow race has distinct run ids, so it still carries over.
   # Anchor on the generated row's run link rather than the bare id, so a human
-  # comment mentioning the run cannot suppress the row. Read into a variable
-  # rather than piped to grep, which would close the pipe under `pipefail` and
-  # could report a match as a read failure.
-  local seen run_url
-  run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+  # comment mentioning the run cannot suppress the row — through
+  # `run_issue_anchor`, the one definition `run_issue_row` writes, so the row
+  # and the matcher cannot drift apart. Read into a variable rather than piped
+  # to grep, which would close the pipe under `pipefail` and could report a
+  # match as a read failure.
+  local seen
   seen=$(gh issue view "$keep" --json body,comments \
     --jq '.body + "\n" + ([.comments[].body] | join("\n"))' 2>/dev/null || true)
-  if ! grep -qF "[workflow run](${run_url})" <<< "$seen"; then
+  if ! grep -qF "$(run_issue_anchor)" <<< "$seen"; then
     printf '%s\n' "$row" | gh issue comment "$keep" -F - >&2 || true
   fi
 

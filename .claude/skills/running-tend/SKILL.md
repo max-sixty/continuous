@@ -38,9 +38,13 @@ Pass extra prefixes when running token reports or listing runs so these
 workflows are included:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" 24 "review-"
+"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "${HOURS:-24}" "review-"
 TARGET_REPO=max-sixty/tend "${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh" "tend-" "review-"
 ```
+
+Under `review-runs`, `$HOURS` is the lookback derived from its Step 1 anchor —
+passing a literal `24` there reopens the window gap that anchor closes. The
+default keeps an ad-hoc invocation working.
 
 ## Labels
 
@@ -156,7 +160,7 @@ both.
 | `claude_version` | `claude/action.yaml` | track latest |
 | `mitmproxy_version` | `claude/action.yaml` | track latest |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml` | keep it on its prerelease line; bump only to a release confirmed to run under `codex exec` |
+| `codex_version` | `codex/action.yaml` | track latest; the surface job confirms the bump |
 
 ```bash
 yq '.inputs.claude_version.default' claude/action.yaml
@@ -164,6 +168,9 @@ npm view @anthropic-ai/claude-code dist-tags.latest
 
 yq '.inputs.mitmproxy_version.default' claude/action.yaml
 curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
+
+yq '.inputs.codex_version.default' codex/action.yaml
+npm view @openai/codex dist-tags.latest
 ```
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
@@ -179,6 +186,13 @@ addon-related in its CHANGELOG against the `mitmdump` flags in
 only launches that mitmproxy and CI smokes the two together, so it needs no
 release stream of its own; move both in one PR, at whatever uv is latest then
 (`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
+
+Bump `codex_version` to `latest`; drop to `alpha` only for a fix not yet
+released. CI's `test-codex-surface` job installs whatever is pinned and asserts
+the CLI surface the action depends on, so a bump that breaks it fails on its own
+PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live agent session stays
+unverified — skim the codex CHANGELOG across the bump for model availability,
+sandbox behavior, and `--output-last-message`, and note what you find in the PR.
 
 ### `uses:` refs
 

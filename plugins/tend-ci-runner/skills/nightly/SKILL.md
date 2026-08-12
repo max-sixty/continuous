@@ -76,15 +76,29 @@ a one-line reason) plus a `_Last refreshed: <YYYY-MM-DD>_` footer. Updates:
 
 Find conflicted PRs from this bot and from upstream dependency bots:
 
+Don't filter `gh pr list --json mergeable` on `== "CONFLICTING"`. `mergeable` is computed lazily: the first query after `main` moves returns `UNKNOWN` and only *enqueues* the computation, so a cold read reports a conflicted PR as clean. There is no blocking read — [the REST docs](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request) prescribe resubmitting the request until the value settles. Test-merge locally instead: `git merge-tree` answers the same question synchronously, in-process, with no retry loop.
+
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
+git fetch --quiet origin main
 for author in "$BOT_LOGIN" app/dependabot app/renovate; do
-  gh pr list --author "$author" --json number,title,mergeable,headRefName,author \
-    --jq '.[] | select(.mergeable == "CONFLICTING")'
+  # A failed query and "no open PRs" both print nothing; only the first is a
+  # reason to stop. --limit 100 because the default 30 truncates silently.
+  prs=$(gh pr list --author "$author" --limit 100 --json number,title) \
+    || { echo "query for $author never landed — conflicts unverified"; continue; }
+  # One fetch for every head, forced because bot branches get force-pushed.
+  mapfile -t refs < <(jq -r '.[].number | "refs/pull/\(.)/head:refs/tend/pr/\(.)"' <<<"$prs")
+  [ "${#refs[@]}" -eq 0 ] && continue
+  git fetch --quiet --force origin "${refs[@]}"
+  # Conflict, missing ref, unreadable ref: all non-zero, all need a look.
+  jq -r '.[] | [.number, .title] | @tsv' <<<"$prs" | while IFS=$'\t' read -r n title; do
+    git merge-tree --write-tree origin/main "refs/tend/pr/$n" >/dev/null \
+      || echo "needs a rebase: $author #$n $title"
+  done
 done
 ```
 
-Skip the rest of this step if none of the queries return anything.
+Skip the rest of this step only when every query landed and nothing printed.
 
 ### Upstream dependency bots: trigger the bot's own rebase
 
@@ -151,8 +165,8 @@ Read the project's CLAUDE.md before reviewing. Apply the review checklist below 
 ## Step 5: Check existing issues
 
 ```bash
-gh issue list --state open --json number,title
-gh pr list --state open --json number,title,headRefName
+gh issue list --state open --limit 200 --json number,title
+gh pr list --state open --limit 200 --json number,title,headRefName
 ```
 
 For each open issue, check whether recent commits or the current codebase state already resolve it. If resolved, comment with the evidence (commits, CI runs, or code state that resolves the issue). Close the issue with `gh issue close` when:
@@ -312,15 +326,15 @@ git worktree remove "/tmp/tend-update-workflows" --force
 Before acting on findings, check for duplicates and existing work:
 
 ```bash
-gh issue list --state open --json number,title
-gh pr list --state open --json number,title,headRefName
+gh issue list --state open --limit 200 --json number,title
+gh pr list --state open --limit 200 --json number,title,headRefName
 ```
 
 The default action is a PR, not an issue. If there's a plausible fix, make it — explain uncertainty in the PR description.
 
 For each finding:
 
-1. **Create a PR** — branch, fix, run full test suite, commit, push, create PR, poll CI. **Every bug fix must include a regression test that would have failed before the fix.** If a test is not feasible (e.g., pure documentation changes), note why in the PR description. When uncertain about the approach, explain the trade-offs in the description.
+1. **Create a PR** — branch, fix, run full test suite, commit, push, create PR, then poll CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`. Your job ends when those checks are terminal: a review posted on the PR while you poll belongs to `tend-mention`. **Every bug fix must include a regression test that would have failed before the fix.** If a test is not feasible (e.g., pure documentation changes), note why in the PR description. When uncertain about the approach, explain the trade-offs in the description.
 2. **Create an issue only when there's no obvious fix** — design questions, problems needing maintainer input, or findings requiring investigation beyond what the survey can provide.
 
 ## Optional steps
