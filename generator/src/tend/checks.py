@@ -702,14 +702,16 @@ class _WorkflowFacts:
     """What one workflow file says about the repo's credential surface."""
 
     path: str
-    steerable: frozenset[str]  # bot-steerable triggers it carries
-    call_only: bool  # `workflow_call` is the only thing that starts it
-    calls: frozenset[str]  # local reusable workflows this one invokes
-    environments: frozenset[str]  # environments its jobs deploy to
-    oidc_environments: frozenset[str]  # …of those, ones a job mints OIDC in
-    oidc_without_environment: frozenset[str]  # job ids minting OIDC ungated
-    filed_deployments: frozenset[str]  # job ids naming tend that file a record
-    unresolved: tuple[str, ...]
+    steerable: frozenset[str] = frozenset()  # bot-steerable triggers it carries
+    call_only: bool = False  # `workflow_call` is the only thing that starts it
+    calls: frozenset[str] = frozenset()  # local reusable workflows it invokes
+    external_calls: frozenset[str] = frozenset()  # job ids calling out of the repo
+    external_oidc: frozenset[str] = frozenset()  # …of those, ones granting OIDC
+    environments: frozenset[str] = frozenset()  # environments its jobs deploy to
+    oidc_environments: frozenset[str] = frozenset()  # …of those, ones minting OIDC
+    oidc_without_environment: frozenset[str] = frozenset()  # job ids minting ungated
+    filed_deployments: frozenset[str] = frozenset()  # job ids naming tend that file
+    unresolved: tuple[str, ...] = ()
 
 
 def _permissions_grant_oidc(permissions: object) -> bool:
@@ -726,9 +728,11 @@ def _called_workflow(uses: str, repo: str) -> str | None:
 
     Two spellings reach the same file: the relative form, and the
     `owner/repo/.github/workflows/x.yaml@ref` form a repo may use on its own
-    workflow to pin the ref it runs. Only a call landing in this repo is
-    followed — another repo's reusable workflow runs against that repo's
-    environments, not this one's.
+    workflow to pin the ref it runs. A call that leaves the repo returns None,
+    not because it deploys elsewhere — the callee's jobs deploy to *this*
+    repo's environments (see `_effective_triggers`) — but because its file
+    cannot be read from here, which `_credential_surface` reports as unread
+    rather than passes over.
     """
     relative = "./.github/workflows/"
     if uses.startswith(relative):
@@ -747,17 +751,12 @@ def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
     — a path tend cannot see is not a path tend can call gated.
     """
     unparsable = (f"{path} could not be parsed as a workflow",)
-    empty = frozenset[str]()
     try:
         data = YAML(typ="safe").load(io.StringIO(text))
     except (YAMLError, ValueError):
-        return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, empty, unparsable
-        )
+        return _WorkflowFacts(path, unresolved=unparsable)
     if not isinstance(data, dict):
-        return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, empty, unparsable
-        )
+        return _WorkflowFacts(path, unresolved=unparsable)
 
     # YAML 1.1 documents (`%YAML 1.1`) turn the `on:` key into the boolean
     # True; 1.2, which ruamel's safe loader defaults to, keeps it a string.
@@ -779,6 +778,8 @@ def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
     jobs = jobs if isinstance(jobs, dict) else {}
 
     calls: set[str] = set()
+    external_calls: set[str] = set()
+    external_oidc: set[str] = set()
     environments: set[str] = set()
     oidc_environments: set[str] = set()
     oidc_without_environment: set[str] = set()
@@ -788,17 +789,25 @@ def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
     for job_id, job in jobs.items():
         if not isinstance(job, dict):
             continue
+        permissions = job.get("permissions", workflow_permissions)
+        oidc = _permissions_grant_oidc(permissions)
+
         uses = job.get("uses")
         if uses is not None:
             # A job that calls another workflow declares no environment of its
-            # own — the called workflow's jobs do, and those are parsed there.
-            # Its `permissions:` only caps what the callee may request.
+            # own — the called workflow's jobs do. Those are parsed here when
+            # the call lands in this repo, and are unreadable when it doesn't,
+            # which is what `external_calls` records. Its `permissions:` only
+            # cap what the callee may request, so a callee mints OIDC on this
+            # repo's behalf exactly when the calling job grants it.
             called = _called_workflow(uses, repo) if isinstance(uses, str) else None
             if called is not None:
                 calls.add(called)
+            else:
+                external_calls.add(str(job_id))
+                if oidc:
+                    external_oidc.add(str(job_id))
             continue
-        permissions = job.get("permissions", workflow_permissions)
-        oidc = _permissions_grant_oidc(permissions)
 
         declared = job.get("environment")
         environment = declared
@@ -830,6 +839,8 @@ def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
         steerable=frozenset(steerable),
         call_only=triggers == {"workflow_call"},
         calls=frozenset(calls),
+        external_calls=frozenset(external_calls),
+        external_oidc=frozenset(external_oidc),
         environments=frozenset(environments),
         oidc_environments=frozenset(oidc_environments),
         oidc_without_environment=frozenset(oidc_without_environment),
@@ -846,14 +857,23 @@ def _effective_triggers(
     `workflow_call` on its own says only that a workflow is callable; what can
     start it is whatever starts its callers. Callers within the repo are
     followed to a fixpoint, and a workflow no such chain reaches is returned as
-    unreached — its callers may live in another repo, which this cannot
-    enumerate.
+    unreached — the only thing left that can start it is a caller in another
+    repo.
 
     A workflow carrying triggers of its own anchors the chain: `workflow_call`
     widens the way in rather than replacing it, so its own `on:` starts it here
     whatever else calls it. A callable workflow is then reached when one of its
     callers is, and unreached when every route to it runs through a workflow
     only an outside caller can start.
+
+    An unreached workflow spends nothing of this repo's, a point GitHub's
+    reusable-workflow docs leave unsaid: a run belongs to the repo that starts
+    it, down into any workflow it calls elsewhere. The secrets, the environment
+    a callee's `environment:` names, the deployment record and the OIDC `sub`
+    are the caller's throughout, and the caller's gate on that environment is
+    what holds the run. So the fact cuts both ways — a call arriving from
+    outside reaches nothing here, and one leaving for outside carries this
+    repo's environments with it.
     """
     resolved = {path: f.steerable for path, f in facts.items()}
     reached = {path: not f.call_only for path, f in facts.items()}
@@ -919,23 +939,44 @@ def _credential_surface(
         if text is None:
             unresolved.append(f"{path} could not be read")
             continue
-        parsed = _parse_workflow(path, text, repo)
-        facts[path] = parsed
-        unresolved.extend(parsed.unresolved)
+        facts[path] = _parse_workflow(path, text, repo)
 
     resolved, unreached = _effective_triggers(facts)
     env_steerable: dict[str, set[str]] = {}
     oidc_environments: set[str] = set()
     ungated_oidc: list[tuple[str, str]] = []
     for path, f in facts.items():
+        if path in unreached:
+            # Nothing here starts it, and the outside caller that does spends
+            # its own repo's credentials, not this one's — so neither what its
+            # jobs name nor what it leaves unreadable is this repo's surface to
+            # gate. A file that would not parse is never unreached: nothing
+            # read `workflow_call` off it, so its own unknown still reports.
+            continue
+        unresolved.extend(f.unresolved)
         for env in f.environments:
             env_steerable.setdefault(env, set()).update(resolved[path])
         oidc_environments |= f.oidc_environments
         ungated_oidc.extend((path, job) for job in sorted(f.oidc_without_environment))
-        if path in unreached and f.environments:
+        # A call out of the repo runs against this repo's environments out of a
+        # file that cannot be read from here, so what it deploys to is unknown.
+        # That only matters where it could change a verdict: a steerable
+        # trigger defeats any ref policy the environment is gated by, and a
+        # granted `id-token: write` may be minted outside an environment
+        # altogether, which is `ungated_oidc`'s finding when it is visible.
+        if f.external_calls and resolved[path]:
+            triggers = ", ".join(f"`{t}`" for t in sorted(resolved[path]))
+            jobs = ", ".join(f"'{j}'" for j in sorted(f.external_calls))
             unresolved.append(
-                f"{path} is only reachable via `workflow_call` from outside this repo"
+                f"{path} runs on {triggers} and calls another repo's workflow "
+                f"({jobs}), whose jobs deploy to this repo's environments"
             )
+        unresolved.extend(
+            f"{path} job '{job}' grants `id-token: write` to another repo's "
+            "workflow, so whether the token is minted inside an environment is "
+            "not visible here"
+            for job in sorted(f.external_oidc)
+        )
 
     return _CredentialSurface(
         env_steerable={e: frozenset(t) for e, t in env_steerable.items()},

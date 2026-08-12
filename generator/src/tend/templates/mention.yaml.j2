@@ -207,8 +207,8 @@ jobs:
           # comments on purpose: the pull_request_review *submission* kind is
           # deliberately left out, since a review the bot leaves on its own PR
           # is its reviewer role (the prompt is told to action it), not a
-          # self-loop. The only self-review skip is the terminal empty-body
-          # APPROVED gate below.
+          # self-loop. The only self-review skips are the terminal empty-body
+          # APPROVED gate and the synthetic reply container, both below.
           if { [ "$KIND" = "issue_comment" ] || [ "$KIND" = "pull_request_review_comment" ]; } \
              && [ "$COMMENT_AUTHOR" = "<<cfg.bot_name>>" ]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -254,12 +254,39 @@ jobs:
           # A review's record includes review.body (checked above) but NOT the
           # bodies of the inline comments attached to the review. Fetch them
           # so a first-contact @-mention inside an inline comment is detected
-          # on PRs where the bot has no prior engagement.
+          # on PRs where the bot has no prior engagement. One object per line,
+          # so `--paginate` concatenates pages instead of reducing within one.
+          # Keep the `{body, in_reply_to_id}` construction: `in_reply_to_id` is
+          # an *optional* property, absent rather than null on a fresh comment,
+          # and building the object normalizes absent to null so the `== null`
+          # select below counts both shapes. A bare `.in_reply_to_id` stream
+          # would emit nothing for a fresh comment and skip every container.
           if [ "$KIND" = "pull_request_review" ]; then
-            if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID/comments" \
-                 --jq '.[].body' | grep -qF '@<<cfg.bot_name>>'; then
+            INLINE=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID/comments" \
+              --jq '.[] | {body, in_reply_to_id}')
+
+            if printf '%s\n' "$INLINE" | jq -r '.body' | grep -qF '@<<cfg.bot_name>>'; then
               echo "should_run=true" >> "$GITHUB_OUTPUT"
               echo "reason=mention" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Replying to a review thread wraps the reply in a synthetic
+            # zero-body COMMENTED review, so the bot's own inline reply arrives
+            # here as a `pull_request_review` submission as well as the
+            # `pull_request_review_comment` the skip above already drops. Same
+            # artifact, second event path: without this the engagement heuristic
+            # below sees a bot-authored PR (or BOT_REVIEWS > 0) and spins up a
+            # full handle job that the prompt's self-loop guard then exits.
+            # Narrower than the comment skip on purpose — a real review the bot
+            # submits with inline comments and no body carries actionable signal,
+            # so require that *every* inline comment be a reply
+            # (`in_reply_to_id` set). A container with any fresh inline comment
+            # still fires.
+            if [ "$REVIEW_AUTHOR" = "<<cfg.bot_name>>" ] \
+               && [ -z "$COMMENT_BODY" ] \
+               && [ "$(printf '%s\n' "$INLINE" | jq -s '[.[] | select(.in_reply_to_id == null)] | length')" = "0" ]; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi

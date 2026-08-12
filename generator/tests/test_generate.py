@@ -23,6 +23,7 @@ from tend.config import (
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
+    GeneratedWorkflow,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -393,6 +394,54 @@ def test_custom_prompt(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     triage = workflows["tend-triage.yaml"]
     assert "Custom triage:" in triage.content
+
+
+def _review_prompt(review: GeneratedWorkflow) -> str:
+    """The `prompt:` input the review job hands the harness action."""
+    steps = yaml.safe_load(review.content)["jobs"]["review"]["steps"]
+    step = next(
+        s for s in steps if s.get("uses", "").startswith("max-sixty/tend/claude@")
+    )
+    return step["with"]["prompt"]
+
+
+def test_review_prompt_without_placeholder_keeps_literal_braces(
+    tmp_path: Path,
+) -> None:
+    """A review prompt with braces but no `{pr_number}` reaches the agent verbatim.
+
+    The review prompt is the only one emitted inside a GHA expression. With the
+    placeholder it goes through `format()`, which needs every other brace
+    doubled; without it, it is a bare string literal that GHA never collapses,
+    so doubling there would ship `{{...}}` to the agent.
+    """
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review this PR. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "{generated}" in prompt
+    assert "{{generated}}" not in prompt
+    assert "format(" not in prompt
+
+
+def test_review_prompt_with_placeholder_escapes_other_braces(tmp_path: Path) -> None:
+    """With `{pr_number}` present the prompt goes through `format()`, so the
+    placeholder becomes `{0}` and every other brace is doubled for it."""
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review PR {pr_number}. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "format(" in prompt
+    assert "{0}" in prompt
+    assert "{{generated}}" in prompt
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
@@ -999,9 +1048,10 @@ def test_mention_self_comment_skip_spares_review_submissions(
     role speaking, not a self-loop — the prompt is told to action it. That
     signal arrives as a `pull_request_review` submission event, distinct from
     the `pull_request_review_comment` inline-comment event the skip covers, so
-    it must still reach the actionable path. The only self-review that is
-    skipped is the terminal empty-body APPROVED case (see
-    test_mention_skips_bot_approved_review).
+    it must still reach the actionable path. The only self-reviews that are
+    skipped are the terminal empty-body APPROVED case (see
+    test_mention_skips_bot_approved_review) and the synthetic reply container
+    (see test_mention_skips_bot_reply_container).
 
     This pins the boundary against a later "skip self-authored reviews too, for
     consistency" edit that would silently break the review -> fix loop: the
@@ -1034,16 +1084,80 @@ def test_mention_self_comment_skip_spares_review_submissions(
         "submission kind — a bot self-review is actionable reviewer signal"
     )
 
-    # The sole author-keyed skip for a review submission is the terminal
-    # empty-body APPROVED gate; a COMMENTED / non-empty-body bot self-review
-    # falls through to the actionable PR_AUTHOR == bot short-circuit.
-    review_skip = run[run.index('[ "$KIND" = "pull_request_review" ]') :]
-    assert '[ "$REVIEW_STATE" = "approved" ]' in review_skip
-    assert '[ -z "$COMMENT_BODY" ]' in review_skip
+    # Two author-keyed skips exist for a review submission — the terminal
+    # empty-body APPROVED gate here, and the reply-container gate pinned by
+    # test_mention_skips_bot_reply_container. Slice to the APPROVED one alone
+    # (it ends at the INLINE fetch the container gate reuses), so this assertion
+    # keeps discriminating rather than passing on either. A COMMENTED /
+    # non-empty-body bot self-review that is not one of those two falls through
+    # to the actionable PR_AUTHOR == bot short-circuit.
+    approved_skip = run[
+        run.index('[ "$KIND" = "pull_request_review" ]') : run.index("INLINE=$(")
+    ]
+    assert '[ "$REVIEW_STATE" = "approved" ]' in approved_skip
+    assert '[ -z "$COMMENT_BODY" ]' in approved_skip
     assert '[ "$PR_AUTHOR" = "test-bot" ]' in run, (
         "a bot self-review that isn't the terminal empty approval must reach "
         "the actionable PR_AUTHOR == bot short-circuit"
     )
+
+
+def test_mention_skips_bot_reply_container(tmp_path: Path) -> None:
+    """Replying to a review thread wraps the reply in a synthetic zero-body
+    COMMENTED review, so the bot's own inline reply reaches verify a second
+    time as a `pull_request_review` submission — the kind the self-authored
+    comment skip deliberately spares. That container is the same comment on a
+    second event path, not a review, so the gate must drop it before the
+    engagement heuristic counts it (BOT_REVIEWS > 0) or short-circuits on the
+    bot-authored PR and spins up a handle job the prompt's self-loop guard
+    then exits with nothing posted.
+
+    The gate is narrower than the comment skip on purpose, and the narrowing is
+    load-bearing in both directions:
+
+    - `REVIEW_AUTHOR` — `pull_request_review_comment` subscribes to `edited`
+      only, so the container is the *sole* path by which a human's freshly
+      created inline reply reaches the bot. Widening this gate to be
+      authorship-agnostic silences the bot on every human reply to its own
+      review threads, with no test failing and no red run to notice.
+    - every inline comment being a reply — an empty-body bot review that owns a
+      *fresh* inline comment still carries actionable signal, so it must fire.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    wf = generate_mention(cfg)
+    data = yaml.safe_load(wf.content)
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    run = check_step["run"]
+
+    # `in_reply_to_id` is an *optional* property on the review-comments
+    # endpoint: it is absent, not null, on a fresh comment. Constructing
+    # `{body, in_reply_to_id}` is what normalizes absent to null so the
+    # `== null` select catches both shapes — a bare `.in_reply_to_id` stream
+    # would drop fresh comments from the count entirely and skip every
+    # container. It also keeps one object per line, so `--paginate`, which
+    # applies `--jq` once per page, concatenates rather than reducing within a
+    # page (#839).
+    assert "--jq '.[] | {body, in_reply_to_id}'" in run
+
+    count = "jq -s '[.[] | select(.in_reply_to_id == null)] | length'"
+    assert count in run, "the skip must key on there being no *fresh* comment"
+
+    # Author and an empty review body are both required, so a human's reply
+    # container and a bot container carrying a body each still fire.
+    reply_gate = run[run.index("INLINE=$(") :]
+    assert '[ "$REVIEW_AUTHOR" = "test-bot" ]' in reply_gate
+    assert '[ -z "$COMMENT_BODY" ]' in reply_gate
+
+    # The @-mention scan over the inline bodies runs first, so a mention the
+    # bot quotes inside a reply still summons it.
+    inline_scan = "printf '%s\\n' \"$INLINE\" | jq -r '.body' | grep -qF '@test-bot'"
+    assert run.index(inline_scan) < run.index(count)
+
+    # And the skip precedes the engagement heuristic that would otherwise count
+    # this very container as prior participation.
+    assert run.index(count) < run.index("BOT_REVIEWS=$(")
 
 
 # ---------------------------------------------------------------------------

@@ -132,8 +132,11 @@ if [ -z "$GIST_ID" ]; then
   fi
   GIST_ID=$(basename "$GIST_URL")
   # First time this month for this target — announce the gist on the tracking issue
-  gh issue comment "$TRACKING_NUMBER" \
-    --body "Evidence gist for \`$TARGET\`: $GIST_URL"
+  # printf, not an inline --body: the backticks are literal inside single
+  # quotes, so nothing needs escaping and bash can't run the span.
+  printf 'Evidence gist for `%s`: %s\n' "$TARGET" "$GIST_URL" \
+    > /tmp/gist-announce.md
+  gh issue comment "$TRACKING_NUMBER" --body-file /tmp/gist-announce.md
 else
   GIST_URL="https://gist.github.com/$GIST_ID"
 fi
@@ -252,12 +255,33 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 >
 > The comment endpoints cover conversation and inline-review comments only; neither returns review submissions, and an empty-body `APPROVE` is `tend-review`'s most common output. Without the fourth count an approvals-only window reports `0, 0` and satisfies the gate below with two zeros carrying no signal. Report all four numbers at the top of your summary. If the sweep found in-window rows your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
 >
+> **Acceptance needs a non-bot actor — name it.** For every acceptance or rejection signal, report the login that produced it: who merged, who reviewed, who replied, who pushed the follow-up. `$BOT_LOGIN` reviewing, replying to, or pushing to its own PR is the bot talking to itself, not acceptance. A non-bot merge *is* acceptance even when every commenter is the bot — the most common shape here is a maintainer merging a bot PR without ever posting. Reserve `bot-only — no human signal` for threads where `$BOT_LOGIN` is the only login across every surface. One `gh pr view` covers them all — merge actor, reviews, inline comments, conversation comments, commits:
+>
+> ```bash
+> gh -R $ARGUMENTS pr view <pr> --json number,state,author,mergedBy,reviews,comments,commits --jq '{
+>   pr: .number, state, author: .author.login, merged_by: .mergedBy.login,
+>   reviews: [.reviews[] | {login: .author.login, state}],
+>   logins: ([.mergedBy.login, .reviews[].author.login, .comments[].author.login,
+>             .commits[].authors[].login] | map(select(. != null and . != "")) | unique)
+> }'
+> ```
+>
+> `logins` is the bot-only test: `["$BOT_LOGIN"]` or empty means no human touched the thread. Anything else, name that login and say which surface it came from. Every inline review comment belongs to a review record — including a standalone reply posted through the replies endpoint — so `reviews` covers inline commenters as well as submitted reviews, and its `state` gives the accept/reject direction. `comments` and `reviews` paginate in full. `commits` does not: `gh pr view` selects `commits(first: 100)` and never fetches a second page, oldest-first, so past 100 commits the newest drop out — exactly where a human follow-up push sits. On a PR that long, read the authors from `gh api "repos/$ARGUMENTS/pulls/<pr>/commits" --paginate` (itself capped at 250) before calling the thread bot-only.
+>
+> A comments-only check is not enough on its own: it misses both a silent maintainer merge (`mergedBy` set, nobody commenting) and a human `CHANGES_REQUESTED` that carries no inline comments.
+>
 > **How to map runs to outputs:**
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
 >   `gh -R $ARGUMENTS pr list --head <branch> --state all` → check bot reviews via
 >   `gh api repos/$ARGUMENTS/pulls/<pr>/reviews`
 > - `tend-notifications`: check for recent bot comments/issue-close events in the past hour
 > - `tend-mention`: map run to issue/PR from triggering comment, check for bot replies
+> - `tend-mention` on `repository_dispatch` (the relay path for review events): there is no triggering comment and `headBranch` is the default branch, so neither route above resolves it. Read the target off the `verify` job's log, where the step env block prints the relayed payload:
+>   ```bash
+>   JOB=$(gh api "repos/$ARGUMENTS/actions/runs/<run-id>/jobs" --jq '.jobs[] | select(.name == "verify") | .id')
+>   gh api "repos/$ARGUMENTS/actions/jobs/$JOB/logs" | grep -E 'PAYLOAD_(KIND|PR|ID):'
+>   ```
+>   `PAYLOAD_PR` is the issue/PR number and `PAYLOAD_KIND` is the relayed event (`pull_request_review`, `pull_request_review_comment`). Read the gate's verdict off the `handle` job, which is gated on `should_run`: `handle` with conclusion `skipped` means the engagement gate declined and no agent booted — expected silence, not missing output. Do not read it off `React to mention`, which is skipped on every relayed `pull_request_review` regardless of the verdict (a review submission has no single comment to react to) and on a comment relay admitted for participation rather than a mention.
 > - `tend-ci-fix`: map run → PR via `headBranch`, check for bot commits
 >
 > **Negative outcome signals** — report any sign the bot's output was rejected, corrected, or ignored. Common shapes (use judgment for signals not listed):
@@ -318,10 +342,13 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > - <run-id>: <workflow> — <reason> (e.g., "no artifacts", "notification no-op")
 >
 > ## Runs with accepted output
-> - <run-id>: <workflow> on PR #N — bot reviewed, PR merged
+> - <run-id>: <workflow> on PR #N — bot reviewed, PR merged by <login>
+>
+> ## Runs with bot-only threads (no human signal)
+> - <run-id>: <workflow> on PR #N — participants: [<login>, ...]
 >
 > ## Runs with concerning output
-> - <run-id>: <workflow> on PR #N — <signal> (e.g., "human posted CHANGES_REQUESTED")
+> - <run-id>: <workflow> on PR #N — <signal> by <login> (e.g., "human posted CHANGES_REQUESTED")
 >
 > ## Sanity check
 > <note if zero bot activity found across all runs — may indicate systemic failure>
@@ -329,11 +356,31 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 
 A report of little or no bot output is only usable if it carries the repo-wide sweep counts — without them, run the sweep block yourself before believing it, because a silent window and a broken per-run walk produce the same summary. Absence is not a finding on its own either: don't reason from it toward a conclusion the sweep would contradict.
 
-Review the subagent's summary. If all outputs are accepted and no sanity-check flags, skip to Step 6 (summary). If concerning outcomes exist, continue to Step 3.
+Review the subagent's summary, and verify any actor attribution before it enters a finding — a survey that credits the bot's own reply to a human turns a self-conversation into a false all-clear. Route on the buckets: if concerning outcomes exist, continue to Step 3. Otherwise judge the bot-only threads on their content — a self-review chain that went wrong is a finding even with no human in it, and one that read fine is not — and if nothing there concerns you and there are no sanity-check flags, skip to Step 6 (summary).
 
 ## Step 3: Investigate concerning outcomes via cheap subagent
 
 For runs with negative outcome signals (or suspicious lack of output), spawn another cheap subagent to download and inspect the specific session logs.
+
+**Also escalate whenever a finding will name *which run* produced an output.** A timestamp falling inside a run's start/end span does not attribute the output to it: several runs are live at once — a long scheduled run that opened the PR, the event-triggered handle answering a review on it, a racing sibling — and any of them can post. Attributing by wall-clock inclusion credits the wrong run, and the run ID then ships in a public comment. Confirm from the posting run's own log before a run ID enters a finding.
+
+Grep for the write *shape*, not the endpoint — `/comments` and `/reviews` are the GET paths too, and reading the thread is the first thing nearly every run does. Don't truncate the tool input: a `git push` or `gh issue comment` often sits hundreds of characters into a longer command. Scan every `*.jsonl` under the run directory, since a subagent posts from its own `subagents/agent-*.jsonl`.
+
+```bash
+WRITES='gh (pr|issue) (comment|review|create|edit)|--method (POST|PATCH|PUT)|-X (POST|PATCH|PUT)|comments/[0-9]+/replies|git push|resolveReviewThread'
+
+# Claude logs
+for f in $(find /tmp/session-logs/<run-id> -name '*.jsonl'); do
+  jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use") | "\(.name): \(.input | tostring)"' "$f"
+done | grep -E "$WRITES"
+
+# Codex logs — same idea against the rollout schema (/install-tend:debug-tend-run)
+for f in $(find /tmp/session-logs/<run-id> -name '*.jsonl'); do
+  jq -r 'select(.payload.type == "function_call") | "\(.payload.name): \(.payload.arguments)"' "$f"
+done | grep -E "$WRITES"
+```
+
+The run whose log contains the posting call is the author. Presence is the strong signal; before concluding a run posted *nothing*, confirm you ran the variant matching the artifact you downloaded — the wrong one returns empty regardless of what the run did — and that the write you're chasing has a shape `WRITES` covers.
 
 Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 
@@ -342,6 +389,8 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > Download: `gh run download <run-id> -R $ARGUMENTS --pattern 'claude-session-logs*' --pattern 'codex-session-logs*' --dir /tmp/session-logs/<run-id>/` (both patterns are passed because the artifact prefix depends on the target repo's harness — Claude uploads `claude-session-logs*`, Codex uploads `codex-session-logs*`)
 >
 > The concerning outcome was: <signal from Step 2>.
+>
+> If your answer will name **which run produced an output**, say which output and confirm it from the log before answering — run <paste the `WRITES` recipe above> over every `*.jsonl` under the download directory, and quote the matching tool call verbatim rather than summarising it. Don't use the truncated query below for this: the write often sits hundreds of characters into a longer command.
 >
 > **JSONL parsing** — each line has a `type` field (`user`, `assistant`, `system`). Key queries:
 > ```
@@ -367,8 +416,8 @@ Evaluate the subagent's diagnosis against the repo-specific guidance from Step 1
 Before creating issues or PRs, check exhaustively for existing ones:
 
 ```bash
-gh issue list --state open --label claude-behavior --json number,title,body
-gh issue list --state open --json number,title,body  # also check unlabeled issues
+gh issue list --state open --label claude-behavior --limit 200 --json number,title,body
+gh issue list --state open --limit 200 --json number,title,body  # also check unlabeled issues
 gh issue list --state closed --label claude-behavior --json number,title,closedAt --limit 30
 # --state all: a merged PR is the most common way a finding is already fixed
 gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body

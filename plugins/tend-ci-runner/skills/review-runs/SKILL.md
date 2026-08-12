@@ -105,12 +105,14 @@ grep -qF "$GITHUB_RUN_ID" /tmp/findings.md || {
 }
 
 if [ -n "$EXISTING_COMMENT" ]; then
-  # Append to existing comment if it fits. GitHub rejects bodies over 65536
-  # characters — start a new comment when the existing one is too large.
+  # Append only if the *combined* body fits. GitHub rejects bodies over 65536
+  # characters and the PATCH has no fallback, so a 422 loses the leg's findings
+  # while the run still reports success — size what you are about to POST, not
+  # the existing comment. `wc -c` counts bytes, which is >= the character
+  # count, so 60000 is a conservative bound.
   gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" --jq '.body' > /tmp/existing.md
-  EXISTING_SIZE=$(wc -c < /tmp/existing.md)
-  if [ "$EXISTING_SIZE" -lt 50000 ]; then
-    cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
+  cat /tmp/existing.md /tmp/findings.md > /tmp/combined.md
+  if [ "$(wc -c < /tmp/combined.md)" -lt 60000 ]; then
     gh api "repos/$REPO/issues/comments/$EXISTING_COMMENT" -X PATCH -F body=@/tmp/combined.md
   else
     gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" -F body=@/tmp/findings.md
@@ -199,6 +201,38 @@ gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
 
 After retrieving the timeout cap from the workflow file, flag any job whose duration exceeded 90% of it as a near-timeout. For the default 360-min cap, that threshold is 324 min.
 
+### Drain stranded triggers
+
+A run that fails files a row on a `tend-outage`-labelled **"Bot temporarily unavailable"** issue, naming the run and the trigger it stranded. Nothing re-runs those triggers — `tend-review` fires only on `pull_request_target`, so a PR whose one review attempt died stays unreviewed until someone pushes. Drain the open issue as part of this sweep.
+
+```bash
+# Usually empty; no open outage issue means nothing stranded.
+OUTAGE=$(gh issue list --state open --label tend-outage --json number,title \
+  --jq '[.[] | select(.title == "Bot temporarily unavailable")][0].number // empty')
+gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
+  | grep -oE 'runs/[0-9]+|\| #[0-9]+'
+```
+
+**Diagnose first.** The nightly enrichment comment names the cause when it can. When it doesn't, read the session log — quota exhaustion surfaces as a `<synthetic>` assistant message:
+
+```bash
+gh run download <run-id> --pattern '*session-logs*' --dir /tmp/outage
+jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/outage/*/*/*.jsonl
+# → You've hit your weekly limit · resets 12am (UTC)
+```
+
+A cluster of these is quota exhaustion, not a bug — don't open a fix PR, and read the reset off the message: a weekly limit can strand most of a day.
+
+**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. Re-running the bot's own failed workflow needs no maintainer approval.
+
+```bash
+gh pr view <n> --json state,headRefOid,reviews \
+  --jq '{state, headRefOid, reviewers: [.reviews[].author.login]}'
+gh run rerun <run-id> --failed
+```
+
+Close the issue once every row is drained (`gh issue close "$OUTAGE"`); one left open folds the next outage into a stale incident.
+
 ## Step 2: Token usage report
 
 Run the token report script to get per-run token counts:
@@ -234,20 +268,41 @@ For each analyzed run, compare what the bot did against what happened next. The 
 mention, notifications, weekly, and review-reviewers runs get the same treatment: find the bot's output and check whether it was accepted.
 
 ```bash
-# Example: check if a bot PR was merged or closed. Re-read Step 1's anchor —
-# unset here, an empty string compares less than every non-null `closedAt` and
-# the check silently stops being windowed at all.
+# Bot PR dispositions — merged or closed in the window. Re-read Step 1's
+# anchor: unset here, an empty string compares less than every non-null
+# `closedAt` and the check silently stops being windowed at all.
 SINCE=$(cat /tmp/review-runs-since)
-gh pr list --author "$BOT_LOGIN" --state all --json number,title,state,closedAt \
+gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,state,closedAt \
   --jq '.[] | select(.closedAt > "'$SINCE'")'
 ```
+
+Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, leaving labels and state untouched, is equally a correction, and on an issue-heavy repo it is the most common one. No disposition query can see it. Read the threads where the bot commented in the window and count a contradiction as a finding:
+
+```bash
+# Human replies in the window, on any issue or PR thread. Both endpoints are
+# repo-wide and take `since`, so this is two calls regardless of thread count.
+# `--paginate` is required, not cosmetic: the response is ascending by
+# `created_at`, so a single 100-item page drops the *newest* comments — the
+# ones a fresh correction sits in. The bot's own comments consume that budget
+# before the filter runs, so a busy day truncates with nothing in the output
+# to say so.
+for endpoint in issues pulls; do
+  gh api --paginate "repos/$REPO/$endpoint/comments?since=$SINCE&per_page=100" \
+    --jq '.[] | select(.user.login != "'"$BOT_LOGIN"'")
+          | {created: .created_at, updated: .updated_at, url: .html_url, body: .body[0:300]}'
+done
+```
+
+`since` filters on `updated_at`, not `created_at`, so results include older comments edited inside the window — a comment created days before `$SINCE` is a real hit, not a broken filter. That is worth having (an edited claim is still a correction); the projection reports both timestamps so the reason a row qualified is visible.
+
+Write "no maintainer corrections" into the tracking issue only after that query ran — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate.
 
 ## Step 5: Deduplicate
 
 Before creating issues or PRs, check for existing ones:
 
 ```bash
-gh issue list --state open --json number,title,body
+gh issue list --state open --limit 200 --json number,title,body
 gh issue list --state closed --json number,title,closedAt --limit 30
 # --state all: a merged PR is the most common way a finding is already fixed
 gh pr list --state all --limit 40 --json number,title,state,mergedAt,headRefName,body

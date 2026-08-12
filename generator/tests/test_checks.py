@@ -2094,9 +2094,10 @@ def test_credential_environments_absolute_self_call_inherits_caller_triggers() -
 def test_credential_environments_own_triggers_reach_a_callable_workflow() -> None:
     """`workflow_call` alongside triggers of its own widens the way in rather
     than replacing it: the workflow's own `on:` still starts it here, so an
-    uncallable-from-here verdict would skip a surface tend can read."""
+    uncallable-from-here verdict would walk past an ungated credential this
+    repo really can spend."""
     result = _credential_check(
-        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        {"pypi": ([], {"protection_rules": []}, "")},
         workflows={
             "tests.yaml": (
                 "on:\n"
@@ -2110,17 +2111,21 @@ def test_credential_environments_own_triggers_reach_a_callable_workflow() -> Non
                 "jobs:\n"
                 "  deploy:\n"
                 "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
             )
         },
     )
-    assert result.passed is True, result.message
+    assert result.passed is False, result.message
+    assert "pypi" in result.message
 
 
-def test_credential_environments_unreached_through_a_caller_is_unverified() -> None:
-    """A caller that nothing here starts leaves its callee just as unreachable
-    — the chain has to anchor on a workflow with triggers of its own."""
+def test_credential_environments_unreached_through_a_caller_spends_nothing() -> None:
+    """The chain has to anchor on a workflow with triggers of its own: a caller
+    that nothing here starts leaves its callee unreachable too, and what an
+    unreachable job names is not this repo's to gate."""
     result = _credential_check(
-        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        {"pypi": ([], {"protection_rules": []}, "")},
         workflows={
             "wrapper.yaml": (
                 "on:\n"
@@ -2130,26 +2135,120 @@ def test_credential_environments_unreached_through_a_caller_is_unverified() -> N
                 "    uses: ./.github/workflows/publish.yaml\n"
             ),
             "publish.yaml": (
-                "on:\n  workflow_call:\njobs:\n  publish:\n    environment: pypi\n"
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
             ),
         },
     )
-    assert result.passed is None
-    assert "publish.yaml is only reachable" in result.message
+    assert result.passed is True, result.message
 
 
-def test_credential_environments_unreached_reusable_workflow_is_unverified() -> None:
-    """Its callers may live in another repo, which this cannot enumerate."""
+def test_credential_environments_unreached_reusable_workflow_spends_nothing() -> None:
+    """A run belongs to the repo that starts it: an outside caller's run reads
+    that repo's secrets, deploys to its environments, and mints OIDC for it. So
+    the ungated 'pypi' here is not a credential this repo can spend, and the
+    check must neither fail on it nor stop short of a verdict."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_unreached_dynamic_environment_spends_nothing() -> None:
+    """What an unreachable workflow leaves unreadable is not this repo's to
+    gate either. A reusable deploy parameterised by its caller's input names no
+    environment tend can resolve, and reporting that would hold the check at
+    unverified for as long as the adopter keeps the workflow."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: ${{ inputs.environment }}\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_call_out_of_the_repo_is_unread() -> None:
+    """The same fact the other way: a workflow this repo calls elsewhere
+    deploys to *this* repo's environments, and its file cannot be read from
+    here — so which environment a steerable run reaches is unknown."""
     result = _credential_check(
         {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
         workflows={
-            "publish.yaml": (
-                "on:\n  workflow_call:\njobs:\n  publish:\n    environment: pypi\n"
+            "dispatch.yaml": (
+                "on:\n"
+                "  repository_dispatch:\n"
+                "    types: [publish]\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
             )
         },
     )
     assert result.passed is None
-    assert "workflow_call" in result.message
+    assert "dispatch.yaml runs on `repository_dispatch`" in result.message
+    assert "'call'" in result.message
+
+
+def test_credential_environments_call_out_of_the_repo_granting_oidc_is_unread() -> None:
+    """A calling job's `permissions:` cap what the callee may request, so one
+    granting `id-token: write` mints on this repo's behalf — and whether the
+    callee does it inside an environment is not visible here."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "release.yaml": (
+                "on: push\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is None
+    assert "release.yaml job 'call' grants `id-token: write`" in result.message
+
+
+def test_credential_environments_call_out_of_the_repo_changing_nothing() -> None:
+    """With no steerable trigger to defeat the ref policy and no OIDC granted,
+    the unread callee cannot change a verdict — and an unknown that changes no
+    verdict is a skip for nothing."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "release.yaml": (
+                "on: push\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
 
 
 def test_credential_environments_dynamic_environment_name_is_unverified() -> None:

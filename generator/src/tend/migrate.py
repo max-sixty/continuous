@@ -22,8 +22,13 @@ import click
 from ruamel.yaml import YAML
 
 
-def migrate_toml_to_yaml(toml_path: Path, yaml_path: Path) -> None:
-    """Read `toml_path`, write equivalent YAML at `yaml_path`, delete the TOML.
+def render_toml_as_yaml(toml_path: Path, yaml_path: Path) -> str:
+    """Return `toml_path` rendered as verified-equivalent YAML text.
+
+    Touches neither file — `yaml_path` is read only to refuse a migration that
+    would overwrite it. This is the whole migration bar the two writes, so
+    `tend init --dry-run` runs it to preview the upgrade on a config it must
+    leave exactly as it found it.
 
     Raises `click.ClickException` if `yaml_path` already exists or the
     round-trip verification fails.
@@ -60,5 +65,15 @@ def migrate_toml_to_yaml(toml_path: Path, yaml_path: Path) -> None:
             f"YAML: {yaml_data!r}"
         )
 
+    return yaml_text
+
+
+def migrate_toml_to_yaml(toml_path: Path, yaml_path: Path) -> None:
+    """Read `toml_path`, write equivalent YAML at `yaml_path`, delete the TOML.
+
+    Raises `click.ClickException` if `yaml_path` already exists or the
+    round-trip verification fails.
+    """
+    yaml_text = render_toml_as_yaml(toml_path, yaml_path)
     yaml_path.write_text(yaml_text)
     toml_path.unlink()
