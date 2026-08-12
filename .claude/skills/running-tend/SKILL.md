@@ -157,7 +157,7 @@ both.
 
 | Pin | File | Rule |
 |---|---|---|
-| `claude_version` | `claude/action.yaml` | track latest |
+| `claude_version` | `claude/action.yaml` | track npm's `latest` dist-tag, not `stable` — see below |
 | `mitmproxy_version` | `claude/action.yaml` | track latest |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
 | `codex_version` | `codex/action.yaml` | track latest; the surface job confirms the bump |
@@ -178,6 +178,16 @@ target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
 between the two versions for anything touching the agent paths (first-run
 onboarding, `--model` alias resolution, headless `-p` result events, Stop-hook
 behavior, slash-command or Skill-tool handling) and note it in the PR.
+
+`latest` over `stable` is a decision, not a default. Both markers exist on npm
+and in the release bucket, several releases apart (2026-08-12: `stable` 2.1.222,
+`latest` 2.1.229), and the fixes in that window have repeatedly been tend's own
+shape — headless sessions losing a long-lived `CLAUDE_CODE_OAUTH_TOKEN` to a
+stored short-lived one, the startup connectivity check hanging behind an HTTPS
+proxy. `stable` would not even keep un-promoted code out of the job:
+`install.sh` always fetches the `latest` build as its bootstrap installer before
+handing off to the pinned target. Pin an exact version either way — the marker
+only picks the number.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
