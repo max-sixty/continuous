@@ -68,7 +68,24 @@ if [ -n "$EXISTING" ]; then
       exit 0
       ;;
   esac
-  printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -
+
+  # The common path once a tracker is open — every failure after the first in
+  # one incident appends through here — and it can 5xx like any other write.
+  # Left bare it aborts under `set -e`, which drops the row without saying so:
+  # the tracker then under-reports the outage, and a run stranded by it reads
+  # as one that never happened. Warning costs the same single row a failed
+  # read above costs, and the next failure records normally. The create below
+  # keeps the opposite policy deliberately: with no tracker open there is no
+  # other record of the outage, so a failed create has to redden the step.
+  # The rate-limit caller guards both of its writes instead: a failed create
+  # there must still reach the annotation that names what to close, where here
+  # the create is the last statement and the red step is all that is left.
+  # A leg that failed to post has nothing of its own to reconcile, so it stops
+  # here; any racing leg that did post reconciles on its own pass.
+  if ! printf '%s\n' "$ROW" | gh issue comment "$EXISTING" -F -; then
+    echo "::warning::Could not append this run's row to #${EXISTING}."
+    exit 0
+  fi
 
   # The check-then-act above still races across concurrently-jittered legs: two
   # can both read no matching row before either posts. Reconcile to one row per

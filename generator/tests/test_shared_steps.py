@@ -19,6 +19,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARK_NOTIFICATION_READ = REPO_ROOT / "shared" / "steps" / "mark-notification-read.sh"
+COMPUTE_TOKEN_USAGE = REPO_ROOT / "shared" / "steps" / "compute-token-usage.sh"
 
 
 def _fake_bin(tmp_path: Path, **scripts: str) -> Path:
@@ -91,6 +92,18 @@ def _calls(env: dict[str, str]) -> list[str]:
 def _comments(env: dict[str, str]) -> str:
     """Every comment body the fake `gh` was handed on stdin, concatenated."""
     return Path(env["COMMENT_BODIES"]).read_text()
+
+
+def _output(env: dict[str, str], key: str) -> str:
+    """The value a pre-check wrote to `$GITHUB_OUTPUT` under *key*.
+
+    Exactly one write: a second would leave the step's consumers reading
+    whichever line Actions kept, so two is a defect rather than a last-wins.
+    """
+    lines = Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
+    values = [line.split("=", 1)[1] for line in lines if line.startswith(f"{key}=")]
+    assert len(values) == 1, f"expected exactly one {key}, got: {lines}"
+    return values[0]
 
 
 # The Run cell of a row generated under the fixtures' GITHUB_RUN_ID. What a
@@ -190,6 +203,324 @@ def test_mark_notification_read_leaves_activity_newer_than_the_run(
 
     assert result.returncode == 0, result.stderr
     assert not any("-X PATCH" in c for c in _calls(gh_env))
+
+
+# --- compute-token-usage.sh -------------------------------------------------
+#
+# Fixtures below mirror the shapes observed in real uploaded artifacts. Three
+# properties drive the tests:
+#
+# 1. Both files record each assistant message roughly twice, so any sum has to
+#    deduplicate by `.message.id` or it lands ~2x high.
+# 2. The stream-json's assistant events are non-final (`stop_reason: null`):
+#    their `usage.output_tokens` is the message-start placeholder (single
+#    digits), not the finished count. Only the session JSONL carries final
+#    per-message usage. Reconstructing from the stream-json therefore
+#    under-counts output by orders of magnitude, while input and cache fields
+#    — known at message start — happen to match.
+# 3. A session that ran a `Task` has a second transcript under
+#    `<session-id>/subagents/`, whose usage the `result` event does not count.
+
+
+def _assistant(msg_id: str, usage: dict[str, int], *, final: bool) -> dict[str, object]:
+    return {
+        "type": "assistant",
+        "message": {
+            "id": msg_id,
+            "stop_reason": "end_turn" if final else None,
+            "usage": usage,
+        },
+    }
+
+
+def _ndjson(path: Path, lines: list[dict[str, object]]) -> Path:
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    return path
+
+
+# Final per-message usage, as the session JSONL records it.
+FINAL_USAGE = [
+    {
+        "input_tokens": 10,
+        "output_tokens": 3000,
+        "cache_creation_input_tokens": 1000,
+        "cache_read_input_tokens": 20000,
+    },
+    {
+        "input_tokens": 5,
+        "output_tokens": 1500,
+        "cache_creation_input_tokens": 500,
+        "cache_read_input_tokens": 40000,
+    },
+]
+# The same two messages as the stream-json emits them: input/cache identical,
+# output still at its message-start placeholder.
+STREAM_USAGE = [dict(u, output_tokens=6) for u in FINAL_USAGE]
+
+
+# A `Task` subagent's own transcript, which real artifacts carry alongside the
+# session it belongs to. Its usage is not in the `result` event, so nothing
+# here may reach the totals.
+SUBAGENT_USAGE = {
+    "input_tokens": 300,
+    "output_tokens": 7000,
+    "cache_creation_input_tokens": 40000,
+    "cache_read_input_tokens": 900000,
+}
+
+
+def _session_jsonl(logs_dir: Path) -> Path:
+    """A cancelled session's JSONL: real usage, each message duplicated.
+
+    Writes the subagent transcript beside it too — `<session>/subagents/` is
+    how Claude Code lays a `Task` out on disk, and `cp -a .../projects/.`
+    copies the subtree into LOGS_DIR.
+    """
+    project = logs_dir / "-home-runner-work-repo-repo"
+    project.mkdir(parents=True, exist_ok=True)
+    lines: list[dict[str, object]] = [{"type": "user"}]
+    for i, usage in enumerate(FINAL_USAGE):
+        entry = _assistant(f"msg_{i}", usage, final=True)
+        lines += [entry, dict(entry), {"type": "user"}]
+    lines.append({"type": "user"})
+
+    subagents = project / "session" / "subagents"
+    subagents.mkdir(parents=True, exist_ok=True)
+    _ndjson(
+        subagents / "agent-a1b2c3.jsonl",
+        [
+            {"type": "user"},
+            _assistant("msg_sub", SUBAGENT_USAGE, final=True),
+            {"type": "user"},
+        ],
+    )
+    return _ndjson(project / "session.jsonl", lines)
+
+
+def _cancelled_stream(tmp_path: Path) -> Path:
+    """Stream-json for the same session: assistant events, no `result`."""
+    lines: list[dict[str, object]] = [{"type": "system"}]
+    for i, usage in enumerate(STREAM_USAGE):
+        entry = _assistant(f"msg_{i}", usage, final=False)
+        lines += [entry, dict(entry), {"type": "user"}]
+    return _ndjson(tmp_path / "stream.json", lines)
+
+
+def _usage(tmp_path: Path, *, stream: Path | None, logs_dir: Path) -> dict[str, object]:
+    result = subprocess.run(
+        ["bash", str(COMPUTE_TOKEN_USAGE)],
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "MODEL": "opus",
+            "LOGS_DIR": str(logs_dir),
+            "STREAM_JSON": str(stream) if stream else "",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_token_usage_reconstructs_a_cancelled_session(tmp_path: Path) -> None:
+    """A cancelled session must be accounted from its session JSONL.
+
+    `tend-review` runs with `cancel-in-progress: true`, so cancellation is
+    routine — and a cancelled session never emits a `type: "result"` event.
+    The step is `if: always()`, so it still writes token-usage.json and still
+    uploads the artifact; only the accounting is lost. Reporting zeros for a
+    run that did real work (and may already have posted a review) biases every
+    downstream total by the cancellation rate.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 4500, (
+        f"cancelled session reported output_tokens={usage['output_tokens']}; "
+        "the session JSONL records 4500 across two messages"
+    )
+    assert usage["input_tokens"] == 15
+    assert usage["cache_creation_input_tokens"] == 1500
+    assert usage["cache_read_input_tokens"] == 60000
+    # Three `user` lines bracket the two assistant turns; num_turns counts the
+    # turns between them.
+    assert usage["turns"] == 3
+    assert usage["partial"] is True, (
+        "a reconstructed total must be distinguishable from a run that "
+        "genuinely cost nothing"
+    )
+
+
+def test_token_usage_ignores_stream_json_placeholder_output(tmp_path: Path) -> None:
+    """The fallback must not sum the stream-json's non-final assistant events.
+
+    They carry `stop_reason: null` and a message-start `output_tokens`, so
+    summing them under-counts output by orders of magnitude while input and
+    cache fields still match — a wrong number that looks plausible.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    stream_sum = sum(u["output_tokens"] for u in STREAM_USAGE)
+    assert usage["output_tokens"] != stream_sum, (
+        "summed the stream-json's placeholder output_tokens"
+    )
+
+
+def test_token_usage_ignores_subagent_transcripts(tmp_path: Path) -> None:
+    """Subagent transcripts must not be slurped into the reconstruction.
+
+    Every `Task` writes its own `<session>/subagents/agent-*.jsonl`, but the
+    `result` event this fallback stands in for counts only the main loop.
+    Summing both inflates each field — turns roughly doubles — so a partial
+    run would no longer be comparable with a complete one.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 4500, "summed the subagent's output_tokens"
+    assert usage["cache_read_input_tokens"] == 60000, "summed the subagent's cache"
+    assert usage["turns"] == 3, "counted the subagent's `user` lines as turns"
+
+
+def test_token_usage_prefers_result_events_when_present(tmp_path: Path) -> None:
+    """A completed session still reports straight from its `result` events."""
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+    stream = _ndjson(
+        tmp_path / "stream.json",
+        [
+            _assistant("msg_0", STREAM_USAGE[0], final=False),
+            {
+                "type": "result",
+                "num_turns": 14,
+                "total_cost_usd": 1.2563179999999998,
+                "usage": {
+                    "input_tokens": 23,
+                    "output_tokens": 9406,
+                    "cache_creation_input_tokens": 62655,
+                    "cache_read_input_tokens": 789006,
+                },
+            },
+        ],
+    )
+
+    usage = _usage(tmp_path, stream=stream, logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 9406
+    assert usage["turns"] == 14
+    assert usage["cost_usd"] == 1.26
+    assert usage["partial"] is False
+
+
+def test_token_usage_survives_a_truncated_final_line(tmp_path: Path) -> None:
+    """A half-written line costs that line, not the run's whole accounting.
+
+    A cancelled process can be killed mid-append, leaving its session JSONL
+    ending in a partial entry. `jq -s` aborts the file on the first parse
+    error and the `|| echo ''` swallows it, which would drop the run into the
+    "agent never ran" branch — republishing the all-zero `partial: false`
+    payload this fallback exists to replace, now indistinguishable from a
+    genuine preflight no-op.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    session = _session_jsonl(logs_dir)
+    session.write_text(session.read_text() + '{"type":"assistant","mess')
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 4500, "a truncated tail zeroed the totals"
+    assert usage["turns"] == 3
+    assert usage["partial"] is True
+
+
+def test_token_usage_survives_a_truncated_line_beside_a_second_session(
+    tmp_path: Path,
+) -> None:
+    """A truncated file must not take the next file's first line with it.
+
+    `jq -R -s` concatenates its inputs into one string before `split("\\n")`
+    runs, so a file ending without a newline would join its partial last line
+    to the next file's first line and `fromjson?` would drop the pair. The
+    files are read through `awk 1`, which terminates each one.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    session = _session_jsonl(logs_dir)
+    session.write_text(session.read_text() + '{"type":"assistant","mess')
+
+    # Sorts after the truncated file, so it is the one glued onto its tail.
+    second = logs_dir / "-home-runner-work-repo-repo2"
+    second.mkdir()
+    _ndjson(
+        second / "session.jsonl",
+        [_assistant("msg_second", FINAL_USAGE[1], final=True), {"type": "user"}],
+    )
+
+    usage = _usage(tmp_path, stream=_cancelled_stream(tmp_path), logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 6000, "lost the second session's first message"
+    # p2 contributes its opening prompt and no turn of its own. The subtraction
+    # is per session, so pooling the files must not count that prompt as one.
+    assert usage["turns"] == 3, "counted the second session's prompt as a turn"
+    assert usage["partial"] is True
+
+
+def test_token_usage_survives_a_truncated_stream_json_line(tmp_path: Path) -> None:
+    """The same truncation on the stream-json must not lose a `result` event.
+
+    Falling through to the session JSONL would still report the tokens, but as
+    `partial` with an unknown cost — a needless downgrade when the result event
+    itself parsed fine.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    _session_jsonl(logs_dir)
+    stream = _ndjson(
+        tmp_path / "stream.json",
+        [
+            {
+                "type": "result",
+                "num_turns": 14,
+                "total_cost_usd": 1.25,
+                "usage": {"input_tokens": 23, "output_tokens": 9406},
+            },
+        ],
+    )
+    stream.write_text(stream.read_text() + '{"type":"resu')
+
+    usage = _usage(tmp_path, stream=stream, logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 9406
+    assert usage["cost_usd"] == 1.25
+    assert usage["partial"] is False
+
+
+def test_token_usage_reports_zero_when_the_agent_never_ran(tmp_path: Path) -> None:
+    """No stream and no session JSONL is a genuine zero, not a partial total.
+
+    A run that dies in preflight really did cost nothing; flagging it partial
+    would push a fabricated unknown into the reports.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+
+    usage = _usage(tmp_path, stream=None, logs_dir=logs_dir)
+
+    assert usage["output_tokens"] == 0
+    assert usage["cost_usd"] == 0
+    assert usage["partial"] is False
 
 
 RATE_LIMIT_PREFLIGHT = REPO_ROOT / "shared" / "steps" / "rate-limit-preflight.sh"
@@ -292,9 +623,13 @@ esac
 # The script is written for the Ubuntu runners' GNU date; macOS ships BSD
 # date, which has no `-d`. Fixed values also make the day-scoping assertions
 # deterministic: "today" is 2026-01-02.
+# The relative offsets come first: every call also carries a format string, so
+# matching that branch first would collapse them all onto one timestamp.
 FAKE_DATE = r"""#!/usr/bin/env bash
 case "$*" in
+  *"30 minutes ago"*) echo "2026-01-02T11:30:00Z" ;;
   *"20 minutes ago"*) echo "2026-01-02T11:40:00Z" ;;
+  *"10 minutes ago"*) echo "2026-01-02T11:50:00Z" ;;
   *"yesterday"*) echo "2026-01-01" ;;
   *"6 days ago"*) echo "2025-12-27" ;;
   *"%Y-%m-%dT%H:%M:%SZ"*) echo "2026-01-02T12:00:00Z" ;;
@@ -302,8 +637,8 @@ case "$*" in
 esac
 """
 
-# The preflight jitters before its check-then-act; a real sleep would add up
-# to 30s per test.
+# The preflight jitters before its check-then-act, and the notifications
+# pre-check backs off between fetch attempts; real sleeps would add up.
 FAKE_SLEEP = "#!/usr/bin/env bash\nexit 0\n"
 
 TODAY = "2026-01-02"
@@ -934,13 +1269,6 @@ def _run_gate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _should_run(env: dict[str, str]) -> str:
-    lines = Path(env["GITHUB_OUTPUT"]).read_text().splitlines()
-    values = [line.split("=", 1)[1] for line in lines if line.startswith("should_run=")]
-    assert len(values) == 1, f"expected exactly one should_run, got: {lines}"
-    return values[0]
-
-
 def _stamp(env: dict[str, str], *statuses: dict[str, str]) -> None:
     Path(env["STATUS_JSON"]).write_text(json.dumps({"statuses": list(statuses)}))
 
@@ -952,7 +1280,7 @@ def test_review_gate_skips_a_stamped_head(gate_env: dict[str, str]) -> None:
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "false"
+    assert _output(gate_env, "should_run") == "false"
 
 
 def test_review_gate_runs_when_head_is_unstamped(gate_env: dict[str, str]) -> None:
@@ -969,7 +1297,7 @@ def test_review_gate_runs_when_head_is_unstamped(gate_env: dict[str, str]) -> No
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
 
 
 def test_review_gate_only_gates_synchronize(gate_env: dict[str, str]) -> None:
@@ -981,7 +1309,7 @@ def test_review_gate_only_gates_synchronize(gate_env: dict[str, str]) -> None:
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
     assert not Path(gate_env["GH_CALLS"]).exists(), "ungated event still hit the API"
 
 
@@ -994,7 +1322,7 @@ def test_review_gate_skips_closed_prs(gate_env: dict[str, str]) -> None:
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "false"
+    assert _output(gate_env, "should_run") == "false"
 
 
 @pytest.mark.parametrize("failure", ["FAIL_PR", "FAIL_STATUS"])
@@ -1008,7 +1336,7 @@ def test_review_gate_fails_open_on_api_errors(
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
 
 
 def test_review_gate_fails_open_on_an_html_200(gate_env: dict[str, str]) -> None:
@@ -1022,7 +1350,347 @@ def test_review_gate_fails_open_on_an_html_200(gate_env: dict[str, str]) -> None
     result = _run_gate(gate_env)
 
     assert result.returncode == 0, result.stderr
-    assert _should_run(gate_env) == "true"
+    assert _output(gate_env, "should_run") == "true"
+
+
+# ---------------------------------------------------------------------------
+# notifications-check.sh — the tend-notifications pre-check
+# ---------------------------------------------------------------------------
+
+NOTIFICATIONS_CHECK = (
+    REPO_ROOT / "generator" / "src" / "tend" / "templates" / "notifications-check.sh"
+)
+
+# `gh` stand-in for the notifications pre-check. Fixtures in, the script's own
+# `--jq` doing the filtering — the tend-workflow name regex and the PR
+# author/state read are the behaviour under test, so a pre-filtered fake would
+# assert nothing.
+FAKE_GH_NOTIFICATIONS = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALLS"
+
+jq_expr=""
+prev=""
+for arg in "$@"; do
+  [ "$prev" = "--jq" ] && jq_expr="$arg"
+  prev="$arg"
+done
+
+emit() {
+  if [ -n "$jq_expr" ]; then
+    printf '%s' "$1" | jq -r "$jq_expr"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+case "$2" in
+  notifications)
+    # The script's diagnostic re-fetch on a failed attempt. The real one exits
+    # non-zero on an error status, which is what its `|| true` tolerates.
+    [ "$3" = "-i" ] && { echo "HTTP/2.0 502 Bad Gateway"; exit 1; }
+    # Fail the fetches in [FROM, UNTIL], so each consumer of the fetch can be
+    # failed on its own: FROM=1 fails every attempt, FROM=1 UNTIL=1 leaves the
+    # retry to succeed, and FROM=2 fails only the Layer-D recount.
+    if [ -n "${FAIL_NOTIFS_FROM:-}" ]; then
+      n=$(( $(cat "$FETCH_CALLS" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$FETCH_CALLS"
+      if [ "$n" -ge "$FAIL_NOTIFS_FROM" ] \
+        && { [ -z "${FAIL_NOTIFS_UNTIL:-}" ] || [ "$n" -le "$FAIL_NOTIFS_UNTIL" ]; }; then
+        exit 1
+      fi
+    fi
+    # A 200 carrying something other than JSON, verbatim.
+    if [ -n "${RAW_BODY:-}" ]; then cat "$RAW_BODY"; exit 0; fi
+    # A thread marked read leaves the unread listing, so a later fetch must not
+    # return it — which is what the Layer-D recount exists to observe.
+    jq -c --rawfile done "$READ_THREADS" \
+      '($done | split("\n")) as $d | [.[] | select(.id | IN($d[]) | not)]' \
+      "$NOTIFICATIONS_JSON"
+    ;;
+  notifications/threads/*)
+    echo "${2##*/}" >> "$READ_THREADS"
+    ;;
+  repos/*/actions/runs*) emit "$(cat "$RUNS_JSON")" ;;
+  repos/*/pulls/*)
+    # 404 for a PR the fixture doesn't carry, which the script's `|| continue`
+    # has to survive under `bash -e`.
+    pr=$(jq -c --argjson n "${2##*/}" \
+      'map(select(.number == $n)) | .[0] // empty' "$PULLS_JSON")
+    [ -n "$pr" ] || exit 1
+    emit "$pr"
+    ;;
+  *) exit 1 ;;
+esac
+"""
+
+# The fake `date` puts "now" at 12:00, so Layer D's 10-minute deferral window
+# opens at 11:50 and Layer B's shadowed-run lookback at 11:30.
+NOTIF_FRESH = "2026-01-02T11:55:00Z"
+NOTIF_SETTLED = "2026-01-02T11:45:00Z"
+
+
+def _notif(
+    tid: str, kind: str, number: int, updated_at: str, repo: str = "owner/repo"
+) -> dict:
+    """One unread notification as `GET /notifications` returns it.
+
+    *kind* is the subject's path segment: `pulls` or `issues`.
+    """
+    return {
+        "id": tid,
+        "updated_at": updated_at,
+        "repository": {"full_name": repo},
+        "subject": {
+            "url": f"https://api.github.com/repos/{repo}/{kind}/{number}",
+            "type": "PullRequest" if kind == "pulls" else "Issue",
+        },
+    }
+
+
+@pytest.fixture
+def notifications_env(tmp_path: Path) -> dict[str, str]:
+    """Fake gh/date/sleep on PATH, plus the workflow env the pre-check reads."""
+    bindir = _fake_bin(
+        tmp_path, gh=FAKE_GH_NOTIFICATIONS, date=FAKE_DATE, sleep=FAKE_SLEEP
+    )
+
+    # Both the fake gh and the script itself shell out to jq.
+    jq = shutil.which("jq")
+    assert jq, "jq is required for these tests"
+
+    notifications = tmp_path / "notifications.json"
+    notifications.write_text("[]")
+    runs = tmp_path / "runs.json"
+    runs.write_text(json.dumps({"workflow_runs": []}))
+    pulls = tmp_path / "pulls.json"
+    pulls.write_text("[]")
+    read_threads = tmp_path / "read-threads"
+    read_threads.write_text("")
+
+    return {
+        "PATH": f"{bindir}:{Path(jq).parent}:/usr/bin:/bin",
+        "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "FETCH_CALLS": str(tmp_path / "fetch-calls"),
+        "READ_THREADS": str(read_threads),
+        "GITHUB_OUTPUT": str(tmp_path / "output.txt"),
+        "GITHUB_REPOSITORY": "owner/repo",
+        "BOT_NAME": "tend-agent",
+        "NOTIFICATIONS_JSON": str(notifications),
+        "RUNS_JSON": str(runs),
+        "PULLS_JSON": str(pulls),
+    }
+
+
+def _run_check(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
+    return subprocess.run(
+        ["bash", "-e", str(NOTIFICATIONS_CHECK)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _marked_read(env: dict[str, str]) -> list[str]:
+    return Path(env["READ_THREADS"]).read_text().split()
+
+
+def _write_json(env: dict[str, str], key: str, value: object) -> None:
+    Path(env[key]).write_text(json.dumps(value))
+
+
+def test_notifications_check_reports_no_work_on_an_empty_inbox(
+    notifications_env: dict[str, str],
+) -> None:
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "count") == "0"
+    assert _marked_read(notifications_env) == []
+
+
+@pytest.mark.parametrize(
+    ("updated_at", "repo", "expected"),
+    [
+        # A dedicated workflow (review/mention/triage/ci-fix) is likely still
+        # mid-flight on this one, so processing it now would duplicate its work.
+        (NOTIF_FRESH, "owner/repo", "0"),
+        (NOTIF_SETTLED, "owner/repo", "1"),
+        # No dedicated workflow covers another repo, so there is nothing to wait
+        # for however fresh the notification is.
+        (NOTIF_FRESH, "other/repo", "1"),
+    ],
+)
+def test_notifications_check_defers_only_fresh_same_repo_work(
+    notifications_env: dict[str, str], updated_at: str, repo: str, expected: str
+) -> None:
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif("999", "issues", 7, updated_at, repo=repo)],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "count") == expected
+
+
+def test_notifications_check_clears_what_a_recent_tend_run_covered(
+    notifications_env: dict[str, str],
+) -> None:
+    """A dedicated run that failed before its post-step leaves the notification
+    unread; clearing it here saves an agent turn rediscovering it. Matched on
+    the tend workflow names, so a run of the repo's own CI clears nothing.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [
+            _notif("11", "pulls", 7, NOTIF_SETTLED),
+            _notif("22", "pulls", 8, NOTIF_SETTLED),
+        ],
+    )
+    _write_json(
+        notifications_env,
+        "RUNS_JSON",
+        {
+            "workflow_runs": [
+                {"name": "tend-review", "pull_requests": [{"number": 7}]},
+                {"name": "ci", "pull_requests": [{"number": 8}]},
+            ]
+        },
+    )
+    # Open, and someone else's, so Layer C leaves both alone.
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [
+            {"number": 7, "user": {"login": "human"}, "state": "open"},
+            {"number": 8, "user": {"login": "human"}, "state": "open"},
+        ],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_read(notifications_env) == ["11"]
+    assert _output(notifications_env, "count") == "1"
+
+
+def test_notifications_check_clears_the_bots_own_closed_prs(
+    notifications_env: dict[str, str],
+) -> None:
+    """The bot auto-subscribes to its own PRs, so one that's closed is noise.
+    Someone else's closed PR, the bot's still-open PR, and a PR that can't be
+    read at all each stay unread and countable.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif(str(n * 11), "pulls", n, NOTIF_SETTLED) for n in (1, 2, 3, 4)],
+    )
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [
+            {"number": 1, "user": {"login": "tend-agent"}, "state": "closed"},
+            {"number": 2, "user": {"login": "human"}, "state": "closed"},
+            {"number": 3, "user": {"login": "tend-agent"}, "state": "open"},
+        ],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_read(notifications_env) == ["11"]
+    assert _output(notifications_env, "count") == "3"
+
+
+def test_notifications_check_gives_up_cleanly_when_the_fetch_keeps_failing(
+    notifications_env: dict[str, str],
+) -> None:
+    """The step is `bash -e`, so an untolerated `gh` failure would fail the job
+    red. A cycle that can't enumerate just skips — the next one picks it up.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif("999", "issues", 7, NOTIF_SETTLED)],
+    )
+    notifications_env["FAIL_NOTIFS_FROM"] = "1"
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "count") == "0"
+    assert _marked_read(notifications_env) == []
+
+
+def test_notifications_check_retries_a_transient_fetch_failure(
+    notifications_env: dict[str, str],
+) -> None:
+    """One failed attempt costs the cycle nothing: the retry enumerates."""
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [_notif("999", "issues", 7, NOTIF_SETTLED)],
+    )
+    notifications_env["FAIL_NOTIFS_FROM"] = "1"
+    notifications_env["FAIL_NOTIFS_UNTIL"] = "1"
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "count") == "1"
+
+
+def test_notifications_check_tolerates_an_html_200(
+    notifications_env: dict[str, str], tmp_path: Path
+) -> None:
+    """A GitHub blip can answer 200 with an HTML error page: `gh` exits zero and
+    the body isn't JSON. Without the parse guard the run would carry on against
+    a non-JSON snapshot and fail the step.
+    """
+    body = tmp_path / "body.html"
+    body.write_text("<html>unicorn</html>")
+    notifications_env["RAW_BODY"] = str(body)
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "count") == "0"
+
+
+def test_notifications_check_counts_from_the_snapshot_when_the_recount_fails(
+    notifications_env: dict[str, str],
+) -> None:
+    """A failed recount over-counts by whatever Layers B/C cleared, spending one
+    agent run — the alternative, a zero count, would strand real work until the
+    next cycle.
+    """
+    _write_json(
+        notifications_env,
+        "NOTIFICATIONS_JSON",
+        [
+            _notif("11", "pulls", 1, NOTIF_SETTLED),
+            _notif("999", "issues", 7, NOTIF_SETTLED),
+        ],
+    )
+    # Layer C clears this one, so a recount that ran would have returned 1 —
+    # which is what separates the fallback from a quietly successful recount.
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [{"number": 1, "user": {"login": "tend-agent"}, "state": "closed"}],
+    )
+    notifications_env["FAIL_NOTIFS_FROM"] = "2"
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_read(notifications_env) == ["11"]
+    assert _output(notifications_env, "count") == "2"
 
 
 REPORT_FAILURE = REPO_ROOT / "shared" / "steps" / "report-failure.sh"
@@ -1082,6 +1750,10 @@ case "$1 $2" in
   "issue comment")
     body=$(cat)
     printf '%s\n' "$body" >> "$COMMENT_BODIES"
+    # Bare `[ -n ... ] && exit 1` would leave the failing test as the case
+    # body's status and so fail every call; keep it an `if`. Fails before the
+    # row lands in the comment list: a post that 5xx'd left no comment behind.
+    if [ -n "${FAIL_ISSUE_COMMENT:-}" ]; then exit 1; fi
     # Land it in the comment list too, so the reconcile that runs straight
     # after sees the row this call just posted.
     jq -c --arg b "$body" --arg t "$POSTED_AT" \
@@ -1223,6 +1895,36 @@ def test_report_failure_files_nothing_when_the_issue_list_cannot_be_read(
     calls = _calls(report_failure_env)
     assert not any(c.startswith("issue create") for c in calls), calls
     assert "::warning::" in result.stdout
+
+
+def test_report_failure_survives_a_failed_append_to_the_open_tracker(
+    report_failure_env: dict[str, str],
+) -> None:
+    """A 5xx on the append must not abort the step.
+
+    This is the common write path — once a tracker is open, every later
+    failure in the same incident appends through it. Left bare under `set -e`
+    the abort costs a second red step on an already-failing run and drops the
+    row silently, so the tracker under-reports the outage and a run stranded
+    by it reads as one that never happened.
+
+    The paired `..._propagates_a_failed_create` below asserts the opposite for
+    the other branch, and the asymmetry is the point: an append has a tracker
+    already carrying the incident, a create has nothing to fall back to.
+    """
+    Path(report_failure_env["OPEN_ISSUES_JSON"]).write_text(
+        json.dumps([{"number": 8, "title": OUTAGE_TITLE}])
+    )
+    report_failure_env["FAIL_ISSUE_COMMENT"] = "1"
+
+    result = _run_report_failure(report_failure_env)
+
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" in result.stdout, result.stdout
+    calls = _calls(report_failure_env)
+    assert not any(c.startswith("issue create") for c in calls), (
+        f"filed a second tracker after the append failed: {calls}"
+    )
 
 
 def test_report_failure_carries_its_row_onto_the_racing_sibling(

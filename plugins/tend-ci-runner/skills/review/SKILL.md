@@ -144,7 +144,7 @@ Scale depth to the change. A docs-only PR or a mechanical rename needs a skim fo
 
 Check the project's CLAUDE.md for language-specific review criteria and conventions. Load any project-specific review skill if available.
 
-Review the diff two ways at once: the manual checks below, plus a `/tend-ci-runner:code-review` pass over the PR's merged tree. That skill is a structured second pass — correctness and cleanup angles, then a verify pass — and it returns findings rather than posting anything. Scale its depth to how core the change is, the same way you scale the manual depth above:
+**Every review that reaches this step runs a `/tend-ci-runner:code-review` pass over the PR's merged tree** — trivial diffs included; the depth-scaling above sets how deep the pass goes, never whether it happens. It's a structured second pass — correctness and cleanup angles, then a verify pass — that returns findings rather than posting anything, and it runs alongside the manual checks below rather than replacing them. Scale its depth to how core the change is:
 
 - Peripheral or mechanical (docs, config, dependency bumps, test-only): tell it the change is peripheral, so it runs the short angle set in one pass.
 - The project's core logic: tell it the change is core, so it fans the angles out and sweeps for gaps.
@@ -207,6 +207,8 @@ Don't explain what the code does — the author wrote it. Don't nitpick formatti
 **Form your own opinion independently.** Do not factor in other reviewers' comments or approvals when deciding whether to approve — the value of this review is as an uncorrelated signal.
 
 **When confidence is low**, go beyond checking the implementation — question the approach: "Does this bypass or duplicate an existing API?" "What does this change *not* handle?" If the design involves a judgment call, flag it for human review as a COMMENT.
+
+**Attribute a withheld approval to whatever actually decided it.** Cite repo guidance as the reason only when you can name the file and heading that guidance lives in; a reader who goes looking for "this repo's review policy" and finds nothing written starts doubting the rest of the review too. When the call is your own judgment, say so plainly — "I'd want a human on this one, it changes what `--force` will delete" rather than "per this repo's review policy this is a hold-for-human surface". Judgment is a sufficient reason on its own; borrowed authority that doesn't exist is not.
 
 **Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Still perform the full review (steps 2-3) — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt `gh pr review --approve` — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 6. Always post CI failure analysis as a COMMENT, even on self-authored PRs.
 

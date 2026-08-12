@@ -185,14 +185,20 @@ def _escape_braces(prompt: str, placeholder: str) -> tuple[str, bool]:
     Returns (escaped_prompt, needs_format). In the escaped prompt, {placeholder}
     is replaced with {0} for use with GitHub Actions format(), and all other
     braces are doubled to prevent format() from interpreting them.
+
+    A prompt with no {placeholder} is returned untouched. Doubling is only
+    correct on the way into `format()`, which collapses each pair back to one
+    brace; without the placeholder the caller emits a bare string literal
+    instead, and GitHub Actions does not collapse braces there — the pairs
+    would reach the agent verbatim.
     """
     sentinel = "\x00PLACEHOLDER\x00"
     text = prompt.replace(f"{{{placeholder}}}", sentinel)
+    if sentinel not in text:
+        return prompt, False
     # Double all remaining braces so format() treats them as literals
     text = text.replace("{", "{{").replace("}", "}}")
-    has_placeholder = sentinel in text
-    text = text.replace(sentinel, "{0}")
-    return text, has_placeholder
+    return text.replace(sentinel, "{0}"), True
 
 
 def _effective_cfg(cfg: Config, wf: WorkflowConfig) -> Config:
@@ -468,7 +474,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v9.0.0
       - name: Verify generator output matches committed files
         env:
           GH_TOKEN: ${{{{ github.token }}}}

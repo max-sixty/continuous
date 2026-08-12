@@ -35,7 +35,7 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v9.0.0
 
       # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
       # conflicting PRs it 404s and every downstream step cascades as skipped.

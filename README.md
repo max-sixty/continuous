@@ -80,9 +80,12 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **notifications** | Every 15 minutes           | Polls GitHub notifications, responds to unhandled mentions, marks handled threads as read.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
 
-Scheduled workflows also support manual dispatch for testing. All are
-enabled by default except **ci-fix**, which requires `watched_workflows`
-to be configured. Any can be disabled:
+Scheduled workflows also support manual dispatch for testing. GitHub runs
+`schedule` triggers on a best-effort basis and drops ticks under load, so
+the intervals above are the requested cadence rather than a guarantee —
+observed gaps between runs are routinely longer. All are enabled by
+default except **ci-fix**, which requires `watched_workflows` to be
+configured. Any can be disabled:
 
 ```yaml
 workflows:
@@ -105,9 +108,8 @@ resolve bot identity. They differ in how the agent runs:
 - **Claude harness** — runs the official `claude` binary headless
   (`claude -p`) as a non-sudo sandbox user behind a local
   credential-injecting proxy, so the bot token and Anthropic credential
-  never enter the agent's environment. Each workflow's prompt names the
-  skill to run in prose rather than as a leading slash command, which
-  keeps the built-in `/code-review` reachable during the run.
+  never enter the agent's environment. Each workflow's prompt is a slash
+  command (`/tend-ci-runner:review`) that loads the matching skill.
 - **Codex harness** — installs the `@openai/codex` CLI on the runner and
   shells out to `codex exec`. An AGENTS.md staged into `$CODEX_HOME`
   teaches Codex to resolve `/tend-ci-runner:NAME` references to the
