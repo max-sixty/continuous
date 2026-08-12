@@ -1160,6 +1160,51 @@ def test_mention_skips_bot_reply_container(tmp_path: Path) -> None:
     assert run.index(count) < run.index("BOT_REVIEWS=$(")
 
 
+def test_mention_skips_third_party_bare_approval(tmp_path: Path) -> None:
+    """A human's APPROVED review with no body and no inline comments is
+    terminal for the bot as well, and the two gates above are author-keyed, so
+    it falls through to the PR-author short-circuit (on a bot-authored PR) or
+    to BOT_REVIEWS (on one the bot has reviewed) and starts a session that can
+    only exit silently — the approval asks for nothing and the bot cannot
+    merge.
+
+    The narrowing is load-bearing in both directions:
+
+    - `approved` — a bare CHANGES_REQUESTED or COMMENTED review is not
+      terminal, and a human's synthetic reply container arrives as COMMENTED,
+      so widening the state would silence the bot on replies to its own review
+      threads (the same trap `test_mention_skips_bot_reply_container` pins from
+      the author side).
+    - `$INLINE` empty, not reply-only — an approval whose nits live inline is a
+      request addressed to the PR's author, a role the bot has to act in on its
+      own PRs.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    wf = generate_mention(cfg)
+    data = yaml.safe_load(wf.content)
+    check_step = next(
+        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
+    )
+    run = check_step["run"]
+
+    # The two author-keyed gates both open on `$KIND` / `$REVIEW_AUTHOR`, so
+    # this opening belongs to the third-party gate alone. Compare the whole
+    # condition with whitespace normalized: an author clause added here, or the
+    # `$INLINE` clause dropped, fails the equality rather than sliding past an
+    # `in` check.
+    gate = run[run.index('if [ "$REVIEW_STATE" = "approved" ]') :]
+    condition = " ".join(gate.split("; then")[0].split())
+    assert condition == (
+        'if [ "$REVIEW_STATE" = "approved" ] \\ '
+        '&& [ -z "$COMMENT_BODY" ] \\ '
+        '&& [ -z "$INLINE" ]'
+    ), "the third-party skip must key on state, empty body, and zero inline comments"
+
+    # And it precedes the engagement heuristic that would otherwise count the
+    # triggering review as prior participation.
+    assert run.index('[ -z "$INLINE" ]') < run.index("BOT_REVIEWS=$(")
+
+
 # ---------------------------------------------------------------------------
 # Fork guard
 # ---------------------------------------------------------------------------

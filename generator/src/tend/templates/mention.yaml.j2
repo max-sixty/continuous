@@ -289,6 +289,23 @@ jobs:
               echo "should_run=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+
+            # Somebody else's content-free approval is terminal too. The gate
+            # above is author-keyed, so a human's bare APPROVED falls through to
+            # the PR-author short-circuit (on a bot-authored PR) or to
+            # BOT_REVIEWS (on one the bot has reviewed) and starts a session
+            # whose only possible outcome is a silent exit: an approval with no
+            # body and no inline comments asks for nothing, and the bot cannot
+            # merge on its own. Unlike the bot-authored gates this one requires
+            # `$INLINE` to be empty rather than reply-only — an approval whose
+            # nits live inline is a request to the PR's author, which on a
+            # bot-authored PR is a role the bot has to act in.
+            if [ "$REVIEW_STATE" = "approved" ] \
+               && [ -z "$COMMENT_BODY" ] \
+               && [ -z "$INLINE" ]; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
           # Non-mention: check bot engagement
