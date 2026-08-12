@@ -1727,6 +1727,59 @@ def test_credential_environments_rejects_tags_without_a_ruleset() -> None:
     assert "admits tags" in result.message
 
 
+def test_credential_environments_withheld_bypass_list_is_unknown() -> None:
+    """GitHub omits `bypass_actors` below repo admin, so the bot's own token
+    reads the gating ruleset as unverifiable rather than absent. Calling that
+    a failure would fail the nightly on exactly the shape tend prescribes,
+    while a maintainer running the same check as admin sees it pass."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    fake = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is None, result.message
+    assert "release" in result.message
+
+
+def test_credential_environments_confirmed_bad_ref_outranks_a_withheld_list() -> None:
+    """An entry naming an unverified ref is a finding the token did settle, so
+    it must not be downgraded to unknown by a tag entry it could not. The API
+    returns policy entries in creation order, so whichever comes first would
+    otherwise decide the verdict."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    for order in ("tag v*\nbranch staging", "branch staging\ntag v*"):
+        fake = _credential_env_gh(
+            {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, order)},
+            tag_rulesets={"7": withheld},
+        )
+        with patch("tend.checks._gh", side_effect=fake):
+            result = check_credential_environments("owner/repo", _config(), ["main"])
+        assert result.passed is False, f"{order}: {result.message}"
+        assert "staging" in result.message
+
+
+def test_credential_environments_unlistable_branch_policy_is_unknown() -> None:
+    """Listing the policy entries can fail on permission alone, and an unread
+    list is not a gate confirmed absent — the same reason a withheld bypass
+    list reports unknown."""
+    inner = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")}
+    )
+
+    def fake(*args, **kwargs):
+        url = args[-3] if "--jq" in args else args[-1]
+        if url.endswith("/deployment-branch-policies"):
+            return _make_completed(returncode=1)
+        return inner(*args, **kwargs)
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is None, result.message
+    assert "cannot list" in result.message
+
+
 def test_credential_environments_bot_bypassable_tag_ruleset_does_not_gate() -> None:
     """A tag ruleset whose bypass list includes a write-level role is one the
     bot walks through, so it must not credit the tag entries."""
@@ -1895,6 +1948,25 @@ def test_credential_environments_steerable_trigger_defeats_a_ref_policy() -> Non
     assert "`release`" in result.message
 
 
+def test_credential_environments_steerable_trigger_outranks_an_unverified_tag() -> None:
+    """The trigger defeats the policy whichever way the tag entry would have
+    settled, so it is a finding the token did reach — it must not be held back
+    to unknown by the entry it could not."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+        workflows={
+            "release.yaml": (
+                "on:\n  release:\n    types: [published]\n"
+                "jobs:\n  publish:\n    environment: pypi\n"
+            )
+        },
+    )
+    assert result.passed is False, result.message
+    assert "`release`" in result.message
+
+
 def test_credential_environments_reviewers_cover_a_steerable_trigger() -> None:
     """Required reviewers gate every trigger, ref-independent — the one control
     that covers the triggers a ref policy cannot."""
@@ -1995,18 +2067,188 @@ def test_credential_environments_reusable_caller_job_is_not_ungated_oidc() -> No
     assert result.passed is True
 
 
-def test_credential_environments_unreached_reusable_workflow_is_unverified() -> None:
-    """Its callers may live in another repo, which this cannot enumerate."""
+def test_credential_environments_absolute_self_call_inherits_caller_triggers() -> None:
+    """A repo calling its own reusable workflow by the `owner/repo/...@ref`
+    form reaches the same file as the relative one, so the callee inherits the
+    caller's triggers either way."""
     result = _credential_check(
         {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
         workflows={
+            "dispatch.yaml": (
+                "on:\n"
+                "  repository_dispatch:\n"
+                "    types: [publish]\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: owner/repo/.github/workflows/publish.yaml@main\n"
+            ),
             "publish.yaml": (
                 "on:\n  workflow_call:\njobs:\n  publish:\n    environment: pypi\n"
+            ),
+        },
+    )
+    assert result.passed is False
+    assert "`repository_dispatch`" in result.message
+
+
+def test_credential_environments_own_triggers_reach_a_callable_workflow() -> None:
+    """`workflow_call` alongside triggers of its own widens the way in rather
+    than replacing it: the workflow's own `on:` still starts it here, so an
+    uncallable-from-here verdict would walk past an ungated credential this
+    repo really can spend."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "tests.yaml": (
+                "on:\n"
+                "  pull_request:\n"
+                "  push:\n"
+                "    branches: [main]\n"
+                "  schedule:\n"
+                "    - cron: '49 10 * * *'\n"
+                "  workflow_dispatch:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  deploy:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is False, result.message
+    assert "pypi" in result.message
+
+
+def test_credential_environments_unreached_through_a_caller_spends_nothing() -> None:
+    """The chain has to anchor on a workflow with triggers of its own: a caller
+    that nothing here starts leaves its callee unreachable too, and what an
+    unreachable job names is not this repo's to gate."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "wrapper.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: ./.github/workflows/publish.yaml\n"
+            ),
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            ),
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_unreached_reusable_workflow_spends_nothing() -> None:
+    """A run belongs to the repo that starts it: an outside caller's run reads
+    that repo's secrets, deploys to its environments, and mints OIDC for it. So
+    the ungated 'pypi' here is not a credential this repo can spend, and the
+    check must neither fail on it nor stop short of a verdict."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_unreached_dynamic_environment_spends_nothing() -> None:
+    """What an unreachable workflow leaves unreadable is not this repo's to
+    gate either. A reusable deploy parameterised by its caller's input names no
+    environment tend can resolve, and reporting that would hold the check at
+    unverified for as long as the adopter keeps the workflow."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: ${{ inputs.environment }}\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_call_out_of_the_repo_is_unread() -> None:
+    """The same fact the other way: a workflow this repo calls elsewhere
+    deploys to *this* repo's environments, and its file cannot be read from
+    here — so which environment a steerable run reaches is unknown."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "dispatch.yaml": (
+                "on:\n"
+                "  repository_dispatch:\n"
+                "    types: [publish]\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
             )
         },
     )
     assert result.passed is None
-    assert "workflow_call" in result.message
+    assert "dispatch.yaml runs on `repository_dispatch`" in result.message
+    assert "'call'" in result.message
+
+
+def test_credential_environments_call_out_of_the_repo_granting_oidc_is_unread() -> None:
+    """A calling job's `permissions:` cap what the callee may request, so one
+    granting `id-token: write` mints on this repo's behalf — and whether the
+    callee does it inside an environment is not visible here."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "release.yaml": (
+                "on: push\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is None
+    assert "release.yaml job 'call' grants `id-token: write`" in result.message
+
+
+def test_credential_environments_call_out_of_the_repo_changing_nothing() -> None:
+    """With no steerable trigger to defeat the ref policy and no OIDC granted,
+    the unread callee cannot change a verdict — and an unknown that changes no
+    verdict is a skip for nothing."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "release.yaml": (
+                "on: push\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
 
 
 def test_credential_environments_dynamic_environment_name_is_unverified() -> None:

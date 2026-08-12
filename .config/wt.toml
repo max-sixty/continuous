@@ -32,6 +32,7 @@ url = "http://localhost:{{ branch | hash_port }}"
 [[pre-remove]]
 server = "lsof -ti :{{ branch | hash_port }} -sTCP:LISTEN | xargs kill 2>/dev/null || true"
 
-# The Python package lives under generator/; this alias runs pytest from the right cwd.
+# Tests live in four places (generator/, proxy/, the install-tend scripts,
+# worker/); dev/test.sh runs the lot, mirroring ci.yaml's test jobs.
 [aliases]
-test = "cd generator && uv run pytest {{ args }}"
+test = "dev/test.sh {{ args }}"

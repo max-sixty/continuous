@@ -756,7 +756,9 @@ def test_install_test_workflow_shape(
     # Version is pinned from the committed header (not `@latest`) so a release
     # mid-PR doesn't fail the drift check for an irrelevant reason.
     assert 'uvx "tend@$TEND_VERSION" init --with-install-test' in content
-    assert "astral-sh/setup-uv@v6" in content
+    # Version-agnostic: the exact pin is covered by the regtest output, and
+    # weekly bumps shouldn't have to edit two places.
+    assert "astral-sh/setup-uv@" in content
 
     # Default-branch probe: must not use `git remote set-head origin --auto`,
     # which errors on the default shallow `actions/checkout@v7` (only the PR

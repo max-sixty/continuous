@@ -11,12 +11,15 @@ completely — old formats should fail with a clear error, not silently parse.
 ## Commands
 
 ```bash
-wt test                            # run pytest in generator/
+wt test                            # every suite (generator/, proxy/, install-tend scripts, worker/)
 uvx tend@latest init               # regenerate workflows from .config/tend.yaml
 uvx tend@latest init --dry-run     # preview without writing
 uvx tend@latest check              # verify branch protection, secrets, bot access
-pre-commit run --all-files         # lint: ruff, typos, actionlint, uv-lock
+pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, uv-lock
 ```
+
+`wt test` runs [`dev/test.sh`](dev/test.sh), which mirrors the test jobs in
+`ci.yaml`; arguments go to the pytest suites (`wt test -k render`).
 
 ## Architecture
 
@@ -106,8 +109,8 @@ from `.config/tend.yaml`. Edit the generator or config, not the workflow files
 directly.
 
 The generator is a Python package under `generator/` — uses the uv_build
-backend, requires Python 3.11+. Runtime dependencies: click, ruamel.yaml.
-Dev dependencies: pytest, pytest-regtest.
+backend, requires Python 3.11+. Runtime dependencies: click, jinja2,
+ruamel.yaml. Dev dependencies: pytest, pytest-regtest.
 
 Consuming repos regenerate their `tend-*.yaml` workflows nightly (tend itself
 included — it dogfoods its own workflows). Changes to the generator do not
