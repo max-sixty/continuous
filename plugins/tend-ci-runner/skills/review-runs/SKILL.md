@@ -92,9 +92,14 @@ REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 BOT_LOGIN=$(gh api user --jq '.login')
 # Match the evidence log by its `## Run <id>` heading, not by "newest bot
 # comment" — other skills (nightly) post their own comments on this issue, and
-# the newest one is often not the log.
+# the newest one is often not the log. Anchor with `(^|\n)`, not `^`: jq's `^`
+# matches the start of the *string*, so a log comment that opens with a blank
+# line or a `---` separator — the ordinary shape of the comment the create-new
+# branch below posts — never matches, and the selector silently falls back to a
+# superseded log comment. jq's `m` flag doesn't help; there it means "`.`
+# matches newline", not multi-line anchors.
 EXISTING_COMMENT=$(gh api "repos/$REPO/issues/$TRACKING_NUMBER/comments" \
-  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and (.body | test(\"^## Run [0-9]\")))] | last | .id // empty")
+  --jq "[.[] | select(.user.login == \"$BOT_LOGIN\" and (.body | test(\"(^|\n)## Run [0-9]\")))] | last | .id // empty")
 
 # Verify the run heading references this run's $GITHUB_RUN_ID literally —
 # fabricated round numbers produce dead Workflow links, see @review-gates.md.
