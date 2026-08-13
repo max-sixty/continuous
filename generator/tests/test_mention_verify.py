@@ -233,6 +233,15 @@ def test_a_review_the_api_does_not_have_is_refused(env: dict[str, str]) -> None:
     assert _verdict(env) == ("false", "")
 
 
+def test_a_comment_the_api_does_not_have_is_refused(env: dict[str, str]) -> None:
+    """Without this branch a forged dispatch naming a nonexistent comment id
+    reaches the PR-binding check with an empty `$COMMENT`."""
+    env["PAYLOAD_KIND"] = "pull_request_review_comment"
+    env["MISSING_COMMENT"] = "1"
+
+    assert _verdict(env) == ("false", "")
+
+
 def test_a_comment_belonging_to_another_pr_is_refused(env: dict[str, str]) -> None:
     """Inline comments fetch by id alone, so a payload pairing a real comment
     with an unrelated PR would otherwise steer the handle job at that PR."""
@@ -257,8 +266,6 @@ def test_the_words_judged_come_from_the_api_not_the_payload(
 ) -> None:
     """The body, url and timestamp all come off the fetched record — the
     payload carries identifiers only."""
-    _review(env, body=f"@{BOT} please look")
-
     _review(env, body=f"@{BOT} please look")
 
     assert _verdict(env) == ("true", "mention")
