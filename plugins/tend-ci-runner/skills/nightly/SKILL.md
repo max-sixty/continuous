@@ -107,7 +107,9 @@ Skip the rest of this step only when every query landed and nothing printed.
 For each conflicted PR by one of these bots, first confirm the branch has no human commits — both triggers force-push and would discard local edits. The check compares each commit's author login against the bot's commit-author login (`dependabot[bot]` or `renovate[bot]`); note that the PR's `.author.login` is the App slug (`app/dependabot`, `app/renovate`) and does **not** match — use the literal commit-author login below.
 
 ```bash
-# COMMIT_LOGIN is "dependabot[bot]" or "renovate[bot]" depending on the bot
+# COMMIT_LOGIN is "dependabot[bot]" or "renovate[bot]" depending on the bot.
+# `--json commits` caps at this PR's first 100 commits; a bump branch carries
+# one or two, so the cap can't hide a human commit here.
 gh pr view <number> --json commits \
   | jq --arg bot "$COMMIT_LOGIN" \
        '[.commits[].authors[].login] | unique | map(select(. != $bot))'
