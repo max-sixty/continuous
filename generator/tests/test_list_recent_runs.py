@@ -111,6 +111,7 @@ def env(tmp_path: Path) -> dict[str, str]:
         "RUNS_JSON": str(tmp_path / "runs.json"),
         "DATE_TABLE": str(tmp_path / "date-table"),
         "FAKE_NOW": str(NOW),
+        "GITHUB_REPOSITORY": "owner/repo",
         "GITHUB_WORKFLOW": "review-reviewers",
         "GITHUB_RUN_ID": "999",
     }
@@ -158,6 +159,15 @@ def test_window_floors_at_the_anchors_start(env: dict[str, str]) -> None:
     assert result.returncode == 0, result.stderr
     assert _ids(result) == [1]
     assert "WARNING" not in result.stderr
+    anchor_calls = [
+        line
+        for line in Path(env["GH_CALLS"]).read_text().splitlines()
+        if "--status success" in line
+    ]
+    assert anchor_calls and all("--repo owner/repo" in c for c in anchor_calls), (
+        "the anchor query must name the workflow's own repo explicitly, not "
+        "lean on cwd remote detection"
+    )
 
 
 def test_anchor_query_excludes_the_current_run(env: dict[str, str]) -> None:

@@ -364,6 +364,9 @@ def test_moved_head_is_reported_not_absorbed(env: dict[str, str]) -> None:
     assert result.returncode == 0
     assert "branch advanced to " + "b" * 40 in result.stdout
     assert HEAD_SHA in result.stdout
+    assert "pr view 7 --repo owner/repo" in Path(env["GH_CALLS"]).read_text(), (
+        "the head re-read must name the repo explicitly"
+    )
 
 
 # --- rerun-failed-jobs.sh ---------------------------------------------------
@@ -413,7 +416,9 @@ def test_rerun_reports_each_new_attempt_jobs_conclusion(env: dict[str, str]) -> 
     assert "success\tlint" in result.stdout
     assert "failure\ttests" in result.stdout
     calls = Path(env["GH_CALLS"]).read_text()
-    assert "run rerun 9000 --failed" in calls
+    assert "run rerun 9000 --failed --repo owner/repo" in calls, (
+        "the rerun must name the repo explicitly, not lean on cwd remote detection"
+    )
     assert "jobs/13" not in calls, "polled a job the rerun never re-queued"
 
 

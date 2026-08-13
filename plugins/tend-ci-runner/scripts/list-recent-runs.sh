@@ -62,7 +62,10 @@ floor_cap=$((now - 21600))
 if [ -n "${GITHUB_WORKFLOW:-}" ]; then
   # Exclude this run itself: a re-run attempt of it can already read as a
   # completed success, and anchoring on it would collapse the window to zero.
-  prev_start=$(gh run list --workflow "$GITHUB_WORKFLOW" \
+  # The anchor comes from the repo the workflow runs in — $GITHUB_REPOSITORY,
+  # named explicitly so the query doesn't lean on cwd remote detection —
+  # never from TARGET_REPO.
+  prev_start=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$GITHUB_WORKFLOW" \
     --status success --limit 5 --json databaseId,createdAt \
     --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0}))] | .[0].createdAt // empty")
   if [ -n "$prev_start" ]; then
