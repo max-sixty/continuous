@@ -1,6 +1,6 @@
 ---
 name: review-reviewers
-description: Hourly outcome-based analysis of tend's CI behavior — checks whether tend's outputs were accepted or rejected, escalating to session logs only when outcomes look wrong.
+description: Outcome-based analysis of tend's CI behavior — checks whether tend's outputs were accepted or rejected, escalating to session logs only when outcomes look wrong.
 argument-hint: "<owner/repo>"
 metadata:
   internal: true
@@ -8,7 +8,7 @@ metadata:
 
 # Review Reviewers
 
-Analyze tend's CI behavior on the target repo over the past hour. Focus on **outcomes** — what the bot produced publicly and whether it was accepted — rather than internal session mechanics. Create PRs or issues on tend when outcomes reveal behavioral problems.
+Analyze tend's CI behavior on the target repo over the window Step 1 returns. Focus on **outcomes** — what the bot produced publicly and whether it was accepted — rather than internal session mechanics. Create PRs or issues on tend when outcomes reveal behavioral problems.
 
 ## First steps
 
@@ -219,6 +219,8 @@ The script discovers `tend-*` workflows by default. Pass additional prefixes as 
 If empty, record the run as all-clear per "Recording below-threshold findings" above, then skip to Step 6.
 
 If the script printed a `WARNING:` on stderr, the list is known-incomplete — the window was clamped, no anchor was found, or a workflow hit the fetch limit. Record a coverage gap naming the missing span instead of an all-clear, whether or not the list came back empty; the next run's floor advances past that span regardless, so an unrecorded gap is never revisited.
+
+**Read the window off the script, and report it.** The anchoring that tiles consecutive windows applies only under an hourly cron; every other trigger — `workflow_dispatch` included — takes a now-anchored 1-hour window, and takes it silently, since the coverage-gap warnings above live on the anchored path. This workflow is dispatch-only, so a run checking on a change that landed earlier than an hour ago is looking past it. State the window's bounds in your summary and scope every claim to them: "no problems in the hour to 14:05Z", never "no problems".
 
 ## Step 2: Survey outcomes via cheap subagent
 
