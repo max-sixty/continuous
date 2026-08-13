@@ -1,7 +1,43 @@
 # Opening a skill PR from CI
 
-The mechanics for proposing a change to a repo's `.claude/skills/` from a CI
-session — when to propose is **Learning from Feedback** in SKILL.md.
+Turning a maintainer's correction into durable guidance: whether it clears the
+bar, and the mechanics of proposing it against the consuming repo's
+`.claude/skills/running-tend/SKILL.md`.
+
+## Whether to propose
+
+The feedback must be **generalizable** — it applies to future runs, not just
+this task — and clear at least one bar:
+
+- **Recurrence**: the same correction seen at least twice, or direct evidence
+  the failure mode recurs. "Saw it once, wrote a rule" is below the bar.
+- **Invisible failure mode**: the bad behavior wouldn't surface as a future CI
+  failure (a cancelled or timed-out run whose work actually succeeded), so
+  nothing would catch it next time.
+- **Maintainer asked** for the rule to be codified, even after one occurrence.
+
+Bundled tend defaults go through human review on the tend repo, which acts as
+an implicit recurrence filter; per-repo overlays don't, so the bar lives here.
+
+Signals pointing at a generalizable rule: the correction names a pattern
+("stop adding inline suggestions for formatting — the linter handles that")
+rather than a task detail, or references a repo convention ("we use
+conventional commits", "PRs go to `develop`").
+
+Don't propose when the feedback is task-specific, when a bundled tend skill
+already covers the lesson (that changes through a PR against tend — see
+**Filing issues** in `other-repos.md`), when confidence that it
+generalizes is low (ask instead), or when it comes from a non-maintainer —
+check `author_association`. Non-maintainers can raise preferences, but only a
+maintainer authorizes codifying them; note the pattern in a reply and let one
+confirm.
+
+When the correction identifies a gap in a **bundled** skill — the same root
+cause would fire in every tend consumer — the fix belongs in tend rather than
+the overlay. Signals: the fix reads as generic guidance any consumer would
+want, and the corrected behavior comes from bundled skill text.
+
+## Mechanics
 
 1. **Complete the current task first.** The skill update is always a separate
    PR.

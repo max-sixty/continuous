@@ -25,50 +25,20 @@ Load `/tend-ci-runner:running-in-ci` first — it contains CI security rules, po
 Before reading the diff, run cheap checks to avoid redundant work. Shell state doesn't persist between tool calls — re-derive `REPO` in each bash invocation or combine commands.
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-BOT_LOGIN=$(gh api user --jq '.login')
 HEAD_SHA=$(gh pr view <number> --json commits --jq '.commits[-1].oid')
 PR_AUTHOR=$(gh pr view <number> --json author --jq '.author.login')
 IS_DRAFT=$(gh pr view <number> --json isDraft --jq '.isDraft')
 EVENT_ACTION=$(jq -r '.action // ""' < "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)
 
-# Find the bot's most recent *real* review. Replying to a review thread
-# (`POST /pulls/{n}/comments/{id}/replies`) makes GitHub wrap the reply in a
-# synthetic zero-body COMMENTED review anchored at the then-current HEAD, so the
-# newest review record routinely points at a commit nothing reviewed. Count a
-# record only when it has a body, owns a top-level (non-reply) inline comment, or
-# is an APPROVED review — reply containers are always zero-body COMMENTED, while
-# an empty-body approval and an empty-body review carrying real inline findings
-# both still anchor.
-SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
-  --jq '.[] | select(.in_reply_to_id == null) | .pull_request_review_id' | jq -s 'unique')
-
-# IMPORTANT: REST reviews carry `.commit_id`, NOT the `.commit.oid` that
-# `gh pr view --json reviews` returns — don't confuse the two. `gh api --jq`
-# accepts no `--arg`/`--argjson`, so pipe to `jq` rather than using `--jq`.
-LAST_REVIEW=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
-  | jq -s --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" \
-    'add | [.[] | select(.user.login == $bot)
-                | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
-         | last // {}')
-LAST_REVIEW_SHA=$(jq -r '.commit_id // empty' <<<"$LAST_REVIEW")
-
-# A force-push does not just move HEAD — GitHub re-points the prior review's
-# `.commit_id` at the NEW head, so `LAST_REVIEW_SHA == HEAD_SHA` reads true for
-# code nothing ever reviewed and the run exits silently, leaving a stale APPROVE
-# standing as the active verdict. (An ordinary push leaves the old anchor
-# intact; only a rewrite re-points it, so `.commit_id` alone can't tell the two
-# apart.) Probe the timeline for a rewrite newer than that review.
-LAST_REVIEW_AT=$(jq -r '.submitted_at // empty' <<<"$LAST_REVIEW")
-FORCE_PUSHED=0
-if [ -n "$LAST_REVIEW_AT" ]; then
-  FORCE_PUSHED=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
-    | jq -s --arg at "$LAST_REVIEW_AT" \
-      'add | [.[] | select(.event == "head_ref_force_pushed" and .created_at > $at)] | length')
-fi
+# Which of the bot's reviews actually anchors this head — reply containers and
+# force-push re-anchoring both discounted. See the script header for why
+# `.commit_id` alone can't be read directly.
+STATE=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number>)
+LAST_REVIEW_SHA=$(jq -r '.last_substantive.sha // empty' <<<"$STATE")
+FORCE_PUSHED=$(jq -r '.force_pushed_since' <<<"$STATE")
 ```
 
-If `FORCE_PUSHED` is non-zero, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports. If that prior review was an `APPROVED` and the re-review lands on findings rather than an approval, dismiss it too — it is re-anchored onto the rewritten head, so posting a COMMENT alone leaves the PR reading as bot-approved. `jq -r '.state, .id' <<<"$LAST_REVIEW"` gives the state and the `$REVIEW_ID` for step 6's `reviews/$REVIEW_ID/dismissals` call.
+If `FORCE_PUSHED` is `true`, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports. If that prior review was an `APPROVED` and the re-review lands on findings rather than an approval, dismiss it too — it is re-anchored onto the rewritten head, so posting a COMMENT alone leaves the PR reading as bot-approved. `jq -r '.last_substantive.state, .last_substantive.id' <<<"$STATE"` gives the state and the `$REVIEW_ID` for step 6's `reviews/$REVIEW_ID/dismissals` call.
 
 Otherwise, if `LAST_REVIEW_SHA == HEAD_SHA`, this commit has already been reviewed — finish at step 9 without posting. Two exceptions: an unanswered conversation question directed at the bot (check below), or `EVENT_ACTION == "ready_for_review"` (the PR just transitioned out of draft, so any prior review was a draft-mode review and the author is now asking for a full one — proceed).
 
@@ -241,36 +211,19 @@ gh api "repos/$REPO/issues/<number>/reactions" -f content="+1"
 Before posting, verify HEAD hasn't moved, the PR is still open, and no review was already posted for this commit:
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-BOT_LOGIN=$(gh api user --jq '.login')
 read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json commits,state \
   --jq '"\(.commits[-1].oid) \(.state)"')
 [ "$CURRENT_HEAD" != "$HEAD_SHA" ] && echo "HEAD moved — fold in per step 9, then re-run these mechanics against $CURRENT_HEAD" && exit 0
 [ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
 
-# Same substantive-review filter as step 1, and for the same reason: a synthetic
-# reply container is anchored at whatever HEAD was when the reply posted, so one
-# left on the current HEAD would read as "already reviewed" and discard this run's
-# review at the last step, after all the work. Shell state doesn't carry between
-# tool calls, so re-derive $SUBSTANTIVE here.
-#
-# The force-push re-anchoring from step 1 lands on this guard too, and harder: a
-# review submitted against the rewritten-away commit now reports
-# `.commit_id == $HEAD_SHA`, so it reads as "already reviewed" and discards the
-# very re-review step 1's `FORCE_PUSHED` probe just unblocked. Drop reviews older
-# than the newest rewrite; anything submitted after it really did anchor here.
-# NOTE: REST API uses .commit_id (not .commit.oid from gh pr view --json)
-SUBSTANTIVE=$(gh api --paginate "repos/$REPO/pulls/<number>/comments" \
-  --jq '.[] | select(.in_reply_to_id == null) | .pull_request_review_id' | jq -s 'unique')
-LAST_FORCE_PUSH_AT=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
-  | jq -rs 'add | [.[] | select(.event == "head_ref_force_pushed") | .created_at] | max // ""')
-ALREADY_POSTED=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
-  | jq -rs --argjson sub "$SUBSTANTIVE" --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" \
-    --arg fp "$LAST_FORCE_PUSH_AT" \
-    'add | [.[] | select(.user.login == $bot and .commit_id == $head)
-                | select($fp == "" or .submitted_at > $fp)
-                | select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED")]
-         | last | .submitted_at // empty')
+# `at_head` is non-null only for a review that genuinely anchors this commit: a
+# synthetic reply container left on the current HEAD would otherwise read as
+# "already reviewed" and discard this run's review at the last step, after all
+# the work — and so would a review of the commit a rewrite replaced, which
+# reports `.commit_id == $HEAD_SHA` and would discard the very re-review step
+# 1's `FORCE_PUSHED` probe just unblocked.
+ALREADY_POSTED=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> \
+  | jq -r '.at_head.at // empty')
 [ -n "$ALREADY_POSTED" ] && echo "Already reviewed — finish at step 9" && exit 0
 ```
 
@@ -378,26 +331,14 @@ GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when
 **Check which case you are in before deciding how to recover** — query for an orphan review on the current HEAD first, then branch on the result.
 
 ```bash
-# The body-length test is what distinguishes an orphan from a synthetic reply
-# container sitting on the same HEAD: case (a) persists the body, a container
-# never has one. Without it, the PUT below would overwrite an unrelated reply.
-# `gh api --paginate` applies `--jq` to each page separately, so a `| last`
-# inside `--jq` returns one id *per page* — pipe to `jq -rs 'add | …'` to reduce
-# over the merged array instead.
-#
-# The force-push filter from the pre-post guard is required here too, and the
-# consequence of omitting it is worse than a skipped run: a body-bearing review
-# from before a rewrite reports `.commit_id == $HEAD_SHA`, passes the body-length
-# test, and the PUT below overwrites that older review's text with this run's
-# findings — destroying a published review and leaving the new body over the old
-# review's inline comments on code that no longer exists.
-LAST_FORCE_PUSH_AT=$(gh api --paginate "repos/$REPO/issues/<number>/timeline" \
-  | jq -rs 'add | [.[] | select(.event == "head_ref_force_pushed") | .created_at] | max // ""')
-ORPHAN_ID=$(gh api --paginate "repos/$REPO/pulls/<number>/reviews" \
-  | jq -rs --arg bot "$BOT_LOGIN" --arg head "$HEAD_SHA" --arg fp "$LAST_FORCE_PUSH_AT" \
-    'add | [.[] | select(.user.login == $bot and .commit_id == $head and (.body | length) > 0)
-                | select($fp == "" or .submitted_at > $fp)]
-         | last | .id // empty')
+# `orphan_id` is the body-bearing bot review anchored here, and only that: a
+# synthetic reply container on the same HEAD has no body, so the PUT below
+# can't overwrite an unrelated reply, and a body-bearing review from before a
+# rewrite is excluded too — it reports `.commit_id == $HEAD_SHA`, so without
+# that filter the PUT destroys a published review, leaving this run's findings
+# over the old review's inline comments on code that no longer exists.
+ORPHAN_ID=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> \
+  | jq -r '.orphan_id // empty')
 ```
 
 Then, in either case, **move the failed inline comments into the review body** as fenced code blocks with file paths, and:

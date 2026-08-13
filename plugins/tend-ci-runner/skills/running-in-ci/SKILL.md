@@ -86,7 +86,7 @@ If a linked PR merged (or the triggering PR itself merged) **after the triggerin
 
 - **Secrets**: Never run commands that introspect the process env (`env`, `printenv`, `set`, `export`) or `cat`/`echo` credential files. The rule is absolute — name-stripping filters like `env | cut -d= -f1` do not make these commands safe: the harness may place credential-bearing values in the environment (the Codex harness passes the PAT and model auth directly to the agent), and a single unfiltered `env` or `printenv FOO` prints the value verbatim into the session log, which is uploaded as an artifact. Never include tokens or credentials in responses or comments.
 - **Merging**: Never merge PRs or enable auto-merge (`gh pr merge`, `gh pr merge --auto`). PRs are proposals — a maintainer decides when to merge.
-- **Scope**: By default, PRs, pushes, and comments on existing threads in other repos are off-limits — the point is to never *spam* repos outside the bot's area of ownership. The exception is an **explicitly invited** contribution: when a maintainer of the target repo asks for it in-thread, or the target's published contributing policy welcomes it, AND the contribution helps the repo the bot maintains (e.g. upstreaming a fix for a dependency bug the bot is working around), the bot may open a PR or comment on that thread — see **Contributing to Other Repos on Invitation** below. Filing fresh issues follows **Filing Issues in Other Repos** below. Absent an explicit invitation, the default holds — surface the blocker per **When a scope rule blocks the right action** below rather than routing around it.
+- **Scope**: By default, PRs, pushes, and comments on existing threads in other repos are off-limits — the point is to never *spam* repos outside the bot's area of ownership. The exception is an **explicitly invited** contribution: when a maintainer of the target repo asks for it in-thread, or the target's published contributing policy welcomes it, AND the contribution helps the repo the bot maintains (e.g. upstreaming a fix for a dependency bug the bot is working around), the bot may open a PR or comment on that thread. Absent one, the default holds — surface the blocker rather than routing around it. **Other Repos** below carries all three cases.
 - **Hanging commands**: Never use `gh run watch` or `gh pr checks --watch` — both hang indefinitely. Poll with `gh pr checks` in a loop instead.
 
 ## End the turn only when work is shipped
@@ -115,47 +115,9 @@ So if you can open the PR in this run, open the PR. Reserve an issue for what yo
 
 This governs your own repo only; filing into another repo follows the section below.
 
-## Filing Issues in Other Repos
+## Other Repos
 
-Default: file an issue in the current repo asking for permission to file in the target. On maintainer approval, file in the target.
-
-The adopter's `running-tend` overlay may grant a standing exception for **agent-equipped** targets — repos that run their own coding agent. Signals:
-
-- `.github/workflows/tend-*.yaml` present (the target uses tend).
-- A workflow invokes `anthropics/claude-code-action` or another coding-agent action.
-- Recent issues or PRs authored by a bot account, with no human pushback in the thread.
-
-Two or three convergent signals are enough; borderline cases revert to the default. Without an explicit opt-in in `running-tend`, the default also applies.
-
-When asking permission (the default path), close with a short offer so the user can record a preference for future asks. The offer should let them pick either outcome: have the bot file without asking next time, or keep approving each one but stop seeing the offer. Phrase it to fit the thread.
-
-Either reply gets codified in the consumer repo's `running-tend` overlay per **Learning from Feedback** below — opt-in adds the target (or "all agent-equipped targets") to the exceptions list; suppress adds a one-line rule telling the bot to skip the offer for future asks.
-
-Whether filed direct or post-approval, the issue body includes:
-
-- Problem statement: what fires, where, under what conditions.
-- Evidence: run links; cost/duration if relevant.
-- Proposed fix with code snippets a maintainer would otherwise re-derive.
-
-### Contributing to Other Repos on Invitation
-
-The Scope default bars *unsolicited* PRs/comments in other repos. It does not bar an *invited* one. When BOTH hold, the bot may open a PR or comment on an existing thread in the target repo:
-
-- **Explicit invitation** — a maintainer of the target repo asked for the contribution in-thread (e.g. "do you want to open the PR?"), or the target's published contributing policy welcomes outside contributions of this kind. Inferred welcome (agent signals, an open "help wanted" label without a direct ask) is not enough — that reverts to the default.
-- **Serves the home repo** — the contribution advances the repo the bot maintains, most often upstreaming a fix for a dependency bug the bot is currently working around locally, so the workaround can later be dropped.
-
-Keep it to the invited scope: the specific PR or comment asked for, attributed to the bot account, with the same evidence bar as any other output (repro, traced mechanism, verified fix). Don't expand into unrelated upstream work. If the invitation is ambiguous, treat it as absent and surface it to the home maintainer per **When a scope rule blocks the right action** below.
-
-### When a scope rule blocks the right action
-
-When a **Scope** restriction is the only thing between you and the correct move (e.g. the right step is to add evidence to an existing upstream thread, which the rule bars), don't silently substitute a workaround and report success — that hides the wall.
-
-Surface the blocker on the triggering thread and offer the maintainer both:
-
-1. **Take the upstream action on approval** — file a fresh issue, or note evidence on the existing thread.
-2. **Relax the rule going forward** — via the consuming repo's `running-tend` overlay.
-
-Record their choice per **Learning from Feedback** below.
+Default: don't act in another repo unsolicited. File an issue in the current repo asking permission to file in the target; on maintainer approval, file there. `references/other-repos.md` carries the rest: the standing exception an overlay can grant for agent-equipped targets, what an issue body must contain, when an invitation makes a PR or comment in the target legitimate, and what to do when a scope rule is the only thing between you and the right move.
 
 ## PR Creation
 
@@ -483,188 +445,11 @@ CI runs are not interactive — every claim must be grounded in evidence. The th
 
 Read logs, code, and API data before drawing conclusions. Show evidence: cite log lines, file paths, commit SHAs. Trace causation — if two things co-occur, find the mechanism rather than saying "this may be related." Never claim a failure is "pre-existing" without checking main branch CI history. Distinguish what you verified from what you inferred.
 
-### User-facing comments require source evidence
-
-Public comments — on issues, PRs, or in review threads — are permanent and visible. A hallucinated detail (wrong syntax, invented API, nonexistent flag) misleads users and erodes trust. **It is always better to take longer and produce a correct response than to respond quickly with fabricated details.**
-
-Before posting any specific claim — a configuration snippet, command syntax, variable name, or API behavior — find the **source text** that confirms it. Source text means documentation, help output, test expectations, or the code that implements the public interface. Internal implementation code (struct fields, variable names in Rust/Python/etc.) shows what exists internally but not how it's exposed to users — read the docs or user-facing layer too.
-
-<example>
-<bad reason="Read Rust code showing a 'target' variable and invented $WT_TARGET">
-
-Bad: Saw `extra_vars.push(("target", target_branch))` in Rust source → posted a hook example using `$WT_TARGET` (an environment variable that doesn't exist — hooks use `{{ target }}` Jinja templates).
-
-</bad>
-<good reason="Verified syntax against user-facing documentation before posting">
-
-Good: Saw `("target", target_branch)` in Rust source → read `docs/hook.md` → confirmed hooks use `{{ target }}` syntax → posted correct example.
-
-</good>
-</example>
-
-For **behavioral claims** — "X happens when you run Y", "command Z works in scenario W" — reading code is not sufficient. Code has conditional branches, early returns, and error paths that are easy to miss when tracing mentally. Before asserting what a command does in a specific scenario, either find a test that exercises that exact scenario or run the command yourself. If neither is feasible, hedge: "Based on code reading, I believe X, but I haven't verified this end-to-end."
-
-<example>
-<bad reason="Traced one code path but missed a guard clause in a called function">
-
-Bad: Read `CommandEnv::for_action("commit", config)` → saw it constructs an env → concluded `wt step commit` works in a detached worktree. Missed that `for_action()` calls `require_current_branch()`, which errors on detached HEAD.
-
-</bad>
-<good reason="Built and tested the actual behavior before claiming">
-
-Good: Read `for_action()` → noticed it calls `require_current_branch()` → uncertain whether detached HEAD hits that path → ran `cargo build && wt step commit` in a detached worktree → confirmed the error → posted accurate answer.
-
-</good>
-</example>
-
-When a project has user-facing documentation (a docs site, `--help` pages, a wiki), link to it. A link to the relevant docs page is more useful than a paraphrased explanation — and finding the link forces verifying the claim.
-
-If you can't find source evidence for a specific detail, say so ("I'm not sure of the exact syntax") rather than guessing. An honest gap is fixable; a confident hallucination gets copy-pasted.
-
-### Specific failure modes
-
-**Links must be fetched, not guessed.** Before pasting any URL in a comment, run `curl -sI <url> | head -1` and confirm `200`. Docs-site slugs are particularly treacherous — `escaping.html` and `quoting.html` and `quote-strings.html` are all plausible nushell page names; only one (or none) actually exists. The canonical source for that project's docs sidebar will tell you which.
-
-**`--jq` projections must include the ID when downstream URLs cite individual items.** Composing `actions/runs/<id>`, `#issuecomment-<id>`, or `pull/<n>` URLs from `gh run list` / `gh api .../comments` / `gh pr list` results requires the ID field in the projection (`databaseId` for runs, `id` for comments, `number` for PRs/issues). If the projection kept only timestamps, titles, or bodies, the bot composes the URL from what it has and fabricates the missing ID — the link 404s. Re-query with the ID field rather than guessing.
-
-**`gh` list commands truncate silently — pass `--limit` whenever the result set is the answer.** `gh issue list`, `gh pr list`, and `gh search` return 30 items unless told otherwise; `gh run list` returns 20. Nothing in the output says it truncated. Two shapes go wrong: a dedup scan misses the existing issue or PR sitting past the cap and opens a duplicate, and a survey ("check every open issue") reports complete coverage of the rows it happened to see. A count that reads exactly the default across repeated measurements is the signature — that's the cap, not a stable value. Set an explicit `--limit` above the plausible ceiling on any query used to dedup, survey, or count. Client-side filtering inside `--jq` is the worst variant: the filter hides the truncation, so a capped result reads as a legitimately short one.
-
-**"Likely" is a stop-sign.** A hedge in a user-facing claim — "likely works", "probably parses as", "should behave like", "I think" — means it rests on an unverified guess. Two options: verify and replace the hedge with the answer, or hedge explicitly ("I haven't tested this — would appreciate if you can confirm") and don't dress up the guess as analysis. The shape is the tell, not the exact words: posting an unverified guess as confident-sounding analysis is the hallucination that erodes trust the fastest.
-
-**Never ship literal placeholders in user-visible content.** Strings like `<PLACEHOLDER>`, `PR #PLACEHOLDER`, `<SHA>`, `TBD`, `XXX`, or `<TODO(fill)>` in an issue body, PR body, or comment are corruption: a deferred substitution that never ran. They survive into the rendered output and read as broken. When a multi-step ask references an artifact that doesn't yet exist ("file an issue that references the PR I'm about to file"), sequence the work so the referenced artifact exists before the referencing body is composed: create the PR → read its number → compose the issue with the number filled in → file the issue. If the cross-reference can't be resolved before posting (e.g. the artifact is out of scope or deferred), omit it or rephrase ("a follow-up PR will…") rather than emit a placeholder. Before any `gh issue create`, `gh pr create`, or `gh ... comment --body-file`, grep the body file for `PLACEHOLDER`, `<SHA>`, `<TODO`, `TBD`, `XXX` and refuse to post if any match. A session that times out mid-sequence leaves an unsubstituted placeholder permanently visible — pre-substitute, don't post-substitute.
-
-### Distinguish transient incidents from durable bugs
-
-Intermittent or inconsistent behavior — the same query returning different results within seconds, an API silently returning empty when records demonstrably exist, a CLI flag working sometimes — points more strongly at an active upstream incident than at a CLI or skill bug. Reproducing the flake confirms the symptom but not the cause; the cause is often a current incident on the upstream service, in which case the right disposition is to wait for resolution rather than commit a code workaround that outlives the incident. Before designing a workaround, check upstream status. For GitHub-side symptoms:
-
-```bash
-# Fetch first, parse second. The endpoint sits behind an edge that sometimes
-# answers a CI runner with an HTML challenge page instead of JSON; piping that
-# straight into jq gives a parse error on stderr and an empty stdout, which
-# reads exactly like "no open incidents". `-f` catches a challenge served as a
-# non-200 and the `jq -e` probe catches one served as 200; capturing the body
-# means the status is curl's or jq's, not a pipeline's (a bare
-# `curl … | jq … || …` exits 0 on the challenge page).
-if ! INCIDENTS=$(curl -fsS 'https://www.githubstatus.com/api/v2/incidents/unresolved.json') \
-   || ! echo "$INCIDENTS" | jq -e . >/dev/null 2>&1; then
-  echo 'STATUS PROBE FAILED — upstream state unknown, not clear'
-else
-  echo "$INCIDENTS" \
-    | jq '.incidents[] | {created_at, name, impact, components: [.components[].name]}'
-fi
-```
-
-**A failed probe is `unknown`, never `clear`.** Empty output from a successful query means no open incident; a probe that errored means you didn't check. Both resolve the same way — record the symptom in the evidence log and skip the workaround PR — so an unreachable status endpoint is not a reason to file one.
-
-If the response is non-empty and the components/timing match the symptom (e.g. Issues / Pull Requests / Actions during a search-degradation incident), record the symptom in the run's evidence log and exit without a PR. Sibling matrix legs that hit different surface symptoms of the same incident otherwise each open their own near-duplicate workaround PR — title and file dedup don't catch them because each leg picks a different command to mitigate.
-
-<example>
-<bad reason="Reproduced an API flake during an active incident, opened code workarounds without checking upstream status">
-
-Bad: `gh issue list` returns `[]` intermittently for queries whose matching issues clearly exist. Bot opens a PR adding a retry loop. A sibling matrix leg sees the same shape on `gh run list` and opens its own workaround PR swapping to client-side filtering. Both are workarounds for an active upstream search-degradation incident; both get closed once the incident link surfaces.
-
-</bad>
-<good reason="Checked status.github.com first, treated the symptom as transient">
-
-Good: Same flake → `curl /api/v2/incidents/unresolved.json` returns an active "GitHub search is degraded" incident touching Issues + Pull Requests → record the symptom in the evidence log, skip the PR, let the incident resolve.
-
-</good>
-</example>
-
-### Verifying external-tool behavior
-
-When a claim turns on how an external CLI, API, or system behaves, verify by running the code.
-
-Two paths, in order of preference:
-
-1. **Run the tool.** If it's installable in this environment, install it and invoke the specific command or flag in question. Link the output in your reply.
-2. **Read the source.** Tend can clone any public repo. `gh repo clone <owner>/<repo>` then grep for the flag or behavior. Source doesn't lag itself, and a flag that isn't defined in the parser doesn't exist.
-
-If both paths fail (GUI-only tool, private repo, environment-specific behavior), cite what you found, name the remaining gap honestly, and follow **Who to ask when you can't do it yourself** below — don't hand the verification to an outside party, least of all an upstream maintainer reviewing your change.
-
-<example>
-<bad reason="Trusted upstream docs for a fast-moving external CLI and shipped a broken recipe">
-
-Bad: Review asked whether `cmux list-workspaces` had structured output. Read a mintlify page describing `--json` → rewrote the recipe to `cmux list-workspaces --json | jq ...` → committed. The installed cmux had no `--json` flag; every reader hit a broken recipe.
-
-</bad>
-<good reason="Cloned the upstream source and verified the flag before shipping">
-
-Good: Same question. Cloned cmux's source repo → grepped the CLI parser for `list-workspaces` → saw no `--json` flag defined → replied with the source link and proposed an alternative that matched the actual CLI surface.
-
-</good>
-</example>
-
-**Path 1 runs against the live repo.** Verifying a skill's own recipe is the common case, and those recipes write: `gh issue close`, `gh pr comment`, `git push`. Never extract a block programmatically to run it — not by position (`awk` on the Nth fence, `sed` on a line range), and not by anchor either: both hand you a block you haven't read, and the ordinal additionally moves with every edit to the file, so what runs isn't even the block you meant to test. Read the file, then run the commands directly. Run the read half and stop before the pipe into the write:
-
-```bash
-gh issue list --state open --author '@me' --search '"..." in:title' --json number --jq '.[].number'
-# ...and read that, rather than piping it into `xargs gh issue close`.
-```
-
-If the write is the part in question, point it at a scratch object you own. A wrong write is only partly recoverable: reopening an issue leaves the close in its timeline, and a deleted comment has already fired its `issue_comment` event, so any workflow it triggered ran and is still in the run list.
-
-### Who to ask when you can't do it yourself
-
-Some checks need hardware or an environment CI doesn't have (Windows, a GPU, a physical terminal). When you can't complete or verify something directly, escalate in this order and stop at the first rung that works:
-
-1. **Do it yourself.** Exhaust what's reachable from CI first — install the tool, clone and read the source, stand up the missing surface in a container.
-2. **Make it doable yourself.** Add the capability to *your own* repo so no future run needs a favor — e.g. add a Windows CI job that exercises the path, rather than asking a person to run it once by hand.
-3. **Ask a contributor of your own repo**, and only for something that's a logical consequence of what they're already doing (a PR author testing their own change).
-4. **Escalate to your own repo's maintainer** that you're blocked and need help.
-
-Never route the ask *outward* — least of all to the maintainer of another repo who is reviewing or merging your change as a favor. Closing an upstream PR with "if you can confirm on a real Windows terminal I'd appreciate it" hands them work; state the gap honestly ("verified by source inspection, not on hardware") and take rung 2 back home instead.
-
-### Rewriting is authoring
-
-Cross-posting, summarizing, or paraphrasing is not copying — any new content you add requires the same source verification as a fresh comment. If you expand with a config section header, code block, or usage example, verify each addition against the source.
-
-<example>
-<bad reason="Composed new TOML section header without verifying it">
-
-Bad: Cross-posted a hook snippet, added an alias example with `[step]` as the section header (inferred from the `wt step` command name). The actual config section is `[aliases]`.
-
-</bad>
-<good reason="Verified new content against docs before posting">
-
-Good: Cross-posted a hook snippet, added an alias example → checked `dev/*.example.toml` to confirm the section is `[aliases]` → posted with correct syntax.
-
-</good>
-</example>
+`references/grounded-analysis.md` carries the depth: what counts as source evidence for a user-facing claim, how to verify an external tool's behavior and run a skill's own recipes safely, the hallucination shapes that recur (guessed links, silently truncated `gh` lists, unsubstituted placeholders), how to tell an upstream incident from a durable bug before writing a workaround, and who to ask when a check needs hardware CI doesn't have.
 
 ## Learning from Feedback
 
-When a maintainer corrects the bot's behavior during a run — points out a repo convention, a repeated mistake, or a preference the bot should have known — propose a follow-up PR against the consuming repo's `.claude/skills/running-tend/SKILL.md`. This turns one-off corrections into durable guidance for future runs in *this* repo. The PR targets the consuming repo, not tend; bundled tend defaults change through separate PRs against the tend repo.
-
-### When to propose
-
-Open a repo-overlay PR only when feedback is **generalizable** — applies to future runs, not just the current task — AND at least one of these bars is met:
-
-- **Recurrence**: the same correction has been observed at least twice, or there is direct evidence the failure mode is recurring. "Saw it once, wrote a rule" is below the bar.
-- **Invisible failure mode**: the bad behavior would not surface as a future CI failure (e.g. cancelled/timed-out runs whose actual work succeeded), so without codification it would not be caught next time.
-- **Maintainer-explicit codification request**: a maintainer has explicitly asked for the rule to be codified after a single occurrence.
-
-This mirrors the bar tend uses for bundled-skill changes — those go through human review on the tend repo before merge, which acts as an implicit recurrence/impact filter. Per-repo overlays don't get the same scrutiny, so the bar belongs here.
-
-Signals that point toward a generalizable rule:
-
-- Correction names a pattern (*"stop adding inline suggestions for formatting — the linter handles that"*), not a task detail (*"rename this variable"*)
-- Feedback references a repo convention (*"we use conventional commits"*, *"PRs go to the `develop` branch, not `main`"*)
-
-Do **not** propose when:
-
-- The feedback is task-specific (a one-off rewording, a particular variable name)
-- The lesson is already covered by a bundled tend skill — those update through PRs against the tend repo, not per-repo overlays
-- Confidence that the feedback generalizes is low — ask for clarification instead
-- The feedback comes from a non-maintainer — check `author_association` and skip the skill PR. Non-maintainers can raise preferences, but only a maintainer authorizes codifying them. If the pattern is worth capturing, note it in a reply and let a maintainer confirm.
-
-### Bundled-skill defects
-
-When the correction identifies a gap or bug in a **bundled** skill — the same root cause would fire in every tend consumer — the fix belongs in tend, not in this overlay. Signals: the fix reads as generic guidance that would apply to any consumer; the behavior being corrected comes from bundled skill text. File against tend per **Filing Issues in Other Repos** above.
-
-### How to propose
-
-Follow `references/skill-pr-workflow.md` in this skill's directory. It carries the whole recipe: dedup by target file against the bot's open PRs, drafting rules (state the rule, not the incident), the workaround for the read-only `.claude/skills/` mount, and the branch/PR mechanics. Open the PR and exit — don't merge, don't wait, don't ping for review.
+When a maintainer corrects the bot's behavior during a run — a repo convention, a repeated mistake, a preference the bot should have known — propose a follow-up PR against the consuming repo's `.claude/skills/running-tend/SKILL.md`, turning a one-off correction into durable guidance for future runs in *this* repo. Follow `references/skill-pr-workflow.md`: it carries the bar the feedback has to clear, when the fix belongs in tend instead, and the branch/PR mechanics. Open the PR and exit — don't merge, don't wait, don't ping for review.
 
 ## Tone
 
