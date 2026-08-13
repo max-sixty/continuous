@@ -27,16 +27,14 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
-  # The composite actions' shared step bodies live in standalone scripts
-  # (shared/steps/, proxy/) rather than inline `run:` blocks, so
-  # actionlint's built-in shellcheck doesn't see them. Run shellcheck directly
-  # to keep that coverage. -S warning matches actionlint's default severity.
+  # Standalone shell entrypoints aren't visible to actionlint's built-in
+  # shellcheck. Run it directly; -S warning matches actionlint's severity.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
         args: ["-S", "warning"]
-        files: ^(shared/steps/.*\.sh|proxy/setup-sandbox\.sh)$
+        files: ^(shared/steps/.*\.sh|proxy/setup-sandbox\.sh|\.config/codex-cloud/environment\.sh)$
   - repo: local
     hooks:
       # The Claude Code slash-command preprocessor treats a backticked token
