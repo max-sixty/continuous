@@ -253,7 +253,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > done | jq -s add
 > ```
 >
-> Filter the comment calls on `created_at` at both ends. `since` is an `updated_at` floor with no ceiling, so unfiltered it also returns comments written days earlier and merely edited in the window, plus everything posted between the window end and now — this skill starts 20–40 min after its tick, so on a busy repo that is most windows. Those are rows the per-run walk was right not to reach, and a check that contradicts a correct walk every run stops being believed. Leave `CANDIDATES` unbounded above: `updated:` matches the PR's own `updated_at`, so a range drops any PR that got bot output inside the window and was touched after it, and over-inclusion in a candidate list costs nothing. `--limit 100` is load-bearing — `gh pr list` defaults to 30 and truncates silently.
+> Filter the comment calls on `created_at` at both ends. `since` is an `updated_at` floor with no ceiling, so unfiltered it also returns comments written days earlier and merely edited in the window, plus everything posted between the window end and now — this skill starts 20–40 min after its tick, so on a busy repo that is most windows. Those are rows the per-run walk was right not to reach, and a check that contradicts a correct walk every run stops being believed. One shape it drops is genuine in-window output — a `tend-review-runs` append lands as a PATCH to a comment created earlier in the month — so four zeros do not settle a window that contained such a run; map it per the bullet below rather than widening the sweep. Leave `CANDIDATES` unbounded above: `updated:` matches the PR's own `updated_at`, so a range drops any PR that got bot output inside the window and was touched after it, and over-inclusion in a candidate list costs nothing. `--limit 100` is load-bearing — `gh pr list` defaults to 30 and truncates silently.
 >
 > The comment endpoints cover conversation and inline-review comments only; neither returns review submissions, and an empty-body `APPROVE` is `tend-review`'s most common output. Without the fourth count an approvals-only window reports `0, 0` and satisfies the gate below with two zeros carrying no signal. Report all four numbers at the top of your summary. If the sweep found in-window rows your per-run walk did not reach, the walk is wrong — re-map from the PR numbers the sweep found rather than reporting those runs as silent.
 >
@@ -285,6 +285,12 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 >   ```
 >   `PAYLOAD_PR` is the issue/PR number and `PAYLOAD_KIND` is the relayed event (`pull_request_review`, `pull_request_review_comment`). Read the gate's verdict off the `handle` job, which is gated on `should_run`: `handle` with conclusion `skipped` means the engagement gate declined and no agent booted — expected silence, not missing output. Do not read it off `React to mention`, which is skipped on every relayed `pull_request_review` regardless of the verdict (a review submission has no single comment to react to) and on a comment relay admitted for participation rather than a mention.
 > - `tend-ci-fix`: map run → PR via `headBranch`, check for bot commits
+> - `tend-review-runs`: its findings ship as a **PATCH to the month's tracking comment**, so the body carries an old `created_at` and a fresh `updated_at` — invisible to both the sweep above and the corruption scan below, which filter on `created_at`. Find it by the mismatch, then scan the appended tail:
+>   ```bash
+>   gh api "repos/$ARGUMENTS/issues/comments?since=$WINDOW_START&per_page=100" \
+>     --jq ".[] | select(.user.login == \"$BOT_LOGIN\" and .created_at < \"$WINDOW_START\") | {id, created_at, updated_at}"
+>   ```
+>   Past ~65 KB the run opens a fresh comment instead, so the same workflow's output is sometimes an edit and sometimes a create — a window with no such row is not evidence the run stayed silent.
 >
 > **Negative outcome signals** — report any sign the bot's output was rejected, corrected, or ignored. Common shapes (use judgment for signals not listed):
 > - Human reviewer posted CHANGES_REQUESTED after bot approved
