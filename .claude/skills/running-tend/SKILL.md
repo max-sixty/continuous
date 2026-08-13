@@ -32,11 +32,11 @@ spot-check after a release, harness switch, or model bump, not on a cadence. The
 per-repo `tend-review-runs` carries the routine loop; the workflow file's header
 explains the pause.
 
-A dispatched run analyzes **the last hour only**: `list-recent-runs.sh` anchors
-its window — and warns about coverage gaps — only when the event payload carries
-an hourly cron, so every other trigger silently takes the hour ending at the run.
-Dispatch it within the hour of whatever you want it seen, and read the result as
-a sample of that hour rather than a verdict on the change.
+A dispatched run's window opens at the **previous successful `review-reviewers`
+run**, floored 6h back (`list-recent-runs.sh`). With no cron, dispatches usually
+sit further apart than that, so the floor is the normal case: the run covers the
+last 6h and warns on stderr that the rest is a coverage gap. Dispatch it within
+~6h of whatever you want it to see.
 
 These use the tend composite action and produce `claude-session-logs*` artifacts,
 but their names don't match the `tend-*` prefix that scripts filter on by
