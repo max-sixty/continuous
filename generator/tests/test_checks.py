@@ -129,13 +129,19 @@ def _gh_ruleset(
     bypass_actors: list[dict[str, object]] | None,
     user_id: int | None = None,
     ruleset_json: str | None = None,
+    login: str | None = None,
 ) -> object:
     """Build a `_gh` fake serving the calls `_has_restrict_updates_ruleset` makes:
     `/rules/branches/<branch>` returns `rules`; `/rulesets/<id>` returns a ruleset
     with `bypass_actors` (or `ruleset_json` verbatim if given, or returncode=1 if
-    both are None); `users/<login>` returns `user_id` (or returncode=1 if None)."""
+    both are None); `users/<login>` returns `user_id`; `user` returns `login`
+    (each returncode=1 if None)."""
 
     def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str] | None:
+        if args[1] == "user":
+            if login is None:
+                return _make_completed(returncode=1)
+            return _make_completed(f"{login}\n")
         if "/rules/branches/" in args[1]:
             return _make_completed(rules)
         if args[1].startswith("users/"):
@@ -351,15 +357,52 @@ def test_ruleset_bypass_list_not_visible() -> None:
     """GitHub omits `bypass_actors` below ruleset-admin → unverifiable, not empty.
 
     Reading the missing key as an empty list would report "nobody bypasses" —
-    a false pass for exactly the caller who can't see the danger.
+    a false pass for exactly the caller who can't see the danger. And
+    `current_user_can_bypass` is evaluated against the caller, so when the
+    caller is not the bot, its "never" proves nothing about the bot.
     """
     fake = _gh_ruleset(
         _make_branch_rules("update"),
         None,
         ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
+        login="a-maintainer",
     )
     with patch("tend.checks._gh", side_effect=fake):
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+
+
+def test_ruleset_bypass_withheld_but_caller_is_bot() -> None:
+    """Running as the bot, GitHub's own bypass evaluation answers what the
+    withheld list cannot: "never" is the ruleset keeping the caller — the
+    bot — out. The login matches casefolded, like every identity test here —
+    GitHub logins are case-insensitive."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
+        login="My-Bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_ruleset_bot_that_can_bypass_is_not_blocked() -> None:
+    """The bot's own "always" outranks a bypass list naming only roles above
+    write: a bot holding admin (the integration fixture's shape) walks
+    through a ruleset the actor-list inference would credit."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps(
+            {
+                "current_user_can_bypass": "always",
+                "bypass_actors": [_role_actor(ROLE_ID_ADMIN)],
+            }
+        ),
+        login="my-bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
 
 
 def test_only_non_update_rules() -> None:
@@ -1420,12 +1463,14 @@ def _credential_env_gh(
     tag_rulesets: dict[str, dict] | None = None,
     workflows: dict[str, str | None] | None = None,
     unreadable_workflows: bool = False,
+    login: str | None = None,
 ):
     """A `_gh` fake serving the calls `check_credential_environments` makes: the
     environment list; per environment its secret names, detail, and
     deployment-branch-policy lines (`"<type> <name>"` per line); the tag
-    rulesets (id → detail) the tag gate reads when a policy admits tags; and
-    the workflow tree the OIDC and trigger reads parse."""
+    rulesets (id → detail) the tag gate reads when a policy admits tags; the
+    workflow tree the OIDC and trigger reads parse; and `user`, answering
+    `login` (or returncode=1 if None)."""
     tag_rulesets = tag_rulesets or {}
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -1434,6 +1479,10 @@ def _credential_env_gh(
                 return _make_completed(returncode=1)
             return _make_completed(_workflow_tree(workflows or {}))
         url = args[-3] if "--jq" in args else args[-1]
+        if url == "user":
+            if login is None:
+                return _make_completed(returncode=1)
+            return _make_completed(f"{login}\n")
         if url.endswith("/environments"):
             return _make_completed("\n".join(environments) + "\n")
         if url.endswith("/rulesets"):
@@ -1728,19 +1777,38 @@ def test_credential_environments_rejects_tags_without_a_ruleset() -> None:
 
 
 def test_credential_environments_withheld_bypass_list_is_unknown() -> None:
-    """GitHub omits `bypass_actors` below repo admin, so the bot's own token
-    reads the gating ruleset as unverifiable rather than absent. Calling that
-    a failure would fail the nightly on exactly the shape tend prescribes,
+    """GitHub omits `bypass_actors` below repo admin, so a write-scoped token
+    that isn't the bot's reads the gating ruleset as unverifiable rather than
+    absent — its own `current_user_can_bypass` proves nothing about the bot.
+    Calling that a failure would fail on exactly the shape tend prescribes,
     while a maintainer running the same check as admin sees it pass."""
     withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    withheld["current_user_can_bypass"] = "never"
     fake = _credential_env_gh(
         {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
         tag_rulesets={"7": withheld},
+        login="a-maintainer",
     )
     with patch("tend.checks._gh", side_effect=fake):
         result = check_credential_environments("owner/repo", _config(), ["main"])
     assert result.passed is None, result.message
     assert "release" in result.message
+
+
+def test_credential_environments_bot_run_reads_its_own_bypass_verdict() -> None:
+    """The nightly runs as the bot — exactly the identity whose bypass
+    matters — so GitHub's `current_user_can_bypass: never` settles the tag
+    gate that the withheld `bypass_actors` list leaves unverifiable."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    withheld["current_user_can_bypass"] = "never"
+    fake = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+        login="bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is True, result.message
 
 
 def test_credential_environments_confirmed_bad_ref_outranks_a_withheld_list() -> None:
