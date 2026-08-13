@@ -288,9 +288,9 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > - `tend-review-runs`: its findings ship as a **PATCH to the month's tracking comment**, so the body carries an old `created_at` and a fresh `updated_at` — invisible to both the sweep above and the corruption scan below, which filter on `created_at`. Find it by the mismatch, then scan the appended tail:
 >   ```bash
 >   gh api "repos/$ARGUMENTS/issues/comments?since=$WINDOW_START&per_page=100" \
->     --jq ".[] | select(.user.login == \"$BOT_LOGIN\" and .created_at < \"$WINDOW_START\") | {id, created_at, updated_at}"
+>     --jq ".[] | select(.user.login == \"$BOT_LOGIN\" and .created_at < \"$WINDOW_START\" and .updated_at <= \"$WINDOW_END\") | {id, created_at, updated_at}"
 >   ```
->   Past ~65 KB the run opens a fresh comment instead, so the same workflow's output is sometimes an edit and sometimes a create — a window with no such row is not evidence the run stayed silent.
+>   Past ~60 KB the run opens a fresh comment instead, so the same workflow's output is sometimes an edit and sometimes a create — a window with no such row is not evidence the run stayed silent.
 >
 > **Negative outcome signals** — report any sign the bot's output was rejected, corrected, or ignored. Common shapes (use judgment for signals not listed):
 > - Human reviewer posted CHANGES_REQUESTED after bot approved
