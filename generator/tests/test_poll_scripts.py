@@ -16,37 +16,23 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from tests import BASH, tool_path
+from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts"
 POLL_PR_CHECKS = SCRIPTS / "poll-pr-checks.sh"
-POLL_RERUN_JOBS = SCRIPTS / "poll-rerun-jobs.sh"
+RERUN_FAILED_JOBS = SCRIPTS / "rerun-failed-jobs.sh"
 
 HEAD_SHA = "aaaa111122223333aaaa111122223333aaaa1111"
 
-# Serves GraphQL responses in sequence: call N reads $ROLLUP_DIR/N.json,
-# falling back to final.json once the sequence runs out. `pr view` and the
+# GraphQL responses are served in sequence: call N reads $ROLLUP_DIR/N.json,
+# falling back to final.json once the sequence runs out. The run endpoint
+# serves `run_attempt` values consumed line-by-line from $ATTEMPTS (the last
+# line repeats), so a rerun's attempt bump is scriptable. `pr view` and the
 # jobs endpoints run the script's `--jq` through real jq.
-FAKE_GH = r"""#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_CALLS"
-
-jq_expr=""
-prev=""
-for arg in "$@"; do
-  [ "$prev" = "--jq" ] && jq_expr="$arg"
-  prev="$arg"
-done
-
-emit() {
-  if [ -n "$jq_expr" ]; then
-    printf '%s' "$1" | jq -r "$jq_expr"
-  else
-    printf '%s' "$1"
-  fi
-}
-
-case "$1 $2" in
+FAKE_GH = (
+    GH_PREAMBLE
+    + r"""case "$1 $2" in
   "api graphql")
     n=$(( $(cat "$GRAPHQL_CALLS" 2>/dev/null || echo 0) + 1 ))
     echo "$n" > "$GRAPHQL_CALLS"
@@ -57,6 +43,8 @@ case "$1 $2" in
   "pr view")
     emit "$(cat "$HEAD_JSON")"
     ;;
+  "run rerun")
+    ;;
   api*)
     case "$2" in
       repos/*/actions/runs/*/jobs*)
@@ -65,12 +53,20 @@ case "$1 $2" in
       repos/*/actions/jobs/*)
         emit "$(cat "$JOB_DIR/${2##*/}.json")"
         ;;
+      repos/*/actions/runs/*)
+        a=$(head -n 1 "$ATTEMPTS")
+        if [ "$(wc -l < "$ATTEMPTS")" -gt 1 ]; then
+          tail -n +2 "$ATTEMPTS" > "$ATTEMPTS.tmp" && mv "$ATTEMPTS.tmp" "$ATTEMPTS"
+        fi
+        emit "{\"run_attempt\": $a}"
+        ;;
       *) exit 1 ;;
     esac
     ;;
   *) exit 1 ;;
 esac
 """
+)
 
 FAKE_SLEEP = "#!/usr/bin/env bash\nexit 0\n"
 
@@ -82,7 +78,7 @@ def _check_run(
     conclusion: str = "SUCCESS",
     workflow: str = "ci",
     run_id: int = 100,
-    started: str = "2026-01-01T00:00:00Z",
+    started: str | None = "2026-01-01T00:00:00Z",
 ) -> dict:
     return {
         "__typename": "CheckRun",
@@ -104,13 +100,18 @@ def _status_ctx(context: str, state: str) -> dict:
     }
 
 
-def _resp(*nodes: dict) -> str:
+def _resp(*nodes: dict, total: int | None = None) -> str:
     return json.dumps(
         {
             "data": {
                 "repository": {
                     "object": {
-                        "statusCheckRollup": {"contexts": {"nodes": list(nodes)}}
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "totalCount": len(nodes) if total is None else total,
+                                "nodes": list(nodes),
+                            }
+                        }
                     }
                 }
             }
@@ -125,12 +126,7 @@ NULL_ROLLUP = json.dumps(
 
 @pytest.fixture
 def env(tmp_path: Path) -> dict[str, str]:
-    bindir = tmp_path / "fakebin"
-    bindir.mkdir()
-    for name, body in {"gh": FAKE_GH, "sleep": FAKE_SLEEP}.items():
-        path = bindir / name
-        path.write_text(body)
-        path.chmod(0o755)
+    bindir = fake_bin(tmp_path, gh=FAKE_GH, sleep=FAKE_SLEEP)
 
     rollups = tmp_path / "rollups"
     rollups.mkdir()
@@ -138,6 +134,7 @@ def env(tmp_path: Path) -> dict[str, str]:
     jobs_dir.mkdir()
     (tmp_path / "head.json").write_text(json.dumps({"headRefOid": HEAD_SHA}))
     (tmp_path / "jobs.json").write_text(json.dumps({"jobs": []}))
+    (tmp_path / "attempts").write_text("1\n")
 
     return {
         "PATH": tool_path(bindir),
@@ -147,6 +144,7 @@ def env(tmp_path: Path) -> dict[str, str]:
         "HEAD_JSON": str(tmp_path / "head.json"),
         "JOBS_JSON": str(tmp_path / "jobs.json"),
         "JOB_DIR": str(jobs_dir),
+        "ATTEMPTS": str(tmp_path / "attempts"),
         "GITHUB_REPOSITORY": "owner/repo",
         "GITHUB_RUN_ID": "555",
         "GITHUB_WORKFLOW": "tend-review",
@@ -247,12 +245,13 @@ def test_superseded_failure_yields_to_its_replacement(env: dict[str, str]) -> No
     )
 
 
-def test_superseded_failure_with_queued_replacement_stays_pending(
+def test_queued_replacement_without_startedat_stays_pending(
     env: dict[str, str],
 ) -> None:
     """A settled FAILURE whose replacement is still QUEUED is unsettled, not
-    red — `startedAt` is set at queue time, so the replacement wins the
-    reduction and lands in `pending`."""
+    red. CheckRun.startedAt is nullable and a queued run may not carry one, so
+    the group must read pending on any non-terminal entry rather than trusting
+    a timestamp race the stale entry would win."""
     _serve(
         env,
         _resp(
@@ -262,12 +261,7 @@ def test_superseded_failure_with_queued_replacement_stays_pending(
                 run_id=111,
                 started="2026-01-01T00:00:00Z",
             ),
-            _check_run(
-                "tests",
-                status="QUEUED",
-                run_id=222,
-                started="2026-01-01T00:10:00Z",
-            ),
+            _check_run("tests", status="QUEUED", run_id=222, started=None),
         ),
     )
 
@@ -322,6 +316,29 @@ def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
     assert "UNVERIFIED, not green" in result.stdout
 
 
+def test_more_contexts_than_one_page_never_reads_green(env: dict[str, str]) -> None:
+    """The query reads one 100-node page; past that, a dropped node could be
+    the failing check, so an all-green page must not read as a verdict."""
+    _serve(env, _resp(_check_run("tests"), total=150))
+
+    result = _poll(env)
+
+    assert result.returncode == 2
+    assert "more than 100 check contexts" in result.stdout
+
+
+def test_cap_report_survives_a_late_api_blip(env: dict[str, str]) -> None:
+    """A transient failure on a later iteration must not discard what earlier
+    polls saw: the cap report still names the pending checks instead of
+    misdiagnosing 'no rollup'."""
+    _serve(env, _resp(_check_run("slow-matrix", status="IN_PROGRESS")), NULL_ROLLUP)
+
+    result = _poll(env)
+
+    assert result.returncode == 3
+    assert "slow-matrix" in result.stdout
+
+
 def test_waits_out_pending_then_reports_green(env: dict[str, str]) -> None:
     _serve(
         env,
@@ -349,21 +366,27 @@ def test_moved_head_is_reported_not_absorbed(env: dict[str, str]) -> None:
     assert HEAD_SHA in result.stdout
 
 
-# --- poll-rerun-jobs.sh -----------------------------------------------------
+# --- rerun-failed-jobs.sh ---------------------------------------------------
 
 
 def _rerun(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, str(POLL_RERUN_JOBS), "9000"],
+        [BASH, str(RERUN_FAILED_JOBS), "9000"],
         env=env,
         capture_output=True,
         text=True,
     )
 
 
-def _jobs_list(env: dict[str, str], *jobs: tuple[int, str]) -> None:
+def _attempts(env: dict[str, str], *values: int) -> None:
+    Path(env["ATTEMPTS"]).write_text("".join(f"{v}\n" for v in values))
+
+
+def _jobs_list(env: dict[str, str], *jobs: tuple[int, str, int]) -> None:
     Path(env["JOBS_JSON"]).write_text(
-        json.dumps({"jobs": [{"id": i, "status": s} for i, s in jobs]})
+        json.dumps(
+            {"jobs": [{"id": i, "status": s, "run_attempt": a} for i, s, a in jobs]}
+        )
     )
 
 
@@ -375,10 +398,12 @@ def _job(
     )
 
 
-def test_rerun_reports_each_jobs_conclusion(env: dict[str, str]) -> None:
+def test_rerun_reports_each_new_attempt_jobs_conclusion(env: dict[str, str]) -> None:
     """`completed` is not `success`: the output names each conclusion, since a
-    rerun that failed again is the case the follow-up turns on."""
-    _jobs_list(env, (11, "queued"), (12, "queued"), (13, "completed"))
+    rerun that failed again is the case the follow-up turns on. Jobs still on
+    the prior attempt were not re-run and stay out of the report."""
+    _attempts(env, 1, 2)
+    _jobs_list(env, (11, "queued", 2), (12, "queued", 2), (13, "completed", 1))
     _job(env, 11, "completed", "success", "lint")
     _job(env, 12, "completed", "failure", "tests")
 
@@ -387,21 +412,41 @@ def test_rerun_reports_each_jobs_conclusion(env: dict[str, str]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "success\tlint" in result.stdout
     assert "failure\ttests" in result.stdout
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert "run rerun 9000 --failed" in calls
+    assert "jobs/13" not in calls, "polled a job the rerun never re-queued"
 
 
-def test_rerun_fails_when_no_attempt_surfaced(env: dict[str, str]) -> None:
-    """All jobs already `completed` means the rerun never re-queued anything —
-    polling would report the *prior* attempt's conclusions as fresh."""
-    _jobs_list(env, (11, "completed"))
+def test_rerun_includes_jobs_that_finished_during_the_wait(
+    env: dict[str, str],
+) -> None:
+    """A fast rerun job can complete before discovery runs. Selecting by
+    attempt number still finds it — a status-based scan would read the run as
+    'nothing re-queued' and drop the fresh conclusion."""
+    _attempts(env, 1, 2)
+    _jobs_list(env, (11, "completed", 2))
+    _job(env, 11, "completed", "success", "lint")
+
+    result = _rerun(env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "success\tlint" in result.stdout
+
+
+def test_rerun_fails_when_no_attempt_surfaces(env: dict[str, str]) -> None:
+    """If `run_attempt` never advances, the rerun did not take; polling the
+    old attempt's jobs would report stale conclusions as fresh."""
+    _attempts(env, 1)
 
     result = _rerun(env)
 
     assert result.returncode == 1
-    assert "not re-queued" in result.stdout
+    assert "did not take" in result.stdout
 
 
 def test_rerun_cap_reports_unverified(env: dict[str, str]) -> None:
-    _jobs_list(env, (11, "queued"))
+    _attempts(env, 1, 2)
+    _jobs_list(env, (11, "queued", 2))
     _job(env, 11, "in_progress", "", "tests")
 
     result = _rerun(env)

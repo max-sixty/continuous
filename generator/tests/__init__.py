@@ -32,3 +32,38 @@ def tool_path(*fakes: Path | str) -> str:
 # (tend.workflows._action_ref). Tests derive the expected ref the same way so
 # version bumps don't churn assertions.
 ACTION_VERSION = version("tend")
+
+
+def fake_bin(tmp_path: Path, **scripts: str) -> Path:
+    """Write executable command stand-ins (gh, date, …); return the PATH dir."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    for name, body in scripts.items():
+        path = bindir / name
+        path.write_text(body)
+        path.chmod(0o755)
+    return bindir
+
+
+# Shared opening for `gh` stand-ins: log the call, extract a --jq argument,
+# and define emit() to run it through real jq — the script's own filter is
+# usually the behaviour under test, so a fake that pre-filtered would assert
+# nothing. Fakes append their own `case` dispatch: GH_PREAMBLE + r'''case …'''.
+GH_PREAMBLE = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_CALLS"
+
+jq_expr=""
+prev=""
+for arg in "$@"; do
+  [ "$prev" = "--jq" ] && jq_expr="$arg"
+  prev="$arg"
+done
+
+emit() {
+  if [ -n "$jq_expr" ]; then
+    printf '%s' "$1" | jq -r "$jq_expr"
+  else
+    printf '%s' "$1"
+  fi
+}
+"""

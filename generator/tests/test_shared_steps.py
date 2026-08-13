@@ -15,22 +15,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from tests import BASH, tool_path
+from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARK_NOTIFICATION_READ = REPO_ROOT / "shared" / "steps" / "mark-notification-read.sh"
 COMPUTE_TOKEN_USAGE = REPO_ROOT / "shared" / "steps" / "compute-token-usage.sh"
-
-
-def _fake_bin(tmp_path: Path, **scripts: str) -> Path:
-    """Write executable command stand-ins (gh, date, …); return the PATH dir."""
-    bindir = tmp_path / "fakebin"
-    bindir.mkdir()
-    for name, body in scripts.items():
-        path = bindir / name
-        path.write_text(body)
-        path.chmod(0o755)
-    return bindir
 
 
 # `gh api` stand-in. Records every invocation so a test can assert which calls
@@ -57,7 +46,7 @@ esac
 @pytest.fixture
 def gh_env(tmp_path: Path) -> dict[str, str]:
     """A fake `gh` on PATH plus the Actions env the script reads."""
-    bindir = _fake_bin(tmp_path, gh=FAKE_GH)
+    bindir = fake_bin(tmp_path, gh=FAKE_GH)
 
     event = tmp_path / "event.json"
     event.write_text(json.dumps({"issue": {"number": 7}}))
@@ -529,24 +518,9 @@ RATE_LIMIT_PREFLIGHT = REPO_ROOT / "shared" / "steps" / "rate-limit-preflight.sh
 # script's own `--jq` expression against a fixture with real jq, because that
 # filter *is* the behaviour under test: which closes count as an approval. A
 # fake that returned a pre-filtered actor list would assert nothing.
-FAKE_GH_RATE_LIMIT = r"""#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_CALLS"
-
-jq_expr=""
-prev=""
-for arg in "$@"; do
-  [ "$prev" = "--jq" ] && jq_expr="$arg"
-  prev="$arg"
-done
-
-emit() {
-  if [ -n "$jq_expr" ]; then
-    printf '%s' "$1" | jq -r "$jq_expr"
-  else
-    printf '%s' "$1"
-  fi
-}
-
+FAKE_GH_RATE_LIMIT = (
+    GH_PREAMBLE
+    + r"""
 case "$1" in
   api)
     case "$2" in
@@ -619,6 +593,7 @@ case "$1" in
   *) exit 1 ;;
 esac
 """
+)
 
 # The script is written for the Ubuntu runners' GNU date; macOS ships BSD
 # date, which has no `-d`. Fixed values also make the day-scoping assertions
@@ -684,9 +659,7 @@ def _closed_event(
 @pytest.fixture
 def rate_limit_env(tmp_path: Path) -> dict[str, str]:
     """Fake gh/date/sleep on PATH, plus the Actions env the preflight reads."""
-    bindir = _fake_bin(
-        tmp_path, gh=FAKE_GH_RATE_LIMIT, date=FAKE_DATE, sleep=FAKE_SLEEP
-    )
+    bindir = fake_bin(tmp_path, gh=FAKE_GH_RATE_LIMIT, date=FAKE_DATE, sleep=FAKE_SLEEP)
 
     event = tmp_path / "event.json"
     event.write_text(json.dumps({"pull_request": {"number": 851}}))
@@ -1236,7 +1209,7 @@ esac
 @pytest.fixture
 def gate_env(tmp_path: Path) -> dict[str, str]:
     """A fake `gh` on PATH plus the workflow env the gate script reads."""
-    bindir = _fake_bin(tmp_path, gh=FAKE_GH_REVIEW_GATE)
+    bindir = fake_bin(tmp_path, gh=FAKE_GH_REVIEW_GATE)
 
     pr = tmp_path / "pr.json"
     pr.write_text(json.dumps({"state": "open", "head": {"sha": "abc123"}}))
@@ -1361,24 +1334,9 @@ NOTIFICATIONS_CHECK = (
 # `--jq` doing the filtering — the tend-workflow name regex and the PR
 # author/state read are the behaviour under test, so a pre-filtered fake would
 # assert nothing.
-FAKE_GH_NOTIFICATIONS = r"""#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_CALLS"
-
-jq_expr=""
-prev=""
-for arg in "$@"; do
-  [ "$prev" = "--jq" ] && jq_expr="$arg"
-  prev="$arg"
-done
-
-emit() {
-  if [ -n "$jq_expr" ]; then
-    printf '%s' "$1" | jq -r "$jq_expr"
-  else
-    printf '%s' "$1"
-  fi
-}
-
+FAKE_GH_NOTIFICATIONS = (
+    GH_PREAMBLE
+    + r"""
 case "$2" in
   notifications)
     # The script's diagnostic re-fetch on a failed attempt. The real one exits
@@ -1418,6 +1376,7 @@ case "$2" in
   *) exit 1 ;;
 esac
 """
+)
 
 # The fake `date` puts "now" at 12:00, so Layer D's 10-minute deferral window
 # opens at 11:50 and Layer B's shadowed-run lookback at 11:30.
@@ -1446,7 +1405,7 @@ def _notif(
 @pytest.fixture
 def notifications_env(tmp_path: Path) -> dict[str, str]:
     """Fake gh/date/sleep on PATH, plus the workflow env the pre-check reads."""
-    bindir = _fake_bin(
+    bindir = fake_bin(
         tmp_path, gh=FAKE_GH_NOTIFICATIONS, date=FAKE_DATE, sleep=FAKE_SLEEP
     )
 

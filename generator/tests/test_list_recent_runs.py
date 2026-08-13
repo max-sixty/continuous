@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from tests import BASH, tool_path
+from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "list-recent-runs.sh"
@@ -31,25 +31,9 @@ def _iso(epoch: int) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-FAKE_GH = r"""#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_CALLS"
-
-jq_expr=""
-prev=""
-for arg in "$@"; do
-  [ "$prev" = "--jq" ] && jq_expr="$arg"
-  prev="$arg"
-done
-
-emit() {
-  if [ -n "$jq_expr" ]; then
-    printf '%s' "$1" | jq -r "$jq_expr"
-  else
-    printf '%s' "$1"
-  fi
-}
-
-case "$1 $2" in
+FAKE_GH = (
+    GH_PREAMBLE
+    + r"""case "$1 $2" in
   "workflow list")
     if [ -n "${FAIL_WORKFLOW_LIST:-}" ]; then exit 1; fi
     emit "$(cat "$WF_JSON")"
@@ -72,6 +56,7 @@ case "$1 $2" in
     ;;
 esac
 """
+)
 
 # GNU-date stand-in with a fixed clock. The three forms the script uses:
 #   date -u +%s                  -> $FAKE_NOW
@@ -111,12 +96,7 @@ def _run_entry(run_id: int, *, updated: int, conclusion: str = "success") -> dic
 @pytest.fixture
 def env(tmp_path: Path) -> dict[str, str]:
     """Fake gh/date on PATH plus the Actions env the script reads."""
-    bindir = tmp_path / "fakebin"
-    bindir.mkdir()
-    for name, body in {"gh": FAKE_GH, "date": FAKE_DATE}.items():
-        path = bindir / name
-        path.write_text(body)
-        path.chmod(0o755)
+    bindir = fake_bin(tmp_path, gh=FAKE_GH, date=FAKE_DATE)
 
     (tmp_path / "wf.json").write_text(json.dumps([{"name": "tend-review"}]))
     (tmp_path / "anchor.json").write_text("[]")
@@ -152,8 +132,10 @@ def _runs(env: dict[str, str], *entries: dict) -> None:
     Path(env["RUNS_JSON"]).write_text(json.dumps(list(entries)))
 
 
-def _run(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([BASH, str(SCRIPT)], env=env, capture_output=True, text=True)
+def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True
+    )
 
 
 def _ids(result: subprocess.CompletedProcess[str]) -> list[int]:
@@ -289,3 +271,15 @@ def test_workflows_filtered_by_prefix(env: dict[str, str]) -> None:
     ]
     assert len(fetches) == 2
     assert not any(" ci " in f for f in fetches)
+
+
+def test_overlapping_prefixes_do_not_double_count(env: dict[str, str]) -> None:
+    """A workflow matched by two prefixes is fetched twice; its runs must
+    still appear once, or the caller reports a doubled census."""
+    _anchor(env, (555, NOW - 5400))
+    _runs(env, _run_entry(1, updated=NOW - 3600))
+
+    result = _run(env, "tend-", "tend-rev")
+
+    assert result.returncode == 0, result.stderr
+    assert _ids(result) == [1], "one workflow's runs were counted once per prefix"

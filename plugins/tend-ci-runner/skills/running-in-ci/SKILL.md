@@ -273,7 +273,7 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/poll-pr-checks.sh <number> "$PINNED_SHA"
 
 Invoke this Bash call in the foreground (no `run_in_background`) with `timeout: 600000` (10 min) — the poll runs up to ~9.5 minutes, and the default 2-min Bash timeout would kill it early.
 
-Exit 0 is green. Exit 1 is red, with the failing checks and their run URLs — diagnose with `gh run view <run-id> --log-failed`, fix, commit, push, and poll the new commit. Any other exit is **unverified, not green**: no rollup exists for the SHA, or checks were still pending at the cap. The cap is the whole poll budget — the pending count includes advisory jobs (an hourly benchmark matrix never reaches zero), so don't re-enter the loop; report the still-pending checks as unverified, marking each required or advisory (`gh pr checks <number> --required` lists the required contexts already registered on the commit; an omnibus that hasn't registered yet is required too).
+Exit 0 is green, judged on the latest run of each check — where one workflow ran twice *independently* on the same SHA, read the earlier run's own conclusion before relying on it. Exit 1 is red, with the failing checks and their run URLs: diagnose with `gh run view <run-id> --log-failed`, fix, commit, push, and poll the new commit. Any other exit is **unverified, not green** — the script prints why. The cap is the whole poll budget — the pending count includes advisory jobs (an hourly benchmark matrix never reaches zero), so don't re-enter the loop; report the still-pending checks as unverified, marking each required or advisory (`gh pr checks <number> --required` lists the required contexts already registered on the commit; an omnibus that hasn't registered yet is required too).
 
 Before dismissing local test failures as "pre-existing", check main branch CI:
 
@@ -290,16 +290,15 @@ If you cannot verify, say "I haven't confirmed whether these failures are pre-ex
 
 Poll your checks to terminal, do the follow-up you were gated on, and exit; name the outstanding review in your summary. This covers a review that arrives *while* you work — a session dispatched to answer a specific review owns that review and actions it normally.
 
-### Polling `gh run rerun --failed`
+### Rerunning failed jobs
 
-After `gh run rerun <run-id> --failed`, poll the rerun's jobs directly — the parent run's `.status` stays `in_progress` until every sibling job finishes, including unrelated long-running ones, and sibling check runs keep the commit rollup pending too:
+To rerun a run's failed jobs and wait for the outcome, use the bundled script — it reruns, finds the new attempt's jobs (the parent run's `.status` and the commit rollup stay pending on unrelated siblings, so neither is a usable signal), and polls them to terminal:
 
 ```bash
-gh run rerun <run-id> --failed
-${CLAUDE_PLUGIN_ROOT}/scripts/poll-rerun-jobs.sh <run-id>
+${CLAUDE_PLUGIN_ROOT}/scripts/rerun-failed-jobs.sh <run-id>
 ```
 
-Same foreground invocation and 10-min `timeout` as above. Exit 0 prints each job's conclusion — `completed` is not `success`; the follow-up turns on the conclusions. Any other exit means the jobs never re-queued or are still running at the cap: report them as unverified rather than re-entering.
+Same foreground invocation and 10-min `timeout` as above. Exit 0 prints each job's conclusion — `completed` is not `success`; the follow-up turns on the conclusions. Any other exit means the rerun never took or the jobs are still running at the cap: report them as unverified rather than re-entering.
 
 ## Replying to Comments
 

@@ -102,10 +102,12 @@ for wf in "${WORKFLOWS[@]}"; do
   all_runs=$(echo "$all_runs" "$runs" | jq -s 'add')
 done
 
-# Filter: drop in-progress (empty conclusion), keep only recently finished
+# Filter: drop in-progress (empty conclusion), keep only recently finished.
+# unique_by: overlapping prefixes can match one workflow twice, which would
+# double-count its runs.
 echo "$all_runs" | jq --argjson cutoff "$COMPLETED_AFTER" '
   [ .[]
     | select(.conclusion != null and .conclusion != "")
     | select((.updatedAt | fromdateiso8601) >= $cutoff)
-  ]
+  ] | unique_by(.databaseId)
 '
