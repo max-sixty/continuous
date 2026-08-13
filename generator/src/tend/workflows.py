@@ -103,8 +103,14 @@ _JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
 # each row the rate-limit preflight appends is a comment, which would fire
 # tend-mention, whose handle job trips the same limit and appends another.
 # A global rather than a literal per template, so the next such label is added
-# in one place.
-BOOKKEEPING_LABELS = ("tend-outage", "tend-rate-limit")
+# in one place. The monthly `*-tracking` issues are the same shape: the bot
+# opens one, so `issues: opened` fires a triage session on its own ledger.
+BOOKKEEPING_LABELS = (
+    "tend-outage",
+    "tend-rate-limit",
+    "review-runs-tracking",
+    "review-reviewers-tracking",
+)
 _JINJA.globals["bookkeeping_labels"] = BOOKKEEPING_LABELS
 
 

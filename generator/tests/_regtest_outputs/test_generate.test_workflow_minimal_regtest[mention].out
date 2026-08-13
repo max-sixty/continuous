@@ -103,7 +103,7 @@ jobs:
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@test-bot')) ||
       (github.event_name == 'issue_comment' &&
-        contains(github.event.issue.labels.*.name, 'tend-outage') == false && contains(github.event.issue.labels.*.name, 'tend-rate-limit') == false)
+        contains(github.event.issue.labels.*.name, 'tend-outage') == false && contains(github.event.issue.labels.*.name, 'tend-rate-limit') == false && contains(github.event.issue.labels.*.name, 'review-runs-tracking') == false && contains(github.event.issue.labels.*.name, 'review-reviewers-tracking') == false)
     runs-on: ubuntu-24.04
     environment:
       name: tend

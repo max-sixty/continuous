@@ -1590,6 +1590,27 @@ def test_job_extras_replace_if_for_skip_review_label(tmp_path: Path) -> None:
     assert "steps" in data["jobs"]["review"]
 
 
+def test_bookkeeping_labels_cover_the_monthly_trackers(tmp_path: Path) -> None:
+    """`tend-triage` and `tend-mention` skip every label tend puts on its own
+    bookkeeping issues — the outage and rate-limit trackers, and the monthly
+    tracking issues the `review-runs` / `review-reviewers` skills open. Without
+    the tracker labels, opening one boots a full triage session on the bot's own
+    record-keeping, every month, in every adopter."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf.content for wf in generate_all(cfg)}
+    triage_if = yaml.safe_load(workflows["tend-triage.yaml"])["jobs"]["triage"]["if"]
+    mention = workflows["tend-mention.yaml"]
+    for label in (
+        "tend-outage",
+        "tend-rate-limit",
+        "review-runs-tracking",
+        "review-reviewers-tracking",
+    ):
+        guard = f"contains(github.event.issue.labels.*.name, '{label}') == false"
+        assert guard in triage_if, f"tend-triage does not skip `{label}`"
+        assert guard in mention, f"tend-mention does not skip `{label}`"
+
+
 def test_null_drops_top_level_key(tmp_path: Path) -> None:
     """YAML-native `null` in workflow_extra removes the targeted key under
     RFC 7396 Merge Patch semantics. The motivating case: keep nightly's
