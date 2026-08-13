@@ -227,12 +227,9 @@ configured correctly, and `--fix` creates either. See
 `docs/security-model.md` for the full threat model. Alternative models
 (GitHub App, triage+fork) are in `TODO.md`.
 
-The environment half is still being adopted: a repo is protected only once
-its secrets are in the environment and the repo-level copies are deleted —
-per-repo work `TODO.md` tracks. Until then it runs with its old exposure.
-
-This repo's own workflows name it too, including the hand-maintained ones
-the generator never touches.
+Every adopter runs the environment gate: both secrets live in the `tend`
+environment with no repo-level copies. This repo's own workflows name it
+too, including the hand-maintained ones the generator never touches.
 
 ## Concurrency and filtering
 
