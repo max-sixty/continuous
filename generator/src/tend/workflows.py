@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import importlib.resources
 import io
+import shlex
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -152,7 +154,7 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
             if "if" in fields:
                 click.echo(
                     "Warning: setup step has an explicit `if:`; the "
-                    "notifications pre-check guard will not be added. "
+                    "workflow's pre-check guard will not be added. "
                     "The step runs based on your condition alone.",
                     err=True,
                 )
@@ -165,6 +167,46 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     buf = io.StringIO()
     _YAML_BLOCK.dump(steps, buf)
     return "\n" + textwrap.indent(buf.getvalue().rstrip(), "    ") + "\n"
+
+
+def _restore_local_actions_run(cfg: Config) -> str:
+    """Shell that puts the local composites named by `setup:` back on disk.
+
+    A `uses: ./path` resolves against the workspace, and the runner re-reads
+    the action file from that same path to dispatch the POST steps of the
+    actions nested inside the composite — matching it against the step list it
+    cached when the composite ran. Review and mention land the PR's tree over
+    that workspace between the two reads, so a PR that resizes or deletes the
+    file breaks cleanup (actions/runner#2816); the paths need restoring before
+    the POST chain walks.
+
+    A restore covers the named directory recursively, so a composite that nests
+    another action *inside its own tree* is covered too; one that reaches for a
+    sibling `uses: ./elsewhere` is not, since only `setup:` is visible here.
+
+    Returned unindented and without a trailing newline, for the macro to place.
+    Empty when no step names a local action, which renders the step away.
+    """
+    paths: list[str] = []
+    for step in cfg.setup:
+        uses = step.fields.get("uses")
+        if not isinstance(uses, str) or not uses.startswith("./"):
+            continue
+        path = uses.removeprefix("./").rstrip("/")
+        if path and path not in paths:
+            paths.append(path)
+    # The path goes through a shell variable rather than straight into both
+    # lines: `shlex.quote` makes it a safe operand for `git`, but the warning
+    # interpolates it into a double-quoted string, where a `$` would expand and
+    # a `"` would end the string early — failing the one step whose job is to
+    # never turn a working run red.
+    return "\n".join(
+        f"dir={shlex.quote(path)}\n"
+        f'git checkout "$GITHUB_SHA" -- "$dir" ||\n'
+        f'  echo "::warning::could not restore $dir from $GITHUB_SHA;'
+        f' POST cleanup of the local action may fail"'
+        for path in paths
+    )
 
 
 @dataclass
@@ -184,14 +226,20 @@ def _escape_braces(prompt: str, placeholder: str) -> tuple[str, bool]:
     Returns (escaped_prompt, needs_format). In the escaped prompt, {placeholder}
     is replaced with {0} for use with GitHub Actions format(), and all other
     braces are doubled to prevent format() from interpreting them.
+
+    A prompt with no {placeholder} is returned untouched. Doubling is only
+    correct on the way into `format()`, which collapses each pair back to one
+    brace; without the placeholder the caller emits a bare string literal
+    instead, and GitHub Actions does not collapse braces there — the pairs
+    would reach the agent verbatim.
     """
     sentinel = "\x00PLACEHOLDER\x00"
     text = prompt.replace(f"{{{placeholder}}}", sentinel)
+    if sentinel not in text:
+        return prompt, False
     # Double all remaining braces so format() treats them as literals
     text = text.replace("{", "{{").replace("}", "}}")
-    has_placeholder = sentinel in text
-    text = text.replace(sentinel, "{0}")
-    return text, has_placeholder
+    return text.replace(sentinel, "{0}"), True
 
 
 def _effective_cfg(cfg: Config, wf: WorkflowConfig) -> Config:
@@ -227,10 +275,18 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     else:
         prompt_expr = f"'{escaped}'"
 
+    skip_condition = "steps.gate.outputs.should_run == 'true'"
+    gate_script = (
+        importlib.resources.files("tend") / "templates" / "review-gate.sh"
+    ).read_text()
+
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=skip_condition),
+        local_actions=_restore_local_actions_run(eff),
         prompt_expr=prompt_expr,
+        skip_condition=skip_condition,
+        gate_script=gate_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 
@@ -246,7 +302,11 @@ _MENTION_TMPL = _JINJA.get_template("mention.yaml.j2")
 def generate_mention(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("mention", WorkflowConfig())
     eff = _effective_cfg(cfg, wf)
-    content = _MENTION_TMPL.render(cfg=eff, setup=_setup_yaml(eff))
+    content = _MENTION_TMPL.render(
+        cfg=eff,
+        setup=_setup_yaml(eff),
+        local_actions=_restore_local_actions_run(eff),
+    )
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
 
 
@@ -348,6 +408,9 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     skip_condition = (
         "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'"
     )
+    check_script = (
+        importlib.resources.files("tend") / "templates" / "notifications-check.sh"
+    ).read_text()
 
     content = _NOTIFICATIONS_TMPL.render(
         cfg=eff,
@@ -355,6 +418,7 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
         skip_condition=skip_condition,
         setup=_setup_yaml(eff, condition=skip_condition),
         prompt=prompt,
+        check_script=check_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-notifications.yaml", content=content)
 
@@ -456,7 +520,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v9.0.0
       - name: Verify generator output matches committed files
         env:
           GH_TOKEN: ${{{{ github.token }}}}

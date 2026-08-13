@@ -106,7 +106,7 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: ./.github/actions/tend-setup
         if: steps.gate.outputs.should_run == 'true'
 
       # GitHub only materializes refs/pull/N/merge for mergeable PRs ? on
@@ -147,3 +147,10 @@ jobs:
           model: opus
           prompt: >-
             ${{ format('/tend-ci-runner:review {0}', github.event.pull_request.number) }}
+
+      - name: Restore local setup actions for POST cleanup
+        if: always() && (steps.gate.outputs.should_run == 'true')
+        run: |
+          dir=.github/actions/tend-setup
+          git checkout "$GITHUB_SHA" -- "$dir" ||
+            echo "::warning::could not restore $dir from $GITHUB_SHA; POST cleanup of the local action may fail"

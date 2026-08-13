@@ -3,7 +3,7 @@
 
 ## Confidence and magnitude gates
 
-Before creating a PR, every finding must pass two gates.
+Before creating a PR, every finding must pass three gates.
 
 ### Gate 1: Confidence — is this a real problem?
 
@@ -29,13 +29,24 @@ If a finding doesn't meet the threshold, **skip it** — don't create a PR, don'
 
 **The larger the change, the more evidence required.** A one-line simplification needs less justification than a new paragraph. Prefer small, targeted fixes over broad rewrites.
 
+### Gate 3: Cost — does the failure cost more than the fix?
+
+Classify what the failure costs:
+
+- **Wrong outward action** — a false-green verdict, a stale approval left standing, a wrong claim posted, an issue closed in error. Each occurrence does standing damage; real complexity is justified to prevent it.
+- **Wasted compute** — a no-op session, a duplicated survey, a run lost to a blip that a later tick retries. Each occurrence costs cents and self-corrects.
+
+Classify by what the observed occurrence itself left on the public record. A hypothetical chain from waste to a wrong outward action ("the lost run could have left a stale approval standing") doesn't upgrade the class — the wrong action has to have occurred.
+
+A waste-class failure supports only a fix that is itself nearly free: a cadence value, a deleted step, a one-line condition, machinery removed. One that needs new mechanism — a retry framework, another skip-gate, scheduling arithmetic, a cache — fails this gate at any occurrence count; a mechanism compressed into one dense line is still a mechanism, so judge by what the fix leaves behind (logic a future session must re-derive, a rule every later run loads, failure modes of its own), not its line count. Record the waste in the evidence store with its cost; if the aggregate grows to matter, escalate the number to the maintainer, who owns the simple levers (cadence, disabling a workflow). The reasoning behind this gate is **Weighing a Fix** in `/tend-ci-runner:running-in-ci`.
+
 ### Structural vs. stochastic failures
 
 Before applying the gates, classify each failure by asking: **did the bot have a decision point?**
 
 - **Structural**: no decision point — the same conditions produce the same failure every time, regardless of how the bot approached the task. E.g., "the checkout differs between `pull_request_target` and `issue_comment` events, so grepping always finds stale content." Structural classification raises confidence the failure will recur, but does **not** override Gate 1 — a non-Critical structural failure still needs the occurrence count its evidence level requires (High = 2–3, Medium = 5+). Only **Critical** structural failures act on a single occurrence.
 
-- **Stochastic**: the failure is a probabilistic model behavior — e.g., "the model was too agreeable when challenged" or "the model forgot to check X." The same model might handle the next identical situation correctly without any guidance change. These need significantly more evidence (5+ occurrences) because adding guidance for a one-off stochastic lapse adds noise that can degrade performance on other tasks.
+- **Stochastic**: the failure is a probabilistic model behavior — e.g., "the model was too agreeable when challenged" or "the model forgot to check X." The same model might handle the next identical situation correctly without any guidance change. These need significantly more evidence (5+ occurrences) because adding guidance for a one-off stochastic lapse adds noise that can degrade performance on other tasks. The 5+ floor governs a stochastic failure whatever evidence level its entries carry — no reclassification, pre-registered condition, or escalation recorded in the evidence store lowers it.
 
 The test: "If I replayed this exact scenario 10 times, would the failure occur every time (structural) or only sometimes (stochastic)?" When in doubt, classify as stochastic and wait for more evidence.
 
@@ -44,10 +55,11 @@ The test: "If I replayed this exact scenario 10 times, would the failure occur e
 For each finding, state:
 1. The evidence level and occurrence count (current + historical)
 2. Whether the failure is structural or stochastic
-3. The proposed change type
-4. Whether it passes both gates
+3. The failure's cost class (wrong outward action / wasted compute)
+4. The proposed change type
+5. Whether it passes all three gates
 
-Only proceed to act on findings that pass both gates.
+Only proceed to act on findings that pass all three gates.
 
 ## Finding format
 

@@ -277,6 +277,42 @@ back" to "the recovery workflow ran and my review still never came back".
 The same gap covers `tend-outage`; #816 tracks it from that side, and the
 `review-runs` skill's drain recipe reads the same table format.
 
+## Decide whether the built-in `/code-review` replaces the vendored port
+
+`plugins/tend-ci-runner/skills/code-review/` is a copy of Claude Code's
+built-in `/code-review`, taken from a 2.1.220 binary. The two share their
+method almost verbatim — the same ten angles, the same three-verdict verify
+with "PLAUSIBLE by default", the same sweep — so the copy buys nothing on
+method and costs the usual: it drifts silently, and nothing re-checks it
+against the binary.
+
+That drift is no longer hypothetical. `claude/action.yaml` now pins 2.1.226,
+which restructured the built-in without touching those texts, so the copy is
+already a version behind the binary CI runs — and the thing that changed is
+exactly what decides this question.
+
+Reaching the built-in is possible. It carries `disable-model-invocation`,
+which the `Skill` tool waives for a turn whose own user message names the
+command, so a prompt naming `/code-review` in prose rather than opening with a
+slash unlocks it for the run. That was built and reverted, because reading the
+built-in out of the 2.1.226 binary says it isn't worth reaching:
+
+- It is a model × effort matrix rather than one prompt, and `claude-opus-5` at
+  both `medium` and `high` — where tend lands, running `model: opus` with no
+  effort set — renders a minimal cell: one careful diff pass, no angles, no
+  verify, no sweep. That cell is marked as externally measured, so it is a
+  deliberate upstream choice rather than an oversight. The port's core-logic
+  band is broader than it, and broader than the `default` row's 3+5 angles.
+- It reports through `ReportFindings`, which `claude/action.yaml` does not
+  allowlist.
+- The Codex harness has no built-in at all, so the port stays the only
+  implementation there regardless.
+
+Revisit when one of those moves: a pinned version whose Opus row is
+angle-based again, `ReportFindings` in the allowlist, or a Codex equivalent.
+Cutting over then costs a prompt reshape plus a per-harness branch in the
+`review` skill's step 4, which only pays once the built-in is the better pass.
+
 ## Worker: Phase 2 LLM summary of `/activity`
 
 A consumer (scheduled job or the Worker calling Claude) reads `/activity`

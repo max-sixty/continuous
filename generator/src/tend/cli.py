@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from pathlib import Path
 
 import click
@@ -18,7 +19,7 @@ from tend.checks import (
     run_all_checks,
 )
 from tend.config import Config
-from tend.migrate import migrate_toml_to_yaml
+from tend.migrate import migrate_toml_to_yaml, render_toml_as_yaml
 from tend.workflows import generate_all
 
 
@@ -83,14 +84,35 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
     # adopters bumping past the TOML→YAML cutover; the migration verifies
     # the parsed structures match before swapping, so the no-op case (no
     # .toml on disk) is the steady state.
+    #
+    # Under --dry-run the migration is rendered and verified but not applied:
+    # the flag's contract is that the command writes nothing, and the one run
+    # an adopter makes to preview the upgrade is exactly the run that would
+    # otherwise perform it — silently, and irreversibly for an uncommitted
+    # config, since the migration deletes the TOML.
+    preview_yaml: str | None = None
     if config_path is None:
         default_yaml = Path(".config/tend.yaml")
         default_toml = Path(".config/tend.toml")
         if not default_yaml.exists() and default_toml.exists():
-            migrate_toml_to_yaml(default_toml, default_yaml)
-            click.echo(f"Migrated {default_toml} → {default_yaml}")
+            if dry_run:
+                preview_yaml = render_toml_as_yaml(default_toml, default_yaml)
+                click.echo(f"  would migrate {default_toml} → {default_yaml}")
+            else:
+                migrate_toml_to_yaml(default_toml, default_yaml)
+                click.echo(f"Migrated {default_toml} → {default_yaml}")
 
-    cfg = Config.load(config_path)
+    if preview_yaml is None:
+        cfg = Config.load(config_path)
+    else:
+        # `Config.load` reads a path, and the real one must stay unwritten —
+        # so the preview loads from a throwaway copy. Same bytes the migration
+        # would have committed, so the workflows printed below are the ones a
+        # real `init` would produce.
+        with tempfile.TemporaryDirectory() as tmp:
+            preview_path = Path(tmp) / "tend.yaml"
+            preview_path.write_text(preview_yaml)
+            cfg = Config.load(preview_path)
     cfg.default_branch = _detect_default_branch_local()
     cfg.repo_owner = detect_canonical_owner() or ""
     if not cfg.repo_owner:

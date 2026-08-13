@@ -427,6 +427,8 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
+      - uses: ./.github/actions/tend-setup
+
       - name: Check out PR branch
         if: |
           (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
@@ -463,15 +465,6 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot
           model: opus
-          sandbox_path: |
-            ~/.cargo/bin
-            /opt/tools/bin
-          sandbox_env: |
-            RUST_BACKTRACE=1
-            CARGO_TERM_COLOR=always
-          sandbox_setup: |
-            rustup component add clippy
-            cargo fetch --locked
           prompt: >-
             ${{ steps.delay.outputs.seconds
             && format('This job started {0}s after the triggering event (over ~40s means it was queued). ',
@@ -493,6 +486,13 @@ jobs:
                 && format('You were mentioned in a comment ({0}). Read the full context and respond. If changes are requested, make them, commit, and push.', github.event.comment.html_url))
               || format('A user commented on an issue/PR where you previously participated ({0}). Read the full context. Only respond if the comment is directed at you, asks a question you can help with, or requests changes you can make. If the conversation is between other participants, exit silently.', github.event.comment.html_url)
             }}
+
+      - name: Restore local setup actions for POST cleanup
+        if: always()
+        run: |
+          dir=.github/actions/tend-setup
+          git checkout "$GITHUB_SHA" -- "$dir" ||
+            echo "::warning::could not restore $dir from $GITHUB_SHA; POST cleanup of the local action may fail"
 
       - name: Remove eyes reaction
         if: |

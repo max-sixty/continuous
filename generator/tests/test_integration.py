@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import click.testing
 import pytest
-from tests import ACTION_VERSION
+from tests import ACTION_VERSION, BASH, tool_path
 from tests import _yaml as yaml
 from click.testing import CliRunner
 
@@ -567,12 +567,12 @@ def test_notifications_precheck_tolerates_transient_non_json(
     output_file = tmp_path / "gh_output"
     output_file.write_text("")
     env = {
-        "PATH": f"{bindir}:/usr/bin:/bin",
+        "PATH": tool_path(bindir),
         "GITHUB_OUTPUT": str(output_file),
         "GITHUB_REPOSITORY": "owner/repo",
     }
     result = subprocess.run(
-        ["bash", "-e", "-c", script],
+        [BASH, "-e", "-c", script],
         env=env,
         capture_output=True,
         text=True,
@@ -756,7 +756,9 @@ def test_install_test_workflow_shape(
     # Version is pinned from the committed header (not `@latest`) so a release
     # mid-PR doesn't fail the drift check for an irrelevant reason.
     assert 'uvx "tend@$TEND_VERSION" init --with-install-test' in content
-    assert "astral-sh/setup-uv@v6" in content
+    # Version-agnostic: the exact pin is covered by the regtest output, and
+    # weekly bumps shouldn't have to edit two places.
+    assert "astral-sh/setup-uv@" in content
 
     # Default-branch probe: must not use `git remote set-head origin --auto`,
     # which errors on the default shallow `actions/checkout@v7` (only the PR

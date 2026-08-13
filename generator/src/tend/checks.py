@@ -21,6 +21,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from functools import cache
+from urllib.parse import quote
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
@@ -214,8 +215,9 @@ def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResul
             None,
             f"Branch '{branch}' is protected but could not verify that the bot "
             "cannot bypass its rulesets — either they aren't readable with this "
-            "token, or a bypass actor names a team, app, or deploy key whose "
-            "membership isn't resolvable here. Check the bypass list manually.",
+            "token, or a bypass actor names a principal tend cannot resolve: a "
+            "team, app, or deploy key, or any user if `bot_name` itself does not "
+            "resolve to an account. Check the bypass list manually.",
         )
 
     return CheckResult(
@@ -247,7 +249,9 @@ def _bypass_actors_above_bot(actors: list[dict] | None, bot_name: str) -> bool |
     Returns False if one of them is the bot itself or a role at write or
     below, None when the list is withheld (only ruleset admins see
     `bypass_actors`) or names a principal this can't resolve (a team, app,
-    or deploy key). An empty list is True — nobody bypasses at all.
+    or deploy key, or any user once `bot_name` itself fails to resolve — the
+    ids have nothing to compare against). An empty list is True — nobody
+    bypasses at all.
     """
     if actors is None:
         return None
@@ -454,6 +458,19 @@ def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
         return None, "Could not parse environment secrets response"
 
 
+def _env_path(env_name: str) -> str:
+    """An environment name as one path segment.
+
+    GitHub admits `/` in an environment name, and `gh api` treats the path it
+    is given as already-formed — it percent-encodes a space but passes a slash
+    through as a separator, so `a/b` addresses an environment that does not
+    exist. Every such 404 reads to the callers below as a token without admin
+    access, which returns the whole credential check as skipped. `safe=""`
+    encodes the separator too; `gh` does not re-encode what it is handed.
+    """
+    return quote(env_name, safe="")
+
+
 def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
     """An environment's deployment branch policies, or None if unlistable.
 
@@ -463,7 +480,7 @@ def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
     listed = _gh(
         "api",
         "--paginate",
-        f"repos/{repo}/environments/{env_name}/deployment-branch-policies",
+        f"repos/{repo}/environments/{_env_path(env_name)}/deployment-branch-policies",
         "--jq",
         ".branch_policies[]",
     )
@@ -598,7 +615,7 @@ def check_environment_deployments(repo: str) -> CheckResult:
         f"{path} job '{job_id}'"
         for path, text in sorted(files.items())
         if text is not None
-        for job_id in sorted(_parse_workflow(path, text).filed_deployments)
+        for job_id in sorted(_parse_workflow(path, text, repo).filed_deployments)
     ]
     if offenders:
         return CheckResult(
@@ -685,14 +702,16 @@ class _WorkflowFacts:
     """What one workflow file says about the repo's credential surface."""
 
     path: str
-    steerable: frozenset[str]  # bot-steerable triggers it carries
-    reusable: bool  # declares `workflow_call`
-    calls: frozenset[str]  # local reusable workflows this one invokes
-    environments: frozenset[str]  # environments its jobs deploy to
-    oidc_environments: frozenset[str]  # …of those, ones a job mints OIDC in
-    oidc_without_environment: frozenset[str]  # job ids minting OIDC ungated
-    filed_deployments: frozenset[str]  # job ids naming tend that file a record
-    unresolved: tuple[str, ...]
+    steerable: frozenset[str] = frozenset()  # bot-steerable triggers it carries
+    call_only: bool = False  # `workflow_call` is the only thing that starts it
+    calls: frozenset[str] = frozenset()  # local reusable workflows it invokes
+    external_calls: frozenset[str] = frozenset()  # job ids calling out of the repo
+    external_oidc: frozenset[str] = frozenset()  # …of those, ones granting OIDC
+    environments: frozenset[str] = frozenset()  # environments its jobs deploy to
+    oidc_environments: frozenset[str] = frozenset()  # …of those, ones minting OIDC
+    oidc_without_environment: frozenset[str] = frozenset()  # job ids minting ungated
+    filed_deployments: frozenset[str] = frozenset()  # job ids naming tend that file
+    unresolved: tuple[str, ...] = ()
 
 
 def _permissions_grant_oidc(permissions: object) -> bool:
@@ -704,7 +723,27 @@ def _permissions_grant_oidc(permissions: object) -> bool:
     return False
 
 
-def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
+def _called_workflow(uses: str, repo: str) -> str | None:
+    """The workflow file in this repo that a job-level `uses:` names, or None.
+
+    Two spellings reach the same file: the relative form, and the
+    `owner/repo/.github/workflows/x.yaml@ref` form a repo may use on its own
+    workflow to pin the ref it runs. A call that leaves the repo returns None,
+    not because it deploys elsewhere — the callee's jobs deploy to *this*
+    repo's environments (see `_effective_triggers`) — but because its file
+    cannot be read from here, which `_credential_surface` reports as unread
+    rather than passes over.
+    """
+    relative = "./.github/workflows/"
+    if uses.startswith(relative):
+        return uses[len(relative) :]
+    absolute = f"{repo}/.github/workflows/"
+    if repo and uses.casefold().startswith(absolute.casefold()):
+        return uses[len(absolute) :].partition("@")[0]
+    return None
+
+
+def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
     """Read one workflow's triggers, environments, and OIDC use.
 
     Anything the parse cannot decide (an unparsable file, an environment named
@@ -712,17 +751,12 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     — a path tend cannot see is not a path tend can call gated.
     """
     unparsable = (f"{path} could not be parsed as a workflow",)
-    empty = frozenset[str]()
     try:
         data = YAML(typ="safe").load(io.StringIO(text))
     except (YAMLError, ValueError):
-        return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, empty, unparsable
-        )
+        return _WorkflowFacts(path, unresolved=unparsable)
     if not isinstance(data, dict):
-        return _WorkflowFacts(
-            path, empty, False, empty, empty, empty, empty, empty, unparsable
-        )
+        return _WorkflowFacts(path, unresolved=unparsable)
 
     # YAML 1.1 documents (`%YAML 1.1`) turn the `on:` key into the boolean
     # True; 1.2, which ruamel's safe loader defaults to, keeps it a string.
@@ -744,6 +778,8 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     jobs = jobs if isinstance(jobs, dict) else {}
 
     calls: set[str] = set()
+    external_calls: set[str] = set()
+    external_oidc: set[str] = set()
     environments: set[str] = set()
     oidc_environments: set[str] = set()
     oidc_without_environment: set[str] = set()
@@ -753,16 +789,25 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     for job_id, job in jobs.items():
         if not isinstance(job, dict):
             continue
+        permissions = job.get("permissions", workflow_permissions)
+        oidc = _permissions_grant_oidc(permissions)
+
         uses = job.get("uses")
         if uses is not None:
             # A job that calls another workflow declares no environment of its
-            # own — the called workflow's jobs do, and those are parsed there.
-            # Its `permissions:` only caps what the callee may request.
-            if isinstance(uses, str) and uses.startswith("./.github/workflows/"):
-                calls.add(uses.split("/")[-1])
+            # own — the called workflow's jobs do. Those are parsed here when
+            # the call lands in this repo, and are unreadable when it doesn't,
+            # which is what `external_calls` records. Its `permissions:` only
+            # cap what the callee may request, so a callee mints OIDC on this
+            # repo's behalf exactly when the calling job grants it.
+            called = _called_workflow(uses, repo) if isinstance(uses, str) else None
+            if called is not None:
+                calls.add(called)
+            else:
+                external_calls.add(str(job_id))
+                if oidc:
+                    external_oidc.add(str(job_id))
             continue
-        permissions = job.get("permissions", workflow_permissions)
-        oidc = _permissions_grant_oidc(permissions)
 
         declared = job.get("environment")
         environment = declared
@@ -792,8 +837,10 @@ def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     return _WorkflowFacts(
         path=path,
         steerable=frozenset(steerable),
-        reusable="workflow_call" in triggers,
+        call_only=triggers == {"workflow_call"},
         calls=frozenset(calls),
+        external_calls=frozenset(external_calls),
+        external_oidc=frozenset(external_oidc),
         environments=frozenset(environments),
         oidc_environments=frozenset(oidc_environments),
         oidc_without_environment=frozenset(oidc_without_environment),
@@ -807,38 +854,54 @@ def _effective_triggers(
 ) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
     """Resolve each workflow's steerable triggers, following `workflow_call`.
 
-    A reusable workflow's own `on:` says only that it is callable; what can
+    `workflow_call` on its own says only that a workflow is callable; what can
     start it is whatever starts its callers. Callers within the repo are
-    followed to a fixpoint. A reusable workflow with no caller here is returned
-    as unreached — its callers may live in another repo, which this cannot
-    enumerate.
+    followed to a fixpoint, and a workflow no such chain reaches is returned as
+    unreached — the only thing left that can start it is a caller in another
+    repo.
+
+    A workflow carrying triggers of its own anchors the chain: `workflow_call`
+    widens the way in rather than replacing it, so its own `on:` starts it here
+    whatever else calls it. A callable workflow is then reached when one of its
+    callers is, and unreached when every route to it runs through a workflow
+    only an outside caller can start.
+
+    An unreached workflow spends nothing of this repo's, a point GitHub's
+    reusable-workflow docs leave unsaid: a run belongs to the repo that starts
+    it, down into any workflow it calls elsewhere. The secrets, the environment
+    a callee's `environment:` names, the deployment record and the OIDC `sub`
+    are the caller's throughout, and the caller's gate on that environment is
+    what holds the run. So the fact cuts both ways — a call arriving from
+    outside reaches nothing here, and one leaving for outside carries this
+    repo's environments with it.
     """
     resolved = {path: f.steerable for path, f in facts.items()}
+    reached = {path: not f.call_only for path, f in facts.items()}
     callers: dict[str, set[str]] = {path: set() for path in facts}
     for path, f in facts.items():
         for callee in f.calls:
             if callee in callers:
                 callers[callee].add(path)
 
-    # Each pass only adds triggers and the vocabulary is finite, so this
-    # settles; the iteration bound keeps a cyclic `uses:` graph from looping.
+    # Each pass only grows the trigger sets and only flips workflows to
+    # reached, so this settles; the iteration bound keeps a cyclic `uses:`
+    # graph from looping.
     for _ in range(len(facts) + 1):
         changed = False
         for path, sources in callers.items():
-            grown = (
-                resolved[path].union(*(resolved[s] for s in sources))
-                if sources
-                else resolved[path]
-            )
+            if not sources:
+                continue
+            grown = resolved[path].union(*(resolved[s] for s in sources))
             if grown != resolved[path]:
                 resolved[path] = grown
+                changed = True
+            if not reached[path] and any(reached[s] for s in sources):
+                reached[path] = True
                 changed = True
         if not changed:
             break
 
-    unreached = frozenset(
-        path for path, f in facts.items() if f.reusable and not callers[path]
-    )
+    unreached = frozenset(path for path, ok in reached.items() if not ok)
     return resolved, unreached
 
 
@@ -853,7 +916,9 @@ class _CredentialSurface:
     unresolved: tuple[str, ...]
 
 
-def _credential_surface(files: dict[str, str | None] | None) -> _CredentialSurface:
+def _credential_surface(
+    repo: str, files: dict[str, str | None] | None
+) -> _CredentialSurface:
     """Read the workflows into the facts the environment gates need.
 
     An unreadable tree yields an empty surface that says so, rather than no
@@ -874,23 +939,44 @@ def _credential_surface(files: dict[str, str | None] | None) -> _CredentialSurfa
         if text is None:
             unresolved.append(f"{path} could not be read")
             continue
-        parsed = _parse_workflow(path, text)
-        facts[path] = parsed
-        unresolved.extend(parsed.unresolved)
+        facts[path] = _parse_workflow(path, text, repo)
 
     resolved, unreached = _effective_triggers(facts)
     env_steerable: dict[str, set[str]] = {}
     oidc_environments: set[str] = set()
     ungated_oidc: list[tuple[str, str]] = []
     for path, f in facts.items():
+        if path in unreached:
+            # Nothing here starts it, and the outside caller that does spends
+            # its own repo's credentials, not this one's — so neither what its
+            # jobs name nor what it leaves unreadable is this repo's surface to
+            # gate. A file that would not parse is never unreached: nothing
+            # read `workflow_call` off it, so its own unknown still reports.
+            continue
+        unresolved.extend(f.unresolved)
         for env in f.environments:
             env_steerable.setdefault(env, set()).update(resolved[path])
         oidc_environments |= f.oidc_environments
         ungated_oidc.extend((path, job) for job in sorted(f.oidc_without_environment))
-        if path in unreached and f.environments:
+        # A call out of the repo runs against this repo's environments out of a
+        # file that cannot be read from here, so what it deploys to is unknown.
+        # That only matters where it could change a verdict: a steerable
+        # trigger defeats any ref policy the environment is gated by, and a
+        # granted `id-token: write` may be minted outside an environment
+        # altogether, which is `ungated_oidc`'s finding when it is visible.
+        if f.external_calls and resolved[path]:
+            triggers = ", ".join(f"`{t}`" for t in sorted(resolved[path]))
+            jobs = ", ".join(f"'{j}'" for j in sorted(f.external_calls))
             unresolved.append(
-                f"{path} is only reachable via `workflow_call` from outside this repo"
+                f"{path} runs on {triggers} and calls another repo's workflow "
+                f"({jobs}), whose jobs deploy to this repo's environments"
             )
+        unresolved.extend(
+            f"{path} job '{job}' grants `id-token: write` to another repo's "
+            "workflow, so whether the token is minted inside an environment is "
+            "not visible here"
+            for job in sorted(f.external_oidc)
+        )
 
     return _CredentialSurface(
         env_steerable={e: frozenset(t) for e, t in env_steerable.items()},
@@ -928,6 +1014,21 @@ def _reviewer_gate(env: dict, bot_name: str) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class _Gap:
+    """Why a gate does not hold, and whether that verdict was verified.
+
+    `verified` is False when the token could not see enough to decide, which
+    is not the same finding as a gate confirmed absent: the module docstring's
+    invariant is that the nightly sees the answers a maintainer does, so where
+    it doesn't, the honest report is unknown. `check_branch_protection` takes
+    the same stance on an unreadable bypass list.
+    """
+
+    reason: str
+    verified: bool = True
+
+
 def _policy_gate(
     repo: str,
     env_name: str,
@@ -935,7 +1036,7 @@ def _policy_gate(
     admitted: list[str],
     tags_ok,
     steerable: frozenset[str],
-) -> str | None:
+) -> _Gap | None:
     """Why this environment's deployment policy does not gate the bot, or None.
 
     A policy gates only when every entry names a ref verified out of the bot's
@@ -954,35 +1055,63 @@ def _policy_gate(
     """
     policy = env.get("deployment_branch_policy")
     if not policy:
-        return "has no deployment branch policy, so every ref reaches its secrets"
+        return _Gap("has no deployment branch policy, so every ref reaches its secrets")
     if policy.get("protected_branches"):
-        return (
+        return _Gap(
             "admits all protected branches, which keys on a rule covering the "
             "branch, not on who may push it"
         )
     policies = _branch_policies(repo, env_name)
     if policies is None:
-        return "has a deployment branch policy this token cannot list"
+        return _Gap(
+            "has a deployment branch policy this token cannot list", verified=False
+        )
+    # An unverifiable entry is held, not returned: a later entry can name a ref
+    # confirmed out of the verified set, and that finding outranks this one —
+    # the precedence `check_credential_environments` already applies when both
+    # kinds arrive from different environments.
+    unverified: _Gap | None = None
     for p in policies:
         if p.get("type") == "tag":
-            if tags_ok() is not True:
-                return (
+            gated = tags_ok()
+            if gated is None:
+                # Every unread input lands here, not just a withheld bypass
+                # list: an unlistable `/rulesets`, a ruleset that won't fetch,
+                # a bypass actor naming a team, app, or deploy key, and a
+                # `User` actor left undecidable by an unresolvable `bot_name`
+                # are all None. So the message names the set rather than
+                # prescribing the admin re-run that settles only one of them.
+                unverified = _Gap(
+                    "admits tags, and whether an all-tags ruleset gates them is "
+                    "unverifiable with this token — either the rulesets aren't "
+                    "readable, a bypass list is withheld (only a repo admin "
+                    "reads one), or a bypass actor names a principal tend "
+                    "cannot resolve: a team, app, or deploy key, or any user "
+                    "if `bot_name` itself does not resolve to an account",
+                    verified=False,
+                )
+            elif gated is False:
+                return _Gap(
                     "admits tags, and no active all-tags ruleset restricting "
                     "creation and update to admins could be verified"
                 )
         elif p["name"] not in admitted:
-            return (
+            return _Gap(
                 f"admits '{p['name']}', which tend has not verified the bot "
                 "cannot write"
             )
     if steerable:
         triggers = ", ".join(f"`{t}`" for t in sorted(steerable))
-        return (
-            f"admits only verified refs, but a workflow reaching it runs on "
-            f"{triggers}, which the bot fires and steers against a ref the "
-            "policy already admits"
+        # Not "admits only verified refs": a held `unverified` means one entry
+        # didn't settle. The ref list is beside the point here anyway — the bot
+        # picks the ref — so the message states the trigger, which holds either
+        # way, and this stays a verified finding.
+        return _Gap(
+            f"is reached by a workflow running on {triggers}, which the bot "
+            "fires and steers against a ref the policy already admits, so its "
+            "ref list does not gate it"
         )
-    return None
+    return unverified
 
 
 def check_credential_environments(
@@ -1028,16 +1157,26 @@ def check_credential_environments(
             name, None, f"Could not list environments: {listed.stderr.strip()}"
         )
 
-    surface = _credential_surface(_fetch_workflow_files(repo))
+    surface = _credential_surface(repo, _fetch_workflow_files(repo))
     tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
     ungated: list[str] = []
+    unverified: list[str] = []
     holders: list[str] = []
-    for env_name in listed.stdout.split():
+    # One name per line, not one per whitespace-separated token: GitHub admits
+    # a space in an environment name, and splitting on whitespace turns one
+    # such environment into two names that exist nowhere. Each answers 404,
+    # which is the `returncode != 0` below, so the whole check reports itself
+    # skipped for want of admin access — a credential check that stops
+    # verifying and blames the token. The real environment goes unexamined
+    # either way.
+    for env_name in listed.stdout.splitlines():
+        if not env_name:
+            continue
         secrets = _gh(
             "api",
             "--paginate",
-            f"repos/{repo}/environments/{env_name}/secrets",
+            f"repos/{repo}/environments/{_env_path(env_name)}/secrets",
             "--jq",
             ".secrets[].name",
         )
@@ -1052,7 +1191,7 @@ def check_credential_environments(
         holders.append(env_name)
         if env_name == TEND_ENVIRONMENT:
             continue  # Gated by its branch policy; `environment` verifies that.
-        detail = _gh("api", f"repos/{repo}/environments/{env_name}")
+        detail = _gh("api", f"repos/{repo}/environments/{_env_path(env_name)}")
         if detail is None or detail.returncode != 0:
             return CheckResult(name, None, f"Could not read environment '{env_name}'")
         try:
@@ -1062,7 +1201,7 @@ def check_credential_environments(
         reviewer_reason = _reviewer_gate(env, cfg.bot_name)
         if reviewer_reason is None:
             continue
-        policy_reason = _policy_gate(
+        gap = _policy_gate(
             repo,
             env_name,
             env,
@@ -1070,9 +1209,10 @@ def check_credential_environments(
             tags_ok,
             surface.env_steerable.get(env_name, frozenset()),
         )
-        if policy_reason is None:
+        if gap is None:
             continue
-        ungated.append(f"'{env_name}' {reviewer_reason}, and {policy_reason}")
+        found = f"'{env_name}' {reviewer_reason}, and {gap.reason}"
+        (ungated if gap.verified else unverified).append(found)
 
     if surface.ungated_oidc:
         jobs = ", ".join(f"{path}:{job}" for path, job in surface.ungated_oidc)
@@ -1088,16 +1228,18 @@ def check_credential_environments(
             False,
             "A run the bot can cause reaches a credential: "
             f"{'; '.join(ungated)}. Gate each environment with a required "
-            "reviewer that is not the bot, or a deployment policy naming only "
-            "verified refs (protected branches, or tags under an admin-only "
-            "all-tags ruleset); move an OIDC job into such an environment.",
+            "reviewer that is not the bot, or a deployment policy listing "
+            "only verified refs — branches this run confirmed the bot cannot "
+            "write, or tags under an admin-only all-tags ruleset; move an "
+            "OIDC job into such an environment. The policy's 'protected "
+            "branches' setting is not one of them.",
         )
-    if surface.unresolved:
+    if unverified or surface.unresolved:
         return CheckResult(
             name,
             None,
             "Could not read the whole credential surface: "
-            f"{'; '.join(surface.unresolved)}",
+            f"{'; '.join([*unverified, *surface.unresolved])}",
         )
     if not holders:
         return CheckResult(name, True, "No environment holds a credential")

@@ -53,13 +53,13 @@ inputs:
     default: danger-full-access
     description: Codex sandbox mode (workspace-write, read-only, danger-full-access)
   codex_version:
-    default: "0.131.0-alpha.22"
+    default: "0.147.0"
     description: >-
-      `@openai/codex` npm version to install (e.g. `0.131.0-alpha.22`).
-      Must ship the `codex plugin add` subcommand (PR #21396, first
-      released in `rust-v0.131.0-alpha.17`). On npm this currently lives
-      on the `alpha` dist-tag — `latest` is still 0.130.0 and lacks it,
-      so the default pins an explicit alpha rather than tracking `latest`.
+      `@openai/codex` npm version to install (e.g. `0.147.0`). Must ship
+      the `codex plugin add` subcommand (PR #21396, first released in
+      `rust-v0.131.0-alpha.17`). That was `alpha`-only when the pin was
+      first set; stable carries it now, so this tracks `latest`. CI's
+      `test-codex-surface` job confirms whichever version is pinned.
   allowed_bots:
     default: "*"
     description: Bots allowed to trigger workflows (engagement gate, not used yet)
@@ -87,6 +87,7 @@ runs:
     # Preflight/teardown step bodies are shared with the Claude actions via
     # ../shared/steps; codex's auth, prompt staging, and run path are its own.
     - name: Security preflight
+      id: security
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/security-preflight.sh"
       env:
@@ -112,11 +113,12 @@ runs:
 
     # Install the Codex CLI from npm. `@openai/codex` ships a prebuilt
     # per-platform binary, so this is ~3 s with no Rust toolchain. We pin
-    # an explicit version (`codex_version`, default a `0.131.0-alpha.*`)
-    # because tend needs `codex plugin add` (PR #21396, first in
-    # `rust-v0.131.0-alpha.17`) and as of 2026-05-15 npm's `latest`
-    # (0.130.0) still predates it — only the `alpha` dist-tag carries it.
-    # Bump the default once a stable npm release ships PR #21396.
+    # an explicit version (`codex_version`) rather than floating on
+    # `latest` so an adopter's run can't change engine mid-release. The
+    # pin sat on an `alpha` for a while because only prereleases carried
+    # `codex plugin add` (PR #21396, first in `rust-v0.131.0-alpha.17`);
+    # stable ships it now, so the pin tracks `latest` and drops back to a
+    # prerelease only for a fix that hasn't been released yet.
     - name: Install Codex CLI
       shell: bash
       run: |
@@ -329,8 +331,15 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # Gate on the job being red, not on the agent step specifically — see the
+    # matching note in claude/action.yaml, including why the security preflight
+    # is excluded. Every step ahead of `codex` (the rate-limit preflight, bot-ID
+    # resolution, auth validation, the CLI and plugin installs, the AGENTS.md
+    # staging, the fork-PR pinning) strands the same work when it fails, and
+    # keying on `steps.codex.outcome` kept all of them out of the outage
+    # tracker.
     - name: Report failure
-      if: failure() && steps.codex.outcome == 'failure'
+      if: failure() && steps.security.outcome != 'failure'
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
       env:

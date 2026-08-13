@@ -1,15 +1,16 @@
 ---
 name: install-tend
-description: Sets up tend — an autonomous junior maintainer for a GitHub repo, powered by Claude or OpenAI Codex — that reviews PRs, triages issues, and fixes CI. Creates config, generates workflows, configures secrets and branch protection via API, creates the bot account, and provisions the harness auth token (Claude OAuth or OpenAI API key). Use when setting up tend on a new repo or when asked to install/configure tend.
+description: Sets up tend — an autonomous junior maintainer for a GitHub repo, powered by Claude or OpenAI Codex — that reviews PRs, triages issues, and fixes CI. Creates config, generates workflows, configures secrets and branch protection via API, creates the bot account, and provisions the harness auth token (Claude OAuth or OpenAI API key). Use when installing tend, when clearing a failing `tend check`, and when changing an installed repo's tend config, generated workflows, secrets, environments, branch protection, or bot access.
 ---
 
 # Install Tend
 
-Set up tend on the current repo. If the user hasn't supplied a bot name,
-get one via `AskUserQuestion` before step 1 using the candidate-generation
-pattern from step 6 (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`, parallel
-availability check, present available ones). The user can pick "Other"
-to supply a custom name.
+Set up tend on the current repo, or change an installation it already has.
+When installing and the user hasn't supplied a bot name, get one via
+`AskUserQuestion` before step 1 using the candidate-generation pattern from
+step 6 (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`, parallel availability
+check, present available ones). The user can pick "Other" to supply a custom
+name.
 
 When asking the user questions during these steps, use the `AskUserQuestion`
 tool — present concrete options when there are clear choices (e.g. bio
@@ -23,7 +24,16 @@ not have to ask "where do I do that?".
 
 ## Kickoff
 
-Before running step 1, choose the harness and lay out the plan:
+Read `.config/tend.yaml` first. Its presence says whether this is an install or
+a change to one, and where it exists it settles the harness: the `harness` key,
+or Claude when the key is absent, which is how a Claude install is normally
+written.
+
+With a config in place, take the harness from it, lay out only the steps the
+task touches, and start. The summary checklist at the end describes a finished
+install, so skip it.
+
+With no config yet, choose the harness and lay out the whole install:
 
 - Ask via `AskUserQuestion` which harness to use:
   - **Claude (Anthropic)** — uses a Claude Code OAuth token (recommended
@@ -355,9 +365,8 @@ Bot-deleting an admin-pushed tag is brief availability damage at worst;
 repos that need stronger protection against published-tag deletion can
 add a no-bypass `deletion` ruleset (see the publisher uplift below).
 
-**Environment ref policies.** A ruleset only helps once an Environment
-names the refs it protects. A new Environment defaults to
-`deployment_branch_policy: null`, which admits every ref — so a bot-pushed
+**Environment gates.** A new Environment admits every ref and requires no
+approval — `deployment_branch_policy: null`, no reviewers — so a bot-pushed
 branch or tag reaches its secrets and mints its OIDC token. Survey what
 exists, including environments GitHub created on the repo's behalf
 (`github-pages`) and ones that predate tend:
@@ -367,9 +376,15 @@ gh api "repos/$REPO/environments" \
   --jq '.environments[] | {name, deployment_branch_policy, rules: [.protection_rules[].type]}'
 ```
 
-Pin each environment that holds a secret, or that a job with
-`id-token: write` names, to the admin-gated refs its workflows actually
-use — all tags for a release, the default branch for a continuous deploy:
+Each environment that holds a secret, or that a job with `id-token: write`
+names, needs a gate: a deployment policy pinned to admin-gated refs, or
+required reviewers who exclude the bot. Either clears
+`credential-environments`, so an environment already behind reviewers
+stays as it is.
+
+Pin the policy to the admin-gated refs its workflows actually use — all
+tags for a release, the default branch for a continuous deploy. The
+rulesets above are what hold those refs out of the bot's reach:
 
 ```bash
 gh api "repos/$REPO/environments/$ENV" --method PUT --input - << 'EOF'
@@ -385,6 +400,18 @@ explicit list to the "protected branches only" setting, which admits any
 branch carrying a *classic* protection rule — a set that grows as
 branches are created, and that excludes a branch protected by the
 ruleset above.
+
+Name required reviewers where no ref list fits — a deploy running from a
+ref no policy can name, such as a preview published from
+`refs/pull/N/merge`. Approval holds whatever ref the run starts from. Ask
+which humans to name; the bot cannot be one of them:
+
+```bash
+ID=$(gh api "users/<login>" --jq .id)
+gh api "repos/$REPO/environments/$ENV" --method PUT --input - << EOF
+{"reviewers": [{"type": "User", "id": $ID}], "deployment_branch_policy": null}
+EOF
+```
 
 **Release/deploy workflow design.** Workflows that use release or deploy
 secrets must trigger on `push: tags:` (release) or `push: branches: [main]`
@@ -408,9 +435,8 @@ the bot.
 
 **More complicated approaches are possible** (per-pattern tag rulesets,
 mixed bypass actors, layered no-bypass immutability rulesets for repos
-that publish actions consumed via tag pins, required-reviewer environment
-gates for per-deploy human approval). Install-tend packages the recipe
-above because it is the simplest configuration that holds the chain;
+that publish actions consumed via tag pins). Install-tend packages the
+recipe above because it is the simplest configuration that holds the chain;
 adopters with stricter requirements can layer additional rulesets or
 environment protection rules on top.
 

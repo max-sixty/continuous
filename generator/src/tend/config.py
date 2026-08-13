@@ -125,8 +125,9 @@ class SetupStep:
 
     Exactly one of `uses` or `run`, plus any of `with`, `env`, `name`,
     `id`, `shell`, `working-directory`, `continue-on-error`,
-    `timeout-minutes`, `if`. The renderer injects the notifications
-    pre-check `if:` guard when absent. For multi-step setup, add multiple
+    `timeout-minutes`, `if`. In the workflows that pre-check whether the
+    agent needs to boot, the renderer injects that check as the step's `if:`
+    guard when the step declares none. For multi-step setup, add multiple
     entries to the `setup:` list — or reference a local composite action
     with `uses`.
     """
