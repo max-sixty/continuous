@@ -32,7 +32,20 @@ url = "http://localhost:{{ branch | hash_port }}"
 [[pre-remove]]
 server = "lsof -ti :{{ branch | hash_port }} -sTCP:LISTEN | xargs kill 2>/dev/null || true"
 
-# Tests live in four places (generator/, proxy/, the install-tend scripts,
-# worker/); dev/test.sh runs the lot, mirroring ci.yaml's test jobs.
-[aliases]
-test = "dev/test.sh {{ args }}"
+# `wt test` is the whole suite: one pytest from the repo root covers every
+# Python test (generator/, proxy/, the install-tend scripts), and worker/ runs
+# its vitest suite and typecheck. Arguments narrow pytest (`wt test -k render`)
+# and nothing else — every step still runs, so reach for `uv run pytest` when
+# the Python half is all you want.
+#
+# One command per block until the last, so pytest's output streams unprefixed;
+# a step's failure stops the blocks after it.
+[[aliases.test]]
+pytest = "uv run pytest {{ args }}"
+
+[[aliases.test]]
+worker-install = "npm --prefix worker ci --prefer-offline --no-audit --no-fund"
+
+[[aliases.test]]
+worker-test = "npm --prefix worker test"
+worker-typecheck = "npm --prefix worker run typecheck"

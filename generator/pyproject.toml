@@ -25,5 +25,6 @@ tend = "tend.cli:main"
 [project.urls]
 homepage = "https://github.com/max-sixty/tend"
 
-[dependency-groups]
-dev = ["pytest>=9.0.2", "pytest-regtest>=2.1.1"]
+# Test dependencies live in the workspace root's dev group, not here: one
+# environment covers every Python suite in the repo, so `uv run pytest` from the
+# root is the whole run.

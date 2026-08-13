@@ -1,6 +1,6 @@
 """Tests for the OAuth wrapper's extractors.
 
-Run: ``uv run --no-project --with pytest pytest`` from this directory.
+Run: ``uv run pytest`` from the repo root, which covers every Python suite.
 
 `complete_match` and `first_url` are pure functions over whatever bytes the pty
 happens to deliver, and every way they can be wrong ends the same way: a

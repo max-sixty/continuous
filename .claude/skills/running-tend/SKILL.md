@@ -169,7 +169,7 @@ both.
 | Pin | File | Rule |
 |---|---|---|
 | `claude_version` | `claude/action.yaml` | track npm's `latest` dist-tag |
-| `mitmproxy_version` | `claude/action.yaml` | track latest |
+| `mitmproxy_version` | `claude/action.yaml` | track latest; move the root `pyproject.toml` dev pin with it and `uv lock` |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
 | `codex_version` | `codex/action.yaml` | track latest; the surface job confirms the bump |
 

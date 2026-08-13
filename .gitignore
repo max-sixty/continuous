@@ -5,3 +5,6 @@
 # Python bytecode caches (generator/).
 __pycache__/
 *.py[cod]
+
+# uv's environment for the workspace root.
+.venv/

@@ -1,16 +1,35 @@
 """Tests for the credential-injection addon (GitHub + Anthropic).
 
-Run: ``uv run --with mitmproxy --with pytest python -m pytest proxy``
+Run: ``uv run pytest`` from the repo root, which covers every Python suite.
 """
 
 from __future__ import annotations
 
 import base64
+from importlib.metadata import version
+from pathlib import Path
 
 import pytest
 from mitmproxy.test import tflow, tutils
+from ruamel.yaml import YAML
 
 from inject_credentials import CredentialInjector
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_pinned_mitmproxy_matches_the_action() -> None:
+    # The addon imports mitmproxy.test, an internal helper, so these tests only
+    # mean anything run against the version production runs. That version is
+    # named twice — the workspace dev group installs it, claude/action.yaml
+    # tells an adopter's job which to fetch — and drift between them greens
+    # this suite while every adopter's proxy breaks. Assert on the installed
+    # distribution rather than the pyproject text, so a lock that resolved to
+    # something else fails here too.
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+    assert version("mitmproxy") == action["inputs"]["mitmproxy_version"]["default"]
 
 
 def test_addon_methods_are_real_mitmproxy_hooks() -> None:
