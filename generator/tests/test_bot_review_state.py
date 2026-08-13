@@ -229,9 +229,7 @@ def test_the_newest_rewrite_is_the_one_that_counts(env: dict[str, str]) -> None:
 def test_an_approval_that_predates_the_rewrite_is_stale(env: dict[str, str]) -> None:
     """A rebased dependency PR carries an approval it never earned; the skip
     paths comment that it isn't mergeable while the PR reads as bot-approved."""
-    _write(
-        env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="APPROVED")]
-    )
+    _write(env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="APPROVED")])
     _rewrite_at(env, "2026-01-02T00:00:00Z")
 
     state = _state(env)
@@ -259,6 +257,15 @@ def test_a_later_approval_supersedes_the_stale_one(env: dict[str, str]) -> None:
 
     assert state["stale_approval_id"] == ""
     assert state["fresh_approval_sha"] == HEAD
+
+
+def test_a_dismissed_approval_is_not_re_dismissed(env: dict[str, str]) -> None:
+    """Dismissing sets the state to DISMISSED, which stops matching — `weekly`
+    relies on that to keep a later run from dismissing the same review again."""
+    _write(env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="DISMISSED")])
+    _rewrite_at(env, "2026-01-02T00:00:00Z")
+
+    assert _state(env)["stale_approval_id"] == ""
 
 
 def test_an_approval_on_an_older_commit_is_not_an_approval_of_this_one(
