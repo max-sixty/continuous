@@ -152,7 +152,15 @@ def _gh_ruleset(
             return _make_completed(ruleset_json)
         if bypass_actors is None:
             return _make_completed(returncode=1)
-        return _make_completed(json.dumps({"bypass_actors": bypass_actors}))
+        # Real responses always carry `current_user_can_bypass`; these
+        # fixtures imply an admin caller reading the full list, whose own
+        # verdict is "always" — exercised so the identity gate is what keeps
+        # the inference path governing when the login isn't the bot's.
+        return _make_completed(
+            json.dumps(
+                {"bypass_actors": bypass_actors, "current_user_can_bypass": "always"}
+            )
+        )
 
     return fake
 
@@ -339,7 +347,7 @@ def test_update_rule_present() -> None:
     fake = _gh_ruleset(_make_branch_rules("update"), [_role_actor(ROLE_ID_ADMIN)])
     with patch("tend.checks._gh", side_effect=fake) as gh:
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
-    assert gh.call_args.args[-1] == "repos/owner/repo/rulesets/1"
+    assert any(c.args[-1] == "repos/owner/repo/rulesets/1" for c in gh.call_args_list)
 
 
 def test_org_ruleset_read_via_repo_endpoint() -> None:
@@ -350,7 +358,7 @@ def test_org_ruleset_read_via_repo_endpoint() -> None:
     )
     with patch("tend.checks._gh", side_effect=fake) as gh:
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
-    assert gh.call_args.args[-1] == "repos/owner/repo/rulesets/1"
+    assert any(c.args[-1] == "repos/owner/repo/rulesets/1" for c in gh.call_args_list)
 
 
 def test_ruleset_bypass_list_not_visible() -> None:
@@ -1529,6 +1537,9 @@ _ADMIN_TAG_RULESET = {
     "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
     "rules": [{"type": "creation"}, {"type": "update"}],
     "bypass_actors": [_role_actor(ROLE_ID_ADMIN)],
+    # Real responses always carry the caller's own verdict; an admin caller
+    # reading the full list bypasses via the admin role, so "always".
+    "current_user_can_bypass": "always",
 }
 
 # An environment detail whose policy is the custom named-list mode; the list
