@@ -1,15 +1,18 @@
 name: review-reviewers
-# Hourly outcome-based analysis of bot behavior across adopter repos.
+# Outcome-based analysis of bot behavior across adopter repos. Each matrix entry
+# is a repo to analyze. The job checks out the tend repo (for creating
+# improvement PRs/issues). TEND_BOT_TOKEN is sufficient for reading CI data from
+# public adopter repos.
 #
-# Each matrix entry is a repo to analyze. The job checks out the tend repo
-# (for creating improvement PRs/issues). TEND_BOT_TOKEN is sufficient for reading
-# CI data from public adopter repos.
-#
-# TODO: Move repo list to a config file so adding a repo doesn't require a workflow change
-# TODO: Cross-repo pattern detection — correlate findings across repos
+# Paused — manual dispatch only, no cron. The hourly outside-in sweep had
+# converged on maintaining its own evidence machinery, at the fleet's highest
+# per-run cost and a quota ceiling that twice took the user-facing workflows
+# down with it. Each adopter's own daily `tend-review-runs` already reviews that
+# repo's runs from the inside and routes bundled-skill defects upstream, so the
+# loop this closes is the direct one, not the only one. Dispatch it as a
+# deliberate spot-check after a change that could move bot behavior fleet-wide:
+# a release, a harness switch, a model bump.
 on:
-  schedule:
-    - cron: '47 * * * *'
   workflow_dispatch:
 
 jobs:
