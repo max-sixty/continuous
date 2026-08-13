@@ -220,7 +220,7 @@ If empty, record the run as all-clear per "Recording below-threshold findings" a
 
 If the script printed a `WARNING:` on stderr, the list is known-incomplete — the window was clamped, no anchor was found, or a workflow hit the fetch limit. Record a coverage gap naming the missing span instead of an all-clear, whether or not the list came back empty; the next run's floor advances past that span regardless, so an unrecorded gap is never revisited.
 
-**Read the window off the script, and report it.** The anchoring that tiles consecutive windows applies only under an hourly cron; every other trigger — `workflow_dispatch` included — takes a now-anchored 1-hour window, and takes it silently, since the coverage-gap warnings above live on the anchored path. This workflow is dispatch-only, so a run checking on a change that landed earlier than an hour ago is looking past it. State the window's bounds in your summary and scope every claim to them: "no problems in the hour to 14:05Z", never "no problems".
+**State the window you analyzed.** The anchoring that tiles consecutive windows keys on an hourly cron in the event payload; every other trigger — `workflow_dispatch` included — takes the hour ending when the script ran, and takes it silently, since both the anchor and the coverage-gap warnings above sit on the anchored path. Nothing prints the bounds on that path, so derive them (the script's run time, less an hour) rather than looking for them. Scope every claim to that hour — "no problems in the hour to 14:05Z", never "no problems" — and say so plainly when a run was dispatched to check on something that landed before it, which this workflow's dispatch-only trigger makes the common case.
 
 ## Step 2: Survey outcomes via cheap subagent
 
