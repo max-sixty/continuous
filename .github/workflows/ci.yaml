@@ -181,6 +181,11 @@ jobs:
       - uses: astral-sh/setup-uv@v9.0.0
       - run: uv run --no-project --with pytest pytest
 
+  # Node 22 to match worker-deploy.yaml, which had to move off 20 because
+  # Wrangler refuses to run there ("Wrangler requires at least Node.js
+  # v22.0.0"). That deploy job re-runs this job's typecheck and tests before
+  # shipping, so leaving the gate on a version the worker's own toolchain
+  # rejects makes the pre-merge signal weaker than the thing it gates.
   test-worker:
     runs-on: ubuntu-24.04
     defaults:
@@ -190,7 +195,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: worker/package-lock.json
       - run: npm ci
