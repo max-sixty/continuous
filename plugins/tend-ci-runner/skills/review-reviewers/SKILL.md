@@ -157,7 +157,7 @@ LAST_GIST_ID=$(gh api /gists --paginate \
 
 ### Recording below-threshold findings
 
-**Append a `## Run <RUN_ID>` heading every run**, even when no problem finding exceeded a gate threshold. For all-clear hours, record a single Low-evidence "all-clear" entry as the body — runs analyzed, outcomes checked, no concerning signals. The heading per run is the audit trail that prior runs read to count cumulative occurrences and confirm which hours were analyzed; missing entries leave gaps that erode gate evaluation across runs.
+**Append a `## Run <RUN_ID>` heading every run**, even when no problem finding exceeded a gate threshold. For an all-clear window, record a single Low-evidence "all-clear" entry as the body — window analyzed, runs and outcomes checked, no concerning signals. The heading per run is the audit trail that prior runs read to count cumulative occurrences and confirm which spans were analyzed; missing entries leave gaps that erode gate evaluation across runs.
 
 After applying the gates, write each run's new findings (format in `@review-gates.md`) to `/tmp/findings.md`, then append them to the gist's `findings.md`. Reuse the current content already fetched into `/tmp/current.md` in "Reading historical evidence", concatenate, and PATCH via the API (`--rawfile` preserves trailing newlines that command substitution would strip):
 
@@ -270,7 +270,7 @@ Use a cheap subagent (e.g. Haiku / gpt-mini) and a prompt like:
 > - `tend-review`: `gh -R $ARGUMENTS run view <run-id> --json headBranch` → find PR via
 >   `gh -R $ARGUMENTS pr list --head <branch> --state all` → check bot reviews via
 >   `gh api repos/$ARGUMENTS/pulls/<pr>/reviews`
-> - `tend-notifications`: check for recent bot comments/issue-close events in the past hour
+> - `tend-notifications`: check for bot comments/issue-close events inside the window from Step 1
 > - `tend-mention`: map run to issue/PR from triggering comment, check for bot replies
 > - `tend-mention` on `repository_dispatch` (the relay path for review events): there is no triggering comment and `headBranch` is the default branch, so neither route above resolves it. Read the target off the `verify` job's log, where the step env block prints the relayed payload:
 >   ```bash
@@ -427,7 +427,7 @@ Search titles AND bodies for related keywords. Only comment on existing issues i
 
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
-- **PR** (default): Branch `hourly/review-$GITHUB_RUN_ID-<target-repo-name>-<topic-slug>`, fix, commit, push, create with label `claude-behavior`. `$GITHUB_RUN_ID` alone is not a unique branch name: every matrix leg of a tick carries the same one, and a single leg may open two PRs (see the 2-PR limit below). The target's repo name (the part after the `/`) keeps two legs from racing the same ref; the topic slug keeps one leg's two PRs from doing the same. Lead the PR description with two or three sentences — problem, fix, verification — and put the full analysis (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count) inside `<details>`. Don't also create a separate issue.
+- **PR** (default): Branch `review-reviewers/$GITHUB_RUN_ID-<target-repo-name>-<topic-slug>`, fix, commit, push, create with label `claude-behavior`. `$GITHUB_RUN_ID` alone is not a unique branch name: every matrix leg of a run carries the same one, and a single leg may open two PRs (see the 2-PR limit below). The target's repo name (the part after the `/`) keeps two legs from racing the same ref; the topic slug keeps one leg's two PRs from doing the same. Lead the PR description with two or three sentences — problem, fix, verification — and put the full analysis (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count) inside `<details>`. Don't also create a separate issue.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly. Include run ID, outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more findings, pick the highest-confidence ones and record the rest in the evidence gist.
