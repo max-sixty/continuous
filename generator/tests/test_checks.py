@@ -115,6 +115,13 @@ def _workflow_tree(workflows: dict[str, str | None]) -> str:
     return json.dumps({"data": {"repository": {"object": {"entries": entries}}}})
 
 
+def _login_response(login: str | None) -> subprocess.CompletedProcess[str]:
+    """What the `user` endpoint answers: `login`, or returncode=1 if None."""
+    if login is None:
+        return _make_completed(returncode=1)
+    return _make_completed(f"{login}\n")
+
+
 def _role_actor(actor_id: int) -> dict[str, object]:
     """A `bypass_actors` entry granting a base repository role."""
     return {
@@ -139,9 +146,7 @@ def _gh_ruleset(
 
     def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str] | None:
         if args[1] == "user":
-            if login is None:
-                return _make_completed(returncode=1)
-            return _make_completed(f"{login}\n")
+            return _login_response(login)
         if "/rules/branches/" in args[1]:
             return _make_completed(rules)
         if args[1].startswith("users/"):
@@ -1488,9 +1493,7 @@ def _credential_env_gh(
             return _make_completed(_workflow_tree(workflows or {}))
         url = args[-3] if "--jq" in args else args[-1]
         if url == "user":
-            if login is None:
-                return _make_completed(returncode=1)
-            return _make_completed(f"{login}\n")
+            return _login_response(login)
         if url.endswith("/environments"):
             return _make_completed("\n".join(environments) + "\n")
         if url.endswith("/rulesets"):
