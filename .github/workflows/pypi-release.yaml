@@ -19,12 +19,15 @@ jobs:
       - name: Set up Python
         run: uv python install 3.13
 
+      # Built from the repo root: `uv build` in a workspace member still writes
+      # to the workspace root's dist/, so `working-directory: generator` would
+      # leave every later step globbing a directory that was never created.
+      # `--package tend` names the member — a bare root build tries to build
+      # the virtual `tend-dev` through setuptools and fails.
       - name: Build package
-        working-directory: generator
-        run: uv build
+        run: uv build --package tend
 
       - name: Check artifacts
-        working-directory: generator
         run: |
           uv tool run --from twine twine check dist/*
           if [ -f dist/tend-0.0.0.tar.gz ]; then
@@ -35,7 +38,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: dist
-          path: generator/dist
+          path: dist
 
   pypi:
     needs: build
