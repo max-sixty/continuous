@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import click.testing
 import pytest
-from tests import ACTION_VERSION
+from tests import ACTION_VERSION, BASH, tool_path
 from tests import _yaml as yaml
 from click.testing import CliRunner
 
@@ -404,9 +404,9 @@ def test_check_full_pipeline_with_mocked_gh(
 
     assert result.exit_code == 0, result.output
     assert "FAIL" not in result.output
-    # branch-protection + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 7
-    assert result.output.count("PASS") == 7
+    # branch-protection + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 8
+    assert result.output.count("PASS") == 8
 
 
 def test_check_full_pipeline_branch_not_protected(
@@ -567,12 +567,12 @@ def test_notifications_precheck_tolerates_transient_non_json(
     output_file = tmp_path / "gh_output"
     output_file.write_text("")
     env = {
-        "PATH": f"{bindir}:/usr/bin:/bin",
+        "PATH": tool_path(bindir),
         "GITHUB_OUTPUT": str(output_file),
         "GITHUB_REPOSITORY": "owner/repo",
     }
     result = subprocess.run(
-        ["bash", "-e", "-c", script],
+        [BASH, "-e", "-c", script],
         env=env,
         capture_output=True,
         text=True,
@@ -756,7 +756,9 @@ def test_install_test_workflow_shape(
     # Version is pinned from the committed header (not `@latest`) so a release
     # mid-PR doesn't fail the drift check for an irrelevant reason.
     assert 'uvx "tend@$TEND_VERSION" init --with-install-test' in content
-    assert "astral-sh/setup-uv@v6" in content
+    # Version-agnostic: the exact pin is covered by the regtest output, and
+    # weekly bumps shouldn't have to edit two places.
+    assert "astral-sh/setup-uv@" in content
 
     # Default-branch probe: must not use `git remote set-head origin --auto`,
     # which errors on the default shallow `actions/checkout@v7` (only the PR

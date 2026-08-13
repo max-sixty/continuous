@@ -24,12 +24,12 @@
         if: <<if_condition>>
 {% endif %}
         with:
-          github_token: ${{ secrets.<<cfg.bot_token_secret>> }}
+          github_token: ${{ secrets.<<bot_token_secret>> }}
 {% if cfg.harness == 'claude' %}
-          claude_code_oauth_token: ${{ secrets.<<cfg.claude_token_secret>> }}
-          anthropic_api_key: ${{ secrets.<<cfg.anthropic_api_key_secret>> }}
+          claude_code_oauth_token: ${{ secrets.<<claude_token_secret>> }}
+          anthropic_api_key: ${{ secrets.<<anthropic_api_key_secret>> }}
 {% else %}
-          openai_api_key: ${{ secrets.<<cfg.openai_key_secret>> }}
+          openai_api_key: ${{ secrets.<<openai_key_secret>> }}
 {% if cfg.effort %}
           effort: <<cfg.effort>>
 {% endif %}
@@ -111,8 +111,43 @@
 {% endif %}
 {%- endmacro %}
 
+{# True when the issue carries none of the labels tend puts on its own
+   bookkeeping issues. The list lives in workflows.py so a new one reaches
+   every workflow at once; see BOOKKEEPING_LABELS for why they are skipped.
+
+   `contains(…) == false` rather than `!contains(…)`: a value starting with
+   `!` is a tag indicator to YAML, so the negated form only parses where the
+   expression is already inside a block scalar. This one renders in both. #}
+{% macro not_bookkeeping() -%}
+{% for label in bookkeeping_labels %}contains(github.event.issue.labels.*.name, '<<label>>') == false{% if not loop.last %} && {% endif %}{% endfor %}
+{%- endmacro %}
+
 {% macro fork_guard_prefix(cfg) -%}
 {% if cfg.repo_owner %}github.repository_owner == '<<cfg.repo_owner|replace("'", "''")>>' && {% endif %}
+{%- endmacro %}
+
+{# Acknowledge an inbound issue or PR the moment the job starts: the agent
+   takes minutes to reach its first comment, and until then an opened issue
+   looks unattended. GitHub files PRs as issues for reactions, so one endpoint
+   covers both, and a repeat call returns the existing reaction rather than
+   erroring.
+
+   The reaction stays for the life of the issue, recording that the bot saw the
+   event; mention's eyes track a session in flight on one comment and come off
+   when it ends. A failure warns rather than failing the job — an
+   acknowledgment is not worth losing the run that does the work. #}
+{% macro react_eyes(number_expr, if_condition='') %}
+      - name: Acknowledge with an eyes reaction
+{% if if_condition %}
+        if: <<if_condition>>
+{% endif %}
+        run: |
+          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+            || echo "::warning::could not add the eyes reaction"
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: <<number_expr>>
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
 {%- endmacro %}
 
 {# Shared `actions/checkout@v7` step. Omitting `ref` takes the event's own ref,
@@ -147,7 +182,46 @@
 {% endif %}
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.<<cfg.bot_token_secret>> }}
+          token: ${{ secrets.<<bot_token_secret>> }}
+{%- endmacro %}
+
+{# Put the local composites named by `setup:` back the way the job loaded them,
+   for the workflows that swap the workspace tree afterwards (review, mention).
+
+   A `uses: ./path` is read from the workspace, and the runner reads it a second
+   time at job end to dispatch the POST steps of the actions nested inside it —
+   `Swatinem/rust-cache` and friends — indexing into the step list it cached the
+   first time. By then the PR's own tree is on disk, so a PR that edits the
+   composite's step count fails cleanup with `Index was out of range`, and one
+   that drops the file entirely with `Can't find 'action.yml'`. Both paint the
+   job red after a session that did its work correctly. actions/runner#2816.
+
+   `$GITHUB_SHA` names the tree the job's first checkout took: both callers give
+   that checkout no `ref`, and `actions/checkout` then resolves the triggering
+   event's own commit. So it is by construction the tree the composite loaded
+   from, whatever branch the event put there. Every main step runs ahead of
+   every POST step, so any position below the tree switch is early enough.
+   `run_body` is empty for a `setup:` that names no local action, rendering this
+   away.
+
+   `always()` runs the step past a *skip* as well as a failure, so a caller
+   whose earlier steps sit behind a gate has to thread that gate in through
+   `if_condition`: on a gate-skipped run nothing checked out, the restore finds
+   no repository, and the `||` emits a warning about cleanup that was never
+   going to happen. On a persistent workspace (self-hosted) it doesn't warn — it
+   succeeds against whatever the previous job left behind — so the condition is
+   what makes the step mean the same thing on both. Mention's handle job gates
+   at the job level — every step runs or the job doesn't — so it passes nothing.
+   #}
+{% macro restore_local_actions(run_body, if_condition='') %}
+{% if run_body %}
+
+
+      - name: Restore local setup actions for POST cleanup
+        if: always()<< " && (" ~ if_condition ~ ")" if if_condition else "" >>
+        run: |
+<<run_body|indent(10, first=True)>>
+{%- endif %}
 {%- endmacro %}
 
 {# YAML block scalar prompt at column 10, with the supplied text indented at

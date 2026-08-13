@@ -9,7 +9,7 @@ import pytest
 from tests import _yaml as yaml
 from click import ClickException
 
-from tend.config import Config
+from tend.config import BOT_TOKEN_SECRET, Config
 from tend.workflows import generate_all
 
 
@@ -44,8 +44,6 @@ def test_bot_name_only(tmp_path: Path) -> None:
     assert cfg.bot_name == "my-bot"
     assert cfg.model == "opus"
     assert cfg.protected_branches == []
-    assert cfg.bot_token_secret == "TEND_BOT_TOKEN"
-    assert cfg.claude_token_secret == "CLAUDE_CODE_OAUTH_TOKEN"
     assert cfg.setup == []
     assert cfg.workflows == {}
     assert cfg.allowed_repo_secrets == []
@@ -301,7 +299,13 @@ def test_prompt_with_zero_placeholder(tmp_path: Path) -> None:
 
 
 def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
-    """Prompt with {1}, {2} — escaped to prevent format() runtime errors."""
+    """Prompt with {1}, {2} and no {pr_number} — emitted verbatim, not escaped.
+
+    Escaping guards `format()`, which collapses each doubled pair back to one
+    brace. With no {pr_number} there is nothing to interpolate, so the prompt
+    is emitted as a bare GHA string literal instead — nothing collapses the
+    pairs there, and doubling would ship `{{1}}` to the agent.
+    """
     path = _write_config(
         tmp_path,
         dedent("""\
@@ -314,9 +318,8 @@ def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
     cfg = Config.load(path)
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     review = workflows["tend-review.yaml"]
-    # {1} and {2} are escaped to {{1}} and {{2}} — literals in GHA expressions
-    assert "{{1}}" in review.content
-    assert "{{2}}" in review.content
+    assert "format(" not in review.content
+    assert "'Fix issue {1} and {2}'" in review.content
 
 
 # ---------------------------------------------------------------------------
@@ -706,18 +709,34 @@ def test_allowed_secrets_string_rejected(tmp_path: Path) -> None:
 def test_allowed_secrets_refuses_operational_names(tmp_path: Path) -> None:
     """Allowlisting an operational secret would let a repo-level copy pass
     `tend check` — one config line quietly re-opening what the environment
-    gate closes — so the config is refused at the edge. The check applies to
-    the resolved names, so a renamed bot token is caught under its rename."""
+    gate closes — so the config is refused at the edge."""
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        secrets:
+          allowed: ["CODECOV_TOKEN", "TEND_BOT_TOKEN"]
+    """),
+    )
+    with pytest.raises(ClickException, match=BOT_TOKEN_SECRET):
+        Config.load(path)
+
+
+def test_secret_name_override_refused(tmp_path: Path) -> None:
+    """The per-adopter name overrides are gone. Ignoring a leftover one would
+    generate workflows reading the fixed name while the adopter's secret still
+    answers to the old one, so it fails with the rename to make."""
     path = _write_config(
         tmp_path,
         dedent("""\
         bot_name: my-bot
         secrets:
           bot_token: MY_BOT_PAT
-          allowed: ["CODECOV_TOKEN", "MY_BOT_PAT"]
     """),
     )
-    with pytest.raises(ClickException, match="MY_BOT_PAT"):
+    with pytest.raises(
+        ClickException, match=rf"secrets\.bot_token → {BOT_TOKEN_SECRET}"
+    ):
         Config.load(path)
 
 

@@ -8,15 +8,28 @@ and composite actions those workflows run.
 No backward compatibility. When a config format or API changes, cut over
 completely — old formats should fail with a clear error, not silently parse.
 
+Simplicity outranks efficiency. Complexity earns its place by preventing
+wrong outward actions — what the bot posts, approves, merges, or closes —
+never by saving compute. Wasted compute (a no-op session, a duplicated
+survey, a run lost to a blip that a later tick retries) costs cents and
+self-corrects; the gate, retry wrapper, or scheduling arithmetic that would
+have prevented it has to be understood and maintained forever. Fix waste
+only when the fix is a simple knob — a cadence value, a deleted step, a
+one-line condition — and otherwise leave it. Prefer deleting a mechanism
+over refining it.
+
 ## Commands
 
 ```bash
-wt test                            # run pytest in generator/
+wt test                            # every suite (generator/, proxy/, install-tend scripts, worker/)
 uvx tend@latest init               # regenerate workflows from .config/tend.yaml
 uvx tend@latest init --dry-run     # preview without writing
 uvx tend@latest check              # verify branch protection, secrets, bot access
-pre-commit run --all-files         # lint: ruff, typos, actionlint, uv-lock
+pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, uv-lock
 ```
+
+`wt test` runs [`dev/test.sh`](dev/test.sh), which mirrors the test jobs in
+`ci.yaml`; arguments go to the pytest suites (`wt test -k render`).
 
 ## Architecture
 
@@ -106,8 +119,8 @@ from `.config/tend.yaml`. Edit the generator or config, not the workflow files
 directly.
 
 The generator is a Python package under `generator/` — uses the uv_build
-backend, requires Python 3.11+. Runtime dependencies: click, ruamel.yaml.
-Dev dependencies: pytest, pytest-regtest.
+backend, requires Python 3.11+. Runtime dependencies: click, jinja2,
+ruamel.yaml. Dev dependencies: pytest, pytest-regtest.
 
 Consuming repos regenerate their `tend-*.yaml` workflows nightly (tend itself
 included — it dogfoods its own workflows). Changes to the generator do not
@@ -122,6 +135,12 @@ stamps a tag that does not exist yet, and the workflow's `uses:` fails to resolv
 Between a generator commit and the next release the committed workflows lag
 the in-tree generator; that is expected, and the gap closes at the next
 release (which tags `X.Y.Z` before regenerating, so the pin always resolves).
+
+`claude_version` in `claude/action.yaml` is an exact version taken from npm's
+`latest` dist-tag, not `stable`. `stable` lags several releases, and pinning it
+wouldn't keep un-promoted code out of the job anyway: `install.sh` always
+downloads the `latest` build as its bootstrap installer, and only the agent
+session runs the pin.
 
 ## Generator vs adopter ownership
 
@@ -208,12 +227,9 @@ configured correctly, and `--fix` creates either. See
 `docs/security-model.md` for the full threat model. Alternative models
 (GitHub App, triage+fork) are in `TODO.md`.
 
-The environment half is still being adopted: a repo is protected only once
-its secrets are in the environment and the repo-level copies are deleted —
-per-repo work `TODO.md` tracks. Until then it runs with its old exposure.
-
-This repo's own workflows name it too, including the hand-maintained ones
-the generator never touches.
+Every adopter runs the environment gate: both secrets live in the `tend`
+environment with no repo-level copies. This repo's own workflows name it
+too, including the hand-maintained ones the generator never touches.
 
 ## Concurrency and filtering
 
@@ -222,15 +238,17 @@ Events pass through three layers before the bot does work:
 1. **GHA `if:` conditions** — evaluated by Actions before the job starts.
    A false condition skips the job entirely (never enters the concurrency
    group, never queues).
-2. **Custom `should_run` logic** (mention only) — a lightweight verify job
-   checks engagement before the expensive handle job runs.
+2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
+   whether the agent boots: mention's verify job checks engagement, review's
+   gate skips a live HEAD already stamped as examined, notifications' check
+   exits when the inbox is clear.
 3. **Concurrency groups** — at most one running job per group.
 
 Concurrency groups:
 
 | Workflow | Group key | Cancel-in-progress |
 |---|---|---|
-| review | `workflow-PR#` | yes — new push invalidates a review |
+| review | `workflow-PR#` | **no** — the session folds pushes in and stamps examined commits (`tend-review/<pr>` status); a pre-check skips the queued run when the live HEAD is stamped |
 | mention/relay | none | stateless — secretless job that re-posts review events as a `repository_dispatch` |
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
@@ -248,14 +266,16 @@ repo only) and `tend-mention`'s review-event paths already filter forks
 via `head.repo.full_name == github.repository`, so neither needs the
 guard.
 
-**GHA queue depth = 1.** With `cancel-in-progress: false` (mention/handle),
-when a third job arrives while one runs and one queues, the pending job is
-replaced. Mitigation lives in the skill prompts: dedup if the bot already
-responded to the triggering comment; self-heal earlier comments without a
-bot reply (oldest first). The workflow injects the queue-to-run time delta
-(seconds between event timestamp and job start) into the prompt — over
-~40 s indicates the job was queued behind another run, making conversation
-drift more likely.
+**GHA queue depth = 1.** With `cancel-in-progress: false` (mention/handle,
+review), when a third job arrives while one runs and one queues, the pending
+job is replaced. For mention, mitigation lives in the skill prompts: dedup if
+the bot already responded to the triggering comment; self-heal earlier
+comments without a bot reply (oldest first). The workflow injects the
+queue-to-run time delta (seconds between event timestamp and job start) into
+the prompt — over ~40 s indicates the job was queued behind another run,
+making conversation drift more likely. For review, replacement is loss-free
+by construction: the pre-check and the skill both judge the live HEAD, so
+whichever run executes covers the replaced event's commits.
 
 ## Skill design: bundled for everyone, overlay for one
 
@@ -312,7 +332,11 @@ for Codex). When adding new capability, split work along this line:
 - **Actions gate whether the agent runs at all.** Agent invocations cost
   tokens; gating them in YAML is cheap. Pre-check steps that early-exit
   the job (e.g. `tend-notifications`'s "Check for unread notifications")
-  save an entire agent run when there's nothing to do.
+  save an entire agent run when there's nothing to do. A gate stays cheap
+  only while it stays trivial: one pre-check against a frequent no-op (an
+  empty inbox every cron tick) earns its place; a run of bespoke gates,
+  each skipping one rare event shape, is machinery that costs more than
+  the boots it saves.
 
 Don't build deterministic YAML steps for work that happens *inside* an
 agent run. Extend the skill instead.

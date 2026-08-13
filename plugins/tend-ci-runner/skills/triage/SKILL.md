@@ -114,7 +114,11 @@ Step 3's duplicate check catches identical fixes. It misses the *same root cause
 
    Closes #$ARGUMENTS"
    git push -u origin fix/issue-$ARGUMENTS
-   gh pr create --title "fix: <description>" --body "## Problem
+   ```
+   Compose the body with the Write tool at `/tmp/pr-body.md` — the fill-ins below are freeform prose that routinely carries markdown inline code, which bash executes inside a double-quoted `--body`:
+
+   ```markdown
+   ## Problem
    [What the issue reported and the root cause]
 
    ## Solution
@@ -124,7 +128,11 @@ Step 3's duplicate check catches identical fixes. It misses the *same root cause
    [How the fix was verified — mention the reproduction test]
 
    ---
-   Closes #$ARGUMENTS — automated triage"
+   Closes #$ARGUMENTS — automated triage
+   ```
+
+   ```bash
+   gh pr create --title "fix: <description>" --body-file /tmp/pr-body.md
    ```
 4. Wait for CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`.
 
@@ -137,11 +145,20 @@ git checkout -b repro/issue-$ARGUMENTS
 git add -A
 git commit -m "test: add reproduction for #$ARGUMENTS"
 git push -u origin repro/issue-$ARGUMENTS
-gh pr create --title "test: reproduction for #$ARGUMENTS" --body "## Context
+```
+
+Compose the body with the Write tool at `/tmp/pr-body.md`:
+
+```markdown
+## Context
 Adds a failing test that reproduces #$ARGUMENTS. The fix is not yet included — this PR captures the reproduction so a maintainer can investigate.
 
 ---
-Automated triage for #$ARGUMENTS"
+Automated triage for #$ARGUMENTS
+```
+
+```bash
+gh pr create --title "test: reproduction for #$ARGUMENTS" --body-file /tmp/pr-body.md
 ```
 
 Note the PR number for the comment.

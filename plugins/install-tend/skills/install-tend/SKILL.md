@@ -1,15 +1,16 @@
 ---
 name: install-tend
-description: Sets up tend — an autonomous junior maintainer for a GitHub repo, powered by Claude or OpenAI Codex — that reviews PRs, triages issues, and fixes CI. Creates config, generates workflows, configures secrets and branch protection via API, creates the bot account, and provisions the harness auth token (Claude OAuth or OpenAI API key). Use when setting up tend on a new repo or when asked to install/configure tend.
+description: Sets up tend — an autonomous junior maintainer for a GitHub repo, powered by Claude or OpenAI Codex — that reviews PRs, triages issues, and fixes CI. Creates config, generates workflows, configures secrets and branch protection via API, creates the bot account, and provisions the harness auth token (Claude OAuth or OpenAI API key). Use when installing tend, when clearing a failing `tend check`, and when changing an installed repo's tend config, generated workflows, secrets, environments, branch protection, or bot access.
 ---
 
 # Install Tend
 
-Set up tend on the current repo. If the user hasn't supplied a bot name,
-get one via `AskUserQuestion` before step 1 using the candidate-generation
-pattern from step 6 (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`, parallel
-availability check, present available ones). The user can pick "Other"
-to supply a custom name.
+Set up tend on the current repo, or change an installation it already has.
+When installing and the user hasn't supplied a bot name, get one via
+`AskUserQuestion` before step 1 using the candidate-generation pattern from
+step 6 (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`, parallel availability
+check, present available ones). The user can pick "Other" to supply a custom
+name.
 
 When asking the user questions during these steps, use the `AskUserQuestion`
 tool — present concrete options when there are clear choices (e.g. bio
@@ -23,7 +24,16 @@ not have to ask "where do I do that?".
 
 ## Kickoff
 
-Before running step 1, choose the harness and lay out the plan:
+Read `.config/tend.yaml` first. Its presence says whether this is an install or
+a change to one, and where it exists it settles the harness: the `harness` key,
+or Claude when the key is absent, which is how a Claude install is normally
+written.
+
+With a config in place, take the harness from it, lay out only the steps the
+task touches, and start. The summary checklist at the end describes a finished
+install, so skip it.
+
+With no config yet, choose the harness and lay out the whole install:
 
 - Ask via `AskUserQuestion` which harness to use:
   - **Claude (Anthropic)** — uses a Claude Code OAuth token (recommended
@@ -82,18 +92,10 @@ bot_name: <bot-name>
 # effort: medium   # optional: low | medium | high | xhigh
 ```
 
-Check whether the repo already has a bot token secret under a non-default name:
+List the secrets the repo already holds:
 
 ```bash
 gh secret list --repo "$REPO" --json name --jq '.[].name'
-```
-
-If a bot-token-like secret exists (e.g., `GH_BOT_TOKEN`, `ROBOT_PAT`),
-suggest overriding the default name rather than creating a duplicate:
-
-```yaml
-secrets:
-  bot_token: GH_BOT_TOKEN
 ```
 
 Any repo-level secret not in `secrets.allowed` triggers a `tend check`
@@ -363,9 +365,8 @@ Bot-deleting an admin-pushed tag is brief availability damage at worst;
 repos that need stronger protection against published-tag deletion can
 add a no-bypass `deletion` ruleset (see the publisher uplift below).
 
-**Environment ref policies.** A ruleset only helps once an Environment
-names the refs it protects. A new Environment defaults to
-`deployment_branch_policy: null`, which admits every ref — so a bot-pushed
+**Environment gates.** A new Environment admits every ref and requires no
+approval — `deployment_branch_policy: null`, no reviewers — so a bot-pushed
 branch or tag reaches its secrets and mints its OIDC token. Survey what
 exists, including environments GitHub created on the repo's behalf
 (`github-pages`) and ones that predate tend:
@@ -375,9 +376,15 @@ gh api "repos/$REPO/environments" \
   --jq '.environments[] | {name, deployment_branch_policy, rules: [.protection_rules[].type]}'
 ```
 
-Pin each environment that holds a secret, or that a job with
-`id-token: write` names, to the admin-gated refs its workflows actually
-use — all tags for a release, the default branch for a continuous deploy:
+Each environment that holds a secret, or that a job with `id-token: write`
+names, needs a gate: a deployment policy pinned to admin-gated refs, or
+required reviewers who exclude the bot. Either clears
+`credential-environments`, so an environment already behind reviewers
+stays as it is.
+
+Pin the policy to the admin-gated refs its workflows actually use — all
+tags for a release, the default branch for a continuous deploy. The
+rulesets above are what hold those refs out of the bot's reach:
 
 ```bash
 gh api "repos/$REPO/environments/$ENV" --method PUT --input - << 'EOF'
@@ -393,6 +400,18 @@ explicit list to the "protected branches only" setting, which admits any
 branch carrying a *classic* protection rule — a set that grows as
 branches are created, and that excludes a branch protected by the
 ruleset above.
+
+Name required reviewers where no ref list fits — a deploy running from a
+ref no policy can name, such as a preview published from
+`refs/pull/N/merge`. Approval holds whatever ref the run starts from. Ask
+which humans to name; the bot cannot be one of them:
+
+```bash
+ID=$(gh api "users/<login>" --jq .id)
+gh api "repos/$REPO/environments/$ENV" --method PUT --input - << EOF
+{"reviewers": [{"type": "User", "id": $ID}], "deployment_branch_policy": null}
+EOF
+```
 
 **Release/deploy workflow design.** Workflows that use release or deploy
 secrets must trigger on `push: tags:` (release) or `push: branches: [main]`
@@ -416,9 +435,8 @@ the bot.
 
 **More complicated approaches are possible** (per-pattern tag rulesets,
 mixed bypass actors, layered no-bypass immutability rulesets for repos
-that publish actions consumed via tag pins, required-reviewer environment
-gates for per-deploy human approval). Install-tend packages the recipe
-above because it is the simplest configuration that holds the chain;
+that publish actions consumed via tag pins). Install-tend packages the
+recipe above because it is the simplest configuration that holds the chain;
 adopters with stricter requirements can layer additional rulesets or
 environment protection rules on top.
 
@@ -561,28 +579,50 @@ For **OAuth token**: before offering the CLI option, check:
 
 - `command -v claude` — if missing, only offer Manual (point them at
   `https://claude.com/claude-code` to install).
-- `uname` — the bundled wrapper depends on `bash` + `script(1)` and
-  has only been validated on macOS and Linux. On anything else
-  (`MINGW*`, `CYGWIN*`, `MSYS*`, `Windows_NT`, etc.), only offer Manual.
+- `uname` — the bundled wrapper needs `python3` and a pty, and has only
+  been validated on macOS and Linux. On anything else (`MINGW*`,
+  `CYGWIN*`, `MSYS*`, `Windows_NT`, etc.), only offer Manual.
 
 - **CLI (recommended on macOS/Linux when `claude` is on PATH)** — run
   the bundled wrapper, which invokes `claude setup-token` (OAuth 2.0
-  PKCE, opens browser):
+  PKCE, opens browser). **Run it in the background:** it prints the
+  authorize URL to stderr and then waits, and one of the two ways it
+  finishes needs you to act while it is still running. Piping straight
+  into `gh` keeps the token out of the transcript.
 
   ```bash
-  TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/oauth-token.sh")
+  TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/oauth_token.py" --code-file /tmp/tend-oauth-code)
+  [ -n "$TOKEN" ] && printf '%s' "$TOKEN" \
+    | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
   ```
+
+  The guard is load-bearing, and nothing writes the secret without it.
+  `gh secret set` stores empty stdin as an empty secret and exits 0, and
+  every check downstream reads names rather than values — `check_secrets`,
+  and this step's own pre-check above — so one failed run would leave a
+  `CLAUDE_CODE_OAUTH_TOKEN` that the next run reads as already set, skips,
+  and finishes green on.
+
+  Give the user the URL from stderr. Approving it either returns to the
+  CLI, which finishes the run on its own, or lands on a page showing a
+  `code#state` string. For the second, have them paste that string back
+  and write it to the same path — the wrapper types it into the prompt:
+
+  ```bash
+  printf '%s' '<code#state>' > /tmp/tend-oauth-code
+  ```
+
+  Each run generates a fresh PKCE challenge, so a code from an earlier
+  run is dead; a restart needs a fresh approval.
 
 - **Manual** — have the user run `claude setup-token` in their own
   terminal (any machine with Claude Code installed) and paste the
   `sk-ant-oat01-…` token back. Use this on Windows or when the
-  wrapper errors out.
+  wrapper errors out. Then store it:
 
-Then store the secret:
-
-```bash
-echo "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
-```
+  ```bash
+  printf '%s' "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
+  ```
 
 For **API key**:
 
@@ -732,10 +772,8 @@ rm -rf "$HOME/.config/gh-bots/<bot-name>"
 
 ### 8c. Push token to secret
 
-Copy the bot's token to the environment secret (`<secret-name>` is the
-`secrets.bot_token` value from §1, default `TEND_BOT_TOKEN`; trust
-this over any name an audit issue quotes) and verify the `Updated`
-timestamp is fresh:
+Copy the bot's token to the `TEND_BOT_TOKEN` environment secret and verify
+the `Updated` timestamp is fresh:
 
 ```bash
 BOT_GH_TOKEN=$(env -u GH_TOKEN -u GITHUB_TOKEN \
@@ -743,7 +781,7 @@ BOT_GH_TOKEN=$(env -u GH_TOKEN -u GITHUB_TOKEN \
 if [ -z "$BOT_GH_TOKEN" ]; then
   echo "bot token empty — fix step 8 first" >&2
 else
-  gh secret set <secret-name> --repo "$REPO" --env tend --body "$BOT_GH_TOKEN"
+  gh secret set TEND_BOT_TOKEN --repo "$REPO" --env tend --body "$BOT_GH_TOKEN"
   gh secret list --repo "$REPO" --env tend
 fi
 ```
@@ -839,7 +877,7 @@ line picks the row that matches the chosen harness):
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Harness auth (claude): `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret set
 - [ ] Harness auth (codex): `OPENAI_API_KEY` secret set
-- [ ] Bot token: the `secrets.bot_token` secret (default `TEND_BOT_TOKEN`) set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
+- [ ] Bot token: `TEND_BOT_TOKEN` set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
 - [ ] Bot access: repo collaborator with write access, invitation accepted
 - [ ] Bot bio: profile bio reflects the authorization stance
 - [ ] Committed (push requires explicit permission)

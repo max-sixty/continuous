@@ -1,15 +1,18 @@
 name: review-reviewers
-# Hourly outcome-based analysis of bot behavior across adopter repos.
+# Outcome-based analysis of bot behavior across adopter repos. Each matrix entry
+# is a repo to analyze. The job checks out the tend repo (for creating
+# improvement PRs/issues). TEND_BOT_TOKEN is sufficient for reading CI data from
+# public adopter repos.
 #
-# Each matrix entry is a repo to analyze. The job checks out the tend repo
-# (for creating improvement PRs/issues). TEND_BOT_TOKEN is sufficient for reading
-# CI data from public adopter repos.
-#
-# TODO: Move repo list to a config file so adding a repo doesn't require a workflow change
-# TODO: Cross-repo pattern detection — correlate findings across repos
+# Paused — manual dispatch only, no cron. The hourly outside-in sweep had
+# converged on maintaining its own evidence machinery, at the fleet's highest
+# per-run cost and a quota ceiling that twice took the user-facing workflows
+# down with it. Each adopter's own daily `tend-review-runs` already reviews that
+# repo's runs from the inside and routes bundled-skill defects upstream, so the
+# loop this closes is the direct one, not the only one. Dispatch it as a
+# deliberate spot-check after a change that could move bot behavior fleet-wide:
+# a release, a harness switch, a model bump.
 on:
-  schedule:
-    - cron: '47 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -17,6 +20,10 @@ jobs:
   # legs find an existing issue instead of racing to create one. Without this,
   # the first cron tick of each new month produced N-1 duplicate tracking
   # issues (one per matrix leg that lost the find-or-create race).
+  #
+  # This is an optimisation, not a precondition: the skill still carries its own
+  # find-or-create fallback, so the matrix runs even when this job doesn't
+  # complete (see `if:` on the matrix job below).
   init-tracking:
     runs-on: ubuntu-24.04
     environment:
@@ -47,6 +54,11 @@ jobs:
 
   review-reviewers:
     needs: init-tracking
+    # Run even when init-tracking failed or never got a runner — losing the
+    # race guard costs up to N-1 duplicate tracking issues on the first tick of
+    # a month, while gating on it costs the whole analysis window for every
+    # target repo. Not `always()`: a user cancelling the run should stop here.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -67,13 +79,13 @@ jobs:
       issues: write
       actions: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: max-sixty/tend/claude@0.1.13
+      - uses: max-sixty/tend/claude@0.1.16
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

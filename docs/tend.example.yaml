@@ -46,9 +46,9 @@ bot_name: my-project-bot
 
 # ## Secrets
 #
-# Required secrets, by harness — stored in the repo's `tend` GitHub
-# Environment (install-tend creates it; a workflow the bot pushes to a
-# branch cannot read them there):
+# Required secrets, by harness, under these exact names — stored in the
+# repo's `tend` GitHub Environment (install-tend creates it; a workflow the
+# bot pushes to a branch cannot read them there):
 #
 # | Harness    | Required                                                                  |
 # |------------|---------------------------------------------------------------------------|
@@ -78,14 +78,6 @@ bot_name: my-project-bot
 # `notifications:write`, `gists:write`, plus the account-level `Profile:
 # read and write` permission (for the bio). `notifications:write` is
 # required so the action can mark threads read after handling an event.
-#
-# Override names if the repo uses different secret names:
-#
-# secrets:
-#   bot_token: MY_BOT_PAT
-#   claude_token: MY_CLAUDE_TOKEN        # claude (OAuth)
-#   anthropic_api_key: MY_ANTHROPIC_KEY  # claude (API key)
-#   openai_key: MY_OPENAI_KEY            # codex
 #
 # `tend check` flags repo-level secrets not in an explicit allowlist — each
 # entry is a deliberate acceptance that any workflow the repo runs can read
@@ -117,30 +109,35 @@ bot_name: my-project-bot
 # `sandbox_setup:` below, which runs inside the Claude harness's sandbox. Under
 # codex there is no such lever; the agent installs what it needs itself.
 #
-# `tend-notifications` injects an `if:` guard on every step so setup is
-# skipped when the pre-check finds no work. A user-supplied `if:` is passed
-# through unchanged (with a generation-time warning) — your condition wins.
+# `tend-notifications` and `tend-review` decide up front whether the agent
+# needs to boot, and inject an `if:` guard on every setup step so a run that
+# found no work does no setup either. A user-supplied `if:` is passed through
+# unchanged (with a generation-time warning) — your condition wins.
 #
 # Each form below shows the config and the YAML it produces inside the
-# `steps:` block. The `if:` guard injected in `tend-notifications` is shown
-# on the first example; it's added the same way on every step.
+# `steps:` block. The guard is shown on the first example; it's added the same
+# way on every step.
 #
 # `uses`:
 #
 #     setup:
-#       - uses: astral-sh/setup-uv@v6
+#       - uses: astral-sh/setup-uv@v9.0.0
 #
 #     # renders as (in tend-notifications):
-#     #   - uses: astral-sh/setup-uv@v6
+#     #   - uses: astral-sh/setup-uv@v9.0.0
 #     #     if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
 #     #
+#     # in tend-review:
+#     #   - uses: astral-sh/setup-uv@v9.0.0
+#     #     if: steps.gate.outputs.should_run == 'true'
+#     #
 #     # and in other workflows:
-#     #   - uses: astral-sh/setup-uv@v6
+#     #   - uses: astral-sh/setup-uv@v9.0.0
 #
 # `uses` with action inputs and step-level env:
 #
 #     setup:
-#       - uses: actions/setup-node@v4
+#       - uses: actions/setup-node@v7
 #         name: Setup Node
 #         with:
 #           node-version-file: .node-version
@@ -148,7 +145,7 @@ bot_name: my-project-bot
 #           FORCE_COLOR: "1"
 #
 #     # renders as:
-#     #   - uses: actions/setup-node@v4
+#     #   - uses: actions/setup-node@v7
 #     #     name: Setup Node
 #     #     with:
 #     #       node-version-file: .node-version
@@ -191,8 +188,19 @@ bot_name: my-project-bot
 #       - ~/.cargo/bin
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
-#   keys (proxy routing, CA trust, dummy credentials, PATH) are rejected — use
-#   `sandbox_path` for PATH:
+#   keys are rejected at `init`, and again inside the sandbox so a hand-edited
+#   workflow can't smuggle one past:
+#
+#   - proxy routing — `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `http_proxy`,
+#     `https_proxy`, `no_proxy`
+#   - CA trust — `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`
+#   - dummy credentials — `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`,
+#     `CLAUDE_CODE_OAUTH_TOKEN`
+#   - prompt suppression — `CLAUDE_CODE_REMOTE`
+#   - the sandbox's own locations — `HOME`, `PATH`, `XDG_CONFIG_HOME`,
+#     `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`
+#
+#   Use `sandbox_path` to extend PATH:
 #
 #     sandbox_env:
 #       RUST_BACKTRACE: "1"
@@ -219,6 +227,9 @@ bot_name: my-project-bot
 # - `prompt` (string) — override the default skill invocation
 #
 # Scheduled workflows also accept `cron` to override their default schedule.
+# GitHub runs `schedule` triggers on a best-effort basis and drops ticks under
+# load, so a cron is the requested cadence rather than a guarantee — observed
+# gaps between runs are routinely longer than the interval.
 #
 # workflows:
 #   notifications:

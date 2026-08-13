@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 from click.testing import CliRunner
@@ -14,6 +15,7 @@ from tend.checks import (
     admitted_refs,
     check_credential_environments,
     check_environment,
+    check_environment_deployments,
     fix_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
@@ -30,7 +32,13 @@ from tend.checks import (
     run_all_checks,
 )
 from tend.cli import main
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import TEND_ENVIRONMENT
 
 
@@ -39,8 +47,6 @@ def _config(
     bot_name: str = "bot",
     default_branch: str = "main",
     protected_branches: list[str] | None = None,
-    bot_token_secret: str = "T1",
-    claude_token_secret: str = "T2",
     harness: str = "claude",
     model: str = "opus",
 ) -> Config:
@@ -49,10 +55,6 @@ def _config(
         bot_name=bot_name,
         default_branch=default_branch,
         protected_branches=protected_branches or [],
-        bot_token_secret=bot_token_secret,
-        claude_token_secret=claude_token_secret,
-        anthropic_api_key_secret="ANTHROPIC_API_KEY",
-        openai_key_secret="OPENAI_API_KEY",
         harness=harness,
         model=model,
         effort="",
@@ -67,6 +69,13 @@ def _make_completed(
     return subprocess.CompletedProcess(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr
     )
+
+
+def _secret_names(args: tuple, *names: str) -> str:
+    """A secrets listing in whichever shape the caller asked for: objects for
+    `gh secret list --json name`, bare names for the `--jq` reads."""
+    listed = [{"name": n} for n in names] if "--json" in args else list(names)
+    return json.dumps(listed) + "\n"
 
 
 def _write_config(tmp_path: Path, content: str = "bot_name: test-bot") -> Path:
@@ -106,6 +115,13 @@ def _workflow_tree(workflows: dict[str, str | None]) -> str:
     return json.dumps({"data": {"repository": {"object": {"entries": entries}}}})
 
 
+def _login_response(login: str | None) -> subprocess.CompletedProcess[str]:
+    """What the `user` endpoint answers: `login`, or returncode=1 if None."""
+    if login is None:
+        return _make_completed(returncode=1)
+    return _make_completed(f"{login}\n")
+
+
 def _role_actor(actor_id: int) -> dict[str, object]:
     """A `bypass_actors` entry granting a base repository role."""
     return {
@@ -120,13 +136,17 @@ def _gh_ruleset(
     bypass_actors: list[dict[str, object]] | None,
     user_id: int | None = None,
     ruleset_json: str | None = None,
+    login: str | None = None,
 ) -> object:
     """Build a `_gh` fake serving the calls `_has_restrict_updates_ruleset` makes:
     `/rules/branches/<branch>` returns `rules`; `/rulesets/<id>` returns a ruleset
     with `bypass_actors` (or `ruleset_json` verbatim if given, or returncode=1 if
-    both are None); `users/<login>` returns `user_id` (or returncode=1 if None)."""
+    both are None); `users/<login>` returns `user_id`; `user` returns `login`
+    (each returncode=1 if None)."""
 
     def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str] | None:
+        if args[1] == "user":
+            return _login_response(login)
         if "/rules/branches/" in args[1]:
             return _make_completed(rules)
         if args[1].startswith("users/"):
@@ -137,7 +157,15 @@ def _gh_ruleset(
             return _make_completed(ruleset_json)
         if bypass_actors is None:
             return _make_completed(returncode=1)
-        return _make_completed(json.dumps({"bypass_actors": bypass_actors}))
+        # Real responses always carry `current_user_can_bypass`; these
+        # fixtures imply an admin caller reading the full list, whose own
+        # verdict is "always" — exercised so the identity gate is what keeps
+        # the inference path governing when the login isn't the bot's.
+        return _make_completed(
+            json.dumps(
+                {"bypass_actors": bypass_actors, "current_user_can_bypass": "always"}
+            )
+        )
 
     return fake
 
@@ -324,7 +352,7 @@ def test_update_rule_present() -> None:
     fake = _gh_ruleset(_make_branch_rules("update"), [_role_actor(ROLE_ID_ADMIN)])
     with patch("tend.checks._gh", side_effect=fake) as gh:
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
-    assert gh.call_args.args[-1] == "repos/owner/repo/rulesets/1"
+    assert any(c.args[-1] == "repos/owner/repo/rulesets/1" for c in gh.call_args_list)
 
 
 def test_org_ruleset_read_via_repo_endpoint() -> None:
@@ -335,22 +363,59 @@ def test_org_ruleset_read_via_repo_endpoint() -> None:
     )
     with patch("tend.checks._gh", side_effect=fake) as gh:
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
-    assert gh.call_args.args[-1] == "repos/owner/repo/rulesets/1"
+    assert any(c.args[-1] == "repos/owner/repo/rulesets/1" for c in gh.call_args_list)
 
 
 def test_ruleset_bypass_list_not_visible() -> None:
     """GitHub omits `bypass_actors` below ruleset-admin → unverifiable, not empty.
 
     Reading the missing key as an empty list would report "nobody bypasses" —
-    a false pass for exactly the caller who can't see the danger.
+    a false pass for exactly the caller who can't see the danger. And
+    `current_user_can_bypass` is evaluated against the caller, so when the
+    caller is not the bot, its "never" proves nothing about the bot.
     """
     fake = _gh_ruleset(
         _make_branch_rules("update"),
         None,
         ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
+        login="a-maintainer",
     )
     with patch("tend.checks._gh", side_effect=fake):
         assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+
+
+def test_ruleset_bypass_withheld_but_caller_is_bot() -> None:
+    """Running as the bot, GitHub's own bypass evaluation answers what the
+    withheld list cannot: "never" is the ruleset keeping the caller — the
+    bot — out. The login matches casefolded, like every identity test here —
+    GitHub logins are case-insensitive."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps({"current_user_can_bypass": "never"}),
+        login="My-Bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+
+
+def test_ruleset_bot_that_can_bypass_is_not_blocked() -> None:
+    """The bot's own "always" outranks a bypass list naming only roles above
+    write: a bot holding admin (the integration fixture's shape) walks
+    through a ruleset the actor-list inference would credit."""
+    fake = _gh_ruleset(
+        _make_branch_rules("update"),
+        None,
+        ruleset_json=json.dumps(
+            {
+                "current_user_can_bypass": "always",
+                "bypass_actors": [_role_actor(ROLE_ID_ADMIN)],
+            }
+        ),
+        login="my-bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
 
 
 def test_only_non_update_rules() -> None:
@@ -885,7 +950,11 @@ def _gh_all_pass(*admitted: str):
             # Two callers read this path with different `--jq` shapes: the
             # membership check wants a JSON array, the environment sweep one
             # name per line. The fake answers whichever was asked for.
-            names = ["T1", "T2"] if url.endswith(f"{TEND_ENVIRONMENT}/secrets") else []
+            names = (
+                [BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET]
+                if url.endswith(f"{TEND_ENVIRONMENT}/secrets")
+                else []
+            )
             if any(a.startswith("[.secrets") for a in args):
                 return _make_completed(json.dumps(names))
             return _make_completed("\n".join(names) + "\n")
@@ -952,7 +1021,7 @@ def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
     def gh_with_repo_level_copy(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         url = args[1]
         if "environments/tend/secrets" not in url and url.endswith("actions/secrets"):
-            return _make_completed('["T1"]\n')
+            return _make_completed(json.dumps([BOT_TOKEN_SECRET]) + "\n")
         return _gh_all_pass()(*args, **kwargs)
 
     with (
@@ -966,7 +1035,7 @@ def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
         "a repo-level copy of the bot token must be flagged — it is readable "
         "from any branch the bot can push"
     )
-    assert "T1" in allowlist[0].message
+    assert BOT_TOKEN_SECRET in allowlist[0].message
 
 
 def test_run_all_checks_allowlist_catches_unexpected() -> None:
@@ -1011,9 +1080,9 @@ def test_run_all_checks_with_protected_branches() -> None:
             _config(protected_branches=["v1", "v2"]),
             repo="owner/repo",
         )
-    # default + v1 + v2 + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 9
-    assert len(results) == 9
+    # default + v1 + v2 + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 10
+    assert len(results) == 10
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 3
     assert {r.name for r in bp_results} == {
@@ -1038,9 +1107,9 @@ def test_codex_engine_passes_with_openai_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"},{"name":"OPENAI_API_KEY"}]\n')
-            return _make_completed('["T1","OPENAI_API_KEY"]\n')
+            return _make_completed(
+                _secret_names(args, BOT_TOKEN_SECRET, OPENAI_KEY_SECRET)
+            )
         return _make_completed(returncode=1)
 
     with (
@@ -1051,7 +1120,7 @@ def test_codex_engine_passes_with_openai_key() -> None:
     codex_check = [r for r in results if r.name == "codex-auth"]
     assert len(codex_check) == 1
     assert codex_check[0].passed is True
-    assert "OPENAI_API_KEY" in codex_check[0].message
+    assert OPENAI_KEY_SECRET in codex_check[0].message
 
 
 def test_codex_engine_fails_when_no_auth() -> None:
@@ -1068,9 +1137,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"}]\n')
-            return _make_completed('["T1"]\n')
+            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1080,7 +1147,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         results = run_all_checks(_config(harness="codex"), repo="owner/repo")
     codex_check = [r for r in results if r.name == "codex-auth"]
     assert codex_check[0].passed is False
-    assert "OPENAI_API_KEY" in codex_check[0].message
+    assert OPENAI_KEY_SECRET in codex_check[0].message
 
 
 def test_claude_engine_omits_codex_auth_check() -> None:
@@ -1095,7 +1162,6 @@ def test_claude_engine_omits_codex_auth_check() -> None:
 
 def test_claude_engine_passes_with_oauth_token() -> None:
     """Engine=claude with the OAuth token secret set passes claude-auth."""
-    # _gh_all_pass returns ["T1","T2"] — T2 is claude_token_secret.
     with (
         patch("shutil.which", return_value="/usr/bin/gh"),
         patch("tend.checks._gh", side_effect=_gh_all_pass()),
@@ -1104,7 +1170,7 @@ def test_claude_engine_passes_with_oauth_token() -> None:
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert len(claude_check) == 1
     assert claude_check[0].passed is True
-    assert "T2" in claude_check[0].message
+    assert CLAUDE_TOKEN_SECRET in claude_check[0].message
 
 
 def test_claude_engine_passes_with_api_key() -> None:
@@ -1121,9 +1187,9 @@ def test_claude_engine_passes_with_api_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"},{"name":"ANTHROPIC_API_KEY"}]\n')
-            return _make_completed('["T1","ANTHROPIC_API_KEY"]\n')
+            return _make_completed(
+                _secret_names(args, BOT_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET)
+            )
         return _make_completed(returncode=1)
 
     with (
@@ -1133,7 +1199,7 @@ def test_claude_engine_passes_with_api_key() -> None:
         results = run_all_checks(_config(), repo="owner/repo")
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert claude_check[0].passed is True
-    assert "ANTHROPIC_API_KEY" in claude_check[0].message
+    assert ANTHROPIC_API_KEY_SECRET in claude_check[0].message
 
 
 def test_claude_engine_fails_when_no_auth() -> None:
@@ -1150,9 +1216,7 @@ def test_claude_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            if "--json" in args:
-                return _make_completed('[{"name":"T1"}]\n')
-            return _make_completed('["T1"]\n')
+            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1162,8 +1226,8 @@ def test_claude_engine_fails_when_no_auth() -> None:
         results = run_all_checks(_config(), repo="owner/repo")
     claude_check = [r for r in results if r.name == "claude-auth"]
     assert claude_check[0].passed is False
-    assert "T2" in claude_check[0].message
-    assert "ANTHROPIC_API_KEY" in claude_check[0].message
+    assert CLAUDE_TOKEN_SECRET in claude_check[0].message
+    assert ANTHROPIC_API_KEY_SECRET in claude_check[0].message
 
 
 def test_run_all_checks_deduplicates_default_branch() -> None:
@@ -1176,9 +1240,9 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             _config(protected_branches=["main", "v1"]),
             repo="owner/repo",
         )
-    # main (deduped) + v1 + bot-permission + environment + credential-environments
-    # + secrets + claude-auth + allowlist = 8
-    assert len(results) == 8
+    # main (deduped) + v1 + bot-permission + environment + environment-deployments
+    # + credential-environments + secrets + claude-auth + allowlist = 9
+    assert len(results) == 9
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 2
     assert {r.name for r in bp_results} == {
@@ -1412,12 +1476,14 @@ def _credential_env_gh(
     tag_rulesets: dict[str, dict] | None = None,
     workflows: dict[str, str | None] | None = None,
     unreadable_workflows: bool = False,
+    login: str | None = None,
 ):
     """A `_gh` fake serving the calls `check_credential_environments` makes: the
     environment list; per environment its secret names, detail, and
     deployment-branch-policy lines (`"<type> <name>"` per line); the tag
-    rulesets (id → detail) the tag gate reads when a policy admits tags; and
-    the workflow tree the OIDC and trigger reads parse."""
+    rulesets (id → detail) the tag gate reads when a policy admits tags; the
+    workflow tree the OIDC and trigger reads parse; and `user`, answering
+    `login` (or returncode=1 if None)."""
     tag_rulesets = tag_rulesets or {}
 
     def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -1426,6 +1492,8 @@ def _credential_env_gh(
                 return _make_completed(returncode=1)
             return _make_completed(_workflow_tree(workflows or {}))
         url = args[-3] if "--jq" in args else args[-1]
+        if url == "user":
+            return _login_response(login)
         if url.endswith("/environments"):
             return _make_completed("\n".join(environments) + "\n")
         if url.endswith("/rulesets"):
@@ -1434,16 +1502,20 @@ def _credential_env_gh(
             if url.endswith(f"/rulesets/{ruleset_id}"):
                 return _make_completed(json.dumps(detail))
         for env_name, (secrets, detail, policies) in environments.items():
-            if url.endswith(f"/environments/{env_name}/deployment-branch-policies"):
+            # Matched percent-encoded, as GitHub answers: a name is one path
+            # segment, so a caller that interpolates it raw addresses another
+            # environment (or none) once the name holds a `/`.
+            seg = quote(env_name, safe="")
+            if url.endswith(f"/environments/{seg}/deployment-branch-policies"):
                 entries = [
                     dict(zip(("type", "name"), line.split(" ", 1)))
                     for line in policies.splitlines()
                     if line
                 ]
                 return _make_completed("\n".join(json.dumps(e) for e in entries) + "\n")
-            if url.endswith(f"/environments/{env_name}/secrets"):
+            if url.endswith(f"/environments/{seg}/secrets"):
                 return _make_completed("\n".join(secrets) + "\n")
-            if url.endswith(f"/environments/{env_name}"):
+            if url.endswith(f"/environments/{seg}"):
                 return _make_completed(json.dumps(detail))
         return _make_completed(returncode=1)
 
@@ -1468,6 +1540,9 @@ _ADMIN_TAG_RULESET = {
     "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
     "rules": [{"type": "creation"}, {"type": "update"}],
     "bypass_actors": [_role_actor(ROLE_ID_ADMIN)],
+    # Real responses always carry the caller's own verdict; an admin caller
+    # reading the full list bypasses via the admin role, so "always".
+    "current_user_can_bypass": "always",
 }
 
 # An environment detail whose policy is the custom named-list mode; the list
@@ -1478,6 +1553,80 @@ _CUSTOM_POLICY = {
         "custom_branch_policies": True,
     }
 }
+
+
+_GENERATED_JOB = """\
+name: tend-review
+on: pull_request_target
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    environment:
+      name: tend
+      deployment: false
+    steps:
+      - run: echo hello
+"""
+
+
+def test_environment_deployments_passes_on_the_generated_shape() -> None:
+    """The block the `environment()` macro emits files no deployment."""
+    with patch(
+        "tend.checks._fetch_workflow_files",
+        return_value={"tend-review.yaml": _GENERATED_JOB},
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is True
+
+
+def test_environment_deployments_flags_the_shorthand() -> None:
+    """`environment: tend` gates the job exactly as well, so nothing else in
+    the repo fails — the only symptom is a deployment record posted on every
+    push to every PR, which is why this check exists at all."""
+    text = _GENERATED_JOB.replace(
+        "    environment:\n      name: tend\n      deployment: false\n",
+        "    environment: tend\n",
+    )
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"tend-review.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is False
+    assert "tend-review.yaml job 'review'" in result.message
+
+
+def test_environment_deployments_flags_deployment_true() -> None:
+    """Spelling the default out loud files the same record."""
+    text = _GENERATED_JOB.replace("deployment: false", "deployment: true")
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"tend-review.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is False
+
+
+def test_environment_deployments_leaves_real_deploy_targets_alone() -> None:
+    """A release environment deploys something, so its record is the point.
+    The check is the operational-secret environment's, not every job's."""
+    text = _GENERATED_JOB.replace(
+        "      name: tend\n      deployment: false\n", "      name: release\n"
+    )
+    # Without this the substitution could silently miss and leave a compliant
+    # `tend` job behind, which passes for the wrong reason.
+    assert "      name: release\n" in text and "      name: tend\n" not in text
+    with patch(
+        "tend.checks._fetch_workflow_files", return_value={"release.yaml": text}
+    ):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is True
+
+
+def test_environment_deployments_unreadable_does_not_pass() -> None:
+    """A workflow tend could not read holds jobs it cannot vouch for, so the
+    claim is withheld rather than granted."""
+    with patch("tend.checks._fetch_workflow_files", return_value={"opaque.yaml": None}):
+        result = check_environment_deployments("owner/repo")
+    assert result.passed is None
 
 
 def test_credential_environments_none_holding_secrets_passes() -> None:
@@ -1527,6 +1676,36 @@ def test_credential_environments_is_keyed_on_secrets_not_on_the_name() -> None:
         result = check_credential_environments("owner/repo", _config(), ["main"])
     assert result.passed is False
     assert "smoke-secrets" in result.message
+
+
+def test_credential_environments_reads_a_name_containing_a_space() -> None:
+    """GitHub admits a space in an environment name, and the list endpoint
+    returns one name per line. Splitting on whitespace instead made two names
+    that exist nowhere; both 404, and the first 404 returned the whole check
+    as skipped-for-want-of-admin — so a repo could hold an ungated credential
+    and read PASS-adjacent silence."""
+    fake = _credential_env_gh(
+        {"staging deploy": (["T1"], {"protection_rules": []}, "")}
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False, result.message
+    assert "staging deploy" in result.message
+
+
+def test_credential_environments_reads_a_name_containing_a_slash() -> None:
+    """The other half of the same failure: GitHub admits `/` in an environment
+    name too, and a name is one path segment. Interpolating it raw addressed a
+    path that 404s, which is the same skipped-for-want-of-admin return as the
+    split above — so the name survives the read only to be lost on the way back
+    out. Verified against live GitHub: an environment named `a/b probe` lists
+    under that name, `gh api repos/<r>/environments/a/b probe/secrets` exits 1
+    with 404, and the percent-encoded path resolves."""
+    fake = _credential_env_gh({"a/b probe": (["T1"], {"protection_rules": []}, "")})
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is False, result.message
+    assert "a/b probe" in result.message
 
 
 def test_credential_environments_accepts_a_human_reviewer() -> None:
@@ -1609,6 +1788,78 @@ def test_credential_environments_rejects_tags_without_a_ruleset() -> None:
         result = check_credential_environments("owner/repo", _config(), ["main"])
     assert result.passed is False
     assert "admits tags" in result.message
+
+
+def test_credential_environments_withheld_bypass_list_is_unknown() -> None:
+    """GitHub omits `bypass_actors` below repo admin, so a write-scoped token
+    that isn't the bot's reads the gating ruleset as unverifiable rather than
+    absent — its own `current_user_can_bypass` proves nothing about the bot.
+    Calling that a failure would fail on exactly the shape tend prescribes,
+    while a maintainer running the same check as admin sees it pass."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    withheld["current_user_can_bypass"] = "never"
+    fake = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+        login="a-maintainer",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is None, result.message
+    assert "release" in result.message
+
+
+def test_credential_environments_bot_run_reads_its_own_bypass_verdict() -> None:
+    """The nightly runs as the bot — exactly the identity whose bypass
+    matters — so GitHub's `current_user_can_bypass: never` settles the tag
+    gate that the withheld `bypass_actors` list leaves unverifiable."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    withheld["current_user_can_bypass"] = "never"
+    fake = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+        login="bot",
+    )
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_confirmed_bad_ref_outranks_a_withheld_list() -> None:
+    """An entry naming an unverified ref is a finding the token did settle, so
+    it must not be downgraded to unknown by a tag entry it could not. The API
+    returns policy entries in creation order, so whichever comes first would
+    otherwise decide the verdict."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    for order in ("tag v*\nbranch staging", "branch staging\ntag v*"):
+        fake = _credential_env_gh(
+            {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, order)},
+            tag_rulesets={"7": withheld},
+        )
+        with patch("tend.checks._gh", side_effect=fake):
+            result = check_credential_environments("owner/repo", _config(), ["main"])
+        assert result.passed is False, f"{order}: {result.message}"
+        assert "staging" in result.message
+
+
+def test_credential_environments_unlistable_branch_policy_is_unknown() -> None:
+    """Listing the policy entries can fail on permission alone, and an unread
+    list is not a gate confirmed absent — the same reason a withheld bypass
+    list reports unknown."""
+    inner = _credential_env_gh(
+        {"release": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")}
+    )
+
+    def fake(*args, **kwargs):
+        url = args[-3] if "--jq" in args else args[-1]
+        if url.endswith("/deployment-branch-policies"):
+            return _make_completed(returncode=1)
+        return inner(*args, **kwargs)
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_credential_environments("owner/repo", _config(), ["main"])
+    assert result.passed is None, result.message
+    assert "cannot list" in result.message
 
 
 def test_credential_environments_bot_bypassable_tag_ruleset_does_not_gate() -> None:
@@ -1779,6 +2030,25 @@ def test_credential_environments_steerable_trigger_defeats_a_ref_policy() -> Non
     assert "`release`" in result.message
 
 
+def test_credential_environments_steerable_trigger_outranks_an_unverified_tag() -> None:
+    """The trigger defeats the policy whichever way the tag entry would have
+    settled, so it is a finding the token did reach — it must not be held back
+    to unknown by the entry it could not."""
+    withheld = {k: v for k, v in _ADMIN_TAG_RULESET.items() if k != "bypass_actors"}
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main\ntag v*")},
+        tag_rulesets={"7": withheld},
+        workflows={
+            "release.yaml": (
+                "on:\n  release:\n    types: [published]\n"
+                "jobs:\n  publish:\n    environment: pypi\n"
+            )
+        },
+    )
+    assert result.passed is False, result.message
+    assert "`release`" in result.message
+
+
 def test_credential_environments_reviewers_cover_a_steerable_trigger() -> None:
     """Required reviewers gate every trigger, ref-independent — the one control
     that covers the triggers a ref policy cannot."""
@@ -1879,18 +2149,188 @@ def test_credential_environments_reusable_caller_job_is_not_ungated_oidc() -> No
     assert result.passed is True
 
 
-def test_credential_environments_unreached_reusable_workflow_is_unverified() -> None:
-    """Its callers may live in another repo, which this cannot enumerate."""
+def test_credential_environments_absolute_self_call_inherits_caller_triggers() -> None:
+    """A repo calling its own reusable workflow by the `owner/repo/...@ref`
+    form reaches the same file as the relative one, so the callee inherits the
+    caller's triggers either way."""
     result = _credential_check(
         {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
         workflows={
+            "dispatch.yaml": (
+                "on:\n"
+                "  repository_dispatch:\n"
+                "    types: [publish]\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: owner/repo/.github/workflows/publish.yaml@main\n"
+            ),
             "publish.yaml": (
                 "on:\n  workflow_call:\njobs:\n  publish:\n    environment: pypi\n"
+            ),
+        },
+    )
+    assert result.passed is False
+    assert "`repository_dispatch`" in result.message
+
+
+def test_credential_environments_own_triggers_reach_a_callable_workflow() -> None:
+    """`workflow_call` alongside triggers of its own widens the way in rather
+    than replacing it: the workflow's own `on:` still starts it here, so an
+    uncallable-from-here verdict would walk past an ungated credential this
+    repo really can spend."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "tests.yaml": (
+                "on:\n"
+                "  pull_request:\n"
+                "  push:\n"
+                "    branches: [main]\n"
+                "  schedule:\n"
+                "    - cron: '49 10 * * *'\n"
+                "  workflow_dispatch:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  deploy:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is False, result.message
+    assert "pypi" in result.message
+
+
+def test_credential_environments_unreached_through_a_caller_spends_nothing() -> None:
+    """The chain has to anchor on a workflow with triggers of its own: a caller
+    that nothing here starts leaves its callee unreachable too, and what an
+    unreachable job names is not this repo's to gate."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "wrapper.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: ./.github/workflows/publish.yaml\n"
+            ),
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            ),
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_unreached_reusable_workflow_spends_nothing() -> None:
+    """A run belongs to the repo that starts it: an outside caller's run reads
+    that repo's secrets, deploys to its environments, and mints OIDC for it. So
+    the ungated 'pypi' here is not a credential this repo can spend, and the
+    check must neither fail on it nor stop short of a verdict."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: pypi\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_unreached_dynamic_environment_spends_nothing() -> None:
+    """What an unreachable workflow leaves unreadable is not this repo's to
+    gate either. A reusable deploy parameterised by its caller's input names no
+    environment tend can resolve, and reporting that would hold the check at
+    unverified for as long as the adopter keeps the workflow."""
+    result = _credential_check(
+        {"pypi": ([], {"protection_rules": []}, "")},
+        workflows={
+            "publish.yaml": (
+                "on:\n"
+                "  workflow_call:\n"
+                "jobs:\n"
+                "  publish:\n"
+                "    environment: ${{ inputs.environment }}\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
+
+
+def test_credential_environments_call_out_of_the_repo_is_unread() -> None:
+    """The same fact the other way: a workflow this repo calls elsewhere
+    deploys to *this* repo's environments, and its file cannot be read from
+    here — so which environment a steerable run reaches is unknown."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "dispatch.yaml": (
+                "on:\n"
+                "  repository_dispatch:\n"
+                "    types: [publish]\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
             )
         },
     )
     assert result.passed is None
-    assert "workflow_call" in result.message
+    assert "dispatch.yaml runs on `repository_dispatch`" in result.message
+    assert "'call'" in result.message
+
+
+def test_credential_environments_call_out_of_the_repo_granting_oidc_is_unread() -> None:
+    """A calling job's `permissions:` cap what the callee may request, so one
+    granting `id-token: write` mints on this repo's behalf — and whether the
+    callee does it inside an environment is not visible here."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "release.yaml": (
+                "on: push\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+        },
+    )
+    assert result.passed is None
+    assert "release.yaml job 'call' grants `id-token: write`" in result.message
+
+
+def test_credential_environments_call_out_of_the_repo_changing_nothing() -> None:
+    """With no steerable trigger to defeat the ref policy and no OIDC granted,
+    the unread callee cannot change a verdict — and an unknown that changes no
+    verdict is a skip for nothing."""
+    result = _credential_check(
+        {"pypi": (["PYPI_TOKEN"], _CUSTOM_POLICY, "branch main")},
+        workflows={
+            "release.yaml": (
+                "on: push\n"
+                "jobs:\n"
+                "  call:\n"
+                "    uses: other/repo/.github/workflows/publish.yaml@v1\n"
+            )
+        },
+    )
+    assert result.passed is True, result.message
 
 
 def test_credential_environments_dynamic_environment_name_is_unverified() -> None:

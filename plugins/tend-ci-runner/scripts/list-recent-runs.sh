@@ -1,74 +1,55 @@
 #!/usr/bin/env bash
-# Lists recently completed tend CI runs.
+# Lists recently completed tend CI runs as a JSON array of
+# {databaseId, conclusion, createdAt, updatedAt} objects.
 #
-# Fetches runs started in the past 3 hours, then filters to only those that
-# are completed and whose updatedAt falls within a 1-hour completion window.
-# This two-step approach is needed because `gh run list --created` filters
-# by *start* time, not *end* time — a run started 2h ago may have just
-# finished, and a run started 50min ago may still be running.
+# The completion window resumes where the previous successful run of the
+# calling workflow left off: the floor is that run's start time. A run's own
+# window always opens at or before its own start, so consecutive windows
+# overlap by a few minutes and never gap — the caller dedups against its
+# evidence log, so overlap is cheap, where a gap is silently unanalyzed.
+# Scheduler delay, dropped ticks, cadence changes, and manual dispatches all
+# need no special handling: whatever run last succeeded is the anchor. A
+# *failed* run analyzed nothing, so it never anchors; its window rides along
+# to the next success. The floor is clamped at 6h so an outage can't grow
+# the window unboundedly; when the clamp bites, or no successful run exists,
+# a WARNING on stderr tells the caller to record a coverage gap rather than
+# an all-clear. Outside GitHub Actions (no GITHUB_WORKFLOW), the window is
+# simply the past hour.
 #
-# Window anchor: when invoked under a scheduled workflow with a simple
-# hourly cron (`MM * * * *`), the completion window is anchored to the most
-# recent intended cron tick instead of `now`. Consecutive cycles then tile
-# exactly: [intended-1h, intended], then [intended, intended+1h]. Without
-# this, GHA scheduler delay (20-40 min during peak hours) shifts each
-# cycle's window relative to actual start time and drops runs that finished
-# in the slack between consecutive actual starts. When GHA *drops* a tick
-# entirely (not just delays it), the window's floor is instead pulled back to
-# the previous actual run's intended tick so the orphaned hour still gets
-# analyzed. For non-schedule events or non-hourly crons, falls back to a
-# now-anchored 1h window.
+# Runs are fetched by *creation* time with a 2h cushion below the floor,
+# then filtered on completion (updatedAt): `gh run list --created` filters
+# by start time, and a run started before the floor may have finished
+# inside the window.
+#
+# A transient API failure fails the script loudly (`set -e`); the caller
+# treats that as "window not analyzed", never as an all-clear, and the next
+# tick's floor reaches back past the lost window.
 #
 # Environment variables:
-#   TARGET_REPO - Query a different repo (default: current repo)
+#   TARGET_REPO - Query a different repo's runs (default: current repo).
+#                 The window anchor always comes from the current repo,
+#                 where the calling workflow runs.
 #
-# Output: JSON array of {databaseId, conclusion, createdAt, updatedAt} objects.
+# Usage: ./list-recent-runs.sh [prefix ...]
+#   Workflow-name prefixes to include (default: "tend-").
 
 set -euo pipefail
 
 # Prevent gh from emitting ANSI color codes in non-TTY contexts.
 export NO_COLOR=1
 
-# Retry a command up to 3 times on failure, echoing its stdout on success.
-# Transient GitHub API errors (e.g. HTTP 503 during an Actions incident) would
-# otherwise slip past `set -euo pipefail` at the call sites below — a process
-# substitution's failure is invisible to `set -e`, and a `|| echo "[]"` fallback
-# silently turns an errored fetch into an empty result. Either way the script
-# would report zero runs when runs exist, and the calling skill records a false
-# "all-clear" that permanently skips that window. Retry here, and let the caller
-# fail loud if every attempt fails rather than swallow the error.
-gh_retry() {
-  local out attempt
-  for attempt in 1 2 3; do
-    if out=$("$@" 2>/dev/null); then
-      printf '%s' "$out"
-      return 0
-    fi
-    # Don't sleep after the final attempt — the whole point of this script is
-    # to fail loud and fast during an incident, so a trailing backoff before
-    # the caller's `exit 1` is wasted delay.
-    [ "$attempt" -lt 3 ] && sleep $((attempt * 3))
-  done
-  return 1
-}
-
 repo_args=()
 if [ -n "${TARGET_REPO:-}" ]; then
   repo_args=(-R "$TARGET_REPO")
 fi
 
-# Dynamically discover workflows by prefix. Multiple prefixes supported.
-# Usage: ./list-recent-runs.sh [prefix ...]
 if [ $# -eq 0 ]; then
   PREFIXES=("tend-")
 else
   PREFIXES=("$@")
 fi
 
-if ! wf_json=$(gh_retry gh workflow list "${repo_args[@]}" --json name); then
-  echo "ERROR: 'gh workflow list' failed after retries (transient API error?) — refusing to report an empty run list that would read as a false all-clear" >&2
-  exit 1
-fi
+wf_json=$(gh workflow list "${repo_args[@]}" --json name)
 
 WORKFLOWS=()
 for prefix in "${PREFIXES[@]}"; do
@@ -76,85 +57,60 @@ for prefix in "${PREFIXES[@]}"; do
   WORKFLOWS+=("${matches[@]}")
 done
 
-# Detect a simple hourly cron (e.g. "47 * * * *") from the workflow event
-# payload so we can anchor the window to the most recent intended tick.
-cron_minute=""
-if [ -f "${GITHUB_EVENT_PATH:-}" ]; then
-  schedule=$(jq -r '.schedule // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
-  if [[ "$schedule" =~ ^([0-9]+)\ \*\ \*\ \*\ \*$ ]]; then
-    cron_minute="${BASH_REMATCH[1]}"
-  fi
-fi
-
-if [ -n "$cron_minute" ]; then
-  this_hour_tick=$(date -u -d "$(date -u +%Y-%m-%dT%H:00:00) $cron_minute minutes" +%s)
-  now_ts=$(date -u +%s)
-  if [ "$now_ts" -lt "$this_hour_tick" ]; then
-    intended=$((this_hour_tick - 3600))
-  else
-    intended=$this_hour_tick
-  fi
-  # Default floor: one cron period back. Consecutive ticks tile exactly.
-  COMPLETED_AFTER=$((intended - 3600))
-
-  # Dropped-tick recovery. GHA doesn't only *delay* scheduled ticks, it also
-  # *drops* them: a tick that fires zero times leaves that hour's completions
-  # in the gap between the previous and next cycle's windows (the skipped-tick
-  # case #526 deferred as acceptable). Rather than assume the previous tick
-  # fired, resume from where the previous *actual* completed run of this
-  # workflow left off: recover that run's intended tick and floor the window
-  # there. When every tick fires, the previous run's intended tick == the
-  # default (intended - 3600), so this is a byte-identical no-op — still no
-  # overlap between consecutive cycles. When a tick was dropped, it reaches
-  # back to cover the orphaned hour. Capped at 6h so a sustained outage can't
-  # create an unbounded window. The analyzing workflow runs on the current
-  # repo, so this query omits TARGET_REPO's -R.
-  if [ -n "${GITHUB_WORKFLOW:-}" ]; then
-    prev_start=$(gh run list --workflow "$GITHUB_WORKFLOW" --status completed \
-      --limit 10 --json databaseId,createdAt \
-      --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0}))] | .[0].createdAt // empty" \
-      2>/dev/null || true)
-    if [ -n "$prev_start" ]; then
-      prev_ts=$(date -u -d "$prev_start" +%s 2>/dev/null || echo "")
-      if [ -n "$prev_ts" ]; then
-        prev_hour_tick=$(date -u -d "$(date -u -d "@$prev_ts" +%Y-%m-%dT%H:00:00) $cron_minute minutes" +%s)
-        if [ "$prev_ts" -ge "$prev_hour_tick" ]; then
-          prev_intended=$prev_hour_tick
-        else
-          prev_intended=$((prev_hour_tick - 3600))
-        fi
-        floor_cap=$((intended - 21600))   # never reach back more than 6h
-        [ "$prev_intended" -lt "$floor_cap" ] && prev_intended=$floor_cap
-        [ "$prev_intended" -lt "$COMPLETED_AFTER" ] && COMPLETED_AFTER=$prev_intended
-      fi
+now=$(date -u +%s)
+floor_cap=$((now - 21600))
+if [ -n "${GITHUB_WORKFLOW:-}" ]; then
+  # Exclude this run itself: a re-run attempt of it can already read as a
+  # completed success, and anchoring on it would collapse the window to zero.
+  # The anchor comes from the repo the workflow runs in — $GITHUB_REPOSITORY,
+  # named explicitly so the query doesn't lean on cwd remote detection —
+  # never from TARGET_REPO.
+  prev_start=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$GITHUB_WORKFLOW" \
+    --status success --limit 5 --json databaseId,createdAt \
+    --jq "[.[] | select(.databaseId != (${GITHUB_RUN_ID:-0}))] | .[0].createdAt // empty")
+  if [ -n "$prev_start" ]; then
+    COMPLETED_AFTER=$(date -u -d "$prev_start" +%s)
+    if [ "$COMPLETED_AFTER" -lt "$floor_cap" ]; then
+      echo "WARNING: the last successful '$GITHUB_WORKFLOW' run started $prev_start, more than 6h back. Window floored at $(date -u -d "@$floor_cap" +%Y-%m-%dT%H:%M:%SZ); runs that completed before it are NOT in this list. Record a coverage gap, not an all-clear." >&2
+      COMPLETED_AFTER=$floor_cap
     fi
+  else
+    echo "WARNING: no successful '$GITHUB_WORKFLOW' run found. Window floored at $(date -u -d "@$floor_cap" +%Y-%m-%dT%H:%M:%SZ); anything earlier is NOT in this list. Record a coverage gap, not an all-clear." >&2
+    COMPLETED_AFTER=$floor_cap
   fi
-
-  CREATED_SINCE=$(date -u -d "@$((COMPLETED_AFTER - 7200))" +%Y-%m-%dT%H:%M:%S)
 else
-  CREATED_SINCE=$(date -d '3 hours ago' +%Y-%m-%dT%H:%M:%S)
-  COMPLETED_AFTER=$(date -d '1 hour ago' +%s)
+  COMPLETED_AFTER=$((now - 3600))
 fi
+
+CREATED_SINCE=$(date -u -d "@$((COMPLETED_AFTER - 7200))" +%Y-%m-%dT%H:%M:%S)
+
+# `gh run list` returns newest-first, so a workflow with more runs in the
+# window than the limit silently drops the *oldest* — exactly the runs a
+# widened window reached back for. Warn rather than fail at the cap: the rows
+# in hand are still worth analyzing; the caller just can't read the list as
+# complete.
+RUN_LIMIT=200
 
 all_runs="[]"
-
 for wf in "${WORKFLOWS[@]}"; do
-  if ! runs=$(gh_retry gh run list \
+  runs=$(gh run list \
     "${repo_args[@]}" \
     --workflow "${wf}" \
     --created ">=${CREATED_SINCE}" \
     --json databaseId,conclusion,createdAt,updatedAt \
-    --limit 50); then
-    echo "ERROR: 'gh run list' for workflow '$wf' failed after retries — refusing to report a partial run list" >&2
-    exit 1
+    --limit "$RUN_LIMIT")
+  if [ "$(printf '%s' "$runs" | jq 'length')" -ge "$RUN_LIMIT" ]; then
+    echo "WARNING: '$wf' returned $RUN_LIMIT runs, the fetch limit — older runs in this window are likely missing from the list. Record a coverage gap, not an all-clear." >&2
   fi
   all_runs=$(echo "$all_runs" "$runs" | jq -s 'add')
 done
 
-# Filter: drop in-progress (empty conclusion), keep only recently finished
+# Filter: drop in-progress (empty conclusion), keep only recently finished.
+# unique_by: overlapping prefixes can match one workflow twice, which would
+# double-count its runs.
 echo "$all_runs" | jq --argjson cutoff "$COMPLETED_AFTER" '
   [ .[]
     | select(.conclusion != null and .conclusion != "")
     | select((.updatedAt | fromdateiso8601) >= $cutoff)
-  ]
+  ] | unique_by(.databaseId)
 '

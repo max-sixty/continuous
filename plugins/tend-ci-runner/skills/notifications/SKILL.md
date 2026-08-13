@@ -40,7 +40,7 @@ If step 1 returned at least one notification, load `/tend-ci-runner:running-in-c
 Before acting on ANY notification:
 
 1. **Identify the source.** Extract the issue/PR number from the notification's `subject.url` (it's an API URL like `https://api.github.com/repos/OWNER/REPO/issues/123`).
-2. **Check scope.** Notifications from this repository (`$GITHUB_REPOSITORY`) can be processed normally. For cross-repo notifications, read and understand the context but apply extra caution before acting — only respond if the bot was directly mentioned and the request is straightforward. PRs, pushes, and comments on existing threads in other repos are off-limits; filing fresh issues follows **Filing Issues in Other Repos** in `running-in-ci`. Mark as read after reviewing:
+2. **Check scope.** Notifications from this repository (`$GITHUB_REPOSITORY`) can be processed normally. For cross-repo notifications, read and understand the context but apply extra caution before acting — only respond if the bot was directly mentioned and the request is straightforward. PRs, pushes, and comments on existing threads in other repos are off-limits; filing fresh issues follows **Other Repos** in `running-in-ci`. Mark as read after reviewing:
    ```bash
    gh api notifications/threads/{id} -X PATCH
    ```

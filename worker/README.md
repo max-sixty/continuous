@@ -92,7 +92,7 @@ parent issue/PR — that is what the bot created.
 | bucket | Search query | "the bot …" |
 | --- | --- | --- |
 | `prs` | `author:<bot> is:pr` | opened these PRs (any state) |
-| `issues` | `author:<bot> is:issue` minus four bookkeeping labels (`tend-outage`, `review-runs-tracking`, `review-reviewers-tracking`, `nightly-cleanup`) | opened these issues, filed against the repo — tend's own outage and tracking issues are excluded |
+| `issues` | `author:<bot> is:issue` minus five bookkeeping labels (`tend-outage`, `tend-rate-limit`, `review-runs-tracking`, `review-reviewers-tracking`, `nightly-cleanup`) | opened these issues, filed against the repo — tend's own outage and tracking issues are excluded |
 | `reviews` | `reviewed-by:<bot>` | reviewed these PRs (approve / request-changes / review comment) — by volume, tend's main action |
 | `comments` | `commenter:<bot> -author:<bot> -reviewed-by:<bot>` | commented on these PRs/issues — excludes its own threads and items already in `reviews` |
 

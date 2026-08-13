@@ -3,74 +3,6 @@
 Deferred work and unimplemented options. Each entry should justify the cost
 of building it if revisited.
 
-## Finish moving the operational secrets into the `tend` environment
-
-The gate closes on a repo only when the repo-level copy is gone, since a job
-naming an environment still reads repo-level secrets. Every adopter now has
-the environment, admitting only `main`, with `TEND_BOT_TOKEN` in it, and every
-generated workflow names it. What remains:
-
-1. **The model credential, every repo.** `CLAUDE_CODE_OAUTH_TOKEN` can't be
-   read back and isn't stored anywhere locally, so it has to be pasted or
-   re-minted with `claude setup-token`:
-   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <repo> --env tend`, then
-   `gh secret delete CLAUDE_CODE_OAUTH_TOKEN --repo <repo>`. Only the
-   generated workflows read it, and all of them name the environment, so
-   nothing else breaks.
-2. **`max-sixty/worktrunk` and `PRQL/prql` keep a repo-level
-   `TEND_BOT_TOKEN`,** because hand-maintained workflows read it outside the
-   generated set. What each needs follows from its trigger, and the two repos
-   differ.
-
-   Jobs running at `refs/heads/main` are admitted by the policy as it stands,
-   so adding `environment: {name: tend, deployment: false}` is the whole
-   change: worktrunk's benchmark gist
-   append and its two create-issue-on-failure jobs, prql's
-   `update-rust-toolchain` (all four `schedule`-only, and already `if`-gated
-   to it) and prql's backport. A `pull_request_target` run reports
-   `GITHUB_REF=refs/heads/main` and is admitted — which also means the
-   environment is not what gates that job.
-
-   worktrunk's release jobs run on a tag *push*, which is not bot-steerable,
-   and its all-tags ruleset is admin-gated — but the tag entry does not go on
-   the `tend` policy, whose shape `check_environment` pins to exactly the
-   protected branches and whose `--fix` deletes anything else. They get a
-   second environment (say `release`) whose policy admits the release tag
-   pattern, the shape `check_credential_environments` already credits under
-   that ruleset. Winget and homebrew move in too, and the repo-level copy
-   goes with no new credential.
-
-   prql's release jobs run on `release`, which is bot-steerable: creating a
-   release against an existing tag takes no tag operation, so the tag ruleset
-   does not stop it and a tag entry would not gate it. One of — a required
-   reviewer on a release environment, costing an approval on every release; a
-   second fine-grained credential scoped to `PRQL/homebrew-prql` and the
-   winget fork, left at repo level and allowlisted; or moving the workflow to
-   a tag push, which makes it worktrunk's case. The second narrows furthest
-   only if `push-web-branch` can drop to `GITHUB_TOKEN`, so check whether
-   anything runs on the `web` branch — a `GITHUB_TOKEN` push fires no
-   workflow.
-
-   Until one lands, `repo-secret-allowlist` fails on both, correctly.
-
-`numbagg/numbagg` and `max-sixty/cargo-affected` are done bar the model
-credential.
-
-The check also sweeps every *other* credential-holding environment — one
-that stores a secret, or that a job requesting `id-token: write` deploys
-to — so a repo with a pre-existing publish environment may fail here until
-that environment is gated: a required reviewer that is not the bot, or a
-policy naming only verified branches — with tag entries needing the
-admin-only all-tags ruleset the install recipe's §3 creates. A trusted
-publisher stores no secret, so this is where a repo that publishes to PyPI
-or npm shows up. That failure is the check doing its job; gate the
-environment rather than allowlisting around it.
-
-`tend-agent/tend-integration` migrates itself: its `integration-secrets`
-reseed writes both secrets into the environment and deletes the repo-level
-copies once the fixture's workflows name it. The fixture regenerates with the
-published `tend`, so this completes on the first weekly after 0.1.13.
-
 ## Cut tend over to harness = "codex" (post-release)
 
 The Codex harness landed but tend itself still runs on Claude. The cutover
@@ -250,6 +182,66 @@ open a draft advisory for security-classified failures. Needs (a) the
 discrimination rule (fix narrows a credential's scope → security; fix
 updates config to reflect intent → drift), (b) `install-tend` enabling PVR
 at setup, (c) confirming the bot token can hit the reports endpoint.
+
+## Re-run the work a rate-limit trip refused
+
+The `tend-rate-limit` issue lists the runs the spike limit refused, and
+closing it approves the volume — but nothing re-runs them. `tend-review`
+fires only on `pull_request_target`, so a refused review stays missing until
+someone pushes to the PR again. Today the recovery is one
+`gh run rerun <id> --failed` per row.
+
+The shape: a generated workflow on `issues: closed`, filtered to the label
+and to a closer who isn't the bot (the same check the preflight makes),
+re-running rows from the last 24 hours whose run is still in `failure` —
+which makes it idempotent, and stops an old row resurrecting itself. It
+needs `actions: write` and, being generated, a template plus config
+plumbing and generator tests. A re-run re-executes the preflight, which now
+sees the approval and passes, so nothing loops.
+
+**Blocked on** confirming tend's re-runs work correctly in the first place.
+Building an automatic re-runner over a broken re-run path would bury that
+bug under a second mechanism: the symptom moves from "my review never came
+back" to "the recovery workflow ran and my review still never came back".
+
+The same gap covers `tend-outage`; #816 tracks it from that side, and the
+`review-runs` skill's drain recipe reads the same table format.
+
+## Decide whether the built-in `/code-review` replaces the vendored port
+
+`plugins/tend-ci-runner/skills/code-review/` is a copy of Claude Code's
+built-in `/code-review`, taken from a 2.1.220 binary. The two share their
+method almost verbatim — the same ten angles, the same three-verdict verify
+with "PLAUSIBLE by default", the same sweep — so the copy buys nothing on
+method and costs the usual: it drifts silently, and nothing re-checks it
+against the binary.
+
+That drift is no longer hypothetical. `claude/action.yaml` now pins 2.1.226,
+which restructured the built-in without touching those texts, so the copy is
+already a version behind the binary CI runs — and the thing that changed is
+exactly what decides this question.
+
+Reaching the built-in is possible. It carries `disable-model-invocation`,
+which the `Skill` tool waives for a turn whose own user message names the
+command, so a prompt naming `/code-review` in prose rather than opening with a
+slash unlocks it for the run. That was built and reverted, because reading the
+built-in out of the 2.1.226 binary says it isn't worth reaching:
+
+- It is a model × effort matrix rather than one prompt, and `claude-opus-5` at
+  both `medium` and `high` — where tend lands, running `model: opus` with no
+  effort set — renders a minimal cell: one careful diff pass, no angles, no
+  verify, no sweep. That cell is marked as externally measured, so it is a
+  deliberate upstream choice rather than an oversight. The port's core-logic
+  band is broader than it, and broader than the `default` row's 3+5 angles.
+- It reports through `ReportFindings`, which `claude/action.yaml` does not
+  allowlist.
+- The Codex harness has no built-in at all, so the port stays the only
+  implementation there regardless.
+
+Revisit when one of those moves: a pinned version whose Opus row is
+angle-based again, `ReportFindings` in the allowlist, or a Codex equivalent.
+Cutting over then costs a prompt reshape plus a per-harness branch in the
+`review` skill's step 4, which only pays once the built-in is the better pass.
 
 ## Worker: Phase 2 LLM summary of `/activity`
 

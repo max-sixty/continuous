@@ -5,14 +5,15 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+  # The hook already selects Python by type; the previous `^generator/` filter
+  # only meant that each new Python directory arrived unlinted and stayed that
+  # way until someone noticed.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.11
     hooks:
       - id: ruff-check
         args: ["--fix"]
-        files: ^generator/
       - id: ruff-format
-        files: ^generator/
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.7.12
     hooks:
@@ -27,14 +28,18 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
-  # Standalone shell entrypoints aren't visible to actionlint's built-in
-  # shellcheck. Run it directly; -S warning matches actionlint's severity.
+  # The composite actions' shared step bodies live in standalone scripts
+  # (shared/steps/, proxy/, generator/src/tend/templates/, .config/codex-cloud/)
+  # rather than inline `run:` blocks, so actionlint's built-in shellcheck
+  # doesn't see them. Run shellcheck directly to keep that coverage — and over
+  # dev/, which actionlint never sees at all. -S warning matches actionlint's
+  # default severity.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
         args: ["-S", "warning"]
-        files: ^(shared/steps/.*\.sh|proxy/setup-sandbox\.sh|\.config/codex-cloud/environment\.sh)$
+        files: ^(shared/steps/.*\.sh|generator/src/tend/templates/.*\.sh|proxy/setup-sandbox\.sh|dev/.*\.sh|plugins/.*\.sh|\.config/codex-cloud/environment\.sh)$
   - repo: local
     hooks:
       # The Claude Code slash-command preprocessor treats a backticked token
@@ -125,7 +130,7 @@ repos:
       - id: sandbox-env-reserved-parity
         name: reserved sandbox_env set stays in sync
         language: system
-        files: ^(generator/src/tend/config\.py|proxy/setup-sandbox\.sh)$
+        files: ^(generator/src/tend/config\.py|proxy/setup-sandbox\.sh|docs/tend\.example\.yaml)$
         entry: python3
         args:
           - -c
@@ -151,6 +156,17 @@ repos:
             heredoc_keys = set(re.findall(r'^([A-Za-z_][A-Za-z0-9_]*)=', heredoc, re.M))
             heredoc_keys |= set(re.findall(r'ANTHROPIC_DUMMY="([A-Za-z_][A-Za-z0-9_]*)=', sh))
 
+            # The adopter only meets this set as a rejection at `init`, so the
+            # `sandbox_env` docs have to name every member — a key reserved in
+            # code but absent from the docs reads as settable right up until
+            # the run fails. Scope the search to that bullet: file-wide, an
+            # unrelated mention elsewhere (the auth section names
+            # ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN) would stand in for
+            # the list entry and hide the drift this leg exists to catch.
+            docs = open("docs/tend.example.yaml").read()
+            section = re.search(r"^# - `sandbox_env`:(.*?)^# - `", docs, re.S | re.M).group(1)
+            documented = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", section))
+
             problems = []
             for name in sorted(config_set - shell_set):
                 problems.append(f"'{name}' is reserved in config.py but NOT guarded in setup-sandbox.sh")
@@ -158,15 +174,18 @@ repos:
                 problems.append(f"'{name}' is guarded in setup-sandbox.sh but NOT reserved in config.py")
             for name in sorted(heredoc_keys - config_set):
                 problems.append(f"'{name}' is written to AGENT_ENV_FILE but NOT reserved in config.py — an adopter's sandbox_env could shadow it")
+            for name in sorted(config_set - documented):
+                problems.append(f"'{name}' is reserved in config.py but NOT named in docs/tend.example.yaml's sandbox_env list")
 
             for p in problems:
                 print(p)
             if problems:
                 print(
                     "\nERROR: the reserved sandbox_env set drifted between "
-                    "config.py, setup-sandbox.sh, and the AGENT_ENV_FILE "
-                    "heredoc. The shell case is the security boundary; keep "
-                    "every env-file key reserved and the two sets aligned."
+                    "config.py, setup-sandbox.sh, the AGENT_ENV_FILE heredoc, "
+                    "and docs/tend.example.yaml. The shell case is the security "
+                    "boundary; keep every env-file key reserved, the two sets "
+                    "aligned, and every reserved name documented."
                 )
                 sys.exit(1)
         pass_filenames: false

@@ -18,7 +18,7 @@ approved-commands = [
   "cd site && npm install --prefer-offline --no-audit --no-fund",
   "cd site && npm run dev -- --port {{ branch | hash_port }}",
   "lsof -ti :{{ branch | hash_port }} -sTCP:LISTEN | xargs kill 2>/dev/null || true",
-  "cd generator && uv run pytest {{ args }}",
+  "dev/test.sh {{ args }}",
 ]
 EOF
 

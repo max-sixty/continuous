@@ -80,9 +80,16 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **notifications** | Every 15 minutes           | Polls GitHub notifications, responds to unhandled mentions, marks handled threads as read.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
 
-Scheduled workflows also support manual dispatch for testing. All are
-enabled by default except **ci-fix**, which requires `watched_workflows`
-to be configured. Any can be disabled:
+The bot reacts 👀 when a job picks an event up. An opened issue or PR keeps
+the reaction; on a comment that mentions the bot, it comes off when the
+session ends.
+
+Scheduled workflows also support manual dispatch for testing. GitHub runs
+`schedule` triggers on a best-effort basis and drops ticks under load, so
+the intervals above are the requested cadence rather than a guarantee —
+observed gaps between runs are routinely longer. All are enabled by
+default except **ci-fix**, which requires `watched_workflows` to be
+configured. Any can be disabled:
 
 ```yaml
 workflows:
@@ -195,8 +202,8 @@ why the Codex subscription `auth.json` path isn't supported;
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
 
-All other options — secret name overrides, setup steps, protected branches,
-workflow overrides, schedules — are documented in
+All other options — setup steps, protected branches, workflow overrides,
+schedules — are documented in
 [`docs/tend.example.yaml`](docs/tend.example.yaml).
 
 ## Project context

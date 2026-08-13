@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import re
 from pathlib import Path
 from textwrap import dedent
@@ -13,10 +14,17 @@ import click
 from click.testing import CliRunner
 
 from tend.cli import main
-from tend.config import Config
+from tend.config import (
+    ANTHROPIC_API_KEY_SECRET,
+    BOT_TOKEN_SECRET,
+    CLAUDE_TOKEN_SECRET,
+    OPENAI_KEY_SECRET,
+    Config,
+)
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
+    GeneratedWorkflow,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -80,6 +88,111 @@ def test_setup_steps_rendered(tmp_path: Path) -> None:
         assert "echo FOO=bar >> $GITHUB_ENV" in wf.content, (
             f"{wf.filename} missing run step"
         )
+
+
+def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
+    """Index of the step that puts the loaded tree's local setup actions back."""
+    for i, step in enumerate(steps):
+        run = str(step.get("run", ""))
+        if "git checkout" in run and "$GITHUB_SHA" in run:
+            return i
+    return None
+
+
+@pytest.mark.parametrize(
+    ("name", "job", "switch", "gate"),
+    [
+        (
+            "review",
+            "review",
+            lambda s: s.get("uses", "").startswith("actions/checkout")
+            and "ref" in s.get("with", {}),
+            "steps.gate.outputs.should_run",
+        ),
+        (
+            "mention",
+            "handle",
+            lambda s: "gh pr checkout" in str(s.get("run", "")),
+            None,
+        ),
+    ],
+)
+def test_local_setup_action_restored_for_post_cleanup(
+    tmp_path: Path,
+    name: str,
+    job: str,
+    switch: object,
+    gate: str | None,
+) -> None:
+    """review and mention land the PR's tree over the workspace a local `setup:`
+    composite was loaded from. To dispatch the POST steps of the actions nested
+    inside it the runner re-reads that file and matches it against the step list
+    it cached at load time, so a PR that resizes or deletes the file fails
+    cleanup (actions/runner#2816). Put the loaded version back before the POST
+    chain walks.
+
+    `always()` covers a skip as well as a failure, so where the caller gates its
+    earlier steps the restore carries that gate too: a gate-skipped run checked
+    nothing out, and an unconditional restore would warn about cleaning up a
+    composite that never loaded."""
+    extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
+
+    idx = _restore_step_index(steps)
+    assert idx is not None, f"{name}: nothing restores the local setup action"
+    assert ".github/actions/tend-setup" in str(steps[idx]["run"])
+    condition = str(steps[idx].get("if", ""))
+    assert condition.startswith("always()"), (
+        f"{name}: the restore has to run even when the session fails"
+    )
+    if gate is None:
+        assert condition == "always()", f"{name}: gates at the job level"
+    else:
+        assert gate in condition, (
+            f"{name}: the restore has to skip with the steps it restores for"
+        )
+    switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
+    assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
+
+
+def test_restore_step_quotes_the_setup_path(tmp_path: Path) -> None:
+    """The path reaches both the `git` operand and the warning text through a
+    shell variable, so a `$` can't expand and a `"` can't end the string early
+    and fail the one step whose job is to never turn a working run red."""
+    extra = "setup:\n  - uses: './weird/$HOME\"; rm -rf /; echo \"'\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    steps = yaml.safe_load(generate_mention(cfg).content)["jobs"]["handle"]["steps"]
+    run = str(steps[_restore_step_index(steps)]["run"])
+
+    assert """dir='weird/$HOME"; rm -rf /; echo "'""" in run
+    assert 'git checkout "$GITHUB_SHA" -- "$dir"' in run
+    # Nothing but the single-quoted assignment carries the raw path.
+    assert run.count("rm -rf /") == 1
+
+
+def test_no_restore_step_without_a_local_setup_action(tmp_path: Path) -> None:
+    """A remote `uses:` resolves from the action cache, not the workspace, so
+    there is nothing to put back."""
+    extra = "setup:\n  - uses: astral-sh/setup-uv@v6\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    for wf in generate_all(cfg):
+        for job in yaml.safe_load(wf.content)["jobs"].values():
+            assert _restore_step_index(job.get("steps", [])) is None, wf.filename
+
+
+@pytest.mark.parametrize(
+    "extra", ["", "setup:\n  - uses: ./.github/actions/tend-setup\n"]
+)
+def test_generated_workflows_end_with_exactly_one_newline(
+    tmp_path: Path, extra: str
+) -> None:
+    """A trailing blank line is pure churn in the adopter's regen diff, and the
+    repo's end-of-file-fixer rejects it in the snapshots."""
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    for wf in generate_all(cfg):
+        assert wf.content.endswith("\n"), f"{wf.filename}: no trailing newline"
+        assert not wf.content.endswith("\n\n"), f"{wf.filename}: trailing blank line"
 
 
 def test_sandbox_levers_rendered_for_claude(tmp_path: Path) -> None:
@@ -271,20 +384,33 @@ def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
         assert "\n\n\n" not in wf.content, f"{wf.filename} has triple blank lines"
 
 
-def test_custom_secrets(tmp_path: Path) -> None:
-    extra = dedent("""\
-        secrets:
-          bot_token: MY_BOT_PAT
-          claude_token: MY_CLAUDE
-          anthropic_api_key: MY_API_KEY
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_workflows_read_only_the_operational_secrets(
+    tmp_path: Path, harness: str
+) -> None:
+    """Every stored secret a workflow reads is one `tend check` verifies.
+
+    The names are fixed constants shared by the templates and the checks, so
+    the failure this guards is a template naming a secret that nothing
+    provisions — which surfaces only as an empty token at run time. The set
+    is per harness because the checks are: `check_claude_auth` verifies the
+    Claude pair and `check_codex_auth` the OpenAI key, so a claude workflow
+    reading `secrets.OPENAI_API_KEY` is unprovisioned as surely as one
+    reading a name nothing defines. `secrets.GITHUB_TOKEN` is
+    workflow-scoped rather than stored, so it is outside the set."""
+    verified = {BOT_TOKEN_SECRET} | (
+        {CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET}
+        if harness == "claude"
+        else {OPENAI_KEY_SECRET}
+    )
+    cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}\n"))
     for wf in generate_all(cfg):
-        assert "MY_BOT_PAT" in wf.content, f"{wf.filename} missing custom bot token"
-        assert "MY_CLAUDE" in wf.content, f"{wf.filename} missing custom claude token"
-        assert "MY_API_KEY" in wf.content, (
-            f"{wf.filename} missing custom anthropic_api_key secret"
+        read = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", wf.content))
+        assert read - {"GITHUB_TOKEN"} <= verified, (
+            f"{wf.filename} reads a secret the {harness} harness does not "
+            f"provision: {sorted(read - {'GITHUB_TOKEN'} - verified)}"
         )
+        assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
 
 
 def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:
@@ -374,6 +500,54 @@ def test_custom_prompt(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     triage = workflows["tend-triage.yaml"]
     assert "Custom triage:" in triage.content
+
+
+def _review_prompt(review: GeneratedWorkflow) -> str:
+    """The `prompt:` input the review job hands the harness action."""
+    steps = yaml.safe_load(review.content)["jobs"]["review"]["steps"]
+    step = next(
+        s for s in steps if s.get("uses", "").startswith("max-sixty/tend/claude@")
+    )
+    return step["with"]["prompt"]
+
+
+def test_review_prompt_without_placeholder_keeps_literal_braces(
+    tmp_path: Path,
+) -> None:
+    """A review prompt with braces but no `{pr_number}` reaches the agent verbatim.
+
+    The review prompt is the only one emitted inside a GHA expression. With the
+    placeholder it goes through `format()`, which needs every other brace
+    doubled; without it, it is a bare string literal that GHA never collapses,
+    so doubling there would ship `{{...}}` to the agent.
+    """
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review this PR. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "{generated}" in prompt
+    assert "{{generated}}" not in prompt
+    assert "format(" not in prompt
+
+
+def test_review_prompt_with_placeholder_escapes_other_braces(tmp_path: Path) -> None:
+    """With `{pr_number}` present the prompt goes through `format()`, so the
+    placeholder becomes `{0}` and every other brace is doubled for it."""
+    extra = dedent("""\
+        workflows:
+          review:
+            prompt: "Review PR {pr_number}. Skip files matching {generated}."
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    prompt = _review_prompt(workflows["tend-review.yaml"])
+    assert "format(" in prompt
+    assert "{0}" in prompt
+    assert "{{generated}}" in prompt
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
@@ -507,6 +681,64 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert "clean" not in checkouts[0]["with"]
 
 
+def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
+    """A push mid-review queues a replacement run; the gate step decides
+    whether it boots an agent.
+
+    The running session folds the push in and stamps examined commits, so the
+    queued run's work is usually already done. That only holds if the gate is
+    the first step and everything after it — checkouts, setup, the agent — is
+    conditioned on its verdict; an ungated step would run (and bill) on every
+    replaced event.
+    """
+    extra = "setup:\n  - run: npm ci\n"
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    job = data["jobs"]["review"]
+
+    assert job["concurrency"]["cancel-in-progress"] is False
+    steps = job["steps"]
+    assert steps[0].get("id") == "gate"
+    assert "tend-review/$PR" in steps[0]["run"]
+    gate = "steps.gate.outputs.should_run == 'true'"
+    for step in steps[1:]:
+        # A step may narrow further (the eyes reaction fires only on `opened`),
+        # but the gate's verdict stays a required conjunct.
+        condition = step.get("if", "")
+        assert condition == gate or condition.startswith(f"{gate} && "), (
+            f"ungated step after the gate: {step}"
+        )
+
+
+def test_opened_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
+    """A newly opened issue or PR carries an eyes reaction before the agent
+    boots: the session takes minutes to reach its first comment, and until then
+    the author has nothing telling them the bot picked the event up.
+
+    Review narrows to `opened` — a synchronize or reopen lands on a PR already
+    carrying the reaction.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+
+    triage = yaml.safe_load(workflows["tend-triage.yaml"].content)
+    first = triage["jobs"]["triage"]["steps"][0]
+    assert "content=eyes" in first["run"]
+    assert first["env"]["NUMBER"] == "${{ github.event.issue.number }}"
+    # Every issues:opened event the job-level `if` admits is the bot's to take.
+    assert "if" not in first
+
+    review = yaml.safe_load(workflows["tend-review.yaml"].content)
+    react = next(
+        step
+        for step in review["jobs"]["review"]["steps"]
+        if "content=eyes" in str(step.get("run", ""))
+    )
+    assert react["env"]["NUMBER"] == "${{ github.event.pull_request.number }}"
+    assert "github.event.action == 'opened'" in react["if"]
+
+
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
     """`raw` was removed in favor of structured steps — the error message
     must point users at the two supported paths so they can migrate."""
@@ -560,14 +792,6 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
     assert "repository_dispatch" in verify_if
     assert "pull_request_review" not in verify_if
 
-    # A dispatch is judged against the API record, not waved through: the
-    # check script resolves {kind, pr, id} and rejects what it can't confirm.
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    assert "/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID" in check_step["run"]
-    assert "/pulls/comments/$PAYLOAD_ID" in check_step["run"]
-
     # Handle job checks out PR branch for this event
     handle_steps = data["jobs"]["handle"]["steps"]
     checkout_step = next(
@@ -616,201 +840,50 @@ def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
     )
 
 
-def test_mention_verify_detects_inline_mentions_on_review(tmp_path: Path) -> None:
-    """For pull_request_review events, verify must fetch the review's inline
-    comments and grep their bodies for the bot mention.
-
-    The pull_request_review event payload exposes review.body but NOT the
-    bodies of the inline comments attached to that review. So a first-contact
-    "@bot" mention written *inside* an inline review comment is invisible to
-    the COMMENT_BODY check (which only sees review.body for review events) and
-    to the engagement check (which only fires when the bot has prior
-    engagement on the PR). Without this fetch, such mentions would be silently
-    dropped on PRs where the bot has no prior engagement.
-
-    Today the gap is masked stochastically by the pull_request_review_comment
-    sibling event firing in parallel and exposing comment.body. Once we stop
-    subscribing to `created` for that event (see
-    test_mention_review_comment_listens_only_for_edits), the masking goes away
-    and verify must detect the mention via the API."""
+def test_mention_verify_wires_every_variable_the_gate_reads(tmp_path: Path) -> None:
+    """The gate's own decisions are exercised by running it (test_mention_verify);
+    what generation owns is the wiring, and an unwired variable is invisible
+    there. The script is inlined verbatim, so a name the workflow forgets is
+    simply empty at runtime: the gate then answers on a blank — a missing
+    COMMENT_AUTHOR reads as "not the bot", a missing PR_URL as "an issue, not a
+    PR" — silently, on a green job."""
     cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    mention = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(mention.content)
+    data = yaml.safe_load(generate_mention(cfg).content)
     check_step = next(
         s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
 
-    # The fetch must target the specific review's inline comments by id
-    assert "/reviews/$PAYLOAD_ID/comments" in check_step["run"], (
-        "verify must fetch inline comments for pull_request_review dispatches "
-        "via the /pulls/{n}/reviews/{review_id}/comments endpoint"
-    )
-    # And grep their bodies for the bot mention (test-bot is the bot_name in
-    # _minimal_config). grep -qF means fixed-string, quiet — same shape as the
-    # other mention checks in this script.
-    assert "grep -qF '@test-bot'" in check_step["run"], (
-        "verify must grep the fetched inline comment bodies for the bot mention"
-    )
+    assert check_step["env"] == {
+        "GITHUB_TOKEN": f"${{{{ secrets.{BOT_TOKEN_SECRET} }}}}",
+        "BOT_NAME": "test-bot",
+        "EVENT_NAME": "${{ github.event_name }}",
+        "COMMENT_BODY": "${{ github.event.comment.body }}",
+        "COMMENT_AUTHOR": "${{ github.event.comment.user.login }}",
+        # The public-API discriminator between a Bot account and a User.
+        "COMMENT_AUTHOR_TYPE": "${{ github.event.comment.user.type }}",
+        "ISSUE_BODY": "${{ github.event.issue.body }}",
+        "ISSUE_OR_PR_NUMBER": "${{ github.event.issue.number }}",
+        "ISSUE_AUTHOR": "${{ github.event.issue.user.login }}",
+        # Present only on comments that live on a PR, which is how the gate
+        # tells an issue thread from a PR one.
+        "PR_URL": "${{ github.event.issue.pull_request.url }}",
+        # A relayed review arrives as identifiers only; the gate resolves them
+        # against the API before judging anything.
+        "PAYLOAD_KIND": "${{ github.event.client_payload.kind }}",
+        "PAYLOAD_PR": "${{ github.event.client_payload.pr }}",
+        "PAYLOAD_ID": "${{ github.event.client_payload.id }}",
+    }
 
-    # The fetch must be gated on the review kind so it doesn't fire for
-    # issue_comment / issues / pull_request_review_comment.
-    assert '[ "$KIND" = "pull_request_review" ]' in check_step["run"], (
-        "the inline-mention fetch must only run for pull_request_review events"
-    )
-
-    # The ids must be wired from the dispatch payload
-    assert check_step["env"]["PAYLOAD_ID"] == "${{ github.event.client_payload.id }}"
-    assert check_step["env"]["PAYLOAD_PR"] == "${{ github.event.client_payload.pr }}"
-
-
-def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> None:
-    """Undirected bot comments (deploy notifications, CI status) on a
-    bot-authored PR must not spin up a session.
-
-    The bot-engagement fallback short-circuits to should_run=true whenever the
-    triggering PR's author is the bot. That branch fires even when the comment
-    is from another bot (e.g. cloudflare-pages deploy notification) with no
-    @-mention of our bot — wasting a full session per `created` event and
-    again per `edited` event (deploy bots edit their comment to update status).
-
-    Skip `issue_comment` events whose comment author is a `Bot` after the
-    @-mention check has already returned false. github.event.comment.user.type
-    is the public-API-visible discriminator (Bot vs User)."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    mention = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(mention.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    assert check_step["env"].get("COMMENT_AUTHOR_TYPE") == (
-        "${{ github.event.comment.user.type }}"
-    ), (
-        "verify must wire github.event.comment.user.type so the script can "
-        "distinguish bot-authored comments from human ones"
-    )
-
-    assert '"$COMMENT_AUTHOR_TYPE" = "Bot"' in run, (
-        "verify must short-circuit issue_comment events from Bot accounts "
-        "(deploy notifications, CI status) when no @-mention is present"
-    )
-
-    # The guard must run for issue_comment events specifically and must come
-    # AFTER the @-mention check (so legitimate bot summons are still honored)
-    # and BEFORE the PR-author short-circuit (so it actually skips the
-    # bot-authored-PR fallback that produces the no-op session).
-    mention_idx = run.index("grep -qF '@test-bot'")
-    bot_guard_idx = run.index('"$COMMENT_AUTHOR_TYPE" = "Bot"')
-    pr_author_idx = run.index('"$PR_AUTHOR" = "test-bot"')
-    assert mention_idx < bot_guard_idx < pr_author_idx, (
-        "bot-comment guard must run after the @-mention check and before the "
-        "PR-author short-circuit"
-    )
-
-
-def test_mention_verify_engagement_lookups_survive_pagination(
-    tmp_path: Path,
-) -> None:
-    """Engagement lookups must not reduce inside a `--paginate`d `--jq`.
-
-    `gh api --paginate` applies `--jq` once per page, so `--jq '[...] | length'`
-    emits one count per page instead of one overall. Past 100 records the
-    variable holds `100\\n7`, the `[ "$X" -gt "0" ]` guard below it errors with
-    `integer expression expected` and returns 2, and the failed test falls
-    through to should_run=false — the bot stops answering participants on
-    exactly the threads where it has engaged the most, with nothing going red.
-
-    Keep the filter a per-element stream, capture it bare, and test it for
-    emptiness. Reducing the stream through a pipe (`| wc -l`) would fix the
-    count but move the substitution's exit status off `gh`, so under the step's
-    default `bash -e` a failed API call would read as "no engagement" on a green
-    job — the same silent-quiet failure, relocated."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    data = yaml.safe_load(workflows["tend-mention.yaml"].content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    # Every `--jq` under `--paginate` must stay a streaming filter. `--slurp` is
-    # not an escape hatch: `gh api` rejects it alongside `--jq`. Join
-    # backslash-continued lines first — the `--jq` sits on its own line.
-    for line in run.replace("\\\n", " ").splitlines():
-        if "--paginate" not in line or "--jq" not in line:
-            continue
-        assert "| length" not in line, (
-            f"reduction inside a --paginate'd --jq runs per page: {line.strip()}"
-        )
-
-    assert run.count("| .id')") == 3, (
-        "the three engagement lookups (issue comments, PR reviews, PR comments) "
-        "must capture the raw stream, so a failing `gh api` still trips errexit"
-    )
-    assert '-gt "0" ]' not in run, (
-        "guard on an empty stream (`[ -n ... ]`) — a numeric comparison is what "
-        "a split count breaks"
-    )
-
-
-def test_mention_verify_skips_self_authored_comments(tmp_path: Path) -> None:
-    """The bot's own comments must not spin up a handle session.
-
-    The Bot-type check only catches GitHub App / Bot accounts. Tend's own bot
-    is a PAT-based User account, so its comments fall through to the engagement
-    heuristics (bot-authored issue, or "bot has prior comments") and reach the
-    handle job, which exits silently via the prompt's self-loop guard — pure
-    waste. This recurs on the monthly tracking-issue rollover (review-reviewers
-    posts evidence-gist links on its own issue) and on duplicate-tracking
-    notices. Skip self-authored `issue_comment` and `pull_request_review_comment`
-    events at the gate, before the @-mention check — a bot comment quoting a
-    prior @-mention would otherwise re-match the mention check and escape the
-    guard, and there is no legitimate self-summons."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    mention = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(mention.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    assert check_step["env"].get("COMMENT_AUTHOR") == (
-        "${{ github.event.comment.user.login }}"
-    ), (
-        "verify must wire github.event.comment.user.login so the script can "
-        "recognize the bot's own (User-type) comments"
-    )
-
-    assert '"$COMMENT_AUTHOR" = "test-bot"' in run, (
-        "verify must short-circuit comment events authored by the bot "
-        "itself — its User-type account is missed by the Bot-type check"
-    )
-
-    # The guard must cover both comment kinds that take the engagement path:
-    # issue_comment (COMMENT_AUTHOR from the event) and
-    # pull_request_review_comment (COMMENT_AUTHOR resolved from the relayed
-    # dispatch's API fetch).
-    assert '"$KIND" = "issue_comment"' in run
-    assert '"$KIND" = "pull_request_review_comment"' in run, (
-        "the self-authored guard must cover relayed inline comments — they "
-        "take the same engagement-heuristic path"
-    )
-
-    # The self-authored guard must run *before* the @-mention check: a bot
-    # comment that quotes a prior @-mention would re-match the mention check and
-    # escape an after-placed guard, and there is no legitimate self-summons. It
-    # must also precede the bot-authored-issue short-circuit that would
-    # otherwise spin up the no-op session.
-    mention_idx = run.index("grep -qF '@test-bot'")
-    self_guard_idx = run.index('"$COMMENT_AUTHOR" = "test-bot"')
-    issue_author_idx = run.index('"$ISSUE_AUTHOR" = "test-bot"')
-    assert self_guard_idx < mention_idx < issue_author_idx, (
-        "self-authored comment guard must run before the @-mention check and "
-        "before the bot-authored-issue short-circuit"
+    # And the mapping is complete: every name the script reads without first
+    # assigning it is either wired above or supplied by the runner.
+    source = (
+        importlib.resources.files("tend") / "templates" / "mention-verify.sh"
+    ).read_text()
+    read = set(re.findall(r"\$\{?([A-Z][A-Z0-9_]*)\}?", source))
+    assigned = set(re.findall(r"\b([A-Z][A-Z0-9_]*)=", source))
+    supplied = set(check_step["env"]) | {"GITHUB_OUTPUT", "GITHUB_REPOSITORY"}
+    assert read - assigned <= supplied, (
+        f"the gate reads {sorted(read - assigned - supplied)}, which nothing sets"
     )
 
 
@@ -914,91 +987,6 @@ def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
     assert "format(" in prompt, "delay preamble must use conditional format()"
     # "Before acting" must always appear (it's the unconditional part)
     assert "Before acting" in prompt
-
-
-def test_mention_skips_bot_approved_review(tmp_path: Path) -> None:
-    """A bot-authored *empty-body* APPROVED review is terminal — there is
-    nothing to act on. The verify gate must short-circuit it to
-    should_run=false instead of counting it as engagement (BOT_REVIEWS > 0)
-    and spinning up a no-op session (issue #747). The skip is gated on review
-    *state* and an empty *body*, not just author: a bot CHANGES_REQUESTED /
-    COMMENTED review keeps actionable signal, and an approval carrying nits in
-    its body may warrant follow-up changes, so both still fire (#166)."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention(cfg)
-    data = yaml.safe_load(wf.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    script = check_step["run"]
-    # Gate on the approved state and an empty review body, so only no-op
-    # approvals are skipped. The record comes from REST, which reports the
-    # state uppercase, so the resolution step must normalize it before the
-    # gate compares against "approved".
-    assert '[ "$REVIEW_STATE" = "approved" ]' in script
-    assert ".state | ascii_downcase" in script
-    assert '[ -z "$COMMENT_BODY" ]' in script
-    # The skip must precede the BOT_REVIEWS heuristic query that would
-    # otherwise count the just-submitted review and return should_run=true.
-    assert script.index('[ "$REVIEW_STATE" = "approved" ]') < script.index(
-        "BOT_REVIEWS=$("
-    )
-
-
-def test_mention_self_comment_skip_spares_review_submissions(
-    tmp_path: Path,
-) -> None:
-    """The self-authored-comment skip must not swallow the bot's own reviews.
-
-    A review the bot's review workflow leaves on its own PR is its reviewer
-    role speaking, not a self-loop — the prompt is told to action it. That
-    signal arrives as a `pull_request_review` submission event, distinct from
-    the `pull_request_review_comment` inline-comment event the skip covers, so
-    it must still reach the actionable path. The only self-review that is
-    skipped is the terminal empty-body APPROVED case (see
-    test_mention_skips_bot_approved_review).
-
-    This pins the boundary against a later "skip self-authored reviews too, for
-    consistency" edit that would silently break the review -> fix loop: the
-    self-authored guard is scoped to the two comment events and must never
-    extend to the review submission, and a COMMENTED / non-empty-body bot
-    self-review must fall through to should_run=true."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention(cfg)
-    data = yaml.safe_load(wf.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    # Isolate the self-authored-comment guard, from its opening condition to the
-    # @-mention check that follows it.
-    guard = run[
-        run.index('if { [ "$KIND" = "issue_comment" ]') : run.index(
-            "grep -qF '@test-bot'"
-        )
-    ]
-    # The skip keys on the bot as commenter over the two comment kinds; the
-    # review *submission* kind (a bare pull_request_review equality, distinct
-    # from pull_request_review_comment) is deliberately absent, so a bot
-    # self-review is never short-circuited here.
-    assert '[ "$COMMENT_AUTHOR" = "test-bot" ]' in guard
-    assert '[ "$KIND" = "pull_request_review_comment" ]' in guard
-    assert '[ "$KIND" = "pull_request_review" ]' not in guard, (
-        "self-authored-comment skip must not extend to the pull_request_review "
-        "submission kind — a bot self-review is actionable reviewer signal"
-    )
-
-    # The sole author-keyed skip for a review submission is the terminal
-    # empty-body APPROVED gate; a COMMENTED / non-empty-body bot self-review
-    # falls through to the actionable PR_AUTHOR == bot short-circuit.
-    review_skip = run[run.index('[ "$KIND" = "pull_request_review" ]') :]
-    assert '[ "$REVIEW_STATE" = "approved" ]' in review_skip
-    assert '[ -z "$COMMENT_BODY" ]' in review_skip
-    assert '[ "$PR_AUTHOR" = "test-bot" ]' in run, (
-        "a bot self-review that isn't the terminal empty approval must reach "
-        "the actionable PR_AUTHOR == bot short-circuit"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1401,6 +1389,19 @@ def test_workflow_with_setup_regtest(
     extra_cfg = _extra_for(name)
     if extra_cfg:
         extra += extra_cfg
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    wf = GENERATORS[name](cfg)
+    print(wf.content, end="", file=regtest)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("name", ["review", "mention"])
+def test_workflow_with_local_setup_regtest(
+    regtest: object, tmp_path: Path, name: str
+) -> None:
+    """Snapshot the two workflows that swap the workspace tree after `setup:`,
+    with a local composite in it — locks the restore step the POST chain needs
+    (actions/runner#2816)."""
+    extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     wf = GENERATORS[name](cfg)
     print(wf.content, end="", file=regtest)  # type: ignore[arg-type]

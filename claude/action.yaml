@@ -28,7 +28,11 @@ inputs:
       claude_code_oauth_token takes precedence when both are present.
   bot_name:
     required: true
-    description: GitHub username of the bot account
+    description: |
+      GitHub username of the bot account. Rendered into the workflows so an
+      adopter can see which account tend runs as; the steps themselves read
+      the identity off the token rather than from here, since a name left
+      stale by a rename fails open.
   prompt:
     required: true
     description: The prompt to send to Claude
@@ -50,7 +54,7 @@ inputs:
     default: "true"
     description: Include the rendered Claude transcript in the workflow step summary.
   claude_version:
-    default: "2.1.220"
+    default: "2.1.226"
     description: >-
       Version of the `claude` binary to install via
       `https://claude.ai/install.sh`, pinned to a specific
@@ -104,7 +108,10 @@ outputs:
     description: >-
       JSON object with token usage: input_tokens, output_tokens,
       cache_creation_input_tokens, cache_read_input_tokens, turns,
-      model, cost_usd
+      model, cost_usd, partial. `partial` is true when the run emitted no
+      result event (typically a cancellation) and the counts were
+      reconstructed from the session log; `cost_usd` is null in that case,
+      since only the result event carries it.
     value: ${{ steps.tokens.outputs.usage }}
 
 runs:
@@ -115,22 +122,19 @@ runs:
     # and runs the script (reached via ../shared/steps, since this action is
     # one level deep).
     - name: Security preflight
+      id: security
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/security-preflight.sh"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # Also publishes `login`/`id` for the bot: it reads them off the token it
+    # already holds, so nothing downstream has to resolve them again from the
+    # configured name, which a rename would leave stale.
     - name: Rate limit preflight
-      shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
-      env:
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-        BOT_NAME: ${{ inputs.bot_name }}
-
-    - name: Resolve bot ID
       id: bot
       shell: bash
-      run: echo "id=$(gh api users/${{ inputs.bot_name }} --jq '.id')" >> "$GITHUB_OUTPUT"
+      run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
@@ -170,7 +174,7 @@ runs:
       run: bash "${{ github.action_path }}/../shared/steps/compose-system-prompt.sh"
       env:
         SYSTEM_PROMPT_FILE: ${{ github.action_path }}/../shared/system-prompt.md
-        BOT_NAME: ${{ inputs.bot_name }}
+        BOT_NAME: ${{ steps.bot.outputs.login }}
         EXTRA: ${{ inputs.system_prompt_append }}
 
     # Credential isolation: run the agent as a separate, non-sudo
@@ -197,7 +201,7 @@ runs:
     # in seconds instead of a cold ~20s resolve. Scoped to the proxy's uv; a
     # skill that installs its own uv gets that uv's default cache, untouched.
     - name: Cache mitmproxy
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/tend-mitmproxy-uv
         key: tend-mitmproxy-${{ runner.os }}-${{ inputs.mitmproxy_version }}
@@ -284,7 +288,7 @@ runs:
         # nothing: the agent's env holds only dummy secrets, and the proxy
         # injects the real ones per-host.
         CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0"
-        BOT_NAME: ${{ inputs.bot_name }}
+        BOT_NAME: ${{ steps.bot.outputs.login }}
         BOT_ID: ${{ steps.bot.outputs.id }}
         TEND_MODEL: ${{ inputs.model }}
         TEND_ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
@@ -457,7 +461,23 @@ runs:
         case "$status" in
           exited)
             if [ "$CLAUDE_EXIT" -ne 0 ]; then
-              echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT) — see the session-logs artifact"
+              # This is the most common failure path — a session-limit exit is
+              # non-zero and emits a <synthetic> assistant message ("You've hit
+              # your session limit · resets 8:30am (UTC)"). Surface that last
+              # assistant text so the annotation names the cause (session limit
+              # vs auth failure vs server error) instead of a generic "see the
+              # artifact". The nightly enrich-tend-outage-issues.sh pass then
+              # carries the annotation into the tend-outage issue for free, so a
+              # maintainer can triage without downloading logs and writing jq.
+              REASON=$(jq -r '
+                select(.type == "assistant") | .message.content[]?
+                | select(.type == "text") | .text
+              ' "$STREAM_JSON" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1)
+              if [ -n "$REASON" ]; then
+                echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT): $REASON — see the session-logs artifact"
+              else
+                echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT) — see the session-logs artifact"
+              fi
               tail -20 "$STDERR_LOG" 2>/dev/null || true
               exit "$CLAUDE_EXIT"
             fi
@@ -527,14 +547,10 @@ runs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
         fi
 
-    # Parse the stream-json the headless run wrote to stdout. It is NDJSON (one
-    # SDK message event per line) containing one or more `type: "result"`
-    # events. Sessions that use `run_in_background: true` Bash emit a second
-    # `result` on wakeup; `usage.*` and `num_turns` are per-event, while
-    # `total_cost_usd` is cumulative. Sum the per-event fields across all
-    # entries and take cost from the last. Output shape mirrors the interactive
-    # harness so downstream consumers (review-reviewers' evidence gist,
-    # token-report.sh, dashboards) don't branch on harness.
+    # Account the run's token usage from the stream-json the headless run wrote
+    # to stdout, falling back to the session JSONL when the run was cancelled
+    # before it emitted a `type: "result"` event. Both parsers live in
+    # compute-token-usage.sh so pytest can cover them.
     - name: Token usage
       if: always()
       id: tokens
@@ -555,29 +571,9 @@ runs:
         cp -a "${AGENT_HOME}/.claude/projects/." "$LOGS_DIR/" 2>/dev/null || true
         cp -a "$RUNNER_TEMP/tend-claude-stderr.log" "$LOGS_DIR/" 2>/dev/null || true
 
-        if [ -n "${STREAM_JSON:-}" ] && [ -s "$STREAM_JSON" ]; then
-          USAGE=$(jq -s -c --arg model "$MODEL" '
-            (map(select(.type == "result"))) as $rs |
-            if ($rs | length) == 0 then
-              {input_tokens:0, output_tokens:0, cache_creation_input_tokens:0,
-               cache_read_input_tokens:0, turns:0, model:$model, cost_usd:0}
-            else
-              ($rs | last) as $r |
-              {
-                input_tokens: ([$rs[].usage.input_tokens // 0] | add),
-                output_tokens: ([$rs[].usage.output_tokens // 0] | add),
-                cache_creation_input_tokens: ([$rs[].usage.cache_creation_input_tokens // 0] | add),
-                cache_read_input_tokens: ([$rs[].usage.cache_read_input_tokens // 0] | add),
-                turns: ([$rs[].num_turns // 0] | add),
-                model: $model,
-                cost_usd: (($r.total_cost_usd // 0) * 100 | round / 100)
-              }
-            end
-          ' "$STREAM_JSON" 2>/dev/null || echo '')
-        fi
-        if [ -z "${USAGE:-}" ]; then
-          USAGE='{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"turns":0,"model":"'"$MODEL"'","cost_usd":0}'
-        fi
+        # Runs after the copy above, so the fallback can read the session JSONL.
+        USAGE=$(LOGS_DIR="$LOGS_DIR" \
+          bash "${{ github.action_path }}/../shared/steps/compute-token-usage.sh")
 
         echo "$USAGE" > "$LOGS_DIR/token-usage.json"
         echo "usage=$(jq -c . <<< "$USAGE")" >> "$GITHUB_OUTPUT"
@@ -593,7 +589,7 @@ runs:
         fi
 
         jq -r '
-          def usd: tostring | if test("\\.") then split(".") | "\(.[0]).\((.[1] + "00")[:2])" else . + ".00" end | "$" + .;
+          def usd: if . == null then "unknown" else tostring | if test("\\.") then split(".") | "\(.[0]).\((.[1] + "00")[:2])" else . + ".00" end | "$" + . end;
           "## Token Usage",
           "| Metric | Value |",
           "|--------|-------|",
@@ -604,11 +600,33 @@ runs:
           "| Cost | \(.cost_usd | usd) |",
           "| Turns | \(.turns) |",
           "",
+          if .partial then
+            "*Reconstructed from the session log: this run emitted no result event (most often a cancellation), so the token counts are its own but the cost is not recoverable.*"
+          else empty end,
           "*Cost at API list prices — a large multiple of the effective rate on Claude Code subscriptions.*"
         ' <<< "$USAGE" >> "$GITHUB_STEP_SUMMARY"
 
+    # Gate on the job being red, not on the agent step specifically. A dozen
+    # steps run before `claude` — the rate-limit preflight, auth validation,
+    # the proxy and sandbox build, the adopter's `sandbox_setup:` — and any of
+    # them failing strands the same work, so each needs to reach the outage
+    # tracker. Keying on `steps.claude.outcome` meant a pre-agent failure went
+    # out as a red run and nothing else; a rate-limit preflight abort held
+    # every workflow on this repo for a full UTC day without filing a thing.
+    #
+    # The security preflight is the one exclusion, and what carves it out is
+    # that reporting would have the bot write to the repo (`gh issue create`,
+    # and `gh issue close` on the reconcile path) with its PAT immediately
+    # after the security gate refused to let it operate there. Its failure is
+    # also persistent — red until a human fixes branch protection, so an issue
+    # titled "Bot temporarily unavailable" would collect a row per trigger —
+    # but that argument doesn't single it out: `Validate auth configured` and
+    # the adopter's `sandbox_setup:` fail the same way and stay in. Bounding
+    # that repeated append belongs in `report-failure.sh`, where it covers
+    # every such step at once (#859); enumerating more step ids here would go
+    # stale as steps move.
     - name: Report failure
-      if: failure() && steps.claude.outcome == 'failure'
+      if: failure() && steps.security.outcome != 'failure'
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
       env:

@@ -10,12 +10,14 @@ concurrency:
 
 jobs:
   triage:
-    if: <<fork_guard_prefix(cfg)>>contains(github.event.issue.labels.*.name, 'tend-outage') == false
+    if: <<fork_guard_prefix(cfg)>><<not_bookkeeping()>>
     runs-on: ubuntu-24.04
 <<environment()>>
     permissions:
 <<permissions()>>
     steps:
+<<react_eyes('${{ github.event.issue.number }}')>>
+
 <<checkout(cfg, ref=cfg.default_branch)>>
 <<setup>>
 <<agent_step(cfg, block_prompt(prompt))>>
