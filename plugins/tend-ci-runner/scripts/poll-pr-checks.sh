@@ -32,10 +32,12 @@
 # Exit codes:
 #   0  every gating check on <sha> settled green
 #   1  red — failing checks and their run URLs on stdout
-#   2  no usable rollup for <sha> (unresolvable OID; an ephemeral merge-ref
-#      commit, which carries none; or more contexts than the query's one
-#      100-node page, where a dropped node could hide a failure) —
-#      UNVERIFIED, not green
+#   2  no usable rollup for <sha> — UNVERIFIED, not green. An unresolvable
+#      OID; an ephemeral merge-ref commit, which carries none; a commit with
+#      zero checks and zero statuses (a push every workflow's paths filter
+#      excludes — the rollup is null then too, so "nothing to gate on" is
+#      indistinguishable from "nothing answered"); or more contexts than the
+#      query's one 100-node page, where a dropped node could hide a failure
 #   3  poll cap hit with checks still pending — UNVERIFIED, not green
 
 set -euo pipefail
@@ -120,7 +122,7 @@ rollup() {
 # the verdict above stays <sha>'s.
 head_note() {
   local now_oid
-  now_oid=$(gh pr view "$PR" --json headRefOid --jq '.headRefOid' 2>/dev/null) || now_oid=""
+  now_oid=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq '.headRefOid' 2>/dev/null) || now_oid=""
   if [ -n "$now_oid" ] && [ "$now_oid" != "$SHA" ]; then
     echo "note: branch advanced to $now_oid — the result above is still $SHA's, the commit this run is accountable for"
   fi

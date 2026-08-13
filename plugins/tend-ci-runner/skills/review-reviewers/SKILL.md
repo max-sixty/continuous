@@ -210,7 +210,7 @@ The script discovers `tend-*` workflows by default. Pass additional prefixes as 
 
 If empty, record the run as all-clear per "Recording below-threshold findings" above, then skip to Step 6.
 
-If the script printed a `WARNING:` on stderr, the list is known-incomplete — the window was clamped, no anchor was found, or a workflow hit the fetch limit. Record a coverage gap naming the missing span instead of an all-clear, whether or not the list came back empty; the next run's floor advances past that span regardless, so an unrecorded gap is never revisited.
+If the script printed a `WARNING:` on stderr, the list is known-incomplete — the window was clamped, no anchor was found, or a workflow hit the fetch limit. Record a coverage gap naming the missing span instead of an all-clear, whether or not the list came back empty; the next run's floor advances past that span regardless, so an unrecorded gap is never revisited. If the script *fails* (non-zero exit, e.g. a transient API error), re-run it once; if it fails again, record the window as a coverage gap the same way — this run still concludes green, so the next tick anchors on it and never revisits the span.
 
 ## Step 2: Survey outcomes via cheap subagent
 

@@ -25,7 +25,7 @@ RUN_ID="$1"
 RUN_API="repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
 
 BASE_ATTEMPT=$(gh api "$RUN_API" --jq '.run_attempt')
-gh run rerun "$RUN_ID" --failed
+gh run rerun "$RUN_ID" --failed --repo "$GITHUB_REPOSITORY"
 
 # The new attempt record takes a few seconds to surface.
 ATTEMPT="$BASE_ATTEMPT"
