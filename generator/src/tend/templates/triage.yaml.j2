@@ -16,6 +16,8 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
+<<react_eyes('${{ github.event.issue.number }}')>>
+
 <<checkout(cfg, ref=cfg.default_branch)>>
 <<setup>>
 <<agent_step(cfg, block_prompt(prompt))>>

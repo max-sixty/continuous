@@ -701,10 +701,42 @@ def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
     steps = job["steps"]
     assert steps[0].get("id") == "gate"
     assert "tend-review/$PR" in steps[0]["run"]
+    gate = "steps.gate.outputs.should_run == 'true'"
     for step in steps[1:]:
-        assert step.get("if") == "steps.gate.outputs.should_run == 'true'", (
+        # A step may narrow further (the eyes reaction fires only on `opened`),
+        # but the gate's verdict stays a required conjunct.
+        condition = step.get("if", "")
+        assert condition == gate or condition.startswith(f"{gate} && "), (
             f"ungated step after the gate: {step}"
         )
+
+
+def test_opened_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
+    """A newly opened issue or PR carries an eyes reaction before the agent
+    boots: the session takes minutes to reach its first comment, and until then
+    the author has nothing telling them the bot picked the event up.
+
+    Review narrows to `opened` — a synchronize or reopen lands on a PR already
+    carrying the reaction.
+    """
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+
+    triage = yaml.safe_load(workflows["tend-triage.yaml"].content)
+    first = triage["jobs"]["triage"]["steps"][0]
+    assert "content=eyes" in first["run"]
+    assert first["env"]["NUMBER"] == "${{ github.event.issue.number }}"
+    # Every issues:opened event the job-level `if` admits is the bot's to take.
+    assert "if" not in first
+
+    review = yaml.safe_load(workflows["tend-review.yaml"].content)
+    react = next(
+        step
+        for step in review["jobs"]["review"]["steps"]
+        if "content=eyes" in str(step.get("run", ""))
+    )
+    assert react["env"]["NUMBER"] == "${{ github.event.pull_request.number }}"
+    assert "github.event.action == 'opened'" in react["if"]
 
 
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:

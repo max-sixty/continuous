@@ -80,6 +80,10 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **notifications** | Every 15 minutes           | Polls GitHub notifications, responds to unhandled mentions, marks handled threads as read.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
 
+The bot reacts 👀 when a job picks an event up: on the issue or PR when one
+is opened, and on a comment that mentions it, for as long as that session
+runs.
+
 Scheduled workflows also support manual dispatch for testing. GitHub runs
 `schedule` triggers on a best-effort basis and drops ticks under load, so
 the intervals above are the requested cadence rather than a guarantee —

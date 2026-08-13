@@ -96,6 +96,17 @@ jobs:
           fi
 
           echo "should_run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Acknowledge with an eyes reaction
+        if: steps.gate.outputs.should_run == 'true' && github.event.action == 'opened'
+        run: |
+          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+            || echo "::warning::could not add the eyes reaction"
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
+
       # GitHub only materializes refs/pull/N/merge for mergeable PRs ? on
       # conflicting PRs it 404s and every downstream step cascades as skipped.
       # Probe first and fall back to /head so review always runs; on fallback

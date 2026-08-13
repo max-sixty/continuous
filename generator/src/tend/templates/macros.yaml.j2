@@ -126,6 +126,30 @@
 {% if cfg.repo_owner %}github.repository_owner == '<<cfg.repo_owner|replace("'", "''")>>' && {% endif %}
 {%- endmacro %}
 
+{# Acknowledge an inbound issue or PR the moment the job starts: the agent
+   takes minutes to reach its first comment, and until then an opened issue
+   looks unattended. GitHub files PRs as issues for reactions, so one endpoint
+   covers both, and a repeat call returns the existing reaction rather than
+   erroring.
+
+   The reaction stays for the life of the issue, recording that the bot saw the
+   event; mention's eyes track a session in flight on one comment and come off
+   when it ends. A failure warns rather than failing the job — an
+   acknowledgment is not worth losing the run that does the work. #}
+{% macro react_eyes(number_expr, if_condition='') %}
+      - name: Acknowledge with an eyes reaction
+{% if if_condition %}
+        if: <<if_condition>>
+{% endif %}
+        run: |
+          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+            || echo "::warning::could not add the eyes reaction"
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: <<number_expr>>
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
+{%- endmacro %}
+
 {# Shared `actions/checkout@v7` step. Omitting `ref` takes the event's own ref,
    which under `pull_request_target` is the PR's base branch — what mention and
    review's first checkout both want. Callers needing a specific tree pass one:

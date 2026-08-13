@@ -28,6 +28,15 @@ jobs:
       actions: read
       issues: write
     steps:
+      - name: Acknowledge with an eyes reaction
+        run: |
+          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+            || echo "::warning::could not add the eyes reaction"
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
+
       - uses: actions/checkout@v7
         with:
           ref: main

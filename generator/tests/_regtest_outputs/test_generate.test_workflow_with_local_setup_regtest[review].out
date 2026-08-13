@@ -96,6 +96,17 @@ jobs:
           fi
 
           echo "should_run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Acknowledge with an eyes reaction
+        if: steps.gate.outputs.should_run == 'true' && github.event.action == 'opened'
+        run: |
+          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+            || echo "::warning::could not add the eyes reaction"
+        env:
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
+
       # Two checkouts: `setup:` runs against the base tree, and the PR's own
       # tree lands after it. Setup executes as the runner user, outside the
       # containment the harness builds for the contributor's code.
