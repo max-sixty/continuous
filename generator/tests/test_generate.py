@@ -1115,35 +1115,6 @@ def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
     assert "Before acting" in prompt
 
 
-def test_mention_skips_bot_approved_review(tmp_path: Path) -> None:
-    """A bot-authored *empty-body* APPROVED review is terminal — there is
-    nothing to act on. The verify gate must short-circuit it to
-    should_run=false instead of counting it as engagement (BOT_REVIEWS > 0)
-    and spinning up a no-op session (issue #747). The skip is gated on review
-    *state* and an empty *body*, not just author: a bot CHANGES_REQUESTED /
-    COMMENTED review keeps actionable signal, and an approval carrying nits in
-    its body may warrant follow-up changes, so both still fire (#166)."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention(cfg)
-    data = yaml.safe_load(wf.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    script = check_step["run"]
-    # Gate on the approved state and an empty review body, so only no-op
-    # approvals are skipped. The record comes from REST, which reports the
-    # state uppercase, so the resolution step must normalize it before the
-    # gate compares against "approved".
-    assert '[ "$REVIEW_STATE" = "approved" ]' in script
-    assert ".state | ascii_downcase" in script
-    assert '[ -z "$COMMENT_BODY" ]' in script
-    # The skip must precede the BOT_REVIEWS heuristic query that would
-    # otherwise count the just-submitted review and return should_run=true.
-    assert script.index('[ "$REVIEW_STATE" = "approved" ]') < script.index(
-        "BOT_REVIEWS=$("
-    )
-
-
 def test_mention_self_comment_skip_spares_review_submissions(
     tmp_path: Path,
 ) -> None:
@@ -1153,18 +1124,13 @@ def test_mention_self_comment_skip_spares_review_submissions(
     role speaking, not a self-loop — the prompt is told to action it. That
     signal arrives as a `pull_request_review` submission event, distinct from
     the `pull_request_review_comment` inline-comment event the skip covers, so
-    it must still reach the actionable path. The self-reviews that are skipped
-    are skipped for leaving this run nothing to do, not for being
-    self-authored: the terminal empty-body APPROVED case (see
-    test_mention_skips_bot_approved_review), the synthetic reply container (see
-    test_mention_skips_bot_reply_container), and a review on a PR the bot did
-    not author (see test_mention_skips_bot_review_on_another_authors_pr).
+    it must still reach the actionable path — the handoff gate pinned by
+    test_mention_bot_review_fires_only_as_the_author_handoff.
 
     This pins the boundary against a later "skip self-authored reviews too, for
     consistency" edit that would silently break the review -> fix loop: the
     self-authored guard is scoped to the two comment events and must never
-    extend to the review submission, and a COMMENTED / non-empty-body bot
-    self-review must fall through to should_run=true."""
+    extend to the review submission."""
     cfg = Config.load(_minimal_config(tmp_path))
     wf = generate_mention(cfg)
     data = yaml.safe_load(wf.content)
@@ -1191,104 +1157,31 @@ def test_mention_self_comment_skip_spares_review_submissions(
         "submission kind — a bot self-review is actionable reviewer signal"
     )
 
-    # Three author-keyed skips exist for a review submission — the terminal
-    # empty-body APPROVED gate here, the reply-container gate pinned by
-    # test_mention_skips_bot_reply_container, and the other-authors-PR gate
-    # pinned by test_mention_skips_bot_review_on_another_authors_pr. Slice to
-    # the APPROVED one alone (it ends at the INLINE fetch the container gate
-    # reuses, which itself precedes the other-authors gate), so this assertion
-    # keeps discriminating rather than passing on any of the three. A
-    # COMMENTED / non-empty-body bot self-review that is none of them falls
-    # through to the actionable PR_AUTHOR == bot short-circuit.
-    approved_skip = run[
-        run.index('[ "$KIND" = "pull_request_review" ]') : run.index("INLINE=$(")
-    ]
-    assert '[ "$REVIEW_STATE" = "approved" ]' in approved_skip
-    assert '[ -z "$COMMENT_BODY" ]' in approved_skip
-    assert '[ "$PR_AUTHOR" = "test-bot" ]' in run, (
-        "a bot self-review that isn't the terminal empty approval must reach "
-        "the actionable PR_AUTHOR == bot short-circuit"
-    )
 
+def test_mention_bot_review_fires_only_as_the_author_handoff(
+    tmp_path: Path,
+) -> None:
+    """A bot-authored review summons a session in exactly one shape: fresh
+    content — a body, or an inline comment that isn't a reply — on a PR the
+    bot authored, the reviewer role handing work to the author role (#166,
+    #761). One gate carries that rule, and its skip branch subsumes three
+    shapes that were once gated separately:
 
-def test_mention_skips_bot_review_on_another_authors_pr(tmp_path: Path) -> None:
-    """A review the bot leaves on a PR someone else authored leaves the mention
-    run nothing to do: whatever the review warranted, the tend-review session
-    that submitted it has already done — left the findings for a human author
-    to act on (pushing to their branch unbidden is barred by conduct rules),
-    or, on a dependency-bot PR where no author will act, pushed the fix itself.
-    The BOT_REVIEWS heuristic counts this very review, so without a gate every
-    such review starts a session that can only exit silently (#915). #747's
-    gate covers only the empty-body APPROVED leg —
-    the reviews observed here carry 455-1920 char bodies in APPROVED and
-    COMMENTED states alike, so the gate must key on author alone.
+    - a review on a PR someone else authored — the tend-review session that
+      submitted it already did whatever the review warranted (#915);
+    - the empty-body APPROVED review (#747) — GitHub rejects self-approvals,
+      so a bot approval only ever exists on another author's PR;
+    - the synthetic zero-body COMMENTED container GitHub wraps around an
+      inline reply, the same comment the self-authored-comment skip drops on
+      its `pull_request_review_comment` event path.
 
-    Placement is the whole design, in both directions:
-
-    - *After* the PR_AUTHOR short-circuit, which exits should_run=true when the
-      PR is the bot's own. A review the bot leaves on its own PR is the reviewer
-      role handing work to the author role, and must keep firing (#166, #761) —
-      an author-keyed gate placed any earlier would swallow it.
-    - *After* the review-body and inline-comment @-mention scans, so an explicit
-      summons the bot quotes still wins.
-    - *Before* the BOT_REVIEWS heuristic, which is what misreads the triggering
-      review as prior engagement.
-    """
-    cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention(cfg)
-    data = yaml.safe_load(wf.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    # The window between the PR-author resolution and the engagement heuristic
-    # is the only place the gate can sit and still satisfy all three orderings.
-    gate = run[run.index("PR_AUTHOR=$(gh pr view") : run.index("BOT_REVIEWS=$(")]
-    assert '[ "$KIND" = "pull_request_review" ]' in gate
-    assert '[ "$REVIEW_AUTHOR" = "test-bot" ]' in gate
-
-    # Keyed on author alone. Reusing #747's state/body clauses here would let
-    # every review in #915's evidence through, since they are non-empty and
-    # mostly COMMENTED.
-    assert '[ "$REVIEW_STATE"' not in gate
-    assert '[ -z "$COMMENT_BODY" ]' not in gate
-
-    # The bot's own PR still reaches the actionable short-circuit, because that
-    # check exits before the gate is read.
-    assert run.index('[ "$PR_AUTHOR" = "test-bot" ]') < run.index(
-        '[ "$KIND" = "pull_request_review" ]', run.index("PR_AUTHOR=$(gh pr view")
-    )
-
-    # And an @-mention inside the review — body or inline comment — still wins.
-    # Anchor the right-hand side to the gate itself, not to the heuristic below
-    # it: the inline fetch has always preceded BOT_REVIEWS, so that comparison
-    # would hold on the pre-change template and pin nothing.
-    assert run.index("reviews/$PAYLOAD_ID/comments") < run.index(
-        '[ "$REVIEW_AUTHOR" = "test-bot" ]', run.index("PR_AUTHOR=$(gh pr view")
-    )
-
-
-def test_mention_skips_bot_reply_container(tmp_path: Path) -> None:
-    """Replying to a review thread wraps the reply in a synthetic zero-body
-    COMMENTED review, so the bot's own inline reply reaches verify a second
-    time as a `pull_request_review` submission — the kind the self-authored
-    comment skip deliberately spares. That container is the same comment on a
-    second event path, not a review, so the gate must drop it before the
-    engagement heuristic counts it (BOT_REVIEWS > 0) or short-circuits on the
-    bot-authored PR and spins up a handle job the prompt's self-loop guard
-    then exits with nothing posted.
-
-    The gate is narrower than the comment skip on purpose, and the narrowing is
-    load-bearing in both directions:
-
-    - `REVIEW_AUTHOR` — `pull_request_review_comment` subscribes to `edited`
-      only, so the container is the *sole* path by which a human's freshly
-      created inline reply reaches the bot. Widening this gate to be
-      authorship-agnostic silences the bot on every human reply to its own
-      review threads, with no test failing and no red run to notice.
-    - every inline comment being a reply — an empty-body bot review that owns a
-      *fresh* inline comment still carries actionable signal, so it must fire.
+    Both narrowings are load-bearing. *Fresh* inline comments: an empty-body
+    bot review owning a non-reply inline comment still carries actionable
+    signal, so it must fire. *Bot* as review author: `pull_request_review_comment`
+    subscribes to `edited` only, so a human's freshly created inline reply
+    reaches the bot only through its review container — an authorship-agnostic
+    gate would silence the bot on every human reply to its own review threads,
+    with no test failing and no red run to notice.
     """
     cfg = Config.load(_minimal_config(tmp_path))
     wf = generate_mention(cfg)
@@ -1302,46 +1195,54 @@ def test_mention_skips_bot_reply_container(tmp_path: Path) -> None:
     # endpoint: it is absent, not null, on a fresh comment. Constructing
     # `{body, in_reply_to_id}` is what normalizes absent to null so the
     # `== null` select catches both shapes — a bare `.in_reply_to_id` stream
-    # would drop fresh comments from the count entirely and skip every
-    # container. It also keeps one object per line, so `--paginate`, which
+    # would drop fresh comments from the count entirely and read every review
+    # as reply-only. It also keeps one object per line, so `--paginate`, which
     # applies `--jq` once per page, concatenates rather than reducing within a
     # page (#839).
     assert "--jq '.[] | {body, in_reply_to_id}'" in run
+    fresh = "jq -s '[.[] | select(.in_reply_to_id == null)] | length'"
+    assert fresh in run, "the gate must count *fresh* (non-reply) inline comments"
 
-    count = "jq -s '[.[] | select(.in_reply_to_id == null)] | length'"
-    assert count in run, "the skip must key on there being no *fresh* comment"
+    # The gate sits between the PR-author resolution and the engagement
+    # heuristic that would otherwise count the triggering review as prior
+    # participation (BOT_REVIEWS > 0).
+    gate = run[run.index("PR_AUTHOR=$(gh pr view") : run.index("BOT_REVIEWS=$(")]
+    assert (
+        '[ "$KIND" = "pull_request_review" ] && [ "$REVIEW_AUTHOR" = "test-bot" ]'
+        in gate
+    )
+    # The one firing shape: the bot's own PR, with a body or a fresh inline
+    # comment.
+    assert '[ "$PR_AUTHOR" = "test-bot" ]' in gate
+    assert '{ [ -n "$COMMENT_BODY" ] || [ "$FRESH_INLINE" -gt 0 ]; }' in gate
 
-    # Author and an empty review body are both required, so a human's reply
-    # container and a bot container carrying a body each still fire.
-    reply_gate = run[run.index("INLINE=$(") :]
-    assert '[ "$REVIEW_AUTHOR" = "test-bot" ]' in reply_gate
-    assert '[ -z "$COMMENT_BODY" ]' in reply_gate
+    # The handoff decision precedes the generic PR-author short-circuit —
+    # after it, the reply container on the bot's own PR would boot a session
+    # that can only exit silently.
+    assert gate.index('[ "$REVIEW_AUTHOR" = "test-bot" ]') < gate.index(
+        'if [ "$PR_AUTHOR" = "test-bot" ]; then'
+    )
 
-    # The @-mention scan over the inline bodies runs first, so a mention the
-    # bot quotes inside a reply still summons it.
+    # And an @-mention inside the review — body or inline comment — still
+    # wins: the inline scan runs before the gate.
     inline_scan = "printf '%s\\n' \"$INLINE\" | jq -r '.body' | grep -qF '@test-bot'"
-    assert run.index(inline_scan) < run.index(count)
-
-    # And the skip precedes the engagement heuristic that would otherwise count
-    # this very container as prior participation.
-    assert run.index(count) < run.index("BOT_REVIEWS=$(")
+    assert run.index(inline_scan) < run.index('[ "$REVIEW_AUTHOR" = "test-bot" ]')
 
 
 def test_mention_skips_third_party_bare_approval(tmp_path: Path) -> None:
     """A human's APPROVED review with no body and no inline comments is
-    terminal for the bot as well, and the two gates above are author-keyed, so
-    it falls through to the PR-author short-circuit (on a bot-authored PR) or
-    to BOT_REVIEWS (on one the bot has reviewed) and starts a session that can
-    only exit silently — the approval asks for nothing and the bot cannot
-    merge.
+    terminal for the bot: the approval asks for nothing and the bot cannot
+    merge. The handoff gate is author-keyed, so without this gate a bare
+    APPROVED falls through to the PR-author short-circuit (on a bot-authored
+    PR) or to BOT_REVIEWS (on one the bot has reviewed) and starts a session
+    that can only exit silently.
 
     The narrowing is load-bearing in both directions:
 
     - `approved` — a bare CHANGES_REQUESTED or COMMENTED review is not
       terminal, and a human's synthetic reply container arrives as COMMENTED,
       so widening the state would silence the bot on replies to its own review
-      threads (the same trap `test_mention_skips_bot_reply_container` pins from
-      the author side).
+      threads (the same trap the handoff gate pins from the author side).
     - `$INLINE` empty, not reply-only — an approval whose nits live inline is a
       request addressed to the PR's author, a role the bot has to act in on its
       own PRs.
@@ -1354,11 +1255,14 @@ def test_mention_skips_third_party_bare_approval(tmp_path: Path) -> None:
     )
     run = check_step["run"]
 
-    # The two author-keyed gates both open on `$KIND` / `$REVIEW_AUTHOR`, so
-    # this opening belongs to the third-party gate alone. Compare the whole
-    # condition with whitespace normalized: an author clause added here, or the
-    # `$INLINE` clause dropped, fails the equality rather than sliding past an
-    # `in` check.
+    # The handoff gate opens on `$KIND` / `$REVIEW_AUTHOR`, so this opening
+    # belongs to the third-party gate alone. Compare the whole condition with
+    # whitespace normalized: an author clause added here, or the `$INLINE`
+    # clause dropped, fails the equality rather than sliding past an `in`
+    # check. The record comes from REST, which reports the state uppercase, so
+    # the resolution step must normalize it before the comparison against
+    # "approved".
+    assert ".state | ascii_downcase" in run
     gate = run[run.index('if [ "$REVIEW_STATE" = "approved" ]') :]
     condition = " ".join(gate.split("; then")[0].split())
     assert condition == (
@@ -1369,10 +1273,9 @@ def test_mention_skips_third_party_bare_approval(tmp_path: Path) -> None:
 
     # `[ -z "$INLINE" ]` only means "zero inline comments" below the fetch that
     # populates it, and that property is positional rather than textual, so the
-    # equality above does not pin it. Hoisting the gate above the fetch — the
-    # shape the bot-authored approval gate deliberately takes, one API call
-    # cheaper — leaves `$INLINE` unset, which reads as empty and silently skips
-    # exactly the approvals-with-inline-nits this gate must let through.
+    # equality above does not pin it. Hoisted above the fetch, `$INLINE` reads
+    # as empty and silently skips exactly the approvals-with-inline-nits this
+    # gate must let through.
     assert run.index("INLINE=$(") < run.index('[ -z "$INLINE" ]'), (
         "the third-party skip must sit below the inline-comment fetch"
     )
