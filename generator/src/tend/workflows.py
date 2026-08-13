@@ -302,10 +302,15 @@ _MENTION_TMPL = _JINJA.get_template("mention.yaml.j2")
 def generate_mention(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("mention", WorkflowConfig())
     eff = _effective_cfg(cfg, wf)
+    check_script = (
+        importlib.resources.files("tend") / "templates" / "mention-verify.sh"
+    ).read_text()
+
     content = _MENTION_TMPL.render(
         cfg=eff,
         setup=_setup_yaml(eff),
         local_actions=_restore_local_actions_run(eff),
+        check_script=check_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-mention.yaml", content=content)
 

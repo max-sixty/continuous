@@ -48,7 +48,10 @@ def fake_bin(tmp_path: Path, **scripts: str) -> Path:
 # Shared opening for `gh` stand-ins: log the call, extract a --jq argument,
 # and define emit() to run it through real jq — the script's own filter is
 # usually the behaviour under test, so a fake that pre-filtered would assert
-# nothing. Fakes append their own `case` dispatch: GH_PREAMBLE + r'''case …'''.
+# nothing. `-c` matches `gh --jq`, which writes one line per result: a filter
+# constructing objects (`{body, in_reply_to_id}`) depends on that, and jq's
+# default pretty-printing would hand the script a shape gh never produces.
+# Fakes append their own `case` dispatch: GH_PREAMBLE + r'''case …'''.
 GH_PREAMBLE = r"""#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_CALLS"
 
@@ -61,7 +64,7 @@ done
 
 emit() {
   if [ -n "$jq_expr" ]; then
-    printf '%s' "$1" | jq -r "$jq_expr"
+    printf '%s' "$1" | jq -rc "$jq_expr"
   else
     printf '%s' "$1"
   fi

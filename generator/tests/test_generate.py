@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import re
 from pathlib import Path
 from textwrap import dedent
@@ -759,14 +760,6 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
     assert "repository_dispatch" in verify_if
     assert "pull_request_review" not in verify_if
 
-    # A dispatch is judged against the API record, not waved through: the
-    # check script resolves {kind, pr, id} and rejects what it can't confirm.
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    assert "/pulls/$PAYLOAD_PR/reviews/$PAYLOAD_ID" in check_step["run"]
-    assert "/pulls/comments/$PAYLOAD_ID" in check_step["run"]
-
     # Handle job checks out PR branch for this event
     handle_steps = data["jobs"]["handle"]["steps"]
     checkout_step = next(
@@ -815,201 +808,50 @@ def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
     )
 
 
-def test_mention_verify_detects_inline_mentions_on_review(tmp_path: Path) -> None:
-    """For pull_request_review events, verify must fetch the review's inline
-    comments and grep their bodies for the bot mention.
-
-    The pull_request_review event payload exposes review.body but NOT the
-    bodies of the inline comments attached to that review. So a first-contact
-    "@bot" mention written *inside* an inline review comment is invisible to
-    the COMMENT_BODY check (which only sees review.body for review events) and
-    to the engagement check (which only fires when the bot has prior
-    engagement on the PR). Without this fetch, such mentions would be silently
-    dropped on PRs where the bot has no prior engagement.
-
-    Today the gap is masked stochastically by the pull_request_review_comment
-    sibling event firing in parallel and exposing comment.body. Once we stop
-    subscribing to `created` for that event (see
-    test_mention_review_comment_listens_only_for_edits), the masking goes away
-    and verify must detect the mention via the API."""
+def test_mention_verify_wires_every_variable_the_gate_reads(tmp_path: Path) -> None:
+    """The gate's own decisions are exercised by running it (test_mention_verify);
+    what generation owns is the wiring, and an unwired variable is invisible
+    there. The script is inlined verbatim, so a name the workflow forgets is
+    simply empty at runtime: the gate then answers on a blank — a missing
+    COMMENT_AUTHOR reads as "not the bot", a missing PR_URL as "an issue, not a
+    PR" — silently, on a green job."""
     cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    mention = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(mention.content)
+    data = yaml.safe_load(generate_mention(cfg).content)
     check_step = next(
         s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
     )
 
-    # The fetch must target the specific review's inline comments by id
-    assert "/reviews/$PAYLOAD_ID/comments" in check_step["run"], (
-        "verify must fetch inline comments for pull_request_review dispatches "
-        "via the /pulls/{n}/reviews/{review_id}/comments endpoint"
-    )
-    # And grep their bodies for the bot mention (test-bot is the bot_name in
-    # _minimal_config). grep -qF means fixed-string, quiet — same shape as the
-    # other mention checks in this script.
-    assert "grep -qF '@test-bot'" in check_step["run"], (
-        "verify must grep the fetched inline comment bodies for the bot mention"
-    )
+    assert check_step["env"] == {
+        "GITHUB_TOKEN": f"${{{{ secrets.{BOT_TOKEN_SECRET} }}}}",
+        "BOT_NAME": "test-bot",
+        "EVENT_NAME": "${{ github.event_name }}",
+        "COMMENT_BODY": "${{ github.event.comment.body }}",
+        "COMMENT_AUTHOR": "${{ github.event.comment.user.login }}",
+        # The public-API discriminator between a Bot account and a User.
+        "COMMENT_AUTHOR_TYPE": "${{ github.event.comment.user.type }}",
+        "ISSUE_BODY": "${{ github.event.issue.body }}",
+        "ISSUE_OR_PR_NUMBER": "${{ github.event.issue.number }}",
+        "ISSUE_AUTHOR": "${{ github.event.issue.user.login }}",
+        # Present only on comments that live on a PR, which is how the gate
+        # tells an issue thread from a PR one.
+        "PR_URL": "${{ github.event.issue.pull_request.url }}",
+        # A relayed review arrives as identifiers only; the gate resolves them
+        # against the API before judging anything.
+        "PAYLOAD_KIND": "${{ github.event.client_payload.kind }}",
+        "PAYLOAD_PR": "${{ github.event.client_payload.pr }}",
+        "PAYLOAD_ID": "${{ github.event.client_payload.id }}",
+    }
 
-    # The fetch must be gated on the review kind so it doesn't fire for
-    # issue_comment / issues / pull_request_review_comment.
-    assert '[ "$KIND" = "pull_request_review" ]' in check_step["run"], (
-        "the inline-mention fetch must only run for pull_request_review events"
-    )
-
-    # The ids must be wired from the dispatch payload
-    assert check_step["env"]["PAYLOAD_ID"] == "${{ github.event.client_payload.id }}"
-    assert check_step["env"]["PAYLOAD_PR"] == "${{ github.event.client_payload.pr }}"
-
-
-def test_mention_verify_skips_bot_comments_without_mention(tmp_path: Path) -> None:
-    """Undirected bot comments (deploy notifications, CI status) on a
-    bot-authored PR must not spin up a session.
-
-    The bot-engagement fallback short-circuits to should_run=true whenever the
-    triggering PR's author is the bot. That branch fires even when the comment
-    is from another bot (e.g. cloudflare-pages deploy notification) with no
-    @-mention of our bot — wasting a full session per `created` event and
-    again per `edited` event (deploy bots edit their comment to update status).
-
-    Skip `issue_comment` events whose comment author is a `Bot` after the
-    @-mention check has already returned false. github.event.comment.user.type
-    is the public-API-visible discriminator (Bot vs User)."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    mention = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(mention.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    assert check_step["env"].get("COMMENT_AUTHOR_TYPE") == (
-        "${{ github.event.comment.user.type }}"
-    ), (
-        "verify must wire github.event.comment.user.type so the script can "
-        "distinguish bot-authored comments from human ones"
-    )
-
-    assert '"$COMMENT_AUTHOR_TYPE" = "Bot"' in run, (
-        "verify must short-circuit issue_comment events from Bot accounts "
-        "(deploy notifications, CI status) when no @-mention is present"
-    )
-
-    # The guard must run for issue_comment events specifically and must come
-    # AFTER the @-mention check (so legitimate bot summons are still honored)
-    # and BEFORE the PR-author short-circuit (so it actually skips the
-    # bot-authored-PR fallback that produces the no-op session).
-    mention_idx = run.index("grep -qF '@test-bot'")
-    bot_guard_idx = run.index('"$COMMENT_AUTHOR_TYPE" = "Bot"')
-    pr_author_idx = run.index('"$PR_AUTHOR" = "test-bot"')
-    assert mention_idx < bot_guard_idx < pr_author_idx, (
-        "bot-comment guard must run after the @-mention check and before the "
-        "PR-author short-circuit"
-    )
-
-
-def test_mention_verify_engagement_lookups_survive_pagination(
-    tmp_path: Path,
-) -> None:
-    """Engagement lookups must not reduce inside a `--paginate`d `--jq`.
-
-    `gh api --paginate` applies `--jq` once per page, so `--jq '[...] | length'`
-    emits one count per page instead of one overall. Past 100 records the
-    variable holds `100\\n7`, the `[ "$X" -gt "0" ]` guard below it errors with
-    `integer expression expected` and returns 2, and the failed test falls
-    through to should_run=false — the bot stops answering participants on
-    exactly the threads where it has engaged the most, with nothing going red.
-
-    Keep the filter a per-element stream, capture it bare, and test it for
-    emptiness. Reducing the stream through a pipe (`| wc -l`) would fix the
-    count but move the substitution's exit status off `gh`, so under the step's
-    default `bash -e` a failed API call would read as "no engagement" on a green
-    job — the same silent-quiet failure, relocated."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    data = yaml.safe_load(workflows["tend-mention.yaml"].content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    # Every `--jq` under `--paginate` must stay a streaming filter. `--slurp` is
-    # not an escape hatch: `gh api` rejects it alongside `--jq`. Join
-    # backslash-continued lines first — the `--jq` sits on its own line.
-    for line in run.replace("\\\n", " ").splitlines():
-        if "--paginate" not in line or "--jq" not in line:
-            continue
-        assert "| length" not in line, (
-            f"reduction inside a --paginate'd --jq runs per page: {line.strip()}"
-        )
-
-    assert run.count("| .id')") == 3, (
-        "the three engagement lookups (issue comments, PR reviews, PR comments) "
-        "must capture the raw stream, so a failing `gh api` still trips errexit"
-    )
-    assert '-gt "0" ]' not in run, (
-        "guard on an empty stream (`[ -n ... ]`) — a numeric comparison is what "
-        "a split count breaks"
-    )
-
-
-def test_mention_verify_skips_self_authored_comments(tmp_path: Path) -> None:
-    """The bot's own comments must not spin up a handle session.
-
-    The Bot-type check only catches GitHub App / Bot accounts. Tend's own bot
-    is a PAT-based User account, so its comments fall through to the engagement
-    heuristics (bot-authored issue, or "bot has prior comments") and reach the
-    handle job, which exits silently via the prompt's self-loop guard — pure
-    waste. This recurs on the monthly tracking-issue rollover (review-reviewers
-    posts evidence-gist links on its own issue) and on duplicate-tracking
-    notices. Skip self-authored `issue_comment` and `pull_request_review_comment`
-    events at the gate, before the @-mention check — a bot comment quoting a
-    prior @-mention would otherwise re-match the mention check and escape the
-    guard, and there is no legitimate self-summons."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    mention = workflows["tend-mention.yaml"]
-    data = yaml.safe_load(mention.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    assert check_step["env"].get("COMMENT_AUTHOR") == (
-        "${{ github.event.comment.user.login }}"
-    ), (
-        "verify must wire github.event.comment.user.login so the script can "
-        "recognize the bot's own (User-type) comments"
-    )
-
-    assert '"$COMMENT_AUTHOR" = "test-bot"' in run, (
-        "verify must short-circuit comment events authored by the bot "
-        "itself — its User-type account is missed by the Bot-type check"
-    )
-
-    # The guard must cover both comment kinds that take the engagement path:
-    # issue_comment (COMMENT_AUTHOR from the event) and
-    # pull_request_review_comment (COMMENT_AUTHOR resolved from the relayed
-    # dispatch's API fetch).
-    assert '"$KIND" = "issue_comment"' in run
-    assert '"$KIND" = "pull_request_review_comment"' in run, (
-        "the self-authored guard must cover relayed inline comments — they "
-        "take the same engagement-heuristic path"
-    )
-
-    # The self-authored guard must run *before* the @-mention check: a bot
-    # comment that quotes a prior @-mention would re-match the mention check and
-    # escape an after-placed guard, and there is no legitimate self-summons. It
-    # must also precede the bot-authored-issue short-circuit that would
-    # otherwise spin up the no-op session.
-    mention_idx = run.index("grep -qF '@test-bot'")
-    self_guard_idx = run.index('"$COMMENT_AUTHOR" = "test-bot"')
-    issue_author_idx = run.index('"$ISSUE_AUTHOR" = "test-bot"')
-    assert self_guard_idx < mention_idx < issue_author_idx, (
-        "self-authored comment guard must run before the @-mention check and "
-        "before the bot-authored-issue short-circuit"
+    # And the mapping is complete: every name the script reads without first
+    # assigning it is either wired above or supplied by the runner.
+    source = (
+        importlib.resources.files("tend") / "templates" / "mention-verify.sh"
+    ).read_text()
+    read = set(re.findall(r"\$\{?([A-Z][A-Z0-9_]*)\}?", source))
+    assigned = set(re.findall(r"\b([A-Z][A-Z0-9_]*)=", source))
+    supplied = set(check_step["env"]) | {"GITHUB_OUTPUT", "GITHUB_REPOSITORY"}
+    assert read - assigned <= supplied, (
+        f"the gate reads {sorted(read - assigned - supplied)}, which nothing sets"
     )
 
 
@@ -1113,176 +955,6 @@ def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
     assert "format(" in prompt, "delay preamble must use conditional format()"
     # "Before acting" must always appear (it's the unconditional part)
     assert "Before acting" in prompt
-
-
-def test_mention_self_comment_skip_spares_review_submissions(
-    tmp_path: Path,
-) -> None:
-    """The self-authored-comment skip must not swallow the bot's own reviews.
-
-    A review the bot's review workflow leaves on its own PR is its reviewer
-    role speaking, not a self-loop — the prompt is told to action it. That
-    signal arrives as a `pull_request_review` submission event, distinct from
-    the `pull_request_review_comment` inline-comment event the skip covers, so
-    it must still reach the actionable path — the handoff gate pinned by
-    test_mention_bot_review_fires_only_as_the_author_handoff.
-
-    This pins the boundary against a later "skip self-authored reviews too, for
-    consistency" edit that would silently break the review -> fix loop: the
-    self-authored guard is scoped to the two comment events and must never
-    extend to the review submission."""
-    cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention(cfg)
-    data = yaml.safe_load(wf.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    # Isolate the self-authored-comment guard, from its opening condition to the
-    # @-mention check that follows it.
-    guard = run[
-        run.index('if { [ "$KIND" = "issue_comment" ]') : run.index(
-            "grep -qF '@test-bot'"
-        )
-    ]
-    # The skip keys on the bot as commenter over the two comment kinds; the
-    # review *submission* kind (a bare pull_request_review equality, distinct
-    # from pull_request_review_comment) is deliberately absent, so a bot
-    # self-review is never short-circuited here.
-    assert '[ "$COMMENT_AUTHOR" = "test-bot" ]' in guard
-    assert '[ "$KIND" = "pull_request_review_comment" ]' in guard
-    assert '[ "$KIND" = "pull_request_review" ]' not in guard, (
-        "self-authored-comment skip must not extend to the pull_request_review "
-        "submission kind — a bot self-review is actionable reviewer signal"
-    )
-
-
-def test_mention_bot_review_fires_only_as_the_author_handoff(
-    tmp_path: Path,
-) -> None:
-    """A bot-authored review summons a session in exactly one shape: fresh
-    content — a body, or an inline comment that isn't a reply — on a PR the
-    bot authored, the reviewer role handing work to the author role (#166,
-    #761). One gate carries that rule, and its skip branch subsumes three
-    shapes that were once gated separately:
-
-    - a review on a PR someone else authored — the tend-review session that
-      submitted it already did whatever the review warranted (#915);
-    - the empty-body APPROVED review (#747) — GitHub rejects self-approvals,
-      so a bot approval only ever exists on another author's PR;
-    - the synthetic zero-body COMMENTED container GitHub wraps around an
-      inline reply, the same comment the self-authored-comment skip drops on
-      its `pull_request_review_comment` event path.
-
-    Both narrowings are load-bearing. *Fresh* inline comments: an empty-body
-    bot review owning a non-reply inline comment still carries actionable
-    signal, so it must fire. *Bot* as review author: `pull_request_review_comment`
-    subscribes to `edited` only, so a human's freshly created inline reply
-    reaches the bot only through its review container — an authorship-agnostic
-    gate would silence the bot on every human reply to its own review threads,
-    with no test failing and no red run to notice.
-    """
-    cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention(cfg)
-    data = yaml.safe_load(wf.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    # `in_reply_to_id` is an *optional* property on the review-comments
-    # endpoint: it is absent, not null, on a fresh comment. Constructing
-    # `{body, in_reply_to_id}` is what normalizes absent to null so the
-    # `== null` select catches both shapes — a bare `.in_reply_to_id` stream
-    # would drop fresh comments from the count entirely and read every review
-    # as reply-only. It also keeps one object per line, so `--paginate`, which
-    # applies `--jq` once per page, concatenates rather than reducing within a
-    # page (#839).
-    assert "--jq '.[] | {body, in_reply_to_id}'" in run
-    fresh = "jq -s '[.[] | select(.in_reply_to_id == null)] | length'"
-    assert fresh in run, "the gate must count *fresh* (non-reply) inline comments"
-
-    # The gate sits between the PR-author resolution and the engagement
-    # heuristic that would otherwise count the triggering review as prior
-    # participation (BOT_REVIEWS > 0).
-    gate = run[run.index("PR_AUTHOR=$(gh pr view") : run.index("BOT_REVIEWS=$(")]
-    assert (
-        '[ "$KIND" = "pull_request_review" ] && [ "$REVIEW_AUTHOR" = "test-bot" ]'
-        in gate
-    )
-    # The one firing shape: the bot's own PR, with a body or a fresh inline
-    # comment.
-    assert '[ "$PR_AUTHOR" = "test-bot" ]' in gate
-    assert '{ [ -n "$COMMENT_BODY" ] || [ "$FRESH_INLINE" -gt 0 ]; }' in gate
-
-    # The handoff decision precedes the generic PR-author short-circuit —
-    # after it, the reply container on the bot's own PR would boot a session
-    # that can only exit silently.
-    assert gate.index('[ "$REVIEW_AUTHOR" = "test-bot" ]') < gate.index(
-        'if [ "$PR_AUTHOR" = "test-bot" ]; then'
-    )
-
-    # And an @-mention inside the review — body or inline comment — still
-    # wins: the inline scan runs before the gate.
-    inline_scan = "printf '%s\\n' \"$INLINE\" | jq -r '.body' | grep -qF '@test-bot'"
-    assert run.index(inline_scan) < run.index('[ "$REVIEW_AUTHOR" = "test-bot" ]')
-
-
-def test_mention_skips_third_party_bare_approval(tmp_path: Path) -> None:
-    """A human's APPROVED review with no body and no inline comments is
-    terminal for the bot: the approval asks for nothing and the bot cannot
-    merge. The handoff gate is author-keyed, so without this gate a bare
-    APPROVED falls through to the PR-author short-circuit (on a bot-authored
-    PR) or to BOT_REVIEWS (on one the bot has reviewed) and starts a session
-    that can only exit silently.
-
-    The narrowing is load-bearing in both directions:
-
-    - `approved` — a bare CHANGES_REQUESTED or COMMENTED review is not
-      terminal, and a human's synthetic reply container arrives as COMMENTED,
-      so widening the state would silence the bot on replies to its own review
-      threads (the same trap the handoff gate pins from the author side).
-    - `$INLINE` empty, not reply-only — an approval whose nits live inline is a
-      request addressed to the PR's author, a role the bot has to act in on its
-      own PRs.
-    """
-    cfg = Config.load(_minimal_config(tmp_path))
-    wf = generate_mention(cfg)
-    data = yaml.safe_load(wf.content)
-    check_step = next(
-        s for s in data["jobs"]["verify"]["steps"] if s.get("id") == "check"
-    )
-    run = check_step["run"]
-
-    # The handoff gate opens on `$KIND` / `$REVIEW_AUTHOR`, so this opening
-    # belongs to the third-party gate alone. Compare the whole condition with
-    # whitespace normalized: an author clause added here, or the `$INLINE`
-    # clause dropped, fails the equality rather than sliding past an `in`
-    # check. The record comes from REST, which reports the state uppercase, so
-    # the resolution step must normalize it before the comparison against
-    # "approved".
-    assert ".state | ascii_downcase" in run
-    gate = run[run.index('if [ "$REVIEW_STATE" = "approved" ]') :]
-    condition = " ".join(gate.split("; then")[0].split())
-    assert condition == (
-        'if [ "$REVIEW_STATE" = "approved" ] \\ '
-        '&& [ -z "$COMMENT_BODY" ] \\ '
-        '&& [ -z "$INLINE" ]'
-    ), "the third-party skip must key on state, empty body, and zero inline comments"
-
-    # `[ -z "$INLINE" ]` only means "zero inline comments" below the fetch that
-    # populates it, and that property is positional rather than textual, so the
-    # equality above does not pin it. Hoisted above the fetch, `$INLINE` reads
-    # as empty and silently skips exactly the approvals-with-inline-nits this
-    # gate must let through.
-    assert run.index("INLINE=$(") < run.index('[ -z "$INLINE" ]'), (
-        "the third-party skip must sit below the inline-comment fetch"
-    )
-
-    # And it precedes the engagement heuristic that would otherwise count the
-    # triggering review as prior participation.
-    assert run.index('[ -z "$INLINE" ]') < run.index("BOT_REVIEWS=$(")
 
 
 # ---------------------------------------------------------------------------
