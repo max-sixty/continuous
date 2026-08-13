@@ -25,7 +25,7 @@ Load `/tend-ci-runner:running-in-ci` first — it contains CI security rules, po
 Before reading the diff, run cheap checks to avoid redundant work. Shell state doesn't persist between tool calls — re-derive `REPO` in each bash invocation or combine commands.
 
 ```bash
-HEAD_SHA=$(gh pr view <number> --json commits --jq '.commits[-1].oid')
+HEAD_SHA=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
 PR_AUTHOR=$(gh pr view <number> --json author --jq '.author.login')
 IS_DRAFT=$(gh pr view <number> --json isDraft --jq '.isDraft')
 EVENT_ACTION=$(jq -r '.action // ""' < "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)
@@ -211,8 +211,8 @@ gh api "repos/$REPO/issues/<number>/reactions" -f content="+1"
 Before posting, verify HEAD hasn't moved, the PR is still open, and no review was already posted for this commit:
 
 ```bash
-read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json commits,state \
-  --jq '"\(.commits[-1].oid) \(.state)"')
+read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json headRefOid,state \
+  --jq '"\(.headRefOid) \(.state)"')
 [ "$CURRENT_HEAD" != "$HEAD_SHA" ] && echo "HEAD moved — fold in per step 9, then re-run these mechanics against $CURRENT_HEAD" && exit 0
 [ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
 

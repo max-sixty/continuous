@@ -26,7 +26,7 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
 2. If CI is passing, review the diff for breaking changes (major version bumps, API changes, deprecation warnings)
 3. If the update is safe (patch/minor with green CI), check whether the bot has already approved this commit before approving — a dependabot PR open across multiple weekly runs (or already approved by `tend-review` on creation) would otherwise accumulate redundant approvals on the same `commit_id`:
    ```bash
-   HEAD_SHA=$(gh pr view <number> --json commits --jq '.commits[-1].oid')
+   HEAD_SHA=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
 
    # `fresh_approval_sha` counts only approvals the bot actually earned: a
    # force-push re-points an earlier approval's anchor at the NEW head, so a

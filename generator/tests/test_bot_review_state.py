@@ -33,7 +33,7 @@ FAKE_GH = (
     + r"""
 case "$*" in
   "api user"*)          emit '{"login":"'"$BOT_LOGIN"'"}' ;;
-  "pr view "*)          emit "$(cat "$COMMITS_JSON")" ;;
+  "pr view "*)          emit "$(cat "$PR_HEAD_JSON")" ;;
   *"/pulls/"*"/comments"*) emit "$(cat "$INLINE_JSON")" ;;
   *"/issues/"*"/timeline"*) emit "$(cat "$TIMELINE_JSON")" ;;
   *"/pulls/"*"/reviews"*)   emit "$(cat "$REVIEWS_JSON")" ;;
@@ -48,7 +48,13 @@ def env(tmp_path: Path) -> dict[str, str]:
     """Fake `gh` plus fixtures for a PR at HEAD with no reviews and no rewrite."""
     bindir = fake_bin(tmp_path, gh=FAKE_GH)
     files = {
-        "COMMITS_JSON": {"commits": [{"oid": OLD}, {"oid": HEAD}]},
+        # `commits` is deliberately wrong-last: `gh pr view --json commits`
+        # is `commits(first: 100)`, oldest-first, so past the cap `.commits[-1]`
+        # is commit #100. A reader that goes back to it reads OLD here.
+        "PR_HEAD_JSON": {
+            "headRefOid": HEAD,
+            "commits": [{"oid": HEAD}, {"oid": OLD}],
+        },
         "INLINE_JSON": [],
         "TIMELINE_JSON": [],
         "REVIEWS_JSON": [],
@@ -338,8 +344,16 @@ def test_the_newest_orphan_wins(env: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_head_is_the_last_commit_not_the_first(env: dict[str, str]) -> None:
+def test_the_head_comes_from_head_ref_oid(env: dict[str, str]) -> None:
+    """`--json commits` caps at 100 and returns oldest-first, so on a long PR
+    `.commits[-1]` is commit #100. Every head-keyed field then matches nothing
+    and goes quiet: the pre-post guard stops firing and a re-run posts a second
+    review, the 422 recovery duplicates instead of editing the orphan, and
+    `weekly`'s redundant-approval guard lets approvals pile up on one commit."""
     assert _state(env)["head_sha"] == HEAD
+
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert "--json headRefOid" in calls, calls
 
 
 def test_the_repo_is_named_explicitly_on_every_call(env: dict[str, str]) -> None:

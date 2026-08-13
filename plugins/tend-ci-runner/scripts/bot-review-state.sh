@@ -56,7 +56,11 @@ PR="$1"
 REPO="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq '.nameWithOwner')}"
 BOT=$(gh api user --jq '.login')
 
-HEAD_SHA=$(gh pr view "$PR" --repo "$REPO" --json commits --jq '.commits[-1].oid')
+# `--json commits` is `commits(first: 100)`, unpaginated and oldest-first, so
+# past 100 commits `.commits[-1]` is commit #100 rather than the head — and
+# every head-keyed field below then silently matches nothing. `headRefOid` is
+# the head by definition.
+HEAD_SHA=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')
 
 # Review ids owning at least one top-level inline comment. `gh api --paginate`
 # applies `--jq` per page, so reduce with a second jq over the merged stream
