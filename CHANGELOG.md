@@ -6,6 +6,23 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.17
+
+### Improved
+
+- **👀 marks a session in flight and comes off when it ends.** The bot reacts on the issue or PR as a session picks it up — triage on an opened issue, review on every run that clears its gate — and on a comment that mentions the bot, as before. The reaction is released at the end of the run under `always()`, so a failed or cancelled session doesn't strand it. Mention's comment target is computed from `github.event_name` rather than probed across both endpoints, so an unrelated issue comment that happens to share a review comment's id can no longer take the reaction. ([#974](https://github.com/max-sixty/tend/pull/974), [#979](https://github.com/max-sixty/tend/pull/979))
+
+### Fixed
+
+- **`credential-environments` verifies the tag ruleset from the bot's own token.** GitHub serves a ruleset's `bypass_actors` only to repo admins, so a run as the bot could never confirm the all-tags ruleset tend prescribes: the check parked at `SKIP` on every repo whose credential-holding environments admit tags, and the nightly's drift issue stayed open indefinitely. Where the caller is the bot, the check now reads `current_user_can_bypass` — GitHub's own evaluation of the caller against the full bypass list, principals the actor-list inference can't resolve included — and credits `"never"` as gated. Any other caller's verdict says nothing about the bot and falls through to the existing inference. ([#976](https://github.com/max-sixty/tend/pull/976))
+- **The Codex harness pins `.claude/` to the base branch on a fork PR.** `codex/agents-tail.md` tells the agent that repo-local skills live at `.claude/skills/<name>/SKILL.md` and to read them in full, while the fork-PR defense restored only `CLAUDE.md` and `AGENTS.md` — so a fork-authored `running-tend` skill loaded as trusted repo guidance. `shared/steps/pin-instruction-files.sh` restores the whole of `.claude/` alongside those files, through git and without following destination symlinks, so a fork symlink can't redirect a write outside the checkout. The Claude harness was unaffected: `restore-sensitive-config.sh` already covered `.claude`. ([#978](https://github.com/max-sixty/tend/pull/978), [#980](https://github.com/max-sixty/tend/pull/980))
+
+### Internal
+
+- One `uv run pytest` from the repo root runs every Python suite. The root is a uv workspace with `generator/` as its only member, so `generator/`, `proxy/`, and the install-tend scripts share one environment — the pinned mitmproxy the proxy addon imports included. `dev/test.sh` is deleted, `wt test` is four named steps in `.config/wt.toml`, and CI's three Python jobs become one; `test_pinned_mitmproxy_matches_the_action` asserts the installed distribution matches `claude/action.yaml`'s default. ([#977](https://github.com/max-sixty/tend/pull/977))
+- A Codex Cloud setup script installs pinned Worktrunk, verifies the `.config/wt.toml` command approvals, syncs the generator, site, and worker dependencies, and installs `pre-commit` without git hooks. `.config/codex-cloud/README.md` documents the Cloud environment settings. ([#978](https://github.com/max-sixty/tend/pull/978))
+- `nightly` records why the `commits(first: 100)` cap can't truncate its human-commit guard: the guard runs only on `dependabot[bot]` / `renovate[bot]` PRs, whose branches carry one or two commits. ([#975](https://github.com/max-sixty/tend/pull/975))
+
 ## 0.1.16
 
 ### Improved
