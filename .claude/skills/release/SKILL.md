@@ -13,7 +13,7 @@ metadata:
 2. **Check current version**: Read `version` in `generator/pyproject.toml`
 3. **Review commits**: `git log <last-version>..origin/main --oneline` to understand scope — against `origin/main` (not `HEAD`), so the range is the full set of commits this release ships even if step 1 was skipped
 4. **Confirm version with user**: Present changes summary and proposed version
-5. **Bump version**: Edit `version` in `generator/pyproject.toml`, then `cd generator && uv lock`
+5. **Bump version**: Edit `version` in `generator/pyproject.toml`, then `uv lock` at the repo root (the workspace's only lockfile)
 6. **Update CHANGELOG**: Add a `## X.Y.Z` section at the top of `CHANGELOG.md` (see "CHANGELOG" below). The release workflow publishes this section verbatim as the GitHub Release notes and **fails the GitHub Release job if the section is missing** (PyPI publish has already happened by then; recovery is a manual `gh release create`), so it must land in the release commit — before the tag.
 7. **Commit on the current branch**: `chore: release X.Y.Z` (version bump, lockfile, and CHANGELOG). Don't create a new branch — this worktree is already on the release branch, and the PR opens from it to `main`.
 8. **Merge to main**: Push, create PR via `gh pr create`, wait for CI, merge with `gh pr merge --squash`

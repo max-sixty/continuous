@@ -21,15 +21,20 @@ over refining it.
 ## Commands
 
 ```bash
-wt test                            # every suite (generator/, proxy/, install-tend scripts, worker/)
+wt test                            # everything: uv run pytest, then worker/'s vitest
+uv run pytest                      # the Python half alone, from the repo root
 uvx tend@latest init               # regenerate workflows from .config/tend.yaml
 uvx tend@latest init --dry-run     # preview without writing
 uvx tend@latest check              # verify branch protection, secrets, bot access
 pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, uv-lock
 ```
 
-`wt test` runs [`dev/test.sh`](dev/test.sh), which mirrors the test jobs in
-`ci.yaml`; arguments go to the pytest suites (`wt test -k render`).
+The repo root is a uv workspace, and pytest run from it collects every Python
+test — generator/, proxy/, and the install-tend scripts — so one `pytest` is
+the whole Python run. `wt test` (defined in [`.config/wt.toml`](.config/wt.toml))
+adds worker/'s vitest suite and typecheck. Its arguments narrow pytest and
+nothing else, so a filtered run still pays for worker/; `uv run pytest -k render`
+is the Python half on its own.
 
 ## Architecture
 
@@ -108,8 +113,9 @@ tend/
 ├── site/                 # Astro marketing site (tend-src.com)
 ├── worker/               # Cloudflare Worker — serves the 2 site data streams
 ├── data/                 # consumers.json — Worker's input (refreshed weekly)
-└── docs/
-    └── security-model.md
+├── docs/
+│   └── security-model.md
+└── pyproject.toml        # uv workspace root: dev deps + the lockfile
 ```
 
 ## Key details
@@ -120,7 +126,10 @@ directly.
 
 The generator is a Python package under `generator/` — uses the uv_build
 backend, requires Python 3.11+. Runtime dependencies: click, jinja2,
-ruamel.yaml. Dev dependencies: pytest, pytest-regtest.
+ruamel.yaml. It is the one member of the repo's uv workspace, so the lockfile
+and the dev dependencies (pytest, pytest-regtest, and the pinned mitmproxy the
+proxy addon imports) live in the root `pyproject.toml`, and the dev environment
+needs 3.12+ even though the package supports 3.11.
 
 Consuming repos regenerate their `tend-*.yaml` workflows nightly (tend itself
 included — it dogfoods its own workflows). Changes to the generator do not

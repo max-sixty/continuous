@@ -1,0 +1,37 @@
+# Dev-only workspace root — nothing is published from here (no build-system, so
+# uv never builds it; the package is the `generator/` member). It exists so
+# every Python suite in the repo shares one environment, which makes plain
+# `uv run pytest` from the repo root the whole Python test run: pytest needs no
+# config of its own, since collecting from the root reaches generator/, proxy/,
+# and the install-tend scripts, and its default `norecursedirs` already skips
+# node_modules and dot-dirs. proxy/ and the install-tend scripts dir aren't
+# packages, so pytest's prepend import mode names their test modules by
+# basename alone — keep those basenames distinct or collection aborts.
+#
+# The floor is 3.12 because mitmproxy needs it; the published package still
+# supports 3.11 (see generator/pyproject.toml), which nothing here can lower.
+[project]
+name = "tend-dev"
+version = "0"
+requires-python = ">=3.12"
+
+[tool.uv.workspace]
+members = ["generator"]
+
+[tool.uv.sources]
+tend = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "tend",
+  "pytest>=9.0.2",
+  "pytest-regtest>=2.1.1",
+  # The proxy addon imports mitmproxy.test, so its tests run against the version
+  # production runs rather than whatever is latest. Kept equal to
+  # claude/action.yaml's `mitmproxy_version` default by
+  # test_pinned_mitmproxy_matches_the_action.
+  "mitmproxy==12.2.3",
+  # That same test reads claude/action.yaml. `tend` happens to pull ruamel in,
+  # but the proxy suite doesn't depend on the generator, so declare it here.
+  "ruamel.yaml>=0.18",
+]

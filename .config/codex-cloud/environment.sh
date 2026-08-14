@@ -18,11 +18,14 @@ approved-commands = [
   "cd site && npm install --prefer-offline --no-audit --no-fund",
   "cd site && npm run dev -- --port {{ branch | hash_port }}",
   "lsof -ti :{{ branch | hash_port }} -sTCP:LISTEN | xargs kill 2>/dev/null || true",
-  "dev/test.sh {{ args }}",
+  "uv run pytest {{ args }}",
+  "npm --prefix worker ci --prefer-offline --no-audit --no-fund",
+  "npm --prefix worker test",
+  "npm --prefix worker run typecheck",
 ]
 EOF
 
-uv sync --directory generator --frozen
+uv sync --frozen
 npm ci --prefix site --prefer-offline --no-audit --no-fund
 npm ci --prefix worker --prefer-offline --no-audit --no-fund
 

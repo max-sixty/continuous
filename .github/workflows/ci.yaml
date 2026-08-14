@@ -5,19 +5,23 @@ on:
   pull_request:
 
 jobs:
+  # Every Python test in the repo — pytest collects generator/, proxy/, and the
+  # install-tend scripts from the root — in the root workspace's environment,
+  # whose dev group holds the pinned mitmproxy the proxy addon imports.
   test:
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: generator
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v9.0.0
       - run: uv run pytest
+      # pypi-release.yaml only fires on a tag push, and the tag is immutable by
+      # ruleset, so a build that breaks there costs a manual publish. Run the
+      # same command here, where a bad `uv build` invocation fails on its PR.
+      - run: uv build --package tend
 
-  # Tests for the shared credential-injection proxy addon. Run standalone (no
-  # project) with mitmproxy + pytest pulled in ad hoc, since the proxy isn't
-  # part of the generator package.
+  # The addon's pytest suite (in `test` above) exercises `mitmproxy.http` and
+  # never launches the proxy, so it passes unchanged across major mitmproxy
+  # versions. This job launches it.
   test-proxy:
     runs-on: ubuntu-24.04
     defaults:
@@ -26,24 +30,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v9.0.0
-      # Read the version from the Claude action's mitmproxy_version default so
-      # the test exercises the version the production proxy runs. The addon
-      # imports mitmproxy.test (an internal helper), so a second copy of the pin
-      # here could drift and green the test while production breaks. `yq -e`
-      # exits non-zero if the input is ever renamed, rather than yielding the
-      # string "null" and failing later as an unresolvable version.
-      - run: |
-          v=$(yq -e '.inputs.mitmproxy_version.default' ../claude/action.yaml)
-          uv run --no-project --with "mitmproxy==$v" --with pytest pytest
-
-      # The addon tests above pass unchanged across major mitmproxy versions —
-      # they exercise `mitmproxy.http` and never launch the proxy. This starts
-      # mitmdump the way setup-sandbox.sh does, so a release that drops a flag,
-      # moves the CA file, or breaks the addon's import fails here rather than
-      # on every adopter's next run. It goes through the pinned uv, which
-      # nothing else in CI installs. The --allow-hosts value is a throwaway:
-      # setup-sandbox.sh owns the real regex, which must track the allowlists
-      # in inject_credentials.py.
+      # mitmdump starts the way setup-sandbox.sh starts it, so a release that
+      # drops a flag, moves the CA file, or breaks the addon's import fails
+      # here rather than on every adopter's next run. It goes through the
+      # pinned uv, which nothing else in CI installs. The --allow-hosts value
+      # is a throwaway: setup-sandbox.sh owns the real regex, which must track
+      # the allowlists in inject_credentials.py.
       #
       # It installs uv by running install-proxy-uv.sh rather than repeating it,
       # which also gives that script its only CI coverage, then warms the uvx
@@ -166,20 +158,6 @@ jobs:
             echo "::error::codex $v no longer accepts the model_reasoning_effort config key"
             exit 1
           fi
-
-  # The OAuth wrapper ships inside the install-tend plugin rather than under
-  # generator/, so the suites above never reach it. Its extractors decide what
-  # becomes an adopter's model credential, and a wrong answer stores a secret
-  # that authenticates nothing, so they get a job of their own.
-  test-install-tend-scripts:
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: plugins/install-tend/skills/install-tend/scripts
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
-      - run: uv run --no-project --with pytest pytest
 
   # Node 22 to match worker-deploy.yaml, which had to move off 20 because
   # Wrangler refuses to run there ("Wrangler requires at least Node.js

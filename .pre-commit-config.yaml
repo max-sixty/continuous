@@ -17,9 +17,9 @@ repos:
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.7.12
     hooks:
+      # One lockfile at the workspace root covers the generator member too.
       - id: uv-lock
-        args: [--directory, generator]
-        files: ^generator/(pyproject\.toml|uv\.lock)$
+        files: ^(generator/)?(pyproject\.toml|uv\.lock)$
   - repo: https://github.com/adhtruong/mirrors-typos
     rev: v1.42.0
     hooks:
@@ -31,15 +31,14 @@ repos:
   # The composite actions' shared step bodies live in standalone scripts
   # (shared/steps/, proxy/, generator/src/tend/templates/, .config/codex-cloud/)
   # rather than inline `run:` blocks, so actionlint's built-in shellcheck
-  # doesn't see them. Run shellcheck directly to keep that coverage — and over
-  # dev/, which actionlint never sees at all. -S warning matches actionlint's
+  # shellcheck directly to keep that coverage. -S warning matches actionlint's
   # default severity.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
         args: ["-S", "warning"]
-        files: ^(shared/steps/.*\.sh|generator/src/tend/templates/.*\.sh|proxy/setup-sandbox\.sh|dev/.*\.sh|plugins/.*\.sh|\.config/codex-cloud/environment\.sh)$
+        files: ^(shared/steps/.*\.sh|generator/src/tend/templates/.*\.sh|proxy/setup-sandbox\.sh|plugins/.*\.sh|\.config/codex-cloud/environment\.sh)$
   - repo: local
     hooks:
       # The Claude Code slash-command preprocessor treats a backticked token
