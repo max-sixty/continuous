@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKTRUNK_VERSION=0.71.0
+WORKTRUNK_VERSION=0.73.0
 if ! command -v wt >/dev/null 2>&1 ||
   [[ "$(wt --version)" != "wt v${WORKTRUNK_VERSION}" ]]; then
   curl --proto '=https' --tlsv1.2 -LsSf \
@@ -24,6 +24,12 @@ approved-commands = [
   "npm --prefix worker run typecheck",
 ]
 EOF
+
+if [[ "$(wt config approvals list --format=json | jq -r '.state')" != approved ]]; then
+  echo "Worktrunk approvals do not cover .config/wt.toml" >&2
+  wt config approvals list >&2
+  exit 1
+fi
 
 uv sync --frozen
 npm ci --prefix site --prefer-offline --no-audit --no-fund

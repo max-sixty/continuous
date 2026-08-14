@@ -31,8 +31,8 @@ repos:
   # The composite actions' shared step bodies live in standalone scripts
   # (shared/steps/, proxy/, generator/src/tend/templates/, .config/codex-cloud/)
   # rather than inline `run:` blocks, so actionlint's built-in shellcheck
-  # shellcheck directly to keep that coverage. -S warning matches actionlint's
-  # default severity.
+  # doesn't see them. Run shellcheck directly to keep that coverage. -S warning
+  # matches actionlint's default severity.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:

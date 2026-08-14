@@ -20,6 +20,73 @@ from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARK_NOTIFICATION_READ = REPO_ROOT / "shared" / "steps" / "mark-notification-read.sh"
 COMPUTE_TOKEN_USAGE = REPO_ROOT / "shared" / "steps" / "compute-token-usage.sh"
+PIN_INSTRUCTION_FILES = REPO_ROOT / "shared" / "steps" / "pin-instruction-files.sh"
+
+
+def test_pin_instruction_files_does_not_follow_fork_symlinks(tmp_path: Path) -> None:
+    """Fork-controlled instruction symlinks cannot write outside the checkout."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.com")
+    (repo / "CLAUDE.md").write_text("trusted guidance\n")
+    (repo / "AGENTS.md").symlink_to("CLAUDE.md")
+    (repo / "nested").mkdir()
+    (repo / "nested" / "AGENTS.md").write_text("trusted nested guidance\n")
+    git("add", ".")
+    git("commit", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    outside_claude = tmp_path / "outside-claude.md"
+    outside_agents = tmp_path / "outside-agents.md"
+    outside_fork = tmp_path / "outside-fork.md"
+    for path in (outside_claude, outside_agents, outside_fork):
+        path.write_text("must not change\n")
+
+    (repo / "CLAUDE.md").unlink()
+    (repo / "CLAUDE.md").symlink_to(outside_claude)
+    (repo / "AGENTS.md").unlink()
+    (repo / "AGENTS.md").symlink_to(outside_agents)
+    (repo / "nested" / "AGENTS.md").unlink()
+    (repo / "fork-only").mkdir()
+    (repo / "fork-only" / "AGENTS.md").symlink_to(outside_fork)
+    git("add", "-A")
+    git("commit", "-m", "fork tree")
+
+    event = tmp_path / "event.json"
+    event.write_text(
+        json.dumps(
+            {
+                "pull_request": {"head": {"repo": {"fork": True}}},
+                "repository": {"default_branch": "main"},
+            }
+        )
+    )
+    result = subprocess.run(
+        [BASH, str(PIN_INSTRUCTION_FILES)],
+        cwd=repo,
+        env={
+            "PATH": tool_path(),
+            "GITHUB_EVENT_NAME": "pull_request_target",
+            "GITHUB_EVENT_PATH": str(event),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (repo / "CLAUDE.md").read_text() == "trusted guidance\n"
+    assert (repo / "AGENTS.md").is_symlink()
+    assert (repo / "AGENTS.md").readlink() == Path("CLAUDE.md")
+    assert (repo / "nested" / "AGENTS.md").read_text() == ("trusted nested guidance\n")
+    assert not (repo / "fork-only" / "AGENTS.md").exists()
+    for path in (outside_claude, outside_agents, outside_fork):
+        assert path.read_text() == "must not change\n"
 
 
 # `gh api` stand-in. Records every invocation so a test can assert which calls

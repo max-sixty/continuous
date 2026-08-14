@@ -164,7 +164,7 @@ the whole list.
 Title each PR `chore: bump <name> to <version>`; the uv-plus-mitmproxy PR names
 both.
 
-### Action inputs
+### Tool versions
 
 | Pin | File | Rule |
 |---|---|---|
@@ -172,6 +172,7 @@ both.
 | `mitmproxy_version` | `claude/action.yaml` | track latest; move the root `pyproject.toml` dev pin with it and `uv lock` |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
 | `codex_version` | `codex/action.yaml` | track latest; the surface job confirms the bump |
+| `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | track latest GitHub release |
 
 ```bash
 yq '.inputs.claude_version.default' claude/action.yaml
@@ -182,6 +183,9 @@ curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
 
 yq '.inputs.codex_version.default' codex/action.yaml
 npm view @openai/codex dist-tags.latest
+
+sed -n 's/^WORKTRUNK_VERSION=//p' .config/codex-cloud/environment.sh
+gh api repos/max-sixty/worktrunk/releases/latest --jq '.tag_name | ltrimstr("v")'
 ```
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias

@@ -182,57 +182,7 @@ runs:
     # prompt-injection vector — so we pin/remove that too.
     - name: Pin instruction files to base branch (fork PRs)
       shell: bash
-      run: |
-        if [ "$GITHUB_EVENT_NAME" != "pull_request_target" ]; then
-          exit 0
-        fi
-        IS_FORK=$(jq -r '.pull_request.head.repo.fork // false' "$GITHUB_EVENT_PATH")
-        if [ "$IS_FORK" != "true" ]; then
-          exit 0
-        fi
-        DEFAULT_BRANCH=$(jq -r '.repository.default_branch' "$GITHUB_EVENT_PATH")
-
-        # Root CLAUDE.md (Claude harness convention; tend ships a CLAUDE.md
-        # alongside its workflows on adopter repos).
-        if git show "origin/${DEFAULT_BRANCH}:CLAUDE.md" > /tmp/base-claude.md 2>/dev/null; then
-          cp /tmp/base-claude.md CLAUDE.md
-          echo "Pinned CLAUDE.md to ${DEFAULT_BRANCH}"
-        else
-          rm -f CLAUDE.md
-          echo "No CLAUDE.md on ${DEFAULT_BRANCH} — removed fork version"
-        fi
-
-        # All AGENTS.md files in the working tree (Codex's per-directory
-        # instruction file). Each one is fork-controlled on a fork PR.
-        # For each merged-tree AGENTS.md: replace with the base-branch
-        # version at the same path if one exists, else remove. We avoid
-        # `git ls-tree` on the merge ref because GitHub may not have
-        # materialized it; iterate the working tree instead.
-        find . -name AGENTS.md -not -path './.git/*' -print0 | while IFS= read -r -d '' f; do
-          rel="${f#./}"
-          if git show "origin/${DEFAULT_BRANCH}:${rel}" > "/tmp/base-agents.md" 2>/dev/null; then
-            cp "/tmp/base-agents.md" "$f"
-            echo "Pinned ${rel} to ${DEFAULT_BRANCH}"
-          else
-            rm -f "$f"
-            echo "No ${rel} on ${DEFAULT_BRANCH} — removed fork version"
-          fi
-        done
-
-        # Also restore any AGENTS.md from base that the fork deleted —
-        # otherwise a fork could silently strip a tend-shipped guidance
-        # file. ls-tree enumerates every AGENTS.md in the base tree,
-        # filtered by `git -c core.quotepath=off` so non-ASCII paths
-        # round-trip cleanly.
-        git -c core.quotepath=off ls-tree -r --name-only "origin/${DEFAULT_BRANCH}" \
-          | grep -E '(^|/)AGENTS\.md$' \
-          | while IFS= read -r rel; do
-              if [ ! -f "$rel" ]; then
-                mkdir -p "$(dirname "$rel")"
-                git show "origin/${DEFAULT_BRANCH}:${rel}" > "$rel"
-                echo "Restored ${rel} from ${DEFAULT_BRANCH} (fork deleted it)"
-              fi
-            done || true
+      run: bash "${{ github.action_path }}/../shared/steps/pin-instruction-files.sh"
 
     - name: Run Codex
       id: codex
