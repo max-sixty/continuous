@@ -179,7 +179,9 @@ runs:
     # also rely on CLAUDE.md for prompt-injection defenses aren't worse off
     # under the Codex harness. Codex reads `AGENTS.md` from the working
     # directory (and any subdir the agent navigates into) — the same
-    # prompt-injection vector — so we pin/remove that too.
+    # prompt-injection vector — so we pin/remove that too, along with
+    # `.claude/`, where the repo-local skills agents-tail.md points the agent
+    # at live.
     - name: Pin instruction files to base branch (fork PRs)
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/pin-instruction-files.sh"

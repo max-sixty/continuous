@@ -38,3 +38,25 @@ while IFS= read -r -d '' rel; do
       ;;
   esac
 done < <(git ls-tree -rz --name-only "$BASE_REF")
+
+# `.claude/` is instruction input too: `codex/agents-tail.md` tells the agent
+# that repo-local skills live at `.claude/skills/<name>/SKILL.md` and that
+# `running-in-ci` will send it there, so a fork's copy is read as trusted repo
+# guidance exactly the way CLAUDE.md is. The Claude harness already restores
+# the directory (`.claude` is in restore-sensitive-config.sh's list); without
+# this the Codex harness reviews a fork PR with the fork's skills loaded.
+#
+# Replaced wholesale rather than reconciled file-by-file: the removal drops
+# fork-added skills and any fork symlink standing in for a base directory in
+# one step, and the restore then rebuilds the base tree as real files. The
+# fork's version stays readable at `git show HEAD:<path>` for a review that
+# wants to see what the PR changed — it is only kept out of the worktree the
+# agent reads.
+mapfile -t -d '' BASE_CLAUDE_FILES < <(git ls-tree -rz --name-only "$BASE_REF" -- .claude)
+rm -rf -- .claude
+if [ "${#BASE_CLAUDE_FILES[@]}" -gt 0 ]; then
+  git restore --source="$BASE_REF" --worktree -- "${BASE_CLAUDE_FILES[@]}"
+  echo "Pinned .claude/ to ${DEFAULT_BRANCH} (${#BASE_CLAUDE_FILES[@]} files)"
+else
+  echo "No .claude/ on ${DEFAULT_BRANCH} — removed fork version"
+fi
