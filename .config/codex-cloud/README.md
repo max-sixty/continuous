@@ -32,9 +32,9 @@ pre-commit --version. Require every command to pass and do not modify files.
 ## Keep it current
 
 `environment.sh` is the one setup command for both fresh and cached containers.
-It reads the command list out of Worktrunk, so a `.config/wt.toml` change needs
-no edit here. Reset the environment cache when a repository change makes the
+Worktrunk records the approvals itself, so a `.config/wt.toml` change needs no
+edit here. Reset the environment cache when a repository change makes the
 cached container incompatible.
 
-The script is Cloud-specific: it replaces the container's Worktrunk approvals
-file. Do not use it as local workstation setup.
+The script is Cloud-specific: it approves this repo's `wt` commands without
+review. Do not use it as local workstation setup.

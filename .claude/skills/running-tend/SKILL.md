@@ -230,7 +230,7 @@ swamped run finishes nothing.
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
 | `codex_version` | `codex/action.yaml` | `latest`; `alpha` only for a fix not yet released |
 | `uv_build` | `generator/pyproject.toml` | its range must contain the uv doing the build; a stale one only warns during `uv build`, so only this sweep catches it |
-| `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh`, and that `wt config show --format json` still has `.project.identifier` and `wt config approvals list --format=json` still has `.commands[].template` |
+| `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh` and that `wt config approvals add --yes` still records approvals without a TTY |
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
 target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
