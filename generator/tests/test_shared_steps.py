@@ -94,6 +94,50 @@ def test_pin_instruction_files_does_not_follow_fork_symlinks(tmp_path: Path) -> 
         assert path.read_text() == "must not change\n"
 
 
+def test_pin_instruction_files_removes_fork_claude_directory(tmp_path: Path) -> None:
+    """A fork-side CLAUDE.md directory cannot fail an absent-base cleanup."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.com")
+    (repo / "README.md").write_text("base\n")
+    git("add", ".")
+    git("commit", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    (repo / "CLAUDE.md").mkdir()
+    (repo / "CLAUDE.md" / "fork-content").write_text("untrusted\n")
+    event = tmp_path / "event.json"
+    event.write_text(
+        json.dumps(
+            {
+                "pull_request": {"head": {"repo": {"fork": True}}},
+                "repository": {"default_branch": "main"},
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [BASH, str(PIN_INSTRUCTION_FILES)],
+        cwd=repo,
+        env={
+            "PATH": tool_path(),
+            "GITHUB_EVENT_NAME": "pull_request_target",
+            "GITHUB_EVENT_PATH": str(event),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (repo / "CLAUDE.md").exists()
+
+
 # `gh api` stand-in. Records every invocation so a test can assert which calls
 # the script made, and fails the run-metadata fetch when FAIL_RUN_META is set.
 FAKE_GH = """#!/usr/bin/env bash

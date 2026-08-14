@@ -15,7 +15,7 @@ if git cat-file -e "${BASE_REF}:CLAUDE.md" 2>/dev/null; then
   git restore --source="$BASE_REF" --worktree -- CLAUDE.md
   echo "Pinned CLAUDE.md to ${DEFAULT_BRANCH}"
 else
-  rm -f -- CLAUDE.md
+  rm -rf -- CLAUDE.md
   echo "No CLAUDE.md on ${DEFAULT_BRANCH} — removed fork version"
 fi
 
