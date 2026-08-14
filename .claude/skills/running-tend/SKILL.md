@@ -182,8 +182,6 @@ uvx pre-commit autoupdate
 
 # npm: `Wanted` ≠ `Current` is lockfile drift (`npm update`); `Latest` ≠
 # `Wanted` needs the range in package.json moved. Exits 1 when a row prints.
-# `publish-site.yaml` builds site/ only on push to main, so run
-# `npm --prefix site run build` yourself before landing an astro bump.
 npm --prefix worker outdated
 npm --prefix site outdated
 
@@ -206,9 +204,10 @@ Out of scope entirely: runner images (`ubuntu-24.04`), `node-version`, and
 `requires-python` are platform choices carrying their own rationale, so they
 move when a reason arrives rather than on a cadence.
 
-Default rule: move to latest and let CI decide. Split PRs by who runs the
-result, and take what fits in one session rather than clearing a backlog at
-once — an unswept pin waits a week, a swamped run finishes nothing.
+Default rule: move to latest and let CI decide — the table below names the pins
+where CI can't. Split PRs by who runs the result, and take what fits in one
+session rather than clearing a backlog at once — an unswept pin waits a week, a
+swamped run finishes nothing.
 
 - **Ships to adopters** — `claude/action.yaml` and `codex/action.yaml` run in
   every adopter's job from the next release; `generator/src/tend/templates/`
@@ -231,6 +230,8 @@ once — an unswept pin waits a week, a swamped run finishes nothing.
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
 | `codex_version` | `codex/action.yaml` | `latest`; `alpha` only for a fix not yet released |
 | `uv_build` | `generator/pyproject.toml` | its range must contain the uv doing the build; a stale one only warns during `uv build`, so only this sweep catches it |
+| `astro` | `site/package.json` | `publish-site.yaml` builds `site/` on push to main, not on the PR — run `npm --prefix site run build` before landing a bump |
+| `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh` and `wt config show --format json` still has `.project.identifier` |
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
 target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
