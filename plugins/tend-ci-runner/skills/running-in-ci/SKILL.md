@@ -252,6 +252,8 @@ If you cannot verify, say "I haven't confirmed whether these failures are pre-ex
 
 Poll your checks to terminal, do the follow-up you were gated on, and exit; name the outstanding review in your summary. This covers a review that arrives *while* you work — a session dispatched to answer a specific review owns that review and actions it normally.
 
+**On a fork PR the premise fails — nothing succeeds you.** `tend-mention`'s relay job is gated on `head.repo.full_name == github.repository`, so a review on a fork PR dispatches nothing, and the notifications poll named as that filter's fallback can't see it either: GitHub doesn't notify an actor of their own activity, so the bot's own review is invisible there by construction. Findings left for a successor session strand until a human happens to comment. So when the review is on a fork PR: if you pushed the commits under a maintainer directive you are the de-facto author — action your own review's findings before ending. Otherwise say in your closing comment that they are unaddressed and unowned, so the thread shows someone has to pick them up.
+
 ### Rerunning failed jobs
 
 To rerun a run's failed jobs and wait for the outcome, use the bundled script — it reruns, finds the new attempt's jobs (the parent run's `.status` and the commit rollup stay pending on unrelated siblings, so neither is a usable signal), and polls them to terminal:
@@ -325,6 +327,8 @@ gh issue view <number> --json comments --jq '.comments | length'
 gh pr view <number> --json comments,reviews \
   --jq '{comments: (.comments | length), reviews: (.reviews | length)}'
 ```
+
+Keep `reviews` in the PR projection rather than narrowing to `comments` — a review submitted while you worked is a directive, not a duplicate, and it is the entry a dedup-shaped check is most likely to drop. On a fork PR it is also the one nothing else will pick up (see **A review that lands while you poll is not yours to action**).
 
 If any prior entry — from a human or another tend workflow — already addresses a point the response would make, omit that point. The dedup applies equally to comment bodies, review bodies, and inline replies. If the response is now entirely redundant, don't post it.
 
