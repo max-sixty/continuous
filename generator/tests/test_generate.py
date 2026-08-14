@@ -708,11 +708,14 @@ def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
     assert "tend-review/$PR" in steps[0]["run"]
     gate = "steps.gate.outputs.should_run == 'true'"
     for step in steps[1:]:
-        # A step may narrow further (the eyes reaction fires only on `opened`)
-        # or widen to `always()` (the reaction comes off a failed run too), but
-        # the gate's verdict stays a conjunct of whatever it builds.
+        # A step may narrow further, or widen to `always()` (the reaction comes
+        # off a failed run too), but the gate's verdict stays a conjunct of
+        # whatever it builds. Matched by shape rather than by substring, which
+        # a step disjoining its way past the gate would also satisfy.
         condition = step.get("if", "")
-        assert gate in condition, f"ungated step after the gate: {step}"
+        assert condition in (gate, f"always() && ({gate})") or condition.startswith(
+            f"{gate} && "
+        ), f"ungated step after the gate: {step}"
 
 
 def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
