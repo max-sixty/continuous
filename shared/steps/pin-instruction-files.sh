@@ -52,11 +52,10 @@ done < <(git ls-tree -rz --name-only "$BASE_REF")
 # fork's version stays readable at `git show HEAD:<path>` for a review that
 # wants to see what the PR changed — it is only kept out of the worktree the
 # agent reads.
-mapfile -t -d '' BASE_CLAUDE_FILES < <(git ls-tree -rz --name-only "$BASE_REF" -- .claude)
 rm -rf -- .claude
-if [ "${#BASE_CLAUDE_FILES[@]}" -gt 0 ]; then
-  git restore --source="$BASE_REF" --worktree -- "${BASE_CLAUDE_FILES[@]}"
-  echo "Pinned .claude/ to ${DEFAULT_BRANCH} (${#BASE_CLAUDE_FILES[@]} files)"
+if git cat-file -e "${BASE_REF}:.claude" 2>/dev/null; then
+  git restore --source="$BASE_REF" --worktree -- .claude
+  echo "Pinned .claude/ to ${DEFAULT_BRANCH}"
 else
   echo "No .claude/ on ${DEFAULT_BRANCH} — removed fork version"
 fi
