@@ -24,7 +24,7 @@ find . -name AGENTS.md -not -path './.git/*' -print0 |
   while IFS= read -r -d '' path; do
     rel="${path#./}"
     if ! git cat-file -e "${BASE_REF}:${rel}" 2>/dev/null; then
-      rm -f -- "$path"
+      rm -rf -- "$path"
       echo "No ${rel} on ${DEFAULT_BRANCH} — removed fork version"
     fi
   done
@@ -33,9 +33,8 @@ find . -name AGENTS.md -not -path './.git/*' -print0 |
 while IFS= read -r -d '' rel; do
   case "$rel" in
     AGENTS.md | */AGENTS.md)
-      mkdir -p -- "$(dirname "$rel")"
       git restore --source="$BASE_REF" --worktree -- "$rel"
       echo "Pinned ${rel} to ${DEFAULT_BRANCH}"
       ;;
   esac
-done < <(git -c core.quotepath=off ls-tree -rz --name-only "$BASE_REF")
+done < <(git ls-tree -rz --name-only "$BASE_REF")

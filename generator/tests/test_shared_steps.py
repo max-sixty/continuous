@@ -53,8 +53,12 @@ def test_pin_instruction_files_does_not_follow_fork_symlinks(tmp_path: Path) -> 
     (repo / "AGENTS.md").unlink()
     (repo / "AGENTS.md").symlink_to(outside_agents)
     (repo / "nested" / "AGENTS.md").unlink()
+    (repo / "nested").rmdir()
+    (repo / "nested").write_text("fork replaced the directory\n")
     (repo / "fork-only").mkdir()
     (repo / "fork-only" / "AGENTS.md").symlink_to(outside_fork)
+    (repo / "directory" / "AGENTS.md").mkdir(parents=True)
+    (repo / "directory" / "AGENTS.md" / "child").write_text("fork content\n")
     git("add", "-A")
     git("commit", "-m", "fork tree")
 
@@ -85,6 +89,7 @@ def test_pin_instruction_files_does_not_follow_fork_symlinks(tmp_path: Path) -> 
     assert (repo / "AGENTS.md").readlink() == Path("CLAUDE.md")
     assert (repo / "nested" / "AGENTS.md").read_text() == ("trusted nested guidance\n")
     assert not (repo / "fork-only" / "AGENTS.md").exists()
+    assert not (repo / "directory" / "AGENTS.md").exists()
     for path in (outside_claude, outside_agents, outside_fork):
         assert path.read_text() == "must not change\n"
 
