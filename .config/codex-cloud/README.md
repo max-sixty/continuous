@@ -1,7 +1,7 @@
 # Codex Cloud with Worktrunk
 
 Tend's Cloud setup lives in `environment.sh`. It installs the pinned Worktrunk
-release, approves Tend's reviewed `.config/wt.toml` commands, syncs all project
+release, approves every command `.config/wt.toml` declares, syncs all project
 dependencies, and installs `pre-commit` without installing Git hooks.
 
 ## Create the environment
@@ -32,10 +32,9 @@ pre-commit --version. Require every command to pass and do not modify files.
 ## Keep it current
 
 `environment.sh` is the one setup command for both fresh and cached containers.
-Keep its `approved-commands` list identical to the hooks and aliases in
-`.config/wt.toml`; Worktrunk blocks a changed or missing command in unattended
-sessions. Reset the environment cache when a repository change makes the cached
-container incompatible.
+It reads the command list out of Worktrunk, so a `.config/wt.toml` change needs
+no edit here. Reset the environment cache when a repository change makes the
+cached container incompatible.
 
 The script is Cloud-specific: it replaces the container's Worktrunk approvals
 file. Do not use it as local workstation setup.

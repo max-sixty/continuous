@@ -6,6 +6,14 @@ on:
       - main
     paths:
       - 'site/**'
+      - '.github/workflows/publish-site.yaml'
+  # The same build on the PR, so a change that breaks it — an astro major, a
+  # bad lockfile — fails before merge rather than on the way to Pages. Only
+  # `build-site` runs there; publishing stays with push and dispatch.
+  pull_request:
+    paths:
+      - 'site/**'
+      - '.github/workflows/publish-site.yaml'
   workflow_dispatch:
 
 concurrency:
@@ -44,8 +52,8 @@ jobs:
     needs: build-site
     runs-on: ubuntu-24.04
 
-    # Don't attempt to publish if on a fork
-    if: ${{ github.repository_owner == 'max-sixty' }}
+    # A PR run is a build check, and a fork has no Pages to publish to.
+    if: ${{ github.event_name != 'pull_request' && github.repository_owner == 'max-sixty' }}
 
     permissions:
       pages: write
