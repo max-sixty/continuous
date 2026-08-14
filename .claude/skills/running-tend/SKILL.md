@@ -161,32 +161,76 @@ the whole list.
 
 ## Weekly: bump pinned versions
 
-Title each PR `chore: bump <name> to <version>`; the uv-plus-mitmproxy PR names
-both.
+Every dependency pin in the repo is in scope — no bot watches this repo, so a
+pin outside the sweep drifts until it breaks. Each command below enumerates its
+own ecosystem, so a pin added later shows up without anyone remembering to list
+it here.
 
-### Tool versions
+```bash
+# Composite-action inputs
+yq -r '.inputs | to_entries[] | select(.key | test("_version$"))
+  | "\(filename) \(.key) = \(.value.default)"' */action.yaml
+
+# Python: `==` and upper bounds freeze a version. Floors (`click>=8.0`) state
+# compatibility instead and stay put — raising one only narrows adopter support.
+git grep -nE '(==|~=|<=?)[0-9]' -- '*pyproject.toml'
+uv lock --upgrade --dry-run
+
+# pre-commit hook revs — the updater rewrites them, `git diff` is the report.
+# Through uvx: the weekly job installs uv and nothing else.
+uvx pre-commit autoupdate
+
+# npm: `Wanted` ≠ `Current` is lockfile drift (`npm update`); `Latest` ≠
+# `Wanted` needs the range in package.json moved. Exits 1 when a row prints.
+# `publish-site.yaml` builds site/ only on push to main, so run
+# `npm --prefix site run build` yourself before landing an astro bump.
+npm --prefix worker outdated
+npm --prefix site outdated
+
+# Versions pinned in a shell script (worktrunk, in the Codex Cloud setup)
+git grep -nE '^[A-Za-z_]*VERSION=' -- '*.sh'
+```
+
+What upstream currently publishes:
+
+```bash
+npm view @anthropic-ai/claude-code dist-tags.latest
+npm view @openai/codex dist-tags.latest
+curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
+curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version
+gh api repos/max-sixty/worktrunk/releases/latest --jq '.tag_name | ltrimstr("v")'
+```
+
+GHA `uses:` refs sweep separately, under a rule of their own — see below.
+Out of scope entirely: runner images (`ubuntu-24.04`), `node-version`, and
+`requires-python` are platform choices carrying their own rationale, so they
+move when a reason arrives rather than on a cadence.
+
+Default rule: move to latest and let CI decide. Split PRs by who runs the
+result, and take what fits in one session rather than clearing a backlog at
+once — an unswept pin waits a week, a swamped run finishes nothing.
+
+- **Ships to adopters** — `claude/action.yaml` and `codex/action.yaml` run in
+  every adopter's job from the next release; `generator/src/tend/templates/`
+  and `workflows.py` render into their workflow files. One PR each, titled
+  `chore: bump <name> to <version>` (the uv-plus-mitmproxy PR names both), its
+  body naming what changed.
+- **Ours alone** — everything else: pre-commit revs, the workspace dev pins,
+  the `uv_build` backend, npm devDependencies, `WORKTRUNK_VERSION`, the
+  hand-maintained `.github/workflows/` files and `.config/tend.yaml`. One PR
+  for the lot.
+- **A major** — an npm `Latest` ≠ `Wanted`, or a new mitmproxy/uv major — gets
+  its own PR from either bucket, its body reporting the migration notes.
+
+### Pins with rules of their own
 
 | Pin | File | Rule |
 |---|---|---|
-| `claude_version` | `claude/action.yaml` | track npm's `latest` dist-tag |
-| `mitmproxy_version` | `claude/action.yaml` | track latest; move the root `pyproject.toml` dev pin with it and `uv lock` |
+| `claude_version` | `claude/action.yaml` | npm's `latest` dist-tag, not `stable` |
+| `mitmproxy_version` | `claude/action.yaml` | move the root `pyproject.toml` `==` pin with it and `uv lock` |
 | `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml` | track latest; the surface job confirms the bump |
-| `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | track latest GitHub release |
-
-```bash
-yq '.inputs.claude_version.default' claude/action.yaml
-npm view @anthropic-ai/claude-code dist-tags.latest
-
-yq '.inputs.mitmproxy_version.default' claude/action.yaml
-curl -fsS https://pypi.org/pypi/mitmproxy/json | jq -r .info.version
-
-yq '.inputs.codex_version.default' codex/action.yaml
-npm view @openai/codex dist-tags.latest
-
-sed -n 's/^WORKTRUNK_VERSION=//p' .config/codex-cloud/environment.sh
-gh api repos/max-sixty/worktrunk/releases/latest --jq '.tag_name | ltrimstr("v")'
-```
+| `codex_version` | `codex/action.yaml` | `latest`; `alpha` only for a fix not yet released |
+| `uv_build` | `generator/pyproject.toml` | its range must contain the uv doing the build; a stale one only warns during `uv build`, so only this sweep catches it |
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
 target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
@@ -199,15 +243,14 @@ credential, so a security fix there matters here. Check anything security- or
 addon-related in its CHANGELOG against the `mitmdump` flags in
 `proxy/setup-sandbox.sh`, and report the comparison in the PR. `uv_version`
 only launches that mitmproxy and CI smokes the two together, so it needs no
-release stream of its own; move both in one PR, at whatever uv is latest then
-(`curl -fsS https://pypi.org/pypi/uv/json | jq -r .info.version`).
+release stream of its own; move both in one PR.
 
-Bump `codex_version` to `latest`; drop to `alpha` only for a fix not yet
-released. CI's `test-codex-surface` job installs whatever is pinned and asserts
-the CLI surface the action depends on, so a bump that breaks it fails on its own
-PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live agent session stays
-unverified — skim the codex CHANGELOG across the bump for model availability,
-sandbox behavior, and `--output-last-message`, and note what you find in the PR.
+For `codex_version`, CI's `test-codex-surface` job installs whatever is pinned
+and asserts the CLI surface the action depends on, so a bump that breaks it
+fails on its own PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live
+agent session stays unverified — skim the codex CHANGELOG across the bump for
+model availability, sandbox behavior, and `--output-last-message`, and note what
+you find in the PR.
 
 ### `uses:` refs
 
@@ -224,14 +267,9 @@ git grep -hoE 'uses: [^ ./][^ @]*@[^ ]+' -- ':!generator/tests' ':!*.md' \
 
 An action listed twice is pinned at two majors: refs move when someone needs a
 behavior from one of them, never in a sweep. `git grep` each drifted action for
-its call sites, then split the PRs by who runs the result.
-
-- **Ships to adopters** — `generator/src/tend/templates/` and `workflows.py`
-  render into adopters' workflow files; `claude/action.yaml` and
-  `codex/action.yaml` run in every adopter's job from the next release. One PR
-  per action, its body naming what changed across the majors it crosses.
-- **Ours alone** — the hand-maintained `.github/workflows/` files and
-  `.config/tend.yaml`. One PR for the lot.
+its call sites, then split the PRs by the buckets above — a ref that ships to
+adopters gets its own, its body naming what changed across the majors it
+crosses.
 
 The generated `tend-*.yaml` show up in that grep too; their refs come from the
 templates and from `.config/tend.yaml`'s `setup:`, which is where they move.
