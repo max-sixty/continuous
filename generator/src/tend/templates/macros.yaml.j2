@@ -126,27 +126,61 @@
 {% if cfg.repo_owner %}github.repository_owner == '<<cfg.repo_owner|replace("'", "''")>>' && {% endif %}
 {%- endmacro %}
 
-{# Acknowledge an inbound issue or PR the moment the job starts: the agent
-   takes minutes to reach its first comment, and until then an opened issue
-   looks unattended. GitHub files PRs as issues for reactions, so one endpoint
-   covers both, and a repeat call returns the existing reaction rather than
-   erroring.
+{# A step's `if:`, as a block scalar where the expression spans lines. #}
+{% macro step_if(condition) %}
+{% if '\n' in condition %}
+        if: |
+<<condition|trim|indent(10, first=True)>>
+{%- else %}
+        if: <<condition>>
+{%- endif %}
+{%- endmacro %}
 
-   The reaction stays for the life of the issue, recording that the bot saw the
-   event; mention's eyes track a session in flight on one comment and come off
-   when it ends. A failure warns rather than failing the job — an
-   acknowledgment is not worth losing the run that does the work. #}
-{% macro react_eyes(number_expr, if_condition='') %}
-      - name: Acknowledge with an eyes reaction
+{# 👀 means one thing wherever the bot uses it: a session is working on this
+   right now. `react_eyes` goes on at the top of the job — the agent takes
+   minutes to reach its first comment, and until then an opened issue looks
+   unattended — and `unreact_eyes` takes it off at the end, under `always()`, so
+   a failed or cancelled run doesn't strand it.
+
+   `target` is an API path under `repos/<owner>/<repo>/`: `issues/<number>` for
+   an issue or PR (GitHub files PRs as issues for reactions), `issues/comments/`
+   or `pulls/comments/<id>` for a comment. A repeat react returns the existing
+   reaction rather than erroring, and the delete is filtered to the bot's own
+   reaction so a human's 👀 survives.
+
+   Either half failing warns rather than failing the job — an acknowledgment is
+   not worth losing the run that does the work, and the unreact half runs on
+   jobs that have already failed. #}
+{% macro react_eyes(target, if_condition='') %}
+      - name: React with eyes
 {% if if_condition %}
-        if: <<if_condition>>
+<<step_if(if_condition)>>
 {% endif %}
         run: |
-          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+          gh api "repos/$REPO/$TARGET/reactions" -f content=eyes --silent \
             || echo "::warning::could not add the eyes reaction"
         env:
           REPO: ${{ github.repository }}
-          NUMBER: <<number_expr>>
+          TARGET: <<target>>
+          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
+{%- endmacro %}
+
+{% macro unreact_eyes(cfg, target, if_condition='') %}
+      - name: Remove the eyes reaction
+{% if if_condition %}
+<<step_if(if_condition)>>
+{% endif %}
+        run: |
+          REACTION_ID=$(gh api "repos/$REPO/$TARGET/reactions?content=eyes" \
+            --jq ".[] | select(.user.login == \"$BOT_NAME\") | .id" | head -n1)
+          if [ -n "$REACTION_ID" ]; then
+            gh api -X DELETE "repos/$REPO/$TARGET/reactions/$REACTION_ID" --silent \
+              || echo "::warning::could not remove the eyes reaction"
+          fi
+        env:
+          REPO: ${{ github.repository }}
+          TARGET: <<target>>
+          BOT_NAME: <<cfg.bot_name>>
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
 {%- endmacro %}
 

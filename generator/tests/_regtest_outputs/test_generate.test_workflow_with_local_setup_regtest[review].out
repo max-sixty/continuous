@@ -97,14 +97,14 @@ jobs:
 
           echo "should_run=true" >> "$GITHUB_OUTPUT"
 
-      - name: Acknowledge with an eyes reaction
-        if: steps.gate.outputs.should_run == 'true' && github.event.action == 'opened'
+      - name: React with eyes
+        if: steps.gate.outputs.should_run == 'true'
         run: |
-          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+          gh api "repos/$REPO/$TARGET/reactions" -f content=eyes --silent \
             || echo "::warning::could not add the eyes reaction"
         env:
           REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.pull_request.number }}
+          TARGET: issues/${{ github.event.pull_request.number }}
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
 
       # Two checkouts: `setup:` runs against the base tree, and the PR's own
@@ -165,3 +165,18 @@ jobs:
           dir=.github/actions/tend-setup
           git checkout "$GITHUB_SHA" -- "$dir" ||
             echo "::warning::could not restore $dir from $GITHUB_SHA; POST cleanup of the local action may fail"
+
+      - name: Remove the eyes reaction
+        if: always() && (steps.gate.outputs.should_run == 'true')
+        run: |
+          REACTION_ID=$(gh api "repos/$REPO/$TARGET/reactions?content=eyes" \
+            --jq ".[] | select(.user.login == \"$BOT_NAME\") | .id" | head -n1)
+          if [ -n "$REACTION_ID" ]; then
+            gh api -X DELETE "repos/$REPO/$TARGET/reactions/$REACTION_ID" --silent \
+              || echo "::warning::could not remove the eyes reaction"
+          fi
+        env:
+          REPO: ${{ github.repository }}
+          TARGET: issues/${{ github.event.pull_request.number }}
+          BOT_NAME: test-bot
+          GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}

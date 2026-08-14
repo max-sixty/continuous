@@ -90,6 +90,11 @@ def test_setup_steps_rendered(tmp_path: Path) -> None:
         )
 
 
+def _eyes_steps(steps: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The steps that put the eyes reaction on and take it off, in order."""
+    return [s for s in steps if "content=eyes" in str(s.get("run", ""))]
+
+
 def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
     """Index of the step that puts the loaded tree's local setup actions back."""
     for i, step in enumerate(steps):
@@ -703,21 +708,20 @@ def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
     assert "tend-review/$PR" in steps[0]["run"]
     gate = "steps.gate.outputs.should_run == 'true'"
     for step in steps[1:]:
-        # A step may narrow further (the eyes reaction fires only on `opened`),
-        # but the gate's verdict stays a required conjunct.
+        # A step may narrow further (the eyes reaction fires only on `opened`)
+        # or widen to `always()` (the reaction comes off a failed run too), but
+        # the gate's verdict stays a conjunct of whatever it builds.
         condition = step.get("if", "")
-        assert condition == gate or condition.startswith(f"{gate} && "), (
-            f"ungated step after the gate: {step}"
-        )
+        assert gate in condition, f"ungated step after the gate: {step}"
 
 
-def test_opened_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
-    """A newly opened issue or PR carries an eyes reaction before the agent
+def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
+    """An issue or PR the bot takes up carries an eyes reaction before the agent
     boots: the session takes minutes to reach its first comment, and until then
     the author has nothing telling them the bot picked the event up.
 
-    Review narrows to `opened` — a synchronize or reopen lands on a PR already
-    carrying the reaction.
+    So the reaction goes on wherever a session starts, not only on the first
+    one — a push mid-review that boots its own session earns its own eyes.
     """
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
@@ -725,18 +729,48 @@ def test_opened_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
     triage = yaml.safe_load(workflows["tend-triage.yaml"].content)
     first = triage["jobs"]["triage"]["steps"][0]
     assert "content=eyes" in first["run"]
-    assert first["env"]["NUMBER"] == "${{ github.event.issue.number }}"
+    assert first["env"]["TARGET"] == "issues/${{ github.event.issue.number }}"
     # Every issues:opened event the job-level `if` admits is the bot's to take.
     assert "if" not in first
 
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
-    react = next(
-        step
-        for step in review["jobs"]["review"]["steps"]
-        if "content=eyes" in str(step.get("run", ""))
+    react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
+    assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
+    # Nothing beyond the gate: a run that boots an agent says so.
+    assert react["if"] == "steps.gate.outputs.should_run == 'true'"
+
+
+@pytest.mark.parametrize(
+    ("name", "react_job", "unreact_job"),
+    [
+        ("triage", "triage", "triage"),
+        ("review", "review", "review"),
+        ("mention", "verify", "handle"),
+    ],
+)
+def test_eyes_come_off_when_the_session_ends(
+    tmp_path: Path, name: str, react_job: str, unreact_job: str
+) -> None:
+    """👀 means a session is working on this right now, so every workflow that
+    puts it on takes it off again — under `always()`, so a failed or cancelled
+    run doesn't strand it.
+
+    Both halves have to name the same reaction target. Mention splits them
+    across jobs, and a target that drifted between the two would leave the eyes
+    on every comment the bot ever answered."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    jobs = yaml.safe_load(workflows[f"tend-{name}.yaml"].content)["jobs"]
+
+    react = _eyes_steps(jobs[react_job]["steps"])[0]
+    unreact = _eyes_steps(jobs[unreact_job]["steps"])[-1]
+    assert "-X DELETE" in unreact["run"], f"{name}: nothing removes the reaction"
+    assert unreact["if"].startswith("always()"), (
+        f"{name}: a failed session has to release the reaction too"
     )
-    assert react["env"]["NUMBER"] == "${{ github.event.pull_request.number }}"
-    assert "github.event.action == 'opened'" in react["if"]
+    assert unreact["env"]["TARGET"] == react["env"]["TARGET"]
+    # The bot's own reaction only — a human's 👀 on the same issue stays put.
+    assert 'select(.user.login == \\"$BOT_NAME\\")' in unreact["run"]
 
 
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:

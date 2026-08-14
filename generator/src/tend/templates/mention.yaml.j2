@@ -1,3 +1,19 @@
+{#- The comment the eyes go on. `issue_comment` fires for issues and PRs alike
+    and its ids are issue comments; the other two arms are inline review
+    comments, which live under `pulls`. #}
+{%- set reaction_target -%}
+${{ github.event_name == 'issue_comment'
+            && format('issues/comments/{0}', github.event.comment.id)
+            || format('pulls/comments/{0}', github.event.comment.id || github.event.client_payload.id) }}
+{%- endset -%}
+{#- True where a comment summoned the bot by name. The dispatch arm covers a
+    relayed inline comment, whose id the check step verified belongs to this
+    PR; `reason` is read from whichever job the condition renders in. #}
+{%- macro summoned(bot_name, reason_expr) -%}
+((github.event.comment && contains(github.event.comment.body, '@<<bot_name>>'))
+    || (github.event.client_payload.kind == 'pull_request_review_comment'
+        && <<reason_expr>> == 'mention'))
+{%- endmacro -%}
 {%- set prompt_body %}prompt: >-
             ${{ steps.delay.outputs.seconds
             && format('This job started {0}s after the triggering event (over ~40s means it was queued). ',
@@ -149,19 +165,7 @@ jobs:
       # step verified belongs to this PR; a review *submission* has no single
       # comment to react to, so it gets no eyes — same as when the events
       # arrived directly.
-      - name: React to mention
-        if: |
-          steps.check.outputs.should_run == 'true'
-          && ((github.event.comment && contains(github.event.comment.body, '@<<cfg.bot_name>>'))
-              || (github.event.client_payload.kind == 'pull_request_review_comment'
-                  && steps.check.outputs.reason == 'mention'))
-        run: |
-          gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes 2>/dev/null || \
-          gh api "repos/$REPO/pulls/comments/$COMMENT_ID/reactions" -f content=eyes 2>/dev/null || true
-        env:
-          REPO: ${{ github.repository }}
-          COMMENT_ID: ${{ github.event.comment.id || github.event.client_payload.id }}
-          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
+<<react_eyes(reaction_target, if_condition="steps.check.outputs.should_run == 'true'\n&& " ~ summoned(cfg.bot_name, 'steps.check.outputs.reason'))>>
 
   handle:
     needs: verify
@@ -207,22 +211,4 @@ jobs:
 
 <<agent_step(cfg, prompt_body)>><<restore_local_actions(local_actions)>>
 
-      - name: Remove eyes reaction
-        if: |
-          always()
-          && ((github.event.comment && contains(github.event.comment.body, '@<<cfg.bot_name>>'))
-              || (github.event.client_payload.kind == 'pull_request_review_comment'
-                  && needs.verify.outputs.reason == 'mention'))
-        run: |
-          for KIND in issues pulls; do
-            REACTION_ID=$(gh api "repos/$REPO/$KIND/comments/$COMMENT_ID/reactions?content=eyes" \
-              --jq ".[] | select(.user.login == \"$BOT_NAME\") | .id" 2>/dev/null | head -n1)
-            if [ -n "$REACTION_ID" ]; then
-              gh api -X DELETE "repos/$REPO/$KIND/comments/$COMMENT_ID/reactions/$REACTION_ID" 2>/dev/null && break
-            fi
-          done
-        env:
-          REPO: ${{ github.repository }}
-          COMMENT_ID: ${{ github.event.comment.id || github.event.client_payload.id }}
-          BOT_NAME: <<cfg.bot_name>>
-          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
+<<unreact_eyes(cfg, reaction_target, if_condition="always()\n&& " ~ summoned(cfg.bot_name, 'needs.verify.outputs.reason'))>>

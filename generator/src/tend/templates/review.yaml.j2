@@ -34,9 +34,7 @@ jobs:
         run: |
 <<gate_script|indent(10, first=True)>>
 
-{# Arrival only: the other trigger types are pushes and state changes on a PR
-   the reaction is already on. #}
-<<react_eyes('${{ github.event.pull_request.number }}', if_condition=skip_condition ~ " && github.event.action == 'opened'")>>
+<<react_eyes('issues/${{ github.event.pull_request.number }}', if_condition=skip_condition)>>
 
 {% if has_setup %}
       # Two checkouts: `setup:` runs against the base tree, and the PR's own
@@ -66,3 +64,5 @@ jobs:
 <<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', if_condition=skip_condition, allow_unsafe_pr_checkout=True, clean=not has_setup)>>
 
 <<agent_step(cfg, prompt_body, if_condition=skip_condition)>><<restore_local_actions(local_actions, if_condition=skip_condition)>>
+
+<<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition='always() && (' ~ skip_condition ~ ')')>>

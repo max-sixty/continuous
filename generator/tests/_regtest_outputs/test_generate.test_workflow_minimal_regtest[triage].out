@@ -28,13 +28,13 @@ jobs:
       actions: read
       issues: write
     steps:
-      - name: Acknowledge with an eyes reaction
+      - name: React with eyes
         run: |
-          gh api "repos/$REPO/issues/$NUMBER/reactions" -f content=eyes --silent \
+          gh api "repos/$REPO/$TARGET/reactions" -f content=eyes --silent \
             || echo "::warning::could not add the eyes reaction"
         env:
           REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.issue.number }}
+          TARGET: issues/${{ github.event.issue.number }}
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
 
       - uses: actions/checkout@v7
@@ -53,3 +53,18 @@ jobs:
           model: opus
           prompt: |
             /tend-ci-runner:triage ${{ github.event.issue.number }}
+
+      - name: Remove the eyes reaction
+        if: always()
+        run: |
+          REACTION_ID=$(gh api "repos/$REPO/$TARGET/reactions?content=eyes" \
+            --jq ".[] | select(.user.login == \"$BOT_NAME\") | .id" | head -n1)
+          if [ -n "$REACTION_ID" ]; then
+            gh api -X DELETE "repos/$REPO/$TARGET/reactions/$REACTION_ID" --silent \
+              || echo "::warning::could not remove the eyes reaction"
+          fi
+        env:
+          REPO: ${{ github.repository }}
+          TARGET: issues/${{ github.event.issue.number }}
+          BOT_NAME: test-bot
+          GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
