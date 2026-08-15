@@ -64,6 +64,8 @@ git fetch --no-tags --quiet origin "$BASE_SHA" 2>/dev/null || true
 git log --no-merges --numstat --format='%h %s' "$LAST_REVIEW_SHA..$HEAD_SHA" --not "$BASE_SHA"
 ```
 
+The incremental scopes the *review*, not anything this run writes about the PR as a whole: if you also edit the PR description, scope its claims to the merge base per **Keeping PR Titles and Descriptions Current** in `/tend-ci-runner:running-in-ci`.
+
 If the incremental changes are trivial, skip the full review — go directly to step 7 to resolve any bot threads addressed by the new changes. After resolving threads: if the most recent bot review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE with an empty body so the PR isn't left in limbo. Otherwise do not submit a new review — the existing one stands. Do NOT proceed to steps 2–6; finish at step 9. Rough heuristic: changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow are typically trivial.
 
 **Commit and PR authorship do not affect review behavior.** Apply the same trivial-vs-substantive heuristic regardless of who pushed the new commits. When `tend-notifications` or `tend-ci-fix` pushes a fix to a human-authored PR, reviewing (and re-approving) the updated state is expected — the reviewer role is independent of commit authorship.
