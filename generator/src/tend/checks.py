@@ -1321,7 +1321,7 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
         )
 
     org = repo.split("/")[0] if "/" in repo else None
-    org_secrets, org_forbidden = _list_org_secrets(org) if org else (None, False)
+    org_secrets, org_forbidden = _list_org_secrets(org, repo) if org else (None, False)
     found_at_org = [s for s in missing if org_secrets and s in org_secrets]
 
     msg = (
@@ -1344,18 +1344,83 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
     return CheckResult("secrets", False, msg)
 
 
-def _list_org_secrets(org: str) -> tuple[set[str] | None, bool]:
-    """List org-level secret names. Returns (secrets, permission_denied)."""
-    result = _gh("api", f"orgs/{org}/actions/secrets", "--jq", "[.secrets[].name]")
+def _repo_is_public(repo: str) -> bool | None:
+    """Whether `repo` is public. None when it cannot be determined."""
+    result = _gh("api", f"repos/{repo}", "--jq", ".private")
+    if result is None or result.returncode != 0:
+        return None
+    return {"true": False, "false": True}.get(result.stdout.strip())
+
+
+def _org_secret_repos(org: str, name: str) -> set[str] | None:
+    """Repos a `selected`-visibility org secret is shared with, or None if the
+    list cannot be read. Paginated: an org sharing a secret with more repos
+    than one page holds would otherwise look like it omits this one."""
+    result = _gh(
+        "api",
+        "--paginate",
+        f"orgs/{org}/actions/secrets/{name}/repositories",
+        "--jq",
+        ".repositories[].full_name",
+    )
+    if result is None or result.returncode != 0:
+        return None
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def _org_plan_is_free(org: str) -> bool:
+    """Whether the org is on GitHub Free, which serves org secrets to public
+    repositories only. False whenever the plan can't be read — the caller
+    skips secrets on this, and skipping wrongly would blind the check."""
+    result = _gh("api", f"orgs/{org}", "--jq", '.plan.name // ""')
+    if result is None or result.returncode != 0:
+        return False
+    return result.stdout.strip() == "free"
+
+
+def _list_org_secrets(org: str, repo: str) -> tuple[set[str] | None, bool]:
+    """List the org-level secrets `repo` can actually read.
+
+    Returns (secrets, permission_denied). An org secret scoped away from this
+    repo is not part of its credential surface, and naming it produces a
+    failure no repo-side change can clear: the repo is already at the tightest
+    scoping GitHub offers, so the only lever left is a `secrets.allowed` entry
+    that would assert the opposite of the truth and mute the name permanently.
+
+    Filtering is fail-safe in one direction only — a secret whose reach cannot
+    be determined stays in the set. Under-reporting hides real exposure;
+    over-reporting is merely noise.
+    """
+    result = _gh(
+        "api",
+        f"orgs/{org}/actions/secrets",
+        "--jq",
+        "[.secrets[] | {name, visibility}]",
+    )
     if result is None:
         return None, False
     if result.returncode != 0:
         forbidden = "HTTP 403" in result.stderr
         return None, forbidden
     try:
-        return set(json.loads(result.stdout)), False
-    except (json.JSONDecodeError, TypeError):
+        listed = [(s["name"], s.get("visibility")) for s in json.loads(result.stdout)]
+    except (json.JSONDecodeError, TypeError, KeyError):
         return None, False
+
+    is_public = _repo_is_public(repo)
+    if is_public is False and _org_plan_is_free(org):
+        return set(), False
+
+    reachable = set()
+    for name, visibility in listed:
+        if visibility == "selected":
+            shared = _org_secret_repos(org, name)
+            if shared is not None and repo not in shared:
+                continue
+        elif visibility == "private" and is_public:
+            continue
+        reachable.add(name)
+    return reachable, False
 
 
 def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
@@ -1383,12 +1448,13 @@ def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
             "repo-secret-allowlist", None, "Could not parse secrets response"
         )
 
-    # Best-effort: include org-level secrets (also available to workflows).
+    # Best-effort: include the org-level secrets this repo can read (also
+    # available to its workflows). Ones scoped away from it are not.
     org = repo.split("/")[0] if "/" in repo else None
     org_secrets: set[str] = set()
     org_forbidden = False
     if org:
-        fetched, org_forbidden = _list_org_secrets(org)
+        fetched, org_forbidden = _list_org_secrets(org, repo)
         if fetched is not None:
             org_secrets = fetched
 

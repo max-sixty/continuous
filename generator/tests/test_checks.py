@@ -122,6 +122,44 @@ def _login_response(login: str | None) -> subprocess.CompletedProcess[str]:
     return _make_completed(f"{login}\n")
 
 
+def _org_secret_gh(
+    *,
+    org_secrets: list[tuple[str, str]],
+    shared: dict[str, list[str]] | None = None,
+    repo_private: bool = False,
+    plan: str = "team",
+    repositories_rc: int = 0,
+):
+    """A `_gh` stand-in serving the endpoints `_list_org_secrets` reads, for the
+    org `acme` and the repo `acme/widget`: the org secret listing as
+    (name, visibility) pairs, each `selected` secret's shared-repo list, the
+    org's plan, and the repo's own visibility. Repo-level secrets come back
+    empty so a test's subject is only what the org contributes."""
+    shared = shared or {}
+
+    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        url = next(a for a in args if a.startswith(("repos/", "orgs/")))
+        if url.endswith("/repositories"):
+            if repositories_rc != 0:
+                return _make_completed(returncode=repositories_rc, stderr="HTTP 404")
+            return _make_completed("\n".join(shared.get(url.split("/")[-2], [])) + "\n")
+        if url == "orgs/acme/actions/secrets":
+            jq = args[args.index("--jq") + 1] if "--jq" in args else ""
+            listed = (
+                [{"name": n, "visibility": v} for n, v in org_secrets]
+                if "visibility" in jq
+                else [n for n, _ in org_secrets]
+            )
+            return _make_completed(json.dumps(listed) + "\n")
+        if url == "orgs/acme":
+            return _make_completed(f"{plan}\n")
+        if url == "repos/acme/widget":
+            return _make_completed(f"{str(repo_private).lower()}\n")
+        return _make_completed("[]\n")
+
+    return fake
+
+
 def _role_actor(actor_id: int) -> dict[str, object]:
     """A `bypass_actors` entry granting a base repository role."""
     return {
@@ -720,14 +758,11 @@ def test_secrets_org_level_copy_fails() -> None:
     reads it — and every workflow keeps working, so the failure has to name
     the copy or the exposure stays invisible."""
 
-    def fake(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        url = next(a for a in args if a.startswith(("repos/", "orgs/")))
-        if url.startswith("orgs/"):
-            return _make_completed('["TEND_BOT_TOKEN"]\n')
-        return _make_completed("[]\n")
-
-    with patch("tend.checks._gh", side_effect=fake):
-        result = check_secrets("owner/repo", ["TEND_BOT_TOKEN"])
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(org_secrets=[("TEND_BOT_TOKEN", "all")]),
+    ):
+        result = check_secrets("acme/widget", ["TEND_BOT_TOKEN"])
     assert result.passed is False
     assert "org level" in result.message
 
@@ -883,6 +918,118 @@ def test_repo_secret_allowlist_empty_repo() -> None:
     ):
         result = check_repo_secret_allowlist("owner/repo", {"TEND_BOT_TOKEN"})
     assert result.passed is True
+
+
+def test_repo_secret_allowlist_org_secret_not_shared_with_repo() -> None:
+    """A `selected`-visibility org secret whose repository list omits this repo
+    is unreadable here, so it is not part of the repo's credential surface.
+    Reporting it produces a FAIL no repo-side change can clear — the repo is
+    already at the tightest scoping GitHub offers."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("NPM_TOKEN", "selected")],
+            shared={"NPM_TOKEN": ["acme/other"]},
+        ),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is True, result.message
+    assert "NPM_TOKEN" not in result.message
+
+
+def test_repo_secret_allowlist_org_secret_shared_with_repo() -> None:
+    """The same secret, shared with this repo, is readable and still reported."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("NPM_TOKEN", "selected")],
+            shared={"NPM_TOKEN": ["acme/other", "acme/widget"]},
+        ),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is False
+    assert "NPM_TOKEN" in result.message
+    assert "org-level" in result.message
+
+
+def test_repo_secret_allowlist_org_secret_visibility_all() -> None:
+    """`visibility: all` reaches every repo in the org, so it is reported."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(org_secrets=[("NPM_TOKEN", "all")]),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is False
+    assert "NPM_TOKEN" in result.message
+
+
+def test_repo_secret_allowlist_org_secret_private_visibility_public_repo() -> None:
+    """`visibility: private` reaches the org's private repos only."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("NPM_TOKEN", "private")], repo_private=False
+        ),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is True, result.message
+    assert "NPM_TOKEN" not in result.message
+
+
+def test_repo_secret_allowlist_org_secret_private_visibility_private_repo() -> None:
+    """The same secret does reach a private repo in the org."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("NPM_TOKEN", "private")], repo_private=True
+        ),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is False
+    assert "NPM_TOKEN" in result.message
+
+
+def test_repo_secret_allowlist_org_free_plan_private_repo() -> None:
+    """On GitHub Free, org secrets reach public repositories only — a private
+    repo in a free org reads none of them however they are scoped."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("NPM_TOKEN", "all")], repo_private=True, plan="free"
+        ),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is True, result.message
+    assert "NPM_TOKEN" not in result.message
+
+
+def test_repo_secret_allowlist_org_secret_reach_unknown_is_reported() -> None:
+    """Filtering is fail-safe: when the shared-repo list can't be read, the
+    secret stays in the surface rather than being silently dropped."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("NPM_TOKEN", "selected")], repositories_rc=1
+        ),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is False
+    assert "NPM_TOKEN" in result.message
+
+
+def test_secrets_org_level_copy_not_shared_with_repo() -> None:
+    """`check_secrets` reads the same surface: an org copy the repo cannot read
+    doesn't keep its workflows running, so it must not be named as if it did."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("TEND_BOT_TOKEN", "selected")],
+            shared={"TEND_BOT_TOKEN": ["acme/other"]},
+        ),
+    ):
+        result = check_secrets("acme/widget", ["TEND_BOT_TOKEN"])
+    assert result.passed is False
+    assert "org level" not in result.message
 
 
 def test_repo_secret_allowlist_api_error() -> None:

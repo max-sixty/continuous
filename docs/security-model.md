@@ -101,7 +101,12 @@ where a credential can live:
   reopen the gate. Org-level secrets are swept into the same check
   best-effort: they cannot be environment-gated at all, and listing them
   needs `admin:org`, the one place the claim rests on the token the
-  maintainer ran `tend check` with.
+  maintainer ran `tend check` with. Only the org secrets this repo can
+  actually read count — one scoped away from it (`selected` without the
+  repo, `private` against a public repo, any of them against a private
+  repo in a GitHub Free org) reaches no workflow here, and naming it
+  would leave a failure no repo-side change can clear. A secret whose
+  reach cannot be determined is reported rather than dropped.
 - *The operational secrets actually live in the gated environment*
   (`environment`, `secrets`): the `tend` policy admits exactly the
   verified branches, and the bot PAT and harness auth are present there
