@@ -34,4 +34,7 @@ dev = [
   # That same test reads claude/action.yaml. `tend` happens to pull ruamel in,
   # but the proxy suite doesn't depend on the generator, so declare it here.
   "ruamel.yaml>=0.18",
+  # test_repo_pins.py reads a version specifier out of a pyproject and asks
+  # whether a version satisfies it. Only ever arrives transitively otherwise.
+  "packaging>=25",
 ]

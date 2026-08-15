@@ -969,6 +969,7 @@ source = { virtual = "." }
 [package.dev-dependencies]
 dev = [
     { name = "mitmproxy" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-regtest" },
     { name = "ruamel-yaml" },
@@ -980,6 +981,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "mitmproxy", specifier = "==12.2.3" },
+    { name = "packaging", specifier = ">=25" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-regtest", specifier = ">=2.1.1" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
