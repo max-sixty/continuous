@@ -161,12 +161,6 @@ jobs:
           PAYLOAD_PR: ${{ github.event.client_payload.pr }}
           PAYLOAD_ID: ${{ github.event.client_payload.id }}
 
-      # The dispatch arm covers a relayed inline comment, whose id the check
-      # step verified belongs to this PR; a review *submission* has no single
-      # comment to react to, so it gets no eyes — same as when the events
-      # arrived directly.
-<<react_eyes(reaction_target, if_condition="steps.check.outputs.should_run == 'true'\n&& " ~ summoned(cfg.bot_name, 'steps.check.outputs.reason'))>>
-
   handle:
     needs: verify
     if: needs.verify.outputs.should_run == 'true'
@@ -178,6 +172,19 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
+      # Both halves of the reaction belong to this job, so the eyes can only
+      # go on once the job that takes them off has started. Put them in
+      # `verify` and `handle` respectively and the routine burst case strands
+      # them: a third mention on one thread evicts the second's pending
+      # `handle` — a job cancelled while queued allocates no runner and runs
+      # no steps, `always()` included — while its `verify` already reacted.
+      #
+      # The dispatch arm covers a relayed inline comment, whose id the check
+      # step verified belongs to this PR; a review *submission* has no single
+      # comment to react to, so it gets no eyes — same as when the events
+      # arrived directly. The job's own `if` already carries `should_run`.
+<<react_eyes(reaction_target, if_condition=summoned(cfg.bot_name, 'needs.verify.outputs.reason'))>>
+
 <<checkout(cfg)>>
 <<setup>>
       - name: Check out PR branch

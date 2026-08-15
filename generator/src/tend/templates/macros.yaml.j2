@@ -142,11 +142,20 @@
    unattended — and `unreact_eyes` takes it off at the end, under `always()`, so
    a failed or cancelled run doesn't strand it.
 
+   Both halves have to sit in the *same* job, which is what makes `always()`
+   mean anything: it governs step execution within a job that started, and a
+   job cancelled while still queued never allocates a runner, so no step of it
+   runs. Split across jobs, every route where the second never starts leaves
+   the eyes on with no session behind them.
+
    `target` is an API path under `repos/<owner>/<repo>/`: `issues/<number>` for
    an issue or PR (GitHub files PRs as issues for reactions), `issues/comments/`
    or `pulls/comments/<id>` for a comment. A repeat react returns the existing
    reaction rather than erroring, and the delete is filtered to the bot's own
-   reaction so a human's 👀 survives.
+   reaction so a human's 👀 survives. That lookup paginates: 👀 is also the
+   ordinary "watching this" reaction, so on a busy issue the bot's own can sit
+   past the first page, and finding nothing there keeps the reaction silently
+   (the step exits 0 either way).
 
    Either half failing warns rather than failing the job — an acknowledgment is
    not worth losing the run that does the work, and the unreact half runs on
@@ -171,7 +180,8 @@
 <<step_if(if_condition)>>
 {% endif %}
         run: |
-          REACTION_ID=$(gh api "repos/$REPO/$TARGET/reactions?content=eyes" \
+          REACTION_ID=$(gh api --paginate \
+            "repos/$REPO/$TARGET/reactions?content=eyes&per_page=100" \
             --jq ".[] | select(.user.login == \"$BOT_NAME\") | .id" | head -n1)
           if [ -n "$REACTION_ID" ]; then
             gh api -X DELETE "repos/$REPO/$TARGET/reactions/$REACTION_ID" --silent \

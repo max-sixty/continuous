@@ -744,29 +744,35 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "react_job", "unreact_job"),
-    [
-        ("triage", "triage", "triage"),
-        ("review", "review", "review"),
-        ("mention", "verify", "handle"),
-    ],
+    ("name", "job"),
+    [("triage", "triage"), ("review", "review"), ("mention", "handle")],
 )
 def test_eyes_come_off_when_the_session_ends(
-    tmp_path: Path, name: str, react_job: str, unreact_job: str
+    tmp_path: Path, name: str, job: str
 ) -> None:
     """👀 means a session is working on this right now, so every workflow that
     puts it on takes it off again — under `always()`, so a failed or cancelled
     run doesn't strand it.
 
-    Both halves have to name the same reaction target. Mention splits them
-    across jobs, and a target that drifted between the two would leave the eyes
-    on every comment the bot ever answered."""
+    Both halves live in the *same* job, which is what makes `always()` mean
+    anything: a job cancelled while still queued never allocates a runner, so
+    none of its steps execute — `always()` governs execution within a job that
+    started. React in one job and unreact in another and every route where the
+    second job never starts leaves the eyes on with no session behind them.
+    `cancel-in-progress: false` doesn't close that: it holds a *running* job
+    while GitHub still evicts a *pending* one to make room for a newer run.
+
+    Both halves also have to name the same reaction target; one that drifted
+    would leave the eyes on every comment the bot ever answered."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     jobs = yaml.safe_load(workflows[f"tend-{name}.yaml"].content)["jobs"]
 
-    react = _eyes_steps(jobs[react_job]["steps"])[0]
-    unreact = _eyes_steps(jobs[unreact_job]["steps"])[-1]
+    reacting = {j for j, spec in jobs.items() if _eyes_steps(spec["steps"])}
+    assert reacting == {job}, f"{name}: the eyes are split across {reacting}"
+
+    eyes = _eyes_steps(jobs[job]["steps"])
+    react, unreact = eyes[0], eyes[-1]
     assert "-X DELETE" in unreact["run"], f"{name}: nothing removes the reaction"
     assert unreact["if"].startswith("always()"), (
         f"{name}: a failed session has to release the reaction too"
@@ -774,6 +780,11 @@ def test_eyes_come_off_when_the_session_ends(
     assert unreact["env"]["TARGET"] == react["env"]["TARGET"]
     # The bot's own reaction only — a human's 👀 on the same issue stays put.
     assert 'select(.user.login == \\"$BOT_NAME\\")' in unreact["run"]
+    # The bot's 👀 is one of many on a busy thread, and page 1 is 30 of them:
+    # unpaginated, the lookup misses its own reaction and silently keeps it.
+    assert "--paginate" in unreact["run"], (
+        f"{name}: the reaction lookup only reads the first page"
+    )
 
 
 def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:

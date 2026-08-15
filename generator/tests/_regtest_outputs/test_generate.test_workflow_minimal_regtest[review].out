@@ -148,7 +148,8 @@ jobs:
       - name: Remove the eyes reaction
         if: always() && (steps.gate.outputs.should_run == 'true')
         run: |
-          REACTION_ID=$(gh api "repos/$REPO/$TARGET/reactions?content=eyes" \
+          REACTION_ID=$(gh api --paginate \
+            "repos/$REPO/$TARGET/reactions?content=eyes&per_page=100" \
             --jq ".[] | select(.user.login == \"$BOT_NAME\") | .id" | head -n1)
           if [ -n "$REACTION_ID" ]; then
             gh api -X DELETE "repos/$REPO/$TARGET/reactions/$REACTION_ID" --silent \
