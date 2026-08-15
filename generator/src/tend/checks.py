@@ -1415,7 +1415,9 @@ def _list_org_secrets(org: str, repo: str) -> tuple[set[str] | None, bool]:
     for name, visibility in listed:
         if visibility == "selected":
             shared = _org_secret_repos(org, name)
-            if shared is not None and repo not in shared:
+            if shared is not None and repo.casefold() not in {
+                r.casefold() for r in shared
+            }:
                 continue
         elif visibility == "private" and is_public:
             continue

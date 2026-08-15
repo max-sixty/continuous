@@ -144,12 +144,7 @@ def _org_secret_gh(
                 return _make_completed(returncode=repositories_rc, stderr="HTTP 404")
             return _make_completed("\n".join(shared.get(url.split("/")[-2], [])) + "\n")
         if url == "orgs/acme/actions/secrets":
-            jq = args[args.index("--jq") + 1] if "--jq" in args else ""
-            listed = (
-                [{"name": n, "visibility": v} for n, v in org_secrets]
-                if "visibility" in jq
-                else [n for n, _ in org_secrets]
-            )
+            listed = [{"name": n, "visibility": v} for n, v in org_secrets]
             return _make_completed(json.dumps(listed) + "\n")
         if url == "orgs/acme":
             return _make_completed(f"{plan}\n")
@@ -950,6 +945,22 @@ def test_repo_secret_allowlist_org_secret_shared_with_repo() -> None:
     assert result.passed is False
     assert "NPM_TOKEN" in result.message
     assert "org-level" in result.message
+
+
+def test_repo_secret_allowlist_org_secret_shared_case_insensitively() -> None:
+    """GitHub returns `full_name` in canonical casing while `repo` is whatever
+    was passed to `--repo`. A casing difference must not read as "not shared"
+    and drop the secret — that is the under-reporting direction."""
+    with patch(
+        "tend.checks._gh",
+        side_effect=_org_secret_gh(
+            org_secrets=[("NPM_TOKEN", "selected")],
+            shared={"NPM_TOKEN": ["Acme/Widget"]},
+        ),
+    ):
+        result = check_repo_secret_allowlist("acme/widget", {"TEND_BOT_TOKEN"})
+    assert result.passed is False
+    assert "NPM_TOKEN" in result.message
 
 
 def test_repo_secret_allowlist_org_secret_visibility_all() -> None:
