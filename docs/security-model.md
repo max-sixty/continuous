@@ -13,7 +13,11 @@ tokens less valuable when leaked, limit what a hijacked session can do, and
 make unsophisticated attacks fail outright.
 
 Each adopting repo should document its specific configuration (admin accounts,
-token names, protected environments) in its own `.github/CLAUDE.md`.
+token names, protected environments) in its own
+`.claude/skills/running-tend/SKILL.md`, the adopter-owned overlay the rest of
+the docs name. Not `.github/CLAUDE.md`: fork-PR instruction pinning covers root
+`CLAUDE.md`, every `AGENTS.md`, and `.claude/` (`shared/steps/pin-instruction-files.sh`),
+so notes parked outside those paths are read from the fork's own tree.
 
 ## Threats
 
