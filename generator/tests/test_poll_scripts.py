@@ -338,15 +338,25 @@ def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
 def test_paginates_past_the_first_page(env: dict[str, str]) -> None:
     """A full matrix registers more than the query's 100-node page — routine
     on a dependency bump, which opens every path filter. The failing check can
-    sit on any page, so an all-green first page must never stand in for the
-    whole rollup."""
-    _serve(env, _resp(_check_run("tests"), has_next=True, end_cursor="Y3Vyc29yOjE"))
+    sit on any page, so every page has to survive the walk: a red on the first
+    is dropped by an accumulator that lets the last page win, and a red on the
+    last is invisible to a query that never follows the cursor."""
+    _serve(
+        env,
+        _resp(
+            _check_run("tests"),
+            _check_run("build", conclusion="FAILURE", run_id=101),
+            has_next=True,
+            end_cursor="Y3Vyc29yOjE",
+        ),
+    )
     _serve_page(env, "Y3Vyc29yOjE", _resp(_check_run("lint", conclusion="FAILURE")))
 
     result = _poll(env)
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "lint https://github.com/o/r/actions/runs/100/job/1" in result.stdout
+    assert "build https://github.com/o/r/actions/runs/101/job/1" in result.stdout
 
 
 def test_truncated_pagination_never_reads_green(env: dict[str, str]) -> None:
