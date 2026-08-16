@@ -1,7 +1,7 @@
 bot_name: tend-agent
 
 setup:
-  - uses: astral-sh/setup-uv@v9.0.0
+  - uses: astral-sh/setup-uv@v10.0.1
 
 workflows:
   ci-fix:

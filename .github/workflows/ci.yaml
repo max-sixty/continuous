@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
       - run: uv run pytest
       # pypi-release.yaml only fires on a tag push, and the tag is immutable by
       # ruleset, so a build that breaks there costs a manual publish. Run the
@@ -29,7 +29,7 @@ jobs:
         working-directory: proxy
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
       # mitmdump starts the way setup-sandbox.sh starts it, so a release that
       # drops a flag, moves the CA file, or breaks the addon's import fails
       # here rather than on every adopter's next run. It goes through the
@@ -100,8 +100,8 @@ jobs:
   test-codex-surface:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       # `yq -e` exits non-zero if the input is ever renamed, rather than
@@ -184,5 +184,5 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
       - uses: pre-commit/action@v3.0.1

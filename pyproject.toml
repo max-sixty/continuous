@@ -38,3 +38,8 @@ dev = [
   # whether a version satisfies it. Only ever arrives transitively otherwise.
   "packaging>=25",
 ]
+
+# `certifi` is the PyPI package name, which typos 1.49 started reading as a
+# misspelling of "certify".
+[tool.typos.default.extend-words]
+certifi = "certifi"
