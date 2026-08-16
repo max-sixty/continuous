@@ -25,20 +25,31 @@ RERUN_FAILED_JOBS = SCRIPTS / "rerun-failed-jobs.sh"
 
 HEAD_SHA = "aaaa111122223333aaaa111122223333aaaa1111"
 
-# GraphQL responses are served in sequence: call N reads $ROLLUP_DIR/N.json,
-# falling back to final.json once the sequence runs out. The run endpoint
-# serves `run_attempt` values consumed line-by-line from $ATTEMPTS (the last
-# line repeats), so a rerun's attempt bump is scriptable. `pr view` and the
-# jobs endpoints run the script's `--jq` through real jq.
+# First-page GraphQL responses are served in sequence: poll N reads
+# $ROLLUP_DIR/N.json, falling back to final.json once the sequence runs out.
+# A call carrying a cursor is a *later page* of the poll in flight and is
+# served from $ROLLUP_DIR/page-<cursor>.json instead — so a page reachable
+# only through the cursor is genuinely unreachable without it. The run
+# endpoint serves `run_attempt` values consumed line-by-line from $ATTEMPTS
+# (the last line repeats), so a rerun's attempt bump is scriptable. `pr view`
+# and the jobs endpoints run the script's `--jq` through real jq.
 FAKE_GH = (
     GH_PREAMBLE
     + r"""case "$1 $2" in
   "api graphql")
-    n=$(( $(cat "$GRAPHQL_CALLS" 2>/dev/null || echo 0) + 1 ))
-    echo "$n" > "$GRAPHQL_CALLS"
-    f="$ROLLUP_DIR/$n.json"
-    [ -f "$f" ] || f="$ROLLUP_DIR/final.json"
-    cat "$f"
+    cursor=""
+    for arg in "$@"; do
+      case "$arg" in cursor=*) cursor="${arg#cursor=}" ;; esac
+    done
+    if [ -n "$cursor" ] && [ "$cursor" != "null" ]; then
+      cat "$ROLLUP_DIR/page-$cursor.json"
+    else
+      n=$(( $(cat "$GRAPHQL_CALLS" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$GRAPHQL_CALLS"
+      f="$ROLLUP_DIR/$n.json"
+      [ -f "$f" ] || f="$ROLLUP_DIR/final.json"
+      cat "$f"
+    fi
     ;;
   "pr view")
     emit "$(cat "$HEAD_JSON")"
@@ -100,7 +111,7 @@ def _status_ctx(context: str, state: str) -> dict:
     }
 
 
-def _resp(*nodes: dict, total: int | None = None) -> str:
+def _resp(*nodes: dict, has_next: bool = False, end_cursor: str | None = None) -> str:
     return json.dumps(
         {
             "data": {
@@ -108,7 +119,10 @@ def _resp(*nodes: dict, total: int | None = None) -> str:
                     "object": {
                         "statusCheckRollup": {
                             "contexts": {
-                                "totalCount": len(nodes) if total is None else total,
+                                "pageInfo": {
+                                    "hasNextPage": has_next,
+                                    "endCursor": end_cursor,
+                                },
                                 "nodes": list(nodes),
                             }
                         }
@@ -156,6 +170,11 @@ def _serve(env: dict[str, str], *responses: str) -> None:
     for i, resp in enumerate(responses, start=1):
         (Path(env["ROLLUP_DIR"]) / f"{i}.json").write_text(resp)
     (Path(env["ROLLUP_DIR"]) / "final.json").write_text(responses[-1])
+
+
+def _serve_page(env: dict[str, str], cursor: str, response: str) -> None:
+    """Serve *response* to any call that asks for the page after *cursor*."""
+    (Path(env["ROLLUP_DIR"]) / f"page-{cursor}.json").write_text(response)
 
 
 def _poll(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -316,15 +335,30 @@ def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
     assert "UNVERIFIED, not green" in result.stdout
 
 
-def test_more_contexts_than_one_page_never_reads_green(env: dict[str, str]) -> None:
-    """The query reads one 100-node page; past that, a dropped node could be
-    the failing check, so an all-green page must not read as a verdict."""
-    _serve(env, _resp(_check_run("tests"), total=150))
+def test_paginates_past_the_first_page(env: dict[str, str]) -> None:
+    """A full matrix registers more than the query's 100-node page — routine
+    on a dependency bump, which opens every path filter. The failing check can
+    sit on any page, so an all-green first page must never stand in for the
+    whole rollup."""
+    _serve(env, _resp(_check_run("tests"), has_next=True, end_cursor="Y3Vyc29yOjE"))
+    _serve_page(env, "Y3Vyc29yOjE", _resp(_check_run("lint", conclusion="FAILURE")))
+
+    result = _poll(env)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "lint https://github.com/o/r/actions/runs/100/job/1" in result.stdout
+
+
+def test_truncated_pagination_never_reads_green(env: dict[str, str]) -> None:
+    """`hasNextPage` with no cursor to follow leaves the rollup incomplete —
+    refetching page one would loop forever, and trusting it could hide a
+    failure on a page never read."""
+    _serve(env, _resp(_check_run("tests"), has_next=True, end_cursor=None))
 
     result = _poll(env)
 
     assert result.returncode == 2
-    assert "more than 100 check contexts" in result.stdout
+    assert "UNVERIFIED, not green" in result.stdout
 
 
 def test_cap_report_survives_a_late_api_blip(env: dict[str, str]) -> None:

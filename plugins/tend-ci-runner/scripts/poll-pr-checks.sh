@@ -36,8 +36,8 @@
 #      OID; an ephemeral merge-ref commit, which carries none; a commit with
 #      zero checks and zero statuses (a push every workflow's paths filter
 #      excludes — the rollup is null then too, so "nothing to gate on" is
-#      indistinguishable from "nothing answered"); or more contexts than the
-#      query's one 100-node page, where a dropped node could hide a failure
+#      indistinguishable from "nothing answered"); or a page walk that could
+#      not be finished, where an unread node could hide a failure
 #   3  poll cap hit with checks still pending — UNVERIFIED, not green
 
 set -euo pipefail
@@ -47,75 +47,92 @@ SHA="$2"
 OWNER="${GITHUB_REPOSITORY%/*}"
 NAME="${GITHUB_REPOSITORY#*/}"
 
-# One call returns check runs *and* legacy status contexts. `pending` counts
-# every non-terminal shape; `failed` counts every terminal-and-red conclusion
-# — STARTUP_FAILURE and ACTION_REQUIRED are terminal CheckConclusionStates
-# that land in neither bucket if forgotten, so a job that never started would
-# read as green. CANCELLED stays excluded: a cancelled sibling is not a
-# verdict on this commit. Empty output means no usable rollup — an errors
-# envelope, an unresolvable OID, and a null rollup all land there, and none
-# of them may read as settled green.
+# One query returns check runs *and* legacy status contexts, a page at a
+# time. The pages are walked to exhaustion rather than sampled: a full matrix
+# passes 100 contexts routinely — a dependency bump touching a lockfile opens
+# every path filter at once — and the failing check can sit on any page.
+# `pending` counts every non-terminal shape; `failed` counts every
+# terminal-and-red conclusion — STARTUP_FAILURE and ACTION_REQUIRED are
+# terminal CheckConclusionStates that land in neither bucket if forgotten, so
+# a job that never started would read as green. CANCELLED stays excluded: a
+# cancelled sibling is not a verdict on this commit. Empty output means no
+# usable rollup — an errors envelope, an unresolvable OID, a null rollup, and
+# a pagination that could not be finished all land there, and none of them may
+# read as settled green.
 rollup() {
-  local resp
-  resp=$(gh api graphql \
-    -f owner="$OWNER" -f name="$NAME" -f oid="$SHA" \
-    -f query='
-      query($owner: String!, $name: String!, $oid: GitObjectID!) {
-        repository(owner: $owner, name: $name) {
-          object(oid: $oid) {
-            ... on Commit {
-              statusCheckRollup {
-                contexts(first: 100) {
-                  totalCount
-                  nodes {
-                    __typename
-                    ... on CheckRun {
-                      name status conclusion startedAt detailsUrl
-                      checkSuite { workflowRun { workflow { name } } }
+  local resp page nodes cursor
+  local -a cursor_arg
+  nodes='[]'
+  cursor=""
+  while :; do
+    # `-F` types the literal `null` as JSON null for the first page, so
+    # `after:` is a no-op there; later pages pass the cursor as a raw string.
+    if [ -z "$cursor" ]; then cursor_arg=(-F cursor=null); else cursor_arg=(-f cursor="$cursor"); fi
+    resp=$(gh api graphql \
+      -f owner="$OWNER" -f name="$NAME" -f oid="$SHA" "${cursor_arg[@]}" \
+      -f query='
+        query($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String) {
+          repository(owner: $owner, name: $name) {
+            object(oid: $oid) {
+              ... on Commit {
+                statusCheckRollup {
+                  contexts(first: 100, after: $cursor) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      __typename
+                      ... on CheckRun {
+                        name status conclusion startedAt detailsUrl
+                        checkSuite { workflowRun { workflow { name } } }
+                      }
+                      ... on StatusContext { context state targetUrl }
                     }
-                    ... on StatusContext { context state targetUrl }
                   }
                 }
               }
             }
           }
-        }
-      }' 2>/dev/null) || return 0
+        }' 2>/dev/null) || return 0
+    page=$(printf '%s' "$resp" | jq -c \
+      '.data.repository.object.statusCheckRollup.contexts | select(. != null)' \
+      2>/dev/null) || return 0
+    [ -z "$page" ] && return 0
+    nodes=$(printf '%s' "$page" | jq -c --argjson acc "$nodes" '$acc + .nodes') || return 0
+    # A truncated walk is no rollup at all: `hasNextPage` with no cursor to
+    # follow would otherwise re-read page one forever.
+    [ "$(printf '%s' "$page" | jq -r '.pageInfo.hasNextPage')" = "true" ] || break
+    cursor=$(printf '%s' "$page" | jq -r '.pageInfo.endCursor // ""')
+    [ -z "$cursor" ] && return 0
+  done
   # A group with any non-terminal entry is pending regardless of timestamps:
   # a QUEUED replacement's startedAt cannot be relied on, and losing the
   # reduction to a stale settled entry would report a superseded verdict.
-  printf '%s' "$resp" | jq -c \
+  printf '%s' "$nodes" | jq -c \
     --arg own "/runs/${GITHUB_RUN_ID:-}/" --arg wf "${GITHUB_WORKFLOW:-}" '
-    .data.repository.object.statusCheckRollup
-    | select(. != null)
-    | if .contexts.totalCount > 100 then "OVERFLOW"
-      else
-        [.contexts.nodes[]
-         | if .__typename == "CheckRun" then
-             {name, status, conclusion: (.conclusion // ""),
-              workflow: (.checkSuite.workflowRun.workflow.name // ""),
-              url: (.detailsUrl // ""), startedAt: (.startedAt // "")}
-           else
-             {name: .context,
-              status: (if .state == "PENDING" or .state == "EXPECTED"
-                       then "PENDING" else "COMPLETED" end),
-              conclusion: .state, workflow: "", url: (.targetUrl // ""),
-              startedAt: ""}
-           end
-         | select(.url | test($own) | not)
-         | select($wf == "" or .workflow != $wf)]
-        | group_by([.name, .workflow])
-        | map(if any(.[]; .status != "COMPLETED")
-              then first(.[] | select(.status != "COMPLETED"))
-              else max_by(.startedAt) end)
-        | {pending: [.[] | select(.status != "COMPLETED") | .name],
-           failed: [.[] | select(.status == "COMPLETED")
-                    | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT"
-                             or .conclusion == "STARTUP_FAILURE"
-                             or .conclusion == "ACTION_REQUIRED"
-                             or .conclusion == "ERROR")
-                    | "\(.name) \(.url)"]}
-      end' 2>/dev/null || true
+    [.[]
+     | if .__typename == "CheckRun" then
+         {name, status, conclusion: (.conclusion // ""),
+          workflow: (.checkSuite.workflowRun.workflow.name // ""),
+          url: (.detailsUrl // ""), startedAt: (.startedAt // "")}
+       else
+         {name: .context,
+          status: (if .state == "PENDING" or .state == "EXPECTED"
+                   then "PENDING" else "COMPLETED" end),
+          conclusion: .state, workflow: "", url: (.targetUrl // ""),
+          startedAt: ""}
+       end
+     | select(.url | test($own) | not)
+     | select($wf == "" or .workflow != $wf)]
+    | group_by([.name, .workflow])
+    | map(if any(.[]; .status != "COMPLETED")
+          then first(.[] | select(.status != "COMPLETED"))
+          else max_by(.startedAt) end)
+    | {pending: [.[] | select(.status != "COMPLETED") | .name],
+       failed: [.[] | select(.status == "COMPLETED")
+                | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT"
+                         or .conclusion == "STARTUP_FAILURE"
+                         or .conclusion == "ACTION_REQUIRED"
+                         or .conclusion == "ERROR")
+                | "\(.name) \(.url)"]}' 2>/dev/null || true
 }
 
 # A moved head is reported as a distinct outcome, never silently absorbed:
@@ -128,12 +145,6 @@ head_note() {
   fi
 }
 
-too_many_contexts() {
-  echo "more than 100 check contexts on $SHA — beyond the query's one page, so a dropped node could hide a failure. UNVERIFIED, not green"
-  head_note
-  exit 2
-}
-
 # R keeps the last usable rollup, so a transient blip on a later iteration
 # doesn't discard what earlier polls saw — the cap report below still names
 # the pending checks.
@@ -141,7 +152,6 @@ R=""
 for _ in $(seq 1 9); do
   sleep 60
   cur=$(rollup)
-  [ "$cur" = '"OVERFLOW"' ] && too_many_contexts
   [ -z "$cur" ] && continue
   R="$cur"
   [ "$(printf '%s' "$R" | jq '.pending | length')" -gt 0 ] && continue
@@ -149,7 +159,6 @@ for _ in $(seq 1 9); do
   # two later; re-check once before trusting pending == 0.
   sleep 30
   cur=$(rollup)
-  [ "$cur" = '"OVERFLOW"' ] && too_many_contexts
   [ -z "$cur" ] && continue
   R="$cur"
   [ "$(printf '%s' "$R" | jq '.pending | length')" -gt 0 ] && continue
