@@ -6,6 +6,24 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.18
+
+### Improved
+
+- **A PR description's claims are scoped to the merge base.** A review run reads its diff from the last commit it reviewed, but the description it edits describes the whole PR, so an increment's conclusion went in as if it covered everything. The two bases sit far apart on a long-lived branch, where nightly's rolling `tend/update-workflows` PR accumulates a release per run, and a wrong description never turns a check red. `running-in-ci` carries the scope rule where the description edit happens; a session that can only verify the increment names that base instead of writing an unscoped claim. ([#992](https://github.com/max-sixty/tend/pull/992))
+- **A session on a fork PR actions its own review's findings.** `tend-mention`'s relay is gated on the PR's head repo, so a review on a fork PR dispatches no successor session, and the notifications poll can't see it either, since GitHub doesn't notify an actor of their own activity. A session that pushed the commits under a maintainer directive now actions its own review before ending; otherwise it names the findings as unowned in its closing comment. `running-in-ci` also records why `reviews` has to stay in the `--json` projection the pre-post recheck reads. ([#985](https://github.com/max-sixty/tend/pull/985))
+
+### Fixed
+
+- **`repo-secret-allowlist` reports only the org secrets the repo can read.** It flagged every org-level secret as available to all workflows without consulting visibility, so a repo where all of them are `visibility: selected` and none list it got a FAIL nothing could clear. That repo is already at the tightest scoping GitHub offers, and the one remaining lever, a `secrets.allowed` entry, would mute those names permanently. `_list_org_secrets` now drops what this repo can't reach: `selected` whose repositories list omits it (paginated), `private` against a public repo, and all of them against a private repo in a GitHub Free org. A secret whose reach can't be determined stays in the reported set, since under-reporting hides real exposure, and `check_secrets` reads the same helper. ([#994](https://github.com/max-sixty/tend/pull/994))
+- **Both halves of the 👀 reaction sit in one job.** `tend-mention` put the eyes on in `verify` and took them off in `handle`, but `always()` only governs steps in a job that started, and GitHub evicts a *pending* job when a newer run arrives. So a burst of mentions on one thread left a 👀 claiming a session was working, with no session behind it and nothing left to remove it. `react_eyes` moves to `handle`'s first step, matching `review` and `triage`. The removal step's lookup also paginates now, because 👀 is the ordinary "watching this" reaction too: on a busy issue the bot's own fell past the first page, and the step exited 0 having kept it. ([#990](https://github.com/max-sixty/tend/pull/990))
+
+### Internal
+
+- The `uv_build` range moves to the 0.12 line, matching the uv that runs the build. The old `<0.12` bound left every `uv build` and workspace `uv sync` printing a version warning; `test_repo_pins.py` now asserts the range contains the `uv_version` pinned in `claude/action.yaml`, so the weekly sweep that bumps that pin carries the build backend along. ([#988](https://github.com/max-sixty/tend/pull/988))
+- The Codex Cloud setup script calls `wt config approvals add --yes` instead of rendering `approvals.toml` by hand, at Worktrunk 0.74.0, where that command no longer refuses a non-TTY. ([#986](https://github.com/max-sixty/tend/pull/986), [#987](https://github.com/max-sixty/tend/pull/987))
+- `publish-site.yaml` runs its build job on any PR touching `site/` or the workflow itself, so an astro bump can't merge green and then break on the way to Pages. ([#986](https://github.com/max-sixty/tend/pull/986))
+
 ## 0.1.17
 
 ### Improved
