@@ -121,18 +121,18 @@ bot_name: my-project-bot
 # `uses`:
 #
 #     setup:
-#       - uses: astral-sh/setup-uv@v9.0.0
+#       - uses: astral-sh/setup-uv@v10.0.1
 #
 #     # renders as (in tend-notifications):
-#     #   - uses: astral-sh/setup-uv@v9.0.0
+#     #   - uses: astral-sh/setup-uv@v10.0.1
 #     #     if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
 #     #
 #     # in tend-review:
-#     #   - uses: astral-sh/setup-uv@v9.0.0
+#     #   - uses: astral-sh/setup-uv@v10.0.1
 #     #     if: steps.gate.outputs.should_run == 'true'
 #     #
 #     # and in other workflows:
-#     #   - uses: astral-sh/setup-uv@v9.0.0
+#     #   - uses: astral-sh/setup-uv@v10.0.1
 #
 # `uses` with action inputs and step-level env:
 #
