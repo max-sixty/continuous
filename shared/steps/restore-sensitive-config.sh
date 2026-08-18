@@ -123,10 +123,17 @@ done < <(git ls-tree -rz --name-only "origin/$BASE_REF")
 # root `.claude/` is inside this glob too (`./.claude/…` contains `/.claude/`),
 # but it was replaced wholesale before the fetch, so everything under it now
 # has a base counterpart and the sweep is a no-op there.
+#
+# `-name .claude ! -type d` covers the `.claude` component itself, which the
+# contents glob misses: `./site/.claude` holds no `/.claude/` substring, and
+# `find` does not descend it, so a fork-planted symlink there would deliver a
+# whole skills tree with nothing enumerated. The basename match is what the
+# `CLAUDE.md` clauses already get for free. A base-tree `.claude` symlink still
+# survives on `git cat-file -e`, and `! -type d` keeps real directories out.
 while IFS= read -r -d '' path; do
   rel="${path#./}"
   git cat-file -e "origin/$BASE_REF:$rel" 2>/dev/null || rm -rf -- "$path"
-done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name AGENTS.md -o \( -path '*/.claude/*' ! -type d \) \) -not -path './.git/*' -not -path './.claude-pr/*' -print0)
+done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name AGENTS.md -o \( -path '*/.claude/*' ! -type d \) -o \( -name .claude ! -type d \) \) -not -path './.git/*' -not -path './.claude-pr/*' -print0)
 
 if [ ${#NESTED[@]} -gt 0 ]; then
   for p in "${NESTED[@]}"; do
