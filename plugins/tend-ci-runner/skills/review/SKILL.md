@@ -371,7 +371,7 @@ Then handle the outcome:
   gh api "repos/$REPO/pulls/<number>/reviews/$REVIEW_ID/dismissals" \
     -X PUT -f message="CI failed — <reason>"
   ```
-  Skip if already dismissed. On **human-authored PRs**, do not push fixes — post the analysis and offer to fix, then wait for the author to accept. On **bot PRs** (Dependabot, renovate, etc.), don't stop at analysis: apply the fix per step 8 so the PR can go green, since no author will act on the offer.
+  Skip if already dismissed. On **human-authored PRs**, do not push fixes — post the analysis and offer to fix, then wait for the author to accept. On **third-party bot PRs** (Dependabot, renovate, etc.), don't stop at analysis: apply the fix per step 8 so the PR can go green, since no author will act on the offer. On PRs this bot authored, step 8's rule holds: the follow-up COMMENT review dispatches the author session, which applies the fix.
 - **A check was cancelled** (conclusion `cancelled`) -> do nothing. Cancellations are almost always caused by concurrency groups — a new workflow run (often triggered by your own approval event) replaces the in-progress one. The replacement run will cover the cancelled checks. **Do not re-run cancelled jobs** — that creates another run that gets cancelled again, wasting time in a loop.
 - **A check failed** (conclusion `failure`, not `cancelled`) and it's a transient flake (unrelated to the PR changes) ->
   1. **Re-run the failed jobs:**
