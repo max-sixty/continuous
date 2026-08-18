@@ -13,6 +13,11 @@
 # fetch on credential prompts), then fetch base, then check out each path, then
 # unstage so the revert doesn't silently leak into commits Claude makes later.
 #
+# AGENTS.md is in the list for the prompt-injection half rather than the RCE
+# half: Claude Code discovers it natively, not only through a CLAUDE.md
+# `@`-import, so a repo that keeps CLAUDE.md as a one-line pointer at AGENTS.md
+# would otherwise have the restore succeed having pinned nothing that matters.
+#
 # Known limitation: a PR that legitimately edits .claude/ or CLAUDE.md will have
 # those edits reverted for the duration of this run. Same tradeoff
 # claude-code-action makes — narrow UX cost for closing the RCE surface.
@@ -24,7 +29,7 @@
 # (from Actions).
 set -eo pipefail
 
-SENSITIVE=(.claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md .husky)
+SENSITIVE=(.claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md AGENTS.md .husky)
 
 case "$GITHUB_EVENT_NAME" in
   pull_request_target|pull_request_review|pull_request_review_comment)
@@ -81,16 +86,16 @@ for p in "${SENSITIVE[@]}"; do
 done
 
 # The list above is root-anchored, but nested instruction files are trusted
-# input too: Claude Code loads the CLAUDE.md nearest the file the agent opens,
-# so a fork's `site/CLAUDE.md` reaches the session with the root one already
-# restored. Enumerated from the base tree after the fetch rather than named in
-# SENSITIVE — the base tree is what says which paths are legitimate, and only
-# the root entries have to be gone *before* the fetch (those are the ones git
-# itself reads).
+# input too: Claude Code loads the instruction file nearest the file the agent
+# opens, so a fork's `site/CLAUDE.md` reaches the session with the root one
+# already restored. Enumerated from the base tree after the fetch rather than
+# named in SENSITIVE — the base tree is what says which paths are legitimate,
+# and only the root entries have to be gone *before* the fetch (those are the
+# ones git itself reads).
 NESTED=()
 while IFS= read -r -d '' rel; do
   case "$rel" in
-    */CLAUDE.md | */CLAUDE.local.md) NESTED+=("$rel") ;;
+    */CLAUDE.md | */CLAUDE.local.md | */AGENTS.md) NESTED+=("$rel") ;;
   esac
 done < <(git ls-tree -rz --name-only "origin/$BASE_REF")
 
@@ -105,7 +110,7 @@ done < <(git ls-tree -rz --name-only "origin/$BASE_REF")
 while IFS= read -r -d '' path; do
   rel="${path#./}"
   git cat-file -e "origin/$BASE_REF:$rel" 2>/dev/null || rm -rf -- "$path"
-done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md \) -not -path './.git/*' -not -path './.claude-pr/*' -print0)
+done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name AGENTS.md \) -not -path './.git/*' -not -path './.claude-pr/*' -print0)
 
 if [ ${#NESTED[@]} -gt 0 ]; then
   for p in "${NESTED[@]}"; do
