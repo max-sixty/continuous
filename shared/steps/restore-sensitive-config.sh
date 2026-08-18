@@ -88,14 +88,23 @@ done
 # The list above is root-anchored, but nested instruction files are trusted
 # input too: Claude Code loads the instruction file nearest the file the agent
 # opens, so a fork's `site/CLAUDE.md` reaches the session with the root one
-# already restored. Enumerated from the base tree after the fetch rather than
-# named in SENSITIVE — the base tree is what says which paths are legitimate,
-# and only the root entries have to be gone *before* the fetch (those are the
-# ones git itself reads).
+# already restored. A nested `.claude/` is the same channel by another route —
+# Claude Code discovers directory-scoped skills, so `apps/web/.claude/skills/
+# <name>/SKILL.md` is loaded for work under `apps/web/`, and a skill's
+# `description` enters the system prompt whether or not the agent ever invokes
+# it. That needs no nested `.claude/` on the base branch to exploit: a fork can
+# add the first one.
+#
+# Enumerated from the base tree after the fetch rather than named in SENSITIVE —
+# the base tree is what says which paths are legitimate, and only the root
+# entries have to be gone *before* the fetch (those are the ones git itself
+# reads). Reconciled file-by-file rather than replaced wholesale the way root
+# `.claude/` is: an `rm -rf apps/web/.claude` writes through a fork-planted
+# `apps/web` symlink, which the two-pass split below avoids by construction.
 NESTED=()
 while IFS= read -r -d '' rel; do
   case "$rel" in
-    */CLAUDE.md | */CLAUDE.local.md | */AGENTS.md) NESTED+=("$rel") ;;
+    */CLAUDE.md | */CLAUDE.local.md | */AGENTS.md | */.claude/*) NESTED+=("$rel") ;;
   esac
 done < <(git ls-tree -rz --name-only "origin/$BASE_REF")
 
@@ -107,10 +116,17 @@ done < <(git ls-tree -rz --name-only "origin/$BASE_REF")
 # symlink straight out of the worktree. `.claude-pr/` is excluded because it is
 # the snapshot this script just wrote: its entries have no base counterpart by
 # construction, so the sweep would delete the very copies review skills read.
+#
+# The nested `.claude/` clause takes files and symlinks but not directories:
+# unlinking a leaf never leaves `find` descending into a path it already
+# removed, and a skill directory stripped of its `SKILL.md` is not a skill. The
+# root `.claude/` is inside this glob too (`./.claude/…` contains `/.claude/`),
+# but it was replaced wholesale before the fetch, so everything under it now
+# has a base counterpart and the sweep is a no-op there.
 while IFS= read -r -d '' path; do
   rel="${path#./}"
   git cat-file -e "origin/$BASE_REF:$rel" 2>/dev/null || rm -rf -- "$path"
-done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name AGENTS.md \) -not -path './.git/*' -not -path './.claude-pr/*' -print0)
+done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name AGENTS.md -o \( -path '*/.claude/*' ! -type d \) \) -not -path './.git/*' -not -path './.claude-pr/*' -print0)
 
 if [ ${#NESTED[@]} -gt 0 ]; then
   for p in "${NESTED[@]}"; do
