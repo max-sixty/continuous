@@ -15,10 +15,11 @@ make unsophisticated attacks fail outright.
 Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
 `.claude/skills/running-tend/SKILL.md`, the adopter-owned overlay the rest of
-the docs name. Not `.github/CLAUDE.md`: fork-PR instruction pinning covers root
-`CLAUDE.md` and `.claude/` under both harnesses (`shared/steps/restore-sensitive-config.sh`
-for Claude, `shared/steps/pin-instruction-files.sh` for Codex, which also pins every
-`AGENTS.md`), so notes parked outside those paths are read from the fork's own tree.
+the docs name. Not `.github/CLAUDE.md`: fork-PR instruction pinning covers `CLAUDE.md` at any
+depth and `.claude/` under both harnesses (`shared/steps/restore-sensitive-config.sh`
+for Claude, which also pins every `CLAUDE.local.md`; `shared/steps/pin-instruction-files.sh`
+for Codex, which also pins every `AGENTS.md`), so notes parked outside those paths
+are read from the fork's own tree.
 
 ## Threats
 

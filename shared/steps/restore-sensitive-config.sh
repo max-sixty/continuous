@@ -80,7 +80,39 @@ for p in "${SENSITIVE[@]}"; do
   git checkout "origin/$BASE_REF" -- "$p" 2>/dev/null || true
 done
 
+# The list above is root-anchored, but nested instruction files are trusted
+# input too: Claude Code loads the CLAUDE.md nearest the file the agent opens,
+# so a fork's `site/CLAUDE.md` reaches the session with the root one already
+# restored. Enumerated from the base tree after the fetch rather than named in
+# SENSITIVE — the base tree is what says which paths are legitimate, and only
+# the root entries have to be gone *before* the fetch (those are the ones git
+# itself reads).
+NESTED=()
+while IFS= read -r -d '' rel; do
+  case "$rel" in
+    */CLAUDE.md | */CLAUDE.local.md) NESTED+=("$rel") ;;
+  esac
+done < <(git ls-tree -rz --name-only "origin/$BASE_REF")
+
+# Fork-added ones have no base version to restore, so drop them outright.
+# `find` does not descend symlinks, so every path here is inside the checkout
+# and `rm` unlinks a fork's symlink rather than its target. The base-tree paths
+# are left to `git checkout`, which replaces a path without writing through a
+# fork-planted symlink — an `rm -rf docs/CLAUDE.md` would follow a `docs`
+# symlink straight out of the worktree.
+while IFS= read -r -d '' path; do
+  rel="${path#./}"
+  git cat-file -e "origin/$BASE_REF:$rel" 2>/dev/null || rm -rf -- "$path"
+done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md \) -not -path './.git/*' -print0)
+
+if [ ${#NESTED[@]} -gt 0 ]; then
+  for p in "${NESTED[@]}"; do
+    git checkout "origin/$BASE_REF" -- "$p" 2>/dev/null || true
+  done
+  echo "Pinned ${#NESTED[@]} nested instruction file(s) to origin/$BASE_REF"
+fi
+
 # Unstage — `git checkout <ref> -- <path>` stages restored files.
-git reset -- "${SENSITIVE[@]}" 2>/dev/null || true
+git reset -- "${SENSITIVE[@]}" "${NESTED[@]}" 2>/dev/null || true
 
 echo "Restored from origin/$BASE_REF"

@@ -9,18 +9,14 @@ fi
 DEFAULT_BRANCH=$(jq -r '.repository.default_branch' "$GITHUB_EVENT_PATH")
 BASE_REF="origin/${DEFAULT_BRANCH}"
 
-# Git replaces the path without following a fork-controlled symlink and
-# preserves a trusted base-branch symlink as a symlink.
-if git cat-file -e "${BASE_REF}:CLAUDE.md" 2>/dev/null; then
-  git restore --source="$BASE_REF" --worktree -- CLAUDE.md
-  echo "Pinned CLAUDE.md to ${DEFAULT_BRANCH}"
-else
-  rm -rf -- CLAUDE.md
-  echo "No CLAUDE.md on ${DEFAULT_BRANCH} — removed fork version"
-fi
+# Both names are read as trusted repo guidance from whichever directory the
+# agent is working in, not only the root: Codex reads the `AGENTS.md` beside
+# the files it opens, and Claude Code loads a nested `CLAUDE.md` the same way.
+# So the walk covers every directory — a fork's `site/CLAUDE.md` reaches the
+# session exactly as a root one would.
 
-# Remove AGENTS.md files introduced by the fork.
-find . -name AGENTS.md -not -path './.git/*' -print0 |
+# Remove instruction files introduced by the fork.
+find . \( -name CLAUDE.md -o -name AGENTS.md \) -not -path './.git/*' -print0 |
   while IFS= read -r -d '' path; do
     rel="${path#./}"
     if ! git cat-file -e "${BASE_REF}:${rel}" 2>/dev/null; then
@@ -29,10 +25,12 @@ find . -name AGENTS.md -not -path './.git/*' -print0 |
     fi
   done
 
-# Restore every base-branch AGENTS.md, including files deleted by the fork.
+# Restore every base-branch instruction file, including files deleted by the
+# fork. Git replaces the path without following a fork-controlled symlink and
+# preserves a trusted base-branch symlink as a symlink.
 while IFS= read -r -d '' rel; do
   case "$rel" in
-    AGENTS.md | */AGENTS.md)
+    CLAUDE.md | */CLAUDE.md | AGENTS.md | */AGENTS.md)
       git restore --source="$BASE_REF" --worktree -- "$rel"
       echo "Pinned ${rel} to ${DEFAULT_BRANCH}"
       ;;
