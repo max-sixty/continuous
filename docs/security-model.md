@@ -289,14 +289,17 @@ SHA) bounds that trust to a reviewed, immutable point.
 
 **Config pinning.** The Claude harness actions restore RCE-relevant config from
 the PR base branch before the agent starts: `.claude/`, `.mcp.json`, `.claude.json`,
-`.gitmodules`, `.ripgreprc`, `.husky`, plus `CLAUDE.md`/`CLAUDE.local.md` as a
-prompt-injection defense. A malicious PR's `SessionStart` hook, MCP server, or
-injected `CLAUDE.md` is reverted before Claude reads it. The restoration runs
-in shell; the path list and ordering mirror claude-code-action's
-`restore-config.ts`. The PR-authored versions of those paths are snapshotted to
-`.claude-pr/` (added to `.git/info/exclude` so they're not tracked) before being
-overwritten, so review skills can optionally inspect what the PR changed without
-those files ever being executed.
+`.gitmodules`, `.ripgreprc`, `.husky` at the root, plus every `CLAUDE.md` and
+`CLAUDE.local.md` in the tree — Claude Code loads the one nearest the file the
+agent opens, so a fork's `site/CLAUDE.md` reaches the session as readily as a
+root one — as a prompt-injection defense. A malicious PR's `SessionStart` hook,
+MCP server, or injected `CLAUDE.md` is reverted before Claude reads it. The
+restoration runs in shell; the root path list and ordering mirror
+claude-code-action's `restore-config.ts`. The PR-authored versions of the root
+paths are snapshotted to `.claude-pr/` (added to `.git/info/exclude` so they're
+not tracked) before being overwritten, so review skills can optionally inspect
+what the PR changed without those files ever being executed; nested instruction
+files are reverted, and fork-added ones deleted, without a snapshot.
 
 **Setup runs on reviewed code.** Adopter `setup:` steps execute as the runner
 user, which holds sudo and, until the sandbox setup strips it, the checkout
