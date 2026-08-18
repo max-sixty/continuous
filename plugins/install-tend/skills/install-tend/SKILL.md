@@ -74,10 +74,19 @@ no need to touch git remotes.
 ## Browser sessions
 
 Step 6 (when the bot account must be created) and step 8's mint paths
-(8a/8b) need a browser session logged in as the bot.
-`mcp__claude-in-chrome__*` automation can drive both when available;
-otherwise, give the user URLs and wait for confirmation. Before acting
-as the bot, verify the logged-in user via the avatar menu.
+(8a/8b) need a browser session logged in as the bot. Check whether
+`mcp__claude-in-chrome__*` is connected (`tabs_context_mcp`) before the
+first browser step, or any question that would offer one as an option.
+When it is, drive the browser steps yourself rather than offering a
+hand-off choice: hand the user only the prompts automation can't cross
+(a signup CAPTCHA, a 2FA or password reauth), and resume once they
+complete the prompt in the open tab. When it isn't, give the user URLs
+and wait for confirmation.
+
+Driving uses the user's real Chrome profile, so logging in as the bot
+displaces their own github.com session until they sign back in — tell
+them when handing the browser back. Before acting as the bot, verify
+the logged-in user via the avatar menu.
 
 ## 1. Create config
 
@@ -184,8 +193,8 @@ place. Classify each remaining secret and act now — don't defer:
   - **Chrome** — drive the registry's token page via `mcp__claude-in-chrome`
     (most registries — PyPI, crates.io, Docker Hub — only issue tokens via
     the web UI). Some registries (PyPI in particular) force a 2FA reauth
-    at token-creation time; Chrome MCP can't drive that second factor.
-    If the reauth prompt appears, fall back to Manual.
+    at token-creation time; the user completes it in the open tab, per
+    Browser sessions.
   - **Manual** — user generates the token themselves on the registry's
     site and pastes it back.
 
@@ -524,11 +533,17 @@ If the account doesn't exist:
      gh api "users/$name" >/dev/null 2>&1 && echo "$name: TAKEN" || echo "$name: available"
    done
    ```
-2. Navigate Chrome to `https://github.com/signup`.
-3. If a verification code is needed and an email-reading skill or MCP is
+2. Ask for the bot's email address. It must be one the user can read —
+   the verification code lands there; a plus-alias of their own address
+   (`user+<bot-name>@…`) works.
+3. Navigate Chrome to `https://github.com/signup` and fill the form.
+   The user types the password and solves the CAPTCHA — the password
+   stays out of the conversation like any secret. Have them save it;
+   later bot logins (device-flow approvals, scope refreshes) need it.
+4. If a verification code is needed and an email-reading skill or MCP is
    available, use it to fetch the latest GitHub verification email
    (`from:github subject:code`); otherwise have the user paste the code.
-4. After confirmation, re-verify via API.
+5. After confirmation, re-verify via API.
 
 ## 7. Harness auth token
 
