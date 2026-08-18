@@ -99,11 +99,13 @@ done < <(git ls-tree -rz --name-only "origin/$BASE_REF")
 # and `rm` unlinks a fork's symlink rather than its target. The base-tree paths
 # are left to `git checkout`, which replaces a path without writing through a
 # fork-planted symlink — an `rm -rf docs/CLAUDE.md` would follow a `docs`
-# symlink straight out of the worktree.
+# symlink straight out of the worktree. `.claude-pr/` is excluded because it is
+# the snapshot this script just wrote: its entries have no base counterpart by
+# construction, so the sweep would delete the very copies review skills read.
 while IFS= read -r -d '' path; do
   rel="${path#./}"
   git cat-file -e "origin/$BASE_REF:$rel" 2>/dev/null || rm -rf -- "$path"
-done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md \) -not -path './.git/*' -print0)
+done < <(find . \( -name CLAUDE.md -o -name CLAUDE.local.md \) -not -path './.git/*' -not -path './.claude-pr/*' -print0)
 
 if [ ${#NESTED[@]} -gt 0 ]; then
   for p in "${NESTED[@]}"; do
