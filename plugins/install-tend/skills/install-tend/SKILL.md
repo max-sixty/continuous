@@ -39,12 +39,21 @@ When the resolution changes the name, or returns `null` (source deleted or
 invisible to the token), confirm the target with the user before touching
 anything — a deliberately maintained hard fork keeps its own name.
 
-A config from a finished install — workflows committed, secrets set, bot
-access granted (`uvx tend@latest check` reports all three) — makes this a
-change: take the harness from the config, lay
-out only the steps the task touches, and start. The summary checklist at the
-end describes a finished install, so skip it. A preference a step needs
-(7a's auth mode, 10's bio stance) is asked at that step.
+A config from a finished install makes this a change: take the harness from
+the config, lay out only the steps the task touches, and start. Finished
+means `uvx tend@latest check` passes — secrets, bot access, protection —
+*and* the workflows are live on the default branch, which that check never
+looks at (step 11 commits without pushing, so an install can stop with
+everything else in place):
+
+```bash
+gh api "repos/$REPO/contents/.github/workflows" \
+  --jq '[.[].name | select(startswith("tend-"))] | length'
+```
+
+The summary checklist at the end describes a finished install, so skip it.
+A preference a step needs (7a's auth mode, 10's bio stance) is asked at
+that step.
 
 Otherwise this is an install, including a resume of one that never finished
 (config present, later steps missing). Gather every preference in a single
@@ -86,8 +95,9 @@ itself the go-ahead.
      (per-call refresh-token invalidation) and is being removed. Detail in
      ${CLAUDE_SKILL_DIR}/references/security-model.md.
 2. **Bot name** — the available candidates, recommended first. "Other"
-   takes a custom name; check its availability before using it. If all
-   candidates are taken, generate more before asking.
+   takes a custom name; check its availability before using it. The tool
+   needs 2–4 options, so generate more candidates whenever fewer than two
+   come back available.
 3. **Customize** (`multiSelect: true`) — the areas where the user wants a
    non-default value, each option naming its default in its description.
    Submitting with nothing selected accepts every default, the normal
