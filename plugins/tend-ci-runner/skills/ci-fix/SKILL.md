@@ -101,7 +101,7 @@ gh issue list --state all --author "$BOT_LOGIN" --search "ci-fix: in:title" \
 
 Match by failure-shape keyword (e.g. `rustup-init`, `composer connect timeout`, `docker pull rate limit`) — not by job name. The same root cause can surface on multiple jobs.
 
-If 2+ prior issues match the current failure shape within the past 7 days, escalate to durable: a fault that re-fires every 1–3 days is not transient even when individual reruns pass. Search for an upstream-documented workaround (`gh issue search` against the action's repo, the action's README, GitHub Community threads) and apply it. If no upstream workaround is documented, open a fix PR proposing a minimal mitigation (pin runner image, skip the affected leg, disable the relevant cache layer) and link the upstream tracking issue.
+If 2+ prior issues match the current failure shape within the past 7 days, escalate to durable: a fault that re-fires every 1–3 days is not transient even when individual reruns pass. Count incidents, not trackers — the same root cause taking down several jobs in one afternoon files several issues and is still one occurrence. Where the fault costs only runner time, the escalation is also subject to the evidence and remedy bar in **Weighing a Fix** (`running-in-ci`). Search for an upstream-documented workaround (`gh issue search` against the action's repo, the action's README, GitHub Community threads) and apply it. If no upstream workaround is documented, open a fix PR proposing a minimal mitigation (pin runner image, skip the affected leg, disable the relevant cache layer) and link the upstream tracking issue.
 
 If you can't tell whether it's transient, treat it as durable and create a fix PR.
 
