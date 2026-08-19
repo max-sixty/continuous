@@ -655,11 +655,13 @@ as 1-year), two mint paths, routed by environment rather than asked:
   `claude setup-token` (OAuth 2.0 PKCE) and prints only the token to
   stdout, so piping straight into `gh` keeps it out of the transcript.
 
-  Launch the command below with the Bash tool's `run_in_background: true`:
-  the wrapper prints the authorize URL within seconds, then waits — up to
-  15 minutes — for the user's approval in the browser. A foreground call sits
-  blocked with the URL trapped in its pending result, and times out
-  before the user has anything to click.
+  Launch the command below with the Bash tool's `run_in_background: true`
+  — a foreground call sits blocked with the URL trapped in its pending
+  result, and times out before the user has anything to click. Start it
+  only once the user says they are at the browser: the wrapper prints the
+  authorize URL within seconds, then waits — up to 15 minutes — for their
+  approval, and a run started ahead of them spends its window and takes
+  its own URL down.
 
   ```bash
   TOKEN=$("${CLAUDE_SKILL_DIR}/scripts/oauth_token.py" --code-file /tmp/tend-oauth-code)
@@ -681,30 +683,50 @@ as 1-year), two mint paths, routed by environment rather than asked:
   Each run generates a fresh PKCE challenge, so a code from an earlier
   run is dead; a restart needs a fresh approval.
 
+  The window needs the user at the browser throughout it. The authorize
+  URL logs the browser out on the way in
+  (`claude.ai/login?reauth=1&from=logout`), which means an
+  already-signed-in Claude session doesn't shorten the job, and the login
+  in front of the approval is theirs — an agent driving Chrome reaches
+  that page and stops there. After a window lapses twice, stop reissuing
+  and hand over the Manual path, which has no window.
+
   When the task exits, its status alone says whether the secret was
-  stored: 0 stored it; anything else wrote nothing. The guard is load-bearing for
-  that — `gh secret set` stores empty stdin as an empty secret and exits
-  0, and every check downstream reads names rather than values
-  (`check_secrets`, and this step's own pre-check above) — so one
+  stored: 0 stored it; anything else wrote nothing. The guard is
+  load-bearing for that — `gh secret set` stores empty stdin as an empty
+  secret and exits 0, and every check downstream reads names rather than
+  values (`check_secrets`, and this step's own pre-check above) — so one
   unguarded failed run would leave a `CLAUDE_CODE_OAUTH_TOKEN` that the
   next run reads as already set, skips, and finishes green on.
 
-- **Manual** — when the CLI path is unavailable or the wrapper errors
-  out: have the user run `claude setup-token` in their own terminal (any
+- **Manual** — when the CLI path is unavailable, the wrapper errors out,
+  or the user isn't at the browser when the agent is. Hand over both
+  commands, fully substituted, for them to run in their own terminal (any
   machine with Claude Code installed; `https://claude.com/claude-code` to
-  install it) and paste the `sk-ant-oat01-…` token back. Then store it:
+  install it), whenever suits them:
 
   ```bash
-  printf '%s' "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
+  claude setup-token
   ```
 
-For **API key**:
+  ```bash
+  gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
+  ```
 
-Have the user paste an `sk-ant-…` key from
-`https://console.anthropic.com/settings/keys`, then store it:
+  Given neither `--body` nor a pipe, `gh secret set` prompts for the
+  value, so the token goes from the first command's output to that prompt
+  and nowhere else. Don't ask for it in chat: the agent has no use for the
+  value, and a token pasted there is a live credential sitting in the
+  transcript. The prompt refuses an empty submission and keeps waiting, so
+  the empty-value hazard that makes the CLI path's guard load-bearing has
+  no counterpart here.
+
+For **API key**: the user takes a key from
+`https://console.anthropic.com/settings/keys` and runs this themselves,
+substituted, pasting the key at the prompt:
 
 ```bash
-gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend --body "$KEY"
+gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend
 ```
 
 ### 7b. Harness = codex
@@ -720,10 +742,12 @@ auth mid-run. See ${CLAUDE_SKILL_DIR}/references/security-model.md.
 gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' | grep -q OPENAI_API_KEY && echo "SET" || echo "NOT SET"
 ```
 
-If not set, have the user paste the `sk-…` key. Store it:
+If not set, the user takes a key from
+`https://platform.openai.com/api-keys` and runs this themselves,
+substituted, pasting the key at the prompt:
 
 ```bash
-gh secret set OPENAI_API_KEY --repo "$REPO" --env tend --body "$KEY"
+gh secret set OPENAI_API_KEY --repo "$REPO" --env tend
 ```
 
 ## 8. Bot token and secret

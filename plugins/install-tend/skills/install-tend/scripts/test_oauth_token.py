@@ -11,8 +11,14 @@ them, so they are pinned here.
 
 from __future__ import annotations
 
-from oauth_token import ANSI_CSI, AUTHORIZE_URL, MAX_TOKEN_LENGTH, TOKEN
-from oauth_token import complete_match, first_url
+from oauth_token import (
+    ANSI_CSI,
+    AUTHORIZE_URL,
+    MAX_TOKEN_LENGTH,
+    TIMEOUT_SECONDS,
+    TOKEN,
+)
+from oauth_token import complete_match, failure_message, first_url
 
 URL = (
     b"https://claude.com/cai/oauth/authorize?code=true&client_id=9d1"
@@ -80,3 +86,31 @@ def test_overlong_token_is_not_truncated_to_the_ceiling() -> None:
 
 def test_authorize_url_pattern_stops_at_control_bytes() -> None:
     assert AUTHORIZE_URL.search(URL + b"\x1b]8;;").group(0) == URL
+
+
+def test_unapproved_run_is_not_blamed_on_the_flag_it_was_given() -> None:
+    # The skill's own invocation always passes --code-file, so a message telling
+    # the caller to pass it names the one thing that was not wrong, and the
+    # caller reruns unchanged into the same empty window.
+    message = failure_message("/tmp/tend-oauth-code", None, True)
+    assert "went unapproved" in message
+    assert "rerun with --code-file" not in message
+
+
+def test_a_refused_code_reads_differently_from_no_code_at_all() -> None:
+    assert "rejected it" in failure_message("/tmp/tend-oauth-code", 1.0, True)
+
+
+def test_a_run_with_nowhere_to_receive_a_code_is_told_to_pass_one() -> None:
+    assert "rerun with --code-file" in failure_message(None, None, True)
+
+
+def test_a_child_that_offered_no_url_is_not_reported_as_unapproved() -> None:
+    # The read loop also breaks on a closed pty and on an exited child, so a
+    # `claude` that dies early — no `setup-token` subcommand, a crash — reaches
+    # here in a moment. Blaming the browser there sends the caller to approve a
+    # URL that was never printed, and the child's own error is swallowed.
+    message = failure_message("/tmp/tend-oauth-code", None, False)
+    assert "run that command directly" in message
+    assert "unapproved" not in message
+    assert str(TIMEOUT_SECONDS) not in message
