@@ -108,7 +108,7 @@ The maintainer's order of value: outward correctness first — what the bot post
 The repo's own CI runner time is the same category, not a separate one: a slow job, a burned runner-hour, a step that hung until the platform killed it. GitHub absorbs the minutes; the maintainer absorbs the machinery forever. So a change whose only benefit is runner time — nothing about it makes a build correct, or a red branch green — clears a much higher bar than a correctness fix, on two counts:
 
 - **Evidence.** One incident is not a pattern. Repeats inside a single upstream incident window — several jobs stalling on the same mirror the same afternoon, the same leg failing twice on the PR that is fixing it — are one occurrence, not three. What justifies a permanent change is a fault that keeps returning across days, after the incident that produced it closed.
-- **Remedy.** Cap it at a one-line knob: a `timeout-minutes:`, a deleted step, a pinned image. A new helper script, a retry wrapper, or a bounded-install shim threaded through several call sites is the shape to decline — when writing one, and when reviewing one. If no knob is enough, say what the waste costs on the thread and leave the decision to the maintainer.
+- **Remedy.** The same knob bar in CI terms: a `timeout-minutes:`, a deleted step, a pinned image. A new helper script, a retry wrapper, or a shim threaded through several call sites is the shape to decline.
 
 This is a bar on the *whole* change, so it applies to the reviewer too: a CI-time PR that is individually well-argued at each step still fails it if the machinery outweighs the minutes saved. Say so plainly rather than reviewing only the details.
 
