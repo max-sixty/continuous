@@ -332,6 +332,8 @@ gh issue list --state open --limit 200 --json number,title
 gh pr list --state open --limit 200 --json number,title,headRefName
 ```
 
+That projection orients you; it does not clear a finding. It omits both states a prior rejection lives in — closed PRs, and the comment bodies of an open issue — so per finding, before writing code, run the searches under **Fetch the prior rejection before re-deriving a fix** in `/tend-ci-runner:running-in-ci`.
+
 The default action is a PR, not an issue. If there's a plausible fix, make it — explain uncertainty in the PR description.
 
 For each finding:

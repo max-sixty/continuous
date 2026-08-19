@@ -168,6 +168,20 @@ gh pr list --state all --search "author:$BOT_LOGIN <issue-number>" \
 
 Compare by title keywords **and** the files the new PR would modify — two concurrent fixes for the same bug typically pick different branch names, so a branch-name match is not sufficient. If a sibling bot PR overlaps in scope — whether open, closed, or already merged — **do not create**: post a comment on the triggering thread linking the existing PR and exit.
 
+### Fetch the prior rejection before re-deriving a fix
+
+A change a maintainer already turned down leaves its verdict in two places the checks above don't fetch: the closed PR that carried it, and the comments on the issue tracking it. Search by the symbol or path the change would edit — a finding re-derived from the code has no issue number, and an attempt predating the tracking issue cites none either — then read the closed hits and the issue bodies, not just their titles.
+
+```bash
+BOT_LOGIN=$(gh api user --jq '.login')
+# <symbol>: the function, file, or config key the change would edit
+gh pr list --state all --search "author:$BOT_LOGIN <symbol>" --json number,title,state,closedAt
+gh pr view <n> --json comments,reviews --jq '[.comments[].body, .reviews[].body]'
+gh issue view <n> --json comments --jq '.comments[].body'
+```
+
+What you find governs: a PR closed on the **code** leaves the fix available to redo, while one closed on the **approach** means the semantics are still an open maintainer question — add findings to that thread rather than opening a second implementation of it.
+
 ## Pushing to PR Branches
 
 Always use `git push` without specifying a remote — `gh pr checkout` configures tracking to the correct remote, including for fork PRs. Specifying `origin` explicitly can push to the wrong place.
