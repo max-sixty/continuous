@@ -264,7 +264,10 @@ place. Classify each remaining secret and act now — don't defer:
     site and stores it themselves: hand over the environment's
     `gh secret set` command fully substituted. With neither `--body` nor
     a pipe it prompts for the value, so the token never sits in the chat
-    transcript.
+    transcript. Don't delete the repo-level copy until
+    `gh secret list --repo "$REPO" --env "$ENV" --json name` shows it —
+    the write is theirs on this route, so nothing else tells the agent it
+    landed.
 
   Whichever route is chosen, include the exact token-creation URL in
   the question or option description (and in the follow-up message if
@@ -521,7 +524,9 @@ environment protection rules on top.
 
 Create `.claude/skills/running-tend/SKILL.md` with tend-specific project
 guidance. This skill is loaded by tend workflows alongside the generic
-`tend-*` skills.
+`tend-*` skills — by skill discovery, so it must open with the
+frontmatter shown below. An existing overlay without it isn't done:
+add the frontmatter in place.
 
 **Do NOT duplicate CLAUDE.md** and **do NOT invent project conventions.**
 
@@ -536,8 +541,7 @@ If the user picked the overlay at Kickoff, ask via `AskUserQuestion`
 
 For each selected item, follow up with a free-text ask to capture the
 specifics, then write them into the overlay, opening with the same
-frontmatter as the placeholder below — skill discovery needs it.
-Otherwise create a placeholder:
+frontmatter as the placeholder below. Otherwise create a placeholder:
 
 ```markdown
 ---
