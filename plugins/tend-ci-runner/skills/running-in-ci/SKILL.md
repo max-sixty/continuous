@@ -15,8 +15,6 @@ If a `running-tend` skill is listed in your available skills, load it with the S
 
 Repo-local skills are invoked by their unprefixed name — `Skill: running-tend`, not `Skill: tend-ci-runner:running-tend` (that prefix is reserved for this plugin's own skills, and trying it returns `Unknown skill`).
 
-Repo-local skills must have YAML frontmatter (`name` + `description`) to be auto-discovered.
-
 If you are going to propose a code fix for a bug, load `/tend-ci-runner:triage` first — it contains reproduction and testing gates that apply to all fix attempts, not just initial triage.
 
 ## Conduct
