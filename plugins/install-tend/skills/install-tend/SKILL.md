@@ -663,22 +663,43 @@ as 1-year), two mint paths, routed by environment rather than asked:
   Each run generates a fresh PKCE challenge, so a code from an earlier
   run is dead; a restart needs a fresh approval.
 
-- **Manual** — when the CLI path is unavailable or the wrapper errors
-  out: have the user run `claude setup-token` in their own terminal (any
+  The wrapper waits 15 minutes and then exits having written nothing, so
+  that window needs the user at the browser throughout it. The authorize
+  URL logs the browser out on the way in
+  (`claude.ai/login?reauth=1&from=logout`), which means an
+  already-signed-in Claude session doesn't shorten the job, and the login
+  in front of the approval is theirs — an agent driving Chrome reaches
+  that page and stops there. So start the run once they say they are at
+  the browser; one started ahead of them spends its window and takes its
+  own URL down. After a window lapses twice, stop reissuing and hand over
+  the Manual path, which has no window.
+
+- **Manual** — when the CLI path is unavailable, the wrapper errors out,
+  or the user isn't at the browser when the agent is. Hand over both
+  commands, fully substituted, for them to run in their own terminal (any
   machine with Claude Code installed; `https://claude.com/claude-code` to
-  install it) and paste the `sk-ant-oat01-…` token back. Then store it:
+  install it), whenever suits them:
 
   ```bash
-  printf '%s' "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
+  claude setup-token
   ```
 
-For **API key**:
+  ```bash
+  gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
+  ```
 
-Have the user paste an `sk-ant-…` key from
-`https://console.anthropic.com/settings/keys`, then store it:
+  Given neither `--body` nor a pipe, `gh secret set` prompts for the
+  value, so the token goes from the first command's output to that prompt
+  and nowhere else. Don't ask for it in chat: the agent has no use for the
+  value, and a token pasted there is a live credential sitting in the
+  transcript.
+
+For **API key**: the user takes a key from
+`https://console.anthropic.com/settings/keys` and runs this themselves,
+substituted, pasting the key at the prompt:
 
 ```bash
-gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend --body "$KEY"
+gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend
 ```
 
 ### 7b. Harness = codex
@@ -694,10 +715,12 @@ auth mid-run. See ${CLAUDE_SKILL_DIR}/references/security-model.md.
 gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' | grep -q OPENAI_API_KEY && echo "SET" || echo "NOT SET"
 ```
 
-If not set, have the user paste the `sk-…` key. Store it:
+If not set, the user takes a key from
+`https://platform.openai.com/api-keys` and runs this themselves,
+substituted, pasting the key at the prompt:
 
 ```bash
-gh secret set OPENAI_API_KEY --repo "$REPO" --env tend --body "$KEY"
+gh secret set OPENAI_API_KEY --repo "$REPO" --env tend
 ```
 
 ## 8. Bot token and secret
