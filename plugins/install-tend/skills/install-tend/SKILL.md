@@ -692,7 +692,9 @@ as 1-year), two mint paths, routed by environment rather than asked:
   value, so the token goes from the first command's output to that prompt
   and nowhere else. Don't ask for it in chat: the agent has no use for the
   value, and a token pasted there is a live credential sitting in the
-  transcript.
+  transcript. The prompt refuses an empty submission and keeps waiting, so
+  the empty-value hazard that makes the CLI path's guard load-bearing has
+  no counterpart here.
 
 For **API key**: the user takes a key from
 `https://console.anthropic.com/settings/keys` and runs this themselves,
