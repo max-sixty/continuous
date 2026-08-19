@@ -179,7 +179,7 @@ BOT_LOGIN=$(gh api user --jq '.login')
 # <symbol>: the function, file, or config key the change would edit
 gh pr list --state all --search "author:$BOT_LOGIN <symbol>" --limit 100 --json number,title,state,closedAt
 gh pr view <n> --json comments,reviews --jq '[.comments[].body, .reviews[].body]'
-gh issue view <n> --json comments --jq '.comments[].body'
+gh issue view <n> --json body,comments --jq '[.body, .comments[].body]'
 ```
 
 What you find governs: a PR closed on the **code** leaves the fix available to redo, while one closed on the **approach** means the semantics are still an open maintainer question — add findings to that thread rather than opening a second implementation of it.
