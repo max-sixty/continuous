@@ -6,15 +6,10 @@ description: Sets up tend — an autonomous junior maintainer for a GitHub repo,
 # Install Tend
 
 Set up tend on the current repo, or change an installation it already has.
-When installing and the user hasn't supplied a bot name, get one via
-`AskUserQuestion` before step 1 using the candidate-generation pattern from
-step 6 (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`, parallel availability
-check, present available ones). The user can pick "Other" to supply a custom
-name.
 
 When asking the user questions during these steps, use the `AskUserQuestion`
-tool — present concrete options when there are clear choices (e.g. bio
-stance, badge style, secret-migration confirmation).
+tool — present concrete options when there are clear choices (e.g.
+secret-migration confirmation, registry token route).
 
 When a question requires the user to do something off-screen (visit a URL,
 run a command, paste a value back), spell the next step out in the question
@@ -29,47 +24,94 @@ a change to one, and where it exists it settles the harness: the `harness` key,
 or Claude when the key is absent, which is how a Claude install is normally
 written.
 
-With a config in place, take the harness from it, lay out only the steps the
-task touches, and start. The summary checklist at the end describes a finished
-install, so skip it.
-
-With no config yet, choose the harness and lay out the whole install:
-
-- Ask via `AskUserQuestion` which harness to use:
-  - **Claude (Anthropic)** — uses a Claude Code OAuth token (recommended
-    for adopters with a Claude subscription) or a console.anthropic.com
-    API key. OAuth draws from the subscription's usage limits; the API
-    key bills per token, which fits when the user has no subscription to
-    draw on or wants a dedicated billing surface and per-key revocation.
-  - **Codex (OpenAI)** — uses an OpenAI API key (pay-per-token). The
-    `auth.json` subscription path is incompatible with tend's
-    concurrent workflows (per-call refresh-token invalidation) and is
-    being removed. Detail in
-    ${CLAUDE_SKILL_DIR}/references/security-model.md.
-- List the steps you'll be running (the section headings below: Create
-  config → Generate workflows → Branch protection → Skill overlay →
-  Badge → Bot account → Harness auth → Bot token → Grant access →
-  Bot bio → Commit) so the user knows what's coming.
-- Tell them it typically takes 5–10 minutes of their hands-on time
-  (browser logins, OAuth approvals, occasional copy-paste); the agent
-  drives the rest.
-- Confirm via `AskUserQuestion` ("Ready to start?") before beginning
-  step 1. Don't proceed until they say yes.
-
-Follow each step in order. Skip steps that are already done — check each
-prerequisite before acting. Derive `REPO` once at the start:
+Derive `REPO` once at the start — the second call resolves a fork clone to
+its root source, so no remotes need touching (every command below passes
+`--repo "$REPO"` explicitly):
 
 ```bash
 gh auth status
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+LOCAL=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+REPO=$(gh api "repos/$LOCAL" --jq 'if .fork then .source.full_name else .full_name end')
 echo "$REPO"
 ```
 
-Confirm with the user that `$REPO` is the canonical repo where tend
-will run — not a fork. Every command below passes `--repo "$REPO"`
-explicitly, so if the working directory is a fork clone, just
-override the variable with the canonical `owner/name` and continue;
-no need to touch git remotes.
+When the resolution changes the name, or returns `null` (source deleted or
+invisible to the token), confirm the target with the user before touching
+anything — a deliberately maintained hard fork keeps its own name.
+
+A config from a finished install — workflows committed, secrets set, bot
+access granted (`uvx tend@latest check` reports all three) — makes this a
+change: take the harness from the config, lay
+out only the steps the task touches, and start. The summary checklist at the
+end describes a finished install, so skip it. A preference a step needs
+(7a's auth mode, 10's bio stance) is asked at that step.
+
+Otherwise this is an install, including a resume of one that never finished
+(config present, later steps missing). Gather every preference in a single
+`AskUserQuestion` round, so the rest of the install stops only where a step
+genuinely needs the user. First generate three bot-name candidates from the
+bare repo name (`<repo>-bot`, `<repo>-tend`, `tend-<repo>`) and check their
+availability in parallel:
+
+```bash
+for name in cand1 cand2 cand3; do
+  gh api "users/$name" >/dev/null 2>&1 && echo "$name: TAKEN" || echo "$name: available"
+done
+```
+
+Also check whether the repo has a README (names in step 5) — it decides
+whether question 3 gets a badge option.
+
+In the message alongside the questions, lay out the install: it targets
+`$REPO`, runs the section headings below as steps, and typically takes 5–10
+minutes of the user's hands-on time (browser logins, OAuth approvals,
+occasional copy-paste) — the agent drives the rest, ending at a local
+commit (pushing waits for their go-ahead, step 11).
+
+Then one `AskUserQuestion` call with three questions. Answering it is the
+go-ahead — no separate "ready to start?" confirmation. Drop any question the
+user's request or an existing config already answers (a supplied bot name, a
+chosen harness); a fully specified request leaves nothing to ask, and is
+itself the go-ahead.
+
+1. **Harness** — which model runs the bot and which credential it
+   bills to:
+   - **Claude — OAuth token** (recommended for adopters with a Claude
+     subscription) — draws from the subscription's usage limits.
+   - **Claude — API key** — a console.anthropic.com key, billed per token.
+     Fits when there's no subscription to draw on, or the user wants a
+     dedicated billing surface and per-key revocation.
+   - **Codex — OpenAI API key** — pay-per-token. The `auth.json`
+     subscription path is incompatible with tend's concurrent workflows
+     (per-call refresh-token invalidation) and is being removed. Detail in
+     ${CLAUDE_SKILL_DIR}/references/security-model.md.
+2. **Bot name** — the available candidates, recommended first. "Other"
+   takes a custom name; check its availability before using it. If all
+   candidates are taken, generate more before asking.
+3. **Customize** (`multiSelect: true`) — the areas where the user wants a
+   non-default value, each option naming its default in its description.
+   Submitting with nothing selected accepts every default, the normal
+   case; phrase the question so an empty submission reads as intended,
+   e.g. "Anything to customize? Defaults apply to whatever you leave
+   unselected." Omit an
+   area that can't apply (no README → no badge option). The tool caps a
+   question at 4 options, so a new area means grouping, not appending.
+   - **Workflow config** — setup steps, workflow conditions, schedules, job
+     permissions/timeouts, env vars (default: no overrides)
+   - **Bot guidance overlay** — PR title format, labels, review routing,
+     target branch, nightly actions (default: a placeholder overlay)
+   - **README badge** — an olive-green "maintained with tend" badge
+     (default: added, matching the README's existing badge style)
+   - **Bot profile bio** — the stance line on the bot's profile (default:
+     "I triage issues and help maintain `<repo>`")
+
+Each selected area gets its follow-up at its step (1, 4, 5, 10); unselected
+areas apply the default without asking. Steps that can't be defaulted —
+migrating a release secret, naming environment reviewers, creating the bot
+account, approving OAuth — still interact when they arrive.
+
+Follow each step in order. Skip steps that are already done — check each
+prerequisite before acting.
 
 ## Browser sessions
 
@@ -158,7 +200,7 @@ place. Classify each remaining secret and act now — don't defer:
   ```
 
   Each entry must match a ref class from §3 (default branch and/or all
-  tags). Confirm before checking the box.
+  tags).
 
   Then sweep deploy/publish workflows. Each must trigger on `push: tags:`
   or `push: branches: [<default-branch>]` (per §3 workflow design) and
@@ -222,14 +264,14 @@ workflows:
 If no CI workflows exist, either skip ci-fix (`enabled: false`) or help the
 user create one first.
 
-Ask via `AskUserQuestion` (`multiSelect: true`) which other overrides
-they want to set. Skip-all is fine — defaults are sensible:
+If the user picked workflow config at Kickoff, ask via `AskUserQuestion`
+(`multiSelect: true`) which overrides to set — otherwise set none:
 
-- Setup steps (system deps, language version, pre-build hooks)
+- Setup steps and env vars (system deps, language version, pre-build
+  hooks, top-level env vars)
 - Workflow conditions (e.g., skip review on `tend:dismissed` PRs — see below)
 - Schedule overrides (cron timing for nightly/weekly)
 - Permissions / timeouts on specific jobs
-- Top-level env vars
 
 For each selected category, follow up with a free-text ask, then write
 the override into `.config/tend.yaml`. See the next subsection for
@@ -324,7 +366,7 @@ fact write, the bot's own role, and granting it hands the bot the merge. Before
 adding any bypass actor, read back what the ruleset actually granted:
 
 ```bash
-gh api graphql -f query='{repository(owner:"OWNER", name:"REPO")
+gh api graphql -f query='{repository(owner:"<owner>", name:"<repo>")
   {rulesets(first:10){nodes{name bypassActors(first:10)
   {nodes{repositoryRoleDatabaseId repositoryRoleName}}}}}}'
 ```
@@ -448,19 +490,18 @@ guidance. This skill is loaded by tend workflows alongside the generic
 
 **Do NOT duplicate CLAUDE.md** and **do NOT invent project conventions.**
 
-Ask via `AskUserQuestion` (`multiSelect: true`) which tend-specific
-preferences they want to capture. Skipping all is fine — the placeholder
-below covers that case.
+If the user picked the overlay at Kickoff, ask via `AskUserQuestion`
+(`multiSelect: true`) which tend-specific preferences to capture:
 
-- PR title format (e.g., conventional commits, Jira ticket prefix)
-- Labels the bot should apply to its PRs
+- PR conventions (title format — e.g., conventional commits, Jira ticket
+  prefix — and labels the bot should apply)
 - Review request routing (specific teams or people)
 - Target branch if not the default branch
 - Optional nightly actions (e.g., changelog maintenance — specify file and branch)
 
 For each selected item, follow up with a free-text ask to capture the
-specifics, then write them into the overlay. If nothing is selected,
-create a placeholder:
+specifics, then write them into the overlay. Otherwise create a
+placeholder:
 
 ```markdown
 No project-specific tend preferences yet. Add guidance here as
@@ -470,10 +511,12 @@ needed — this file is loaded by tend workflows alongside CLAUDE.md.
 Build commands, test commands, code style, and project structure belong
 in CLAUDE.md — tend reads it like any other Claude session.
 
-## 5. Offer to add a badge
+## 5. README badge
 
-If the repo has a README (any of `README.md`, `README.rst`, `README`), offer
-to add a "maintained with tend" badge.
+If the repo has a README (any of `README.md`, `README.rst`, `README`), add a
+"maintained with tend" badge. If the user picked the badge at Kickoff, first
+ask what they want (skip it, or a placement/style preference); otherwise
+insert it without asking.
 
 Base URL (always include the logo):
 
@@ -494,18 +537,14 @@ markdown shape:
 [![maintained with tend](<image-url>)](https://github.com/max-sixty/tend)
 ```
 
-Use `AskUserQuestion` to confirm. Describe the badge briefly in the
-question ("an olive-green 'maintained with tend' badge with the tend
-wordmark") — do NOT paste the raw `img.shields.io` URL or its base64
+Wherever the badge comes up in chat (the Kickoff option, a follow-up),
+describe it briefly ("an olive-green 'maintained with tend' badge with the
+tend wordmark") — do NOT paste the raw `img.shields.io` URL or its base64
 logo blob into the chat; the blob is hundreds of characters of noise.
-The user only needs to decide yes/no, not eyeball the URL. Insert the
-markdown directly into the README on confirmation.
 
 Place it near the top of the README — after the title/heading but
 before the first paragraph. If there are already badges on that line,
 append to the same line.
-
-If no README exists, skip this step.
 
 ## 6. Bot account
 
@@ -513,17 +552,12 @@ If no README exists, skip this step.
 gh api users/<bot-name> --jq '.login,.id' 2>/dev/null && echo "EXISTS" || echo "NOT FOUND"
 ```
 
-If the account doesn't exist:
+If the account doesn't exist (the name comes from Kickoff or
+`bot_name` in the config):
 
-1. If the user hasn't chosen a name yet, generate three candidates
-   (e.g. `<repo>-bot`, `<repo>-tend`, `tend-<repo>`), check availability
-   in parallel, and present the available ones via `AskUserQuestion`:
-
-   ```bash
-   for name in cand1 cand2 cand3; do
-     gh api "users/$name" >/dev/null 2>&1 && echo "$name: TAKEN" || echo "$name: available"
-   done
-   ```
+1. Ask the user which email address the account should use — GitHub needs
+   an inbox that can receive its verification mail; plus-addressing of
+   their own (`name+bot@…`) works.
 2. Navigate Chrome to `https://github.com/signup`.
 3. If a verification code is needed and an email-reading skill or MCP is
    available, use it to fetch the latest GitHub verification email
@@ -551,12 +585,12 @@ install) can't be read back — GitHub secrets are write-only — so mint the
 value into the environment per the steps below, then delete the
 repo-level copy; `tend check` flags it until deleted.
 
-Branch on the harness chosen in Kickoff.
+Branch on the harness.
 
 ### 7a. Harness = claude
 
-The Claude action accepts two auth modes; pick whichever the user has.
-The action prefers `CLAUDE_CODE_OAUTH_TOKEN` when both are set.
+The action prefers `CLAUDE_CODE_OAUTH_TOKEN` when both auth modes' secrets
+are set.
 
 ```bash
 gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' \
@@ -564,28 +598,20 @@ gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' \
   && echo "SET" || echo "NOT SET"
 ```
 
-If not set, ask via `AskUserQuestion` which auth mode to use:
+If not set, mint per the auth mode chosen at Kickoff. Absent a Kickoff
+answer — the config records the harness, never the auth mode, so a change
+flow or a resumed install lands here without one — first ask which mode
+via `AskUserQuestion`: the two Claude options from Kickoff question 1.
 
-- **OAuth token (recommended for Claude subscribers)** —
-  `sk-ant-oat01-…` from `claude setup-token`. Draws from the
-  subscription's usage limits. Token is advertised as 1-year.
-- **API key** — `sk-ant-…` from
-  `https://console.anthropic.com/settings/keys`. Billed per token against
-  the Console org. Pick this when there's no Claude subscription, when
-  the bot should bill against a dedicated Console org, or when per-key
-  revocation matters. Works for any repo.
+For **OAuth token** (`sk-ant-oat01-…` from `claude setup-token`; advertised
+as 1-year), two mint paths, routed by environment rather than asked:
 
-For **OAuth token**: before offering the CLI option, check:
-
-- `command -v claude` — if missing, only offer Manual (point them at
-  `https://claude.com/claude-code` to install).
-- `uname` — the bundled wrapper needs `python3` and a pty, and has only
-  been validated on macOS and Linux. On anything else (`MINGW*`,
-  `CYGWIN*`, `MSYS*`, `Windows_NT`, etc.), only offer Manual.
-
-- **CLI (recommended on macOS/Linux when `claude` is on PATH)** — run
-  the bundled wrapper, which invokes `claude setup-token` (OAuth 2.0
-  PKCE, opens browser). **Run it in the background:** it prints the
+- **CLI** — the default when `claude` is on PATH (`command -v claude`) and
+  `uname` reports macOS or Linux; the bundled wrapper needs `python3` and a
+  pty and has only been validated there, so `MINGW*`, `CYGWIN*`, `MSYS*`,
+  `Windows_NT`, etc. route to Manual. Run the wrapper, which invokes
+  `claude setup-token` (OAuth 2.0 PKCE, opens browser). **Run it in the
+  background:** it prints the
   authorize URL to stderr and then waits, and one of the two ways it
   finishes needs you to act while it is still running. Piping straight
   into `gh` keeps the token out of the transcript.
@@ -615,10 +641,10 @@ For **OAuth token**: before offering the CLI option, check:
   Each run generates a fresh PKCE challenge, so a code from an earlier
   run is dead; a restart needs a fresh approval.
 
-- **Manual** — have the user run `claude setup-token` in their own
-  terminal (any machine with Claude Code installed) and paste the
-  `sk-ant-oat01-…` token back. Use this on Windows or when the
-  wrapper errors out. Then store it:
+- **Manual** — when the CLI path is unavailable or the wrapper errors
+  out: have the user run `claude setup-token` in their own terminal (any
+  machine with Claude Code installed; `https://claude.com/claude-code` to
+  install it) and paste the `sk-ant-oat01-…` token back. Then store it:
 
   ```bash
   printf '%s' "$TOKEN" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO" --env tend
@@ -626,7 +652,8 @@ For **OAuth token**: before offering the CLI option, check:
 
 For **API key**:
 
-Have the user paste the `sk-ant-…` key, then store it:
+Have the user paste an `sk-ant-…` key from
+`https://console.anthropic.com/settings/keys`, then store it:
 
 ```bash
 gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend --body "$KEY"
@@ -662,9 +689,8 @@ only if needed (8a or 8b), and pushes it to the environment secret (8c). It
 serves both the install sequence and a standalone `Bot PAT`
 scope-audit remediation; in the audit case it is the whole fix, and
 you close the issue once 8c verifies. `<bot-name>` is `bot_name` in
-`.config/tend.yaml`; `$REPO` derives as in the kickoff:
-`gh repo view --json nameWithOwner --jq '.nameWithOwner'` (confirm it
-names the canonical repo, not a fork).
+`.config/tend.yaml`; `$REPO` derives as in the Kickoff (whose recipe
+resolves a fork clone to the canonical repo).
 
 Bot auth lives in a dedicated config dir,
 `$HOME/.config/gh-bots/<bot-name>`, with the token stored plaintext
@@ -815,9 +841,11 @@ bot to do, then reflect that stance in the bot's profile bio (≤160 chars)
 so it's discoverable on the bot's user page. This is advisory — the bot
 doesn't gate behavior on it.
 
-Ask the creator via `AskUserQuestion` which stance applies. Substitute
-`<owner>/<repo>` at ask time. Order options recommended-first and mark
-the recommended one explicitly:
+Use the recommended stance below unless the user picked the bio at Kickoff
+or there was no Kickoff round (a change flow) — then ask via
+`AskUserQuestion` which applies. Substitute
+`<owner>/<repo>`. Order options recommended-first and mark the recommended
+one explicitly:
 
 - `tend agent for <owner>/<repo>. I triage issues and help maintain <repo>.` (Recommended — invites issue/PR engagement without inviting open-ended Q&A)
 - `tend agent for <owner>/<repo>. Feel free to ask me questions about <repo>.` (Most permissive — invites contributor questions)
@@ -859,7 +887,8 @@ Commit with co-author attribution. Do NOT push without explicit permission.
 
 After pushing the install PR, wait for the `tend-install-test` workflow
 to pass before merging — it verifies the bot+harness secrets are set and
-that the committed workflow files match the generator's output. The file
+that the committed workflow files match the generator's output. Merging
+is the user's call. The file
 itself is removed on the next nightly regen, so future PRs won't trigger
 it.
 
@@ -873,7 +902,7 @@ line picks the row that matches the chosen harness):
 - [ ] Rulesets: merge restriction on default branch (admin bypass), tag operations on all tags (admin bypass)
 - [ ] Release/deploy secrets: environment-protected; the environment's deployment-branch-policies list only the admin-gated refs from §3 (default branch and/or all tags)
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
-- [ ] Badge: offered to add to README (optional)
+- [ ] Badge: added to README (unless skipped, or no README)
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Harness auth (claude): `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret set
 - [ ] Harness auth (codex): `OPENAI_API_KEY` secret set
