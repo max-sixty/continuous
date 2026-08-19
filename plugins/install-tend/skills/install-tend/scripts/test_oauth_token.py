@@ -11,7 +11,13 @@ them, so they are pinned here.
 
 from __future__ import annotations
 
-from oauth_token import ANSI_CSI, AUTHORIZE_URL, MAX_TOKEN_LENGTH, TIMEOUT_SECONDS, TOKEN
+from oauth_token import (
+    ANSI_CSI,
+    AUTHORIZE_URL,
+    MAX_TOKEN_LENGTH,
+    TIMEOUT_SECONDS,
+    TOKEN,
+)
 from oauth_token import complete_match, failure_message, first_url
 
 URL = (
