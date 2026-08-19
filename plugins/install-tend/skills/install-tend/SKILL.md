@@ -523,10 +523,9 @@ environment protection rules on top.
 ## 4. Create skill overlay (recommended)
 
 Create `.claude/skills/running-tend/SKILL.md` with tend-specific project
-guidance. This skill is loaded by tend workflows alongside the generic
-`tend-*` skills — by skill discovery, so it must open with the
-frontmatter shown below. An existing overlay without it isn't done:
-add the frontmatter in place.
+guidance, opening with the frontmatter below so discovery lists it by
+description rather than by its first heading. An existing overlay without
+frontmatter needs it added in place.
 
 **Do NOT duplicate CLAUDE.md** and **do NOT invent project conventions.**
 
@@ -540,8 +539,8 @@ If the user picked the overlay at Kickoff, ask via `AskUserQuestion`
 - Optional nightly actions (e.g., changelog maintenance — specify file and branch)
 
 For each selected item, follow up with a free-text ask to capture the
-specifics, then write them into the overlay, opening with the same
-frontmatter as the placeholder below. Otherwise create a placeholder:
+specifics, then write them into the overlay. Otherwise create a
+placeholder:
 
 ```markdown
 ---
