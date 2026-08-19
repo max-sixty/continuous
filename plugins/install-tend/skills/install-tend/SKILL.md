@@ -261,7 +261,10 @@ place. Classify each remaining secret and act now — don't defer:
     at token-creation time; the user completes it in the open tab, per
     Browser sessions.
   - **Manual** — user generates the token themselves on the registry's
-    site and pastes it back.
+    site and stores it themselves: hand over the environment's
+    `gh secret set` command fully substituted. With neither `--body` nor
+    a pipe it prompts for the value, so the token never sits in the chat
+    transcript.
 
   Whichever route is chosen, include the exact token-creation URL in
   the question or option description (and in the follow-up message if
@@ -627,6 +630,10 @@ install) can't be read back — GitHub secrets are write-only — so mint the
 value into the environment per the steps below, then delete the
 repo-level copy; `tend check` flags it until deleted.
 
+Where a path below has the user run `gh secret set` themselves, the step
+finishes when its pre-check prints SET — re-run it once they say they're
+done.
+
 Branch on the harness.
 
 ### 7a. Harness = claude
@@ -702,8 +709,9 @@ as 1-year), two mint paths, routed by environment rather than asked:
 - **Manual** — when the CLI path is unavailable, the wrapper errors out,
   or the user isn't at the browser when the agent is. Hand over both
   commands, fully substituted, for them to run in their own terminal (any
-  machine with Claude Code installed; `https://claude.com/claude-code` to
-  install it), whenever suits them:
+  machine with Claude Code installed and `gh` logged in as the
+  maintainer; `https://claude.com/claude-code` to install it), whenever
+  suits them:
 
   ```bash
   claude setup-token
@@ -731,8 +739,7 @@ gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend
 
 ### 7b. Harness = codex
 
-Codex uses `OPENAI_API_KEY` (pay-per-token, from
-`https://platform.openai.com/api-keys`). The subscription `auth.json`
+Codex uses `OPENAI_API_KEY` (pay-per-token). The subscription `auth.json`
 path is not supported — Codex rotates that refresh token on every
 API call and invalidates the prior one, so tend's concurrent
 workflows (review/mention/triage/nightly/…) would break each other's
