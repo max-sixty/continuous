@@ -172,10 +172,12 @@ Compare by title keywords **and** the files the new PR would modify — two conc
 
 A change a maintainer already turned down leaves its verdict in two places the checks above don't fetch: the closed PR that carried it, and the comments on the issue tracking it. Search by the symbol or path the change would edit — a finding re-derived from the code has no issue number, and an attempt predating the tracking issue cites none either — then read the closed hits and the issue bodies, not just their titles.
 
+Search, don't scan. A recency-ordered listing ages a rejection out in bot-throughput time: at a few PRs a day, any `--limit` drops it within weeks, and raising the cap only moves that boundary. A symbol match stays small however many PRs have landed since.
+
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
 # <symbol>: the function, file, or config key the change would edit
-gh pr list --state all --search "author:$BOT_LOGIN <symbol>" --json number,title,state,closedAt
+gh pr list --state all --search "author:$BOT_LOGIN <symbol>" --limit 100 --json number,title,state,closedAt
 gh pr view <n> --json comments,reviews --jq '[.comments[].body, .reviews[].body]'
 gh issue view <n> --json comments --jq '.comments[].body'
 ```
