@@ -20,6 +20,9 @@ jobs:
     # validation isn't worth special-casing.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
+    # Bounds the whole job, adopter `setup:` included. Override with
+    # `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

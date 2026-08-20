@@ -69,11 +69,19 @@ def test_every_job_declares_a_timeout(tmp_path: Path) -> None:
 
     That default is long enough for a wedged setup step to hold a
     `cancel-in-progress: false` concurrency queue for six hours, so a new job
-    shipping uncapped is the regression this guards.
+    shipping uncapped is the regression this guards. ci-fix is enabled and
+    install-test opted in so the corpus is every workflow: both are skipped by
+    default, and a skipped workflow is one this invariant silently stops
+    covering — install-test runs `uvx tend init` behind `setup-uv`, the same
+    pre-agent install region the observed wedges came from.
     """
     extra = 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
     cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in generate_all(cfg):
+    generated = generate_all(cfg, with_install_test=True)
+    assert {wf.filename for wf in generated} == {
+        f"tend-{name}.yaml" for name in GENERATORS
+    } | {"tend-install-test.yaml"}
+    for wf in generated:
         for name, job in yaml.safe_load(wf.content)["jobs"].items():
             cap = job.get("timeout-minutes")
             assert cap is not None, f"{wf.filename}:{name} has no timeout-minutes"
