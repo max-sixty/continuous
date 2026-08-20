@@ -21,6 +21,9 @@ jobs:
       # booting an agent when its HEAD is already covered.
       cancel-in-progress: false
     runs-on: ubuntu-24.04
+    # Bounds the whole job, adopter `setup:` included. Override with
+    # `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml.
+    timeout-minutes: 240
     environment:
       name: tend
       deployment: false
@@ -161,6 +164,5 @@ jobs:
           TARGET: issues/${{ github.event.pull_request.number }}
           BOT_NAME: test-bot
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
-    timeout-minutes: 240
 env:
   FOO: bar

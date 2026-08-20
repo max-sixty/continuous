@@ -12,6 +12,7 @@ jobs:
   triage:
     if: <<fork_guard_prefix(cfg)>><<not_bookkeeping()>>
     runs-on: ubuntu-24.04
+<<job_timeout(120)>>
 <<environment()>>
     permissions:
 <<permissions()>>

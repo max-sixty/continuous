@@ -21,6 +21,7 @@ jobs:
       # booting an agent when its HEAD is already covered.
       cancel-in-progress: false
     runs-on: ubuntu-24.04
+<<job_timeout(120)>>
 <<environment()>>
     permissions:
 <<permissions()>>

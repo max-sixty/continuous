@@ -8,6 +8,7 @@ on:
 jobs:
   notifications:
 <<fork_guard_if(cfg)>>    runs-on: ubuntu-24.04
+<<job_timeout(60)>>
 <<environment()>>
     permissions:
 <<permissions()>>

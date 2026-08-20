@@ -64,6 +64,23 @@ def test_generated_yaml_is_valid(tmp_path: Path) -> None:
         assert "jobs" in data, f"{wf.filename} missing jobs"
 
 
+def test_every_job_declares_a_timeout(tmp_path: Path) -> None:
+    """A job with no cap is bounded only by GitHub's 360-minute default.
+
+    That default is long enough for a wedged setup step to hold a
+    `cancel-in-progress: false` concurrency queue for six hours, so a new job
+    shipping uncapped is the regression this guards.
+    """
+    extra = 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    for wf in generate_all(cfg):
+        for name, job in yaml.safe_load(wf.content)["jobs"].items():
+            cap = job.get("timeout-minutes")
+            assert cap is not None, f"{wf.filename}:{name} has no timeout-minutes"
+            # Above the cap and GitHub's default is the operative bound again.
+            assert 0 < cap < 360, f"{wf.filename}:{name} timeout-minutes={cap}"
+
+
 def test_disabled_workflow_not_generated(tmp_path: Path) -> None:
     cfg = Config.load(
         _minimal_config(tmp_path, "workflows:\n  weekly:\n    enabled: false\n")
@@ -1267,8 +1284,10 @@ def test_mention_job_extras_target_specific_job(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     data = yaml.safe_load(workflows["tend-mention.yaml"].content)
+    # Both jobs ship a default cap, so "untouched" is the default surviving on
+    # `verify` rather than the key being absent.
     assert data["jobs"]["handle"]["timeout-minutes"] == 180
-    assert "timeout-minutes" not in data["jobs"]["verify"]
+    assert data["jobs"]["verify"]["timeout-minutes"] == 10
 
 
 def test_extras_preserve_header(tmp_path: Path) -> None:

@@ -342,6 +342,13 @@ bot_name: my-project-bot
 #
 # ### Example: longer timeout on a specific job
 #
+# Every generated job ships a `timeout-minutes` default — 60 for ci-fix,
+# notifications and weekly; 120 for review, triage, review-runs and mention's
+# `handle`; 180 for nightly; 10 for mention's `relay` and `verify`. The cap
+# covers the whole job, `setup:` included, which is the only bound that
+# reaches steps running before the harness action is entered. Override it
+# where a job legitimately needs longer:
+#
 # workflows:
 #   review:
 #     jobs:

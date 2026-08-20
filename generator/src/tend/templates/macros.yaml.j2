@@ -79,6 +79,26 @@
       deployment: false
 {%- endmacro %}
 
+{# Job timeout at column 4. A job cap is the only bound that reaches the whole
+   job: the harness supervisor's `timeout_seconds` starts once the action is
+   entered, so every step before it — checkout, the adopter's `setup:`, the
+   CLI installers — is otherwise bounded only by GitHub's 360-minute default.
+   Observed wedges live in exactly that region (an unbounded `apt-get update`
+   in an adopter setup composite, killed at 360 minutes), and a wedge on a job
+   with `cancel-in-progress: false` holds its concurrency queue for the same
+   six hours. On `pull_request_target` there is no successor run unless
+   someone pushes, so a wedged review is a review that never happens.
+
+   Values are sized above observed healthy durations, not near the supervisor
+   budget: a cap that only restates GitHub's default bounds nothing. Adopters
+   who need more override per job —
+   `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml. #}
+{% macro job_timeout(minutes) %}
+    # Bounds the whole job, adopter `setup:` included. Override with
+    # `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml.
+    timeout-minutes: <<minutes>>
+{%- endmacro %}
+
 {# Permissions block at column 6. `issues` defaults to True because every
    workflow except ci-fix needs it. The trailing inline conditional avoids
    the trim_blocks-eats-the-separator issue between `actions: read` and

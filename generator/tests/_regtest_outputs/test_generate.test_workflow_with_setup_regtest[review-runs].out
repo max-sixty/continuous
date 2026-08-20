@@ -15,6 +15,9 @@ on:
 jobs:
   review-runs:
     runs-on: ubuntu-24.04
+    # Bounds the whole job, adopter `setup:` included. Override with
+    # `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml.
+    timeout-minutes: 120
     environment:
       name: tend
       deployment: false

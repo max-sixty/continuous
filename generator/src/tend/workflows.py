@@ -384,6 +384,15 @@ _SCHEDULED_DEFAULT_CRON = {
     "review-runs": "47 7 * * *",
 }
 
+# One template, three workloads of different length: nightly's sweep is the
+# longest, weekly's dependency pass the shortest. See the `job_timeout` macro
+# for why these are capped at all.
+_SCHEDULED_TIMEOUT_MINUTES = {
+    "nightly": 180,
+    "weekly": 60,
+    "review-runs": 120,
+}
+
 
 def _generate_scheduled(cfg: Config, name: str) -> GeneratedWorkflow:
     wf = cfg.workflows.get(name, WorkflowConfig())
@@ -395,6 +404,7 @@ def _generate_scheduled(cfg: Config, name: str) -> GeneratedWorkflow:
         cfg=eff,
         name=name,
         cron=cron,
+        timeout_minutes=_SCHEDULED_TIMEOUT_MINUTES[name],
         setup=_setup_yaml(eff),
         prompt=prompt,
     )
