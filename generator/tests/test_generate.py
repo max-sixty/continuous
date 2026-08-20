@@ -109,7 +109,11 @@ def test_agent_budget_expires_before_the_job_cap(tmp_path: Path) -> None:
                     continue
                 budget = int(step["with"]["timeout_seconds"])
                 cap = job["timeout-minutes"] * 60
-                assert budget < cap, f"{wf.filename}:{name} {budget}s vs {cap}s cap"
+                # Lower bound too: a `_JOB_TIMEOUT_MINUTES` entry of 10 or less
+                # renders a budget of zero or negative, which doesn't disable
+                # the supervisor but inverts it — its elapsed-vs-budget poll is
+                # true on the first iteration, killing every session at ~0s.
+                assert 0 < budget < cap, f"{wf.filename}:{name} {budget}s vs {cap}s cap"
                 checked.add(wf.filename)
     # Every workflow `generate_all` yields runs an agent, so a name missing
     # here means the step shape changed and the loop above matched nothing.
@@ -120,12 +124,21 @@ def test_agent_budget_expires_before_the_job_cap(tmp_path: Path) -> None:
 
 def test_codex_agent_step_takes_no_supervisor_budget(tmp_path: Path) -> None:
     """Codex has no supervisor timeout — the job cap is that harness's bound."""
-    cfg = Config.load(_minimal_config(tmp_path, "harness: codex\nmodel: gpt-5.5\n"))
+    extra = (
+        "harness: codex\nmodel: gpt-5.5\n"
+        'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+    )
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    checked = set()
     for wf in generate_all(cfg):
         for job in yaml.safe_load(wf.content)["jobs"].values():
             for step in job["steps"]:
                 if "max-sixty/tend/codex@" in step.get("uses", ""):
                     assert "timeout_seconds" not in step["with"]
+                    checked.add(wf.filename)
+    # Same corpus pin as the claude test above: without it, a change to the
+    # codex step's shape matches nothing and the assertion passes vacuously.
+    assert checked == {f"tend-{name}.yaml" for name in GENERATORS}
 
 
 def test_disabled_workflow_not_generated(tmp_path: Path) -> None:

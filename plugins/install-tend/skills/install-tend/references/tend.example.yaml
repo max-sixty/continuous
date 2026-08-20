@@ -349,8 +349,10 @@ bot_name: my-project-bot
 # reaches steps running before the harness action is entered. Override it
 # where a job legitimately needs longer — note that the override moves the job
 # cap only: the Claude harness's own session budget is generated 10 minutes
-# under the default cap, so a much larger override leaves the session bounded
-# where it was (reported as a failure, not silently cancelled).
+# under the default cap. Raising the cap leaves the session bounded where it
+# was (reported as a failure, not silently cancelled); lowering it below that
+# budget puts the supervisor out of reach again, and an overrunning session
+# goes back to being cancelled silently.
 #
 # workflows:
 #   review:

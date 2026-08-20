@@ -118,9 +118,11 @@
    cannot drift apart. Adopters who need more override per job —
    `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml. That
    override moves the job cap alone — step inputs take no override, so the
-   supervisor budget stays at the generated value and an adopter who raises
-   the cap gets a session still bounded by the default. Reported, not silent:
-   the supervisor's kill is the one that files the outage row. #}
+   supervisor budget stays at the generated value. Raising the cap therefore
+   leaves the session bounded where it was, and reported rather than silent:
+   the supervisor's kill is the one that files the outage row. Lowering it
+   under that budget puts the supervisor out of reach again, and an overrun
+   goes back to being cancelled silently. #}
 {% macro job_timeout(minutes) %}
     # Bounds the whole job, adopter `setup:` included. Override with
     # `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml.
