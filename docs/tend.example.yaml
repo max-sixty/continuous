@@ -347,7 +347,10 @@ bot_name: my-project-bot
 # `handle`; 180 for nightly; 10 for mention's `relay` and `verify`. The cap
 # covers the whole job, `setup:` included, which is the only bound that
 # reaches steps running before the harness action is entered. Override it
-# where a job legitimately needs longer:
+# where a job legitimately needs longer — note that the override moves the job
+# cap only: the Claude harness's own session budget is generated 10 minutes
+# under the default cap, so a much larger override leaves the session bounded
+# where it was (reported as a failure, not silently cancelled).
 #
 # workflows:
 #   review:

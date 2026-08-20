@@ -15,11 +15,11 @@ jobs:
   fix-ci:
     if: <<fork_guard_prefix(cfg)>>github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-24.04
-<<job_timeout(60)>>
+<<job_timeout(timeout_minutes)>>
 <<environment()>>
     permissions:
 <<permissions(issues=False)>>
     steps:
 <<checkout(cfg, ref=cfg.default_branch)>>
 <<setup>>
-<<agent_step(cfg, prompt_body)>>
+<<agent_step(cfg, prompt_body, timeout_minutes)>>

@@ -170,7 +170,7 @@ jobs:
       group: ${{ github.workflow }}-handle-${{ github.event.issue.number || github.event.client_payload.pr }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-<<job_timeout(120)>>
+<<job_timeout(timeout_minutes)>>
 <<environment()>>
     permissions:
 <<permissions()>>
@@ -219,6 +219,6 @@ jobs:
           # the API record — the dispatch payload never carries one to spoof.
           EVENT_TS: ${{ github.event.comment.updated_at || needs.verify.outputs.ts || github.event.issue.updated_at }}
 
-<<agent_step(cfg, prompt_body)>><<restore_local_actions(local_actions)>>
+<<agent_step(cfg, prompt_body, timeout_minutes)>><<restore_local_actions(local_actions)>>
 
 <<unreact_eyes(cfg, reaction_target, if_condition="always()\n&& " ~ summoned(cfg.bot_name, 'needs.verify.outputs.reason'))>>

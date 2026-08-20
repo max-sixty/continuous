@@ -89,6 +89,45 @@ def test_every_job_declares_a_timeout(tmp_path: Path) -> None:
             assert 0 < cap < 360, f"{wf.filename}:{name} timeout-minutes={cap}"
 
 
+def test_agent_budget_expires_before_the_job_cap(tmp_path: Path) -> None:
+    """The supervisor must get an overrunning session before GitHub does.
+
+    The two kills are not interchangeable: the supervisor exits 1, so the job
+    is `failure` and the action's `failure()`-gated `Report failure` step files
+    the `tend-outage` row that `review-runs` drains. GitHub's `timeout-minutes`
+    kill yields `cancelled`, where `failure()` steps are skipped and the
+    overrun goes unreported. A `timeout_seconds` at or above the job cap — the
+    action's 21000s default included — puts the supervisor out of reach.
+    """
+    extra = 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    checked = set()
+    for wf in generate_all(cfg):
+        for name, job in yaml.safe_load(wf.content)["jobs"].items():
+            for step in job["steps"]:
+                if "max-sixty/tend/claude@" not in step.get("uses", ""):
+                    continue
+                budget = int(step["with"]["timeout_seconds"])
+                cap = job["timeout-minutes"] * 60
+                assert budget < cap, f"{wf.filename}:{name} {budget}s vs {cap}s cap"
+                checked.add(wf.filename)
+    # Every workflow `generate_all` yields runs an agent, so a name missing
+    # here means the step shape changed and the loop above matched nothing.
+    # install-test is deliberately outside the corpus: it renders no agent
+    # step, so it has a job cap and no supervisor budget to order against.
+    assert checked == {f"tend-{name}.yaml" for name in GENERATORS}
+
+
+def test_codex_agent_step_takes_no_supervisor_budget(tmp_path: Path) -> None:
+    """Codex has no supervisor timeout — the job cap is that harness's bound."""
+    cfg = Config.load(_minimal_config(tmp_path, "harness: codex\nmodel: gpt-5.5\n"))
+    for wf in generate_all(cfg):
+        for job in yaml.safe_load(wf.content)["jobs"].values():
+            for step in job["steps"]:
+                if "max-sixty/tend/codex@" in step.get("uses", ""):
+                    assert "timeout_seconds" not in step["with"]
+
+
 def test_disabled_workflow_not_generated(tmp_path: Path) -> None:
     cfg = Config.load(
         _minimal_config(tmp_path, "workflows:\n  weekly:\n    enabled: false\n")

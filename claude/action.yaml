@@ -70,7 +70,9 @@ inputs:
       overhead (observed ~2 minutes) with margin, so a run that fills its
       budget still gets the supervisor's clean kill and failure report
       instead of GitHub's own silent one. Short tasks finish well before
-      the cap regardless.
+      the cap regardless. Generated workflows always pass a value, derived
+      from their job's own `timeout-minutes` by the same 10-minute margin,
+      so this default applies only to a caller that declares no job cap.
   mitmproxy_version:
     default: "12.2.3"
     description: >-

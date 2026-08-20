@@ -436,6 +436,10 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot
           model: opus
+          # 10 minutes under the job cap, so an overrunning session takes the
+          # harness's kill ? job red, failure reported ? rather than GitHub's,
+          # which cancels the job and skips the report.
+          timeout_seconds: 6600
           prompt: >-
             ${{ steps.delay.outputs.seconds
             && format('This job started {0}s after the triggering event (over ~40s means it was queued). ',

@@ -8,7 +8,7 @@ on:
 jobs:
   notifications:
 <<fork_guard_if(cfg)>>    runs-on: ubuntu-24.04
-<<job_timeout(60)>>
+<<job_timeout(timeout_minutes)>>
 <<environment()>>
     permissions:
 <<permissions()>>
@@ -22,4 +22,4 @@ jobs:
 <<check_script|indent(10, first=True)>>
 
 <<checkout(cfg, ref=cfg.default_branch, if_condition=skip_condition)>>
-<<setup>><<agent_step(cfg, block_prompt(prompt), if_condition=skip_condition)>>
+<<setup>><<agent_step(cfg, block_prompt(prompt), timeout_minutes, if_condition=skip_condition)>>

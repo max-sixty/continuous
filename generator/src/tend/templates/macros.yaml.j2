@@ -13,8 +13,24 @@
    active credential through its credential proxy (OAuth wins when both are
    present), treating empty as absent. Codex takes a single `openai_api_key` —
    the subscription `auth.json` path is incompatible with tend's concurrent
-   workflows and is not exposed. #}
-{% macro agent_step(cfg, prompt_body, if_condition='') %}
+   workflows and is not exposed.
+
+   `timeout_minutes` is the enclosing job's cap, and the claude branch spends
+   it: the supervisor's budget is set 10 minutes under it so the two kills stay
+   ordered. They are not equivalent — the supervisor exits 1, which paints the
+   job `failure` and so runs the action's `failure()`-gated `Report failure`
+   step, filing the `tend-outage` row that `review-runs` drains to re-run
+   stranded triggers; GitHub's `timeout-minutes` kill yields `cancelled`, where
+   `failure()` steps are skipped and an overrun goes unreported. Leaving the
+   action's 21000s default in place would put every job cap below it and make
+   the supervisor unreachable. The ordering holds while the steps ahead of the
+   agent — checkout, `setup:`, the CLI installers — fit inside that 10-minute
+   margin; past it the job cap wins and the kill is silent again, but that is
+   the pre-agent region `timeout-minutes` exists to bound in the first place.
+
+   Codex has no supervisor timeout, so its branch emits nothing and the job cap
+   is that harness's only bound. #}
+{% macro agent_step(cfg, prompt_body, timeout_minutes, if_condition='') %}
 {% if cfg.harness == 'claude' %}
       - uses: max-sixty/tend/claude@<<tend_version>>
 {% else %}
@@ -37,6 +53,10 @@
           bot_name: <<cfg.bot_name>>
           model: <<cfg.model>>
 {% if cfg.harness == 'claude' %}
+          # 10 minutes under the job cap, so an overrunning session takes the
+          # harness's kill — job red, failure reported — rather than GitHub's,
+          # which cancels the job and skips the report.
+          timeout_seconds: <<(timeout_minutes - 10) * 60>>
 {% if cfg.sandbox_path %}
           sandbox_path: |
 {% for dir in cfg.sandbox_path %}
@@ -90,9 +110,17 @@
    someone pushes, so a wedged review is a review that never happens.
 
    Values are sized above observed healthy durations, not near the supervisor
-   budget: a cap that only restates GitHub's default bounds nothing. Adopters
-   who need more override per job —
-   `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml. #}
+   budget: a cap that only restates GitHub's default bounds nothing. The same
+   value sets the agent step's `timeout_seconds` 10 minutes lower (see
+   `agent_step`), so the supervisor still owns an agent-session overrun and
+   this cap backstops the region it cannot reach. Both come from
+   `_JOB_TIMEOUT_MINUTES` in workflows.py — one number per workflow, so the two
+   cannot drift apart. Adopters who need more override per job —
+   `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml. That
+   override moves the job cap alone — step inputs take no override, so the
+   supervisor budget stays at the generated value and an adopter who raises
+   the cap gets a session still bounded by the default. Reported, not silent:
+   the supervisor's kill is the one that files the outage row. #}
 {% macro job_timeout(minutes) %}
     # Bounds the whole job, adopter `setup:` included. Override with
     # `workflows.<name>.jobs.<job>.timeout-minutes` in .config/tend.yaml.

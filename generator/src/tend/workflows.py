@@ -107,6 +107,26 @@ _JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
 BOOKKEEPING_LABELS = ("tend-outage", "tend-rate-limit")
 _JINJA.globals["bookkeeping_labels"] = BOOKKEEPING_LABELS
 
+# Job cap per workflow, sized above the durations these workloads actually run:
+# nightly's sweep is the longest, the short-session workflows the cheapest to
+# bound. The `job_timeout` macro carries why they are capped at all, and
+# `agent_step` spends the same number a second time — the supervisor budget is
+# derived from it, so one entry here moves both bounds together.
+#
+# Keyed by workflow, not by job, because only the agent-running job of each
+# takes a value from here: mention's secretless relay and verify jobs do
+# seconds of API work and carry a literal 10 in the template.
+_JOB_TIMEOUT_MINUTES = {
+    "ci-fix": 60,
+    "notifications": 60,
+    "weekly": 60,
+    "review": 120,
+    "mention": 120,
+    "triage": 120,
+    "review-runs": 120,
+    "nightly": 180,
+}
+
 
 # Register every macro defined in `macros.yaml.j2` as a Jinja global so
 # workflow templates can call `agent_step(...)` directly, without an
@@ -282,6 +302,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
 
     content = _REVIEW_TMPL.render(
         cfg=eff,
+        timeout_minutes=_JOB_TIMEOUT_MINUTES["review"],
         setup=_setup_yaml(eff, condition=skip_condition),
         local_actions=_restore_local_actions_run(eff),
         prompt_expr=prompt_expr,
@@ -308,6 +329,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
 
     content = _MENTION_TMPL.render(
         cfg=eff,
+        timeout_minutes=_JOB_TIMEOUT_MINUTES["mention"],
         setup=_setup_yaml(eff),
         local_actions=_restore_local_actions_run(eff),
         check_script=check_script.rstrip("\n"),
@@ -330,7 +352,12 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
         "{issue_number}", "${{ github.event.issue.number }}"
     )
 
-    content = _TRIAGE_TMPL.render(cfg=eff, setup=_setup_yaml(eff), prompt=prompt)
+    content = _TRIAGE_TMPL.render(
+        cfg=eff,
+        timeout_minutes=_JOB_TIMEOUT_MINUTES["triage"],
+        setup=_setup_yaml(eff),
+        prompt=prompt,
+    )
     return GeneratedWorkflow(filename="tend-triage.yaml", content=content)
 
 
@@ -360,6 +387,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
 
     content = _CI_FIX_TMPL.render(
         cfg=eff,
+        timeout_minutes=_JOB_TIMEOUT_MINUTES["ci-fix"],
         watched=watched,
         branches=branches,
         setup=_setup_yaml(eff),
@@ -384,15 +412,6 @@ _SCHEDULED_DEFAULT_CRON = {
     "review-runs": "47 7 * * *",
 }
 
-# One template, three workloads of different length: nightly's sweep is the
-# longest, weekly's dependency pass the shortest. See the `job_timeout` macro
-# for why these are capped at all.
-_SCHEDULED_TIMEOUT_MINUTES = {
-    "nightly": 180,
-    "weekly": 60,
-    "review-runs": 120,
-}
-
 
 def _generate_scheduled(cfg: Config, name: str) -> GeneratedWorkflow:
     wf = cfg.workflows.get(name, WorkflowConfig())
@@ -404,7 +423,7 @@ def _generate_scheduled(cfg: Config, name: str) -> GeneratedWorkflow:
         cfg=eff,
         name=name,
         cron=cron,
-        timeout_minutes=_SCHEDULED_TIMEOUT_MINUTES[name],
+        timeout_minutes=_JOB_TIMEOUT_MINUTES[name],
         setup=_setup_yaml(eff),
         prompt=prompt,
     )
@@ -429,6 +448,7 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
 
     content = _NOTIFICATIONS_TMPL.render(
         cfg=eff,
+        timeout_minutes=_JOB_TIMEOUT_MINUTES["notifications"],
         cron=cron,
         skip_condition=skip_condition,
         setup=_setup_yaml(eff, condition=skip_condition),

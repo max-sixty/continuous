@@ -15,4 +15,4 @@ jobs:
     steps:
 <<checkout(cfg, ref=cfg.default_branch)>>
 <<setup>>
-<<agent_step(cfg, block_prompt(prompt))>>
+<<agent_step(cfg, block_prompt(prompt), timeout_minutes)>>

@@ -12,7 +12,7 @@ jobs:
   triage:
     if: <<fork_guard_prefix(cfg)>><<not_bookkeeping()>>
     runs-on: ubuntu-24.04
-<<job_timeout(120)>>
+<<job_timeout(timeout_minutes)>>
 <<environment()>>
     permissions:
 <<permissions()>>
@@ -21,6 +21,6 @@ jobs:
 
 <<checkout(cfg, ref=cfg.default_branch)>>
 <<setup>>
-<<agent_step(cfg, block_prompt(prompt))>>
+<<agent_step(cfg, block_prompt(prompt), timeout_minutes)>>
 
 <<unreact_eyes(cfg, 'issues/${{ github.event.issue.number }}', if_condition='always()')>>
