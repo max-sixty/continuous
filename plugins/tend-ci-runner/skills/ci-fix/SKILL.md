@@ -87,9 +87,12 @@ Before filing the tracker below, check whether the same failure shape has alread
 ```bash
 BOT_LOGIN=$(gh api user --jq '.login')
 gh issue list --state all --label tend-outage --author "$BOT_LOGIN" \
+  --search "ci-fix: transient failure in:title" \
   --json number,title,body,createdAt \
   --jq "[.[] | select(.createdAt >= (now - 7*86400 | todateiso8601))]"
 ```
+
+Both filters are load-bearing: the label keeps 3b's durable trackers out, and the title keeps out the `report-failure.sh` **"Bot temporarily unavailable"** issues, which carry the same label and author and vastly outnumber these — without it the first page is all outage rows and the count reads zero.
 
 Match by failure-shape keyword against the issue body (e.g. `rustup-init`, `composer connect timeout`, `docker pull rate limit`) — not by job name. The same root cause can surface on multiple jobs.
 
