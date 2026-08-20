@@ -106,7 +106,7 @@ The maintainer's order of value: outward correctness first — what the bot post
 So a change whose only benefit is saved compute clears a higher bar than a correctness fix, on two counts:
 
 - **Evidence.** The waste has recurred across days — observed, not projected.
-- **Remedy.** A knob: a cadence value, a deleted step, a one-line condition, a `timeout-minutes:`, a pinned image. Decline a helper script, a retry wrapper, or a shim threaded through several call sites.
+- **Remedy.** One existing knob set in one place, a deleted step, or a one-line condition. Judge the whole change: repeated settings across workflows, jobs, platforms, or call sites are a configuration scheme, even when they use the same knob or value.
 
 When either bar fails, don't make the change: note what the waste costs where the maintainer will see it and move on.
 
