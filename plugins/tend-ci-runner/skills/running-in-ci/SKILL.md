@@ -130,6 +130,10 @@ Default: don't act in another repo unsolicited. File an issue in the current rep
 
 When asked to create a PR, use `gh pr create` directly.
 
+Write PR titles and commit subjects in plain, literal language that a reader can
+understand without the body. Name the concrete component and behavior changed.
+Put the explanation in the body. Example: `Stop worker retries after cancellation`.
+
 Before creating a branch or PR, check for existing work:
 
 ```bash
