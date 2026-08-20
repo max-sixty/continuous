@@ -34,7 +34,7 @@ If a finding doesn't meet the threshold, **skip it** — don't create a PR, don'
 Classify what the failure costs:
 
 - **Wrong outward action** — a false-green verdict, a stale approval left standing, a wrong claim posted, an issue closed in error. Each occurrence does standing damage; real complexity is justified to prevent it.
-- **Wasted compute** — a no-op session, a duplicated survey, a run lost to a blip that a later tick retries. Each occurrence costs cents and self-corrects.
+- **Wasted compute** — a no-op session, a duplicated survey, a run lost to a blip that a later tick retries, a runner-hour burned by a slow or hung job. Each occurrence leaves no standing damage.
 
 Classify by what the observed occurrence itself left on the public record. A hypothetical chain from waste to a wrong outward action ("the lost run could have left a stale approval standing") doesn't upgrade the class — the wrong action has to have occurred.
 

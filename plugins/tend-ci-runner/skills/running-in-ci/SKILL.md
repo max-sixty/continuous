@@ -103,14 +103,16 @@ Your closing summary is the session's only durable record of what happened, and 
 
 ## Weighing a Fix
 
-The maintainer's order of value: outward correctness first — what the bot posts, approves, merges, closes — then simple machinery, and efficiency a distant third. Complexity spent preventing a wrong outward action is well spent. Complexity spent preventing wasted compute — a no-op session, a duplicated survey, a run lost to a blip that a later tick retries — is not: the waste costs cents and self-corrects, while the added gate, retry wrapper, or cache is maintained forever and fails in ways of its own. Fix waste only when the fix is a simple knob (a cadence value, a deleted step, a one-line condition); otherwise note the cost where the maintainer will see it and move on.
+The maintainer's order of value: outward correctness first — what the bot posts, approves, merges, closes — then simple machinery, and efficiency a distant third. Complexity spent preventing a wrong outward action is well spent. Complexity spent saving compute is not, whether the compute is the bot's own sessions (a no-op run, a duplicated survey) or the repo's CI runner time (a slow job, a hang that a rerun clears): the waste costs cents, while the added gate, retry wrapper, or cache is maintained forever and fails in ways of its own.
 
-The repo's own CI runner time is the same category, not a separate one: a slow job, a burned runner-hour, a step that hung until the platform killed it. GitHub absorbs the minutes; the maintainer absorbs the machinery forever. So a change whose only benefit is runner time — nothing about it makes a build correct, or a red branch green — clears a much higher bar than a correctness fix, on two counts:
+So a change whose only benefit is saved compute clears a higher bar than a correctness fix, on two counts:
 
-- **Evidence.** One incident is not a pattern. Repeats inside a single upstream incident window — several jobs stalling on the same mirror the same afternoon, the same leg failing twice on the PR that is fixing it — are one occurrence, not three. What justifies a permanent change is a fault that keeps returning across days, after the incident that produced it closed.
-- **Remedy.** The same knob bar in CI terms: a `timeout-minutes:`, a deleted step, a pinned image. A new helper script, a retry wrapper, or a shim threaded through several call sites is the shape to decline.
+- **Evidence.** The waste has recurred across days — observed, not projected.
+- **Remedy.** A knob: a cadence value, a deleted step, a one-line condition, a `timeout-minutes:`, a pinned image. Decline a helper script, a retry wrapper, or a shim threaded through several call sites.
 
-This is a bar on the *whole* change, so it applies to the reviewer too: a CI-time PR that is individually well-argued at each step still fails it if the machinery outweighs the minutes saved. Say so plainly rather than reviewing only the details.
+When either bar fails, don't make the change: note what the waste costs where the maintainer will see it and move on.
+
+## Scripts over prose recipes
 
 When a skill's code block needs edge-case handling or grows past a couple of dozen lines, put the logic in a tested script and leave the skill a one-line invocation with the intent: for bundled skills `plugins/tend-ci-runner/scripts/` (exercised by the generator test suite), for a repo overlay a `scripts/` directory beside the skill. A prose recipe gets no shellcheck and no tests; every session re-derives its correctness.
 

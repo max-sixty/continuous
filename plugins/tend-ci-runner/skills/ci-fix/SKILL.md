@@ -78,32 +78,34 @@ Automated fix for [failed run](run-url)
 
 If the diagnosis identifies the failure as transient — runner-disk corruption, an isolated network blip, an upstream incident that has since resolved — there is no fix PR to create. Don't post the diagnosis as a commit comment (it surfaces on whatever commit triggered CI, including release commits where it's visibly off-topic).
 
-Instead, open an issue with the diagnosis and close it immediately. The closure records "diagnosed, no further action" while keeping the analysis discoverable and off the commit timeline. Apply the `tend-outage` label — the workflow-level `if:` in `tend-triage` and `tend-mention` skip labelled issues, suppressing the no-op cascade runs (`opened` → silent-exit; `closed`-comment → silent-exit) that would otherwise fire on every transient tracker:
+Use this path only when the evidence points to ephemeral infrastructure, not anything the project's code does. Signals (examples, not a checklist): the same code path passed on recent prior runs with no relevant change; the failure shape is filesystem/network-level; an upstream status incident matches the timing and components. If you can't tell whether it's transient, treat it as durable — create a fix PR, or follow 3b if a safe fix can't be produced.
+
+#### Repeat-occurrence escalation
+
+Before filing the tracker below, check whether the same failure shape has already been classified transient recently. The single-shot criteria above don't catch an intermittent upstream regression — each rerun-pass reinforces the wrong classification.
+
+```bash
+BOT_LOGIN=$(gh api user --jq '.login')
+gh issue list --state all --label tend-outage --author "$BOT_LOGIN" \
+  --json number,title,body,createdAt \
+  --jq "[.[] | select(.createdAt >= (now - 7*86400 | todateiso8601))]"
+```
+
+Match by failure-shape keyword against the issue body (e.g. `rustup-init`, `composer connect timeout`, `docker pull rate limit`) — not by job name. The same root cause can surface on multiple jobs.
+
+If the current failure shape has 2+ prior occurrences on separate days within the past 7, escalate to durable: a fault that keeps coming back within a week is not transient even when individual reruns pass. Count occurrences, not trackers — the same root cause taking down several jobs in one afternoon files several trackers and is still one occurrence.
+
+An escalated fault still reruns green, so a mitigation buys back runner time, not correctness — the compute-only bar in **Weighing a Fix** (`running-in-ci`) applies. Open a fix PR proposing a knob-sized mitigation (pin the runner image, skip the affected leg, disable the relevant cache layer), preferring an upstream-documented workaround — `gh issue search` against the action's repo, the action's README, GitHub Community threads — and linking the upstream issue if the search surfaced one. If the fault has no knob-sized mitigation, treat it as a durable cause without a safe fix and follow 3b.
+
+#### File the transient tracker
+
+If the failure stays classified transient, open an issue with the diagnosis and close it immediately. The closure records "diagnosed, no further action" while keeping the analysis discoverable and off the commit timeline. Apply the `tend-outage` label — the workflow-level `if:` in `tend-triage` and `tend-mention` skip labelled issues, suppressing the no-op cascade runs (`opened` → silent-exit; `closed`-comment → silent-exit) that would otherwise fire on every transient tracker:
 
 ```bash
 gh label create tend-outage --description "Tracks bot outage incidents" --color "d93f0b" 2>/dev/null || true
 gh issue create --title "ci-fix: transient failure on <run-id>" --label tend-outage --body-file /tmp/diagnosis.md
 gh issue close <issue-number> --reason "not planned" --comment "Transient — closing as diagnosed."
 ```
-
-Use this path only when the evidence points to ephemeral infrastructure, not anything the project's code does. Signals (examples, not a checklist): the same code path passed on recent prior runs with no relevant change; the failure shape is filesystem/network-level; an upstream status incident matches the timing and components. Weigh the evidence rather than matching the list.
-
-#### Repeat-occurrence escalation
-
-Before applying the transient path, check whether the same failure shape has already been classified transient recently. The single-shot criteria above don't catch an intermittent upstream regression — each rerun-pass reinforces the wrong classification.
-
-```bash
-BOT_LOGIN=$(gh api user --jq '.login')
-gh issue list --state all --author "$BOT_LOGIN" --search "ci-fix: in:title" \
-  --json number,title,createdAt \
-  --jq "[.[] | select(.createdAt >= (now - 7*86400 | todateiso8601))]"
-```
-
-Match by failure-shape keyword (e.g. `rustup-init`, `composer connect timeout`, `docker pull rate limit`) — not by job name. The same root cause can surface on multiple jobs.
-
-If 2+ prior issues match the current failure shape within the past 7 days, escalate to durable: a fault that re-fires every 1–3 days is not transient even when individual reruns pass. Count incidents, not trackers — the same root cause taking down several jobs in one afternoon files several issues and is still one occurrence. Where the mitigation's only benefit is runner time — the failure reruns green, so nothing about it makes a build correct or a red branch durably green — the escalation is also subject to the evidence and remedy bar in **Weighing a Fix** (`running-in-ci`). Search for an upstream-documented workaround (`gh issue search` against the action's repo, the action's README, GitHub Community threads) and apply it. If no upstream workaround is documented, open a fix PR proposing a minimal mitigation (pin runner image, skip the affected leg, disable the relevant cache layer) and link the upstream tracking issue.
-
-If you can't tell whether it's transient, treat it as durable and create a fix PR.
 
 Skip step 4 — there's no PR to monitor.
 

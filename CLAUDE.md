@@ -11,8 +11,8 @@ completely — old formats should fail with a clear error, not silently parse.
 Simplicity outranks efficiency. Complexity earns its place by preventing
 wrong outward actions — what the bot posts, approves, merges, or closes —
 never by saving compute. Wasted compute (a no-op session, a duplicated
-survey, a run lost to a blip that a later tick retries) costs cents and
-self-corrects; the gate, retry wrapper, or scheduling arithmetic that would
+survey, a slow CI job, a run lost to a blip that a later tick retries)
+costs cents; the gate, retry wrapper, or scheduling arithmetic that would
 have prevented it has to be understood and maintained forever. Fix waste
 only when the fix is a simple knob — a cadence value, a deleted step, a
 one-line condition — and otherwise leave it. Prefer deleting a mechanism
