@@ -130,10 +130,6 @@ Default: don't act in another repo unsolicited. File an issue in the current rep
 
 When asked to create a PR, use `gh pr create` directly.
 
-Write PR titles and commit subjects in plain, literal language that a reader can
-understand without the body. Name the concrete component and behavior changed.
-Put the explanation in the body. Example: `Stop worker retries after cancellation`.
-
 Before creating a branch or PR, check for existing work:
 
 ```bash
@@ -142,6 +138,11 @@ git branch -r --list 'origin/fix/*'
 ```
 
 Open PRs compete for one maintainer's attention. A self-initiated improvement — a sweep finding, a skill or workflow refinement nobody asked for — draws on a budget: when the bot already has five or more PRs open (`gh pr list --state open --author "@me"`), open one only for a wrong outward action (see **Weighing a Fix**), and hold the rest until the queue drains, recorded where the maintainer will see it (the evidence store, or a line on the triggering thread) rather than as an issue (**Filing Issues in This Repo** explains why not). The budget never holds work someone asked for, a fix a user is waiting on (a red default branch, a triaged bug), or the scheduled maintenance a skill itself instructs (a workflow regeneration, a pinned-version bump, a data refresh). Base every PR on the default branch; never stack one on an unmerged bot branch, which puts the same change through review once per link in the chain.
+
+Write PR titles and commit subjects in plain, literal language that a reader can
+understand without the body. Name the concrete component and behavior changed
+while keeping any prefix the repository requires. Put the explanation in the
+body. Example: `Stop worker retries after cancellation`.
 
 Open the PR body with two or three sentences — problem, fix, verification — and fold supporting detail into `<details>` (per **Comment Formatting**).
 
