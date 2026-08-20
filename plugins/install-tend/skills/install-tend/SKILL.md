@@ -351,8 +351,7 @@ those.) The next nightly regen
 runs `uvx tend@latest init` without the flag, and the init cleanup step
 removes the file from the default branch.
 
-Verify workflow files appear in `.github/workflows/tend-*.yaml`. Run
-`uvx tend@latest check` to validate branch protection, secrets, and bot access.
+Verify workflow files appear in `.github/workflows/tend-*.yaml`.
 
 Check for workflows using `anthropics/claude-code-action`:
 
@@ -509,9 +508,10 @@ see. If a repo keeps one on a release/deploy workflow, gate that
 Environment with required reviewers before migrating release or deploy
 secrets to it.
 
-Run `uvx tend@latest check` after this section; its
-`credential-environments` line reports any environment still reachable by
-the bot.
+Run `uvx tend@latest check` after this section. It exits non-zero until
+the later steps set the secrets and grant the bot access; read its
+`credential-environments` line, which reports any environment still
+reachable by the bot.
 
 **More complicated approaches are possible** (per-pattern tag rulesets,
 mixed bypass actors, layered no-bypass immutability rulesets for repos
@@ -523,10 +523,9 @@ environment protection rules on top.
 ## 4. Create skill overlay (recommended)
 
 Create `.claude/skills/running-tend/SKILL.md` with tend-specific project
-guidance. This skill is loaded by tend workflows alongside the generic
-`tend-*` skills — by skill discovery, so it must open with the
-frontmatter shown below. An existing overlay without it isn't done:
-add the frontmatter in place.
+guidance, opening with the frontmatter below so discovery lists it by
+description rather than by its first heading. An existing overlay without
+frontmatter needs it added in place.
 
 **Do NOT duplicate CLAUDE.md** and **do NOT invent project conventions.**
 
@@ -540,8 +539,8 @@ If the user picked the overlay at Kickoff, ask via `AskUserQuestion`
 - Optional nightly actions (e.g., changelog maintenance — specify file and branch)
 
 For each selected item, follow up with a free-text ask to capture the
-specifics, then write them into the overlay, opening with the same
-frontmatter as the placeholder below. Otherwise create a placeholder:
+specifics, then write them into the overlay. Otherwise create a
+placeholder:
 
 ```markdown
 ---
@@ -958,7 +957,15 @@ else
 fi
 ```
 
-## 11. Commit and push
+## 11. Verify, commit and push
+
+Everything `check` inspects is in place by now, so this run must pass:
+
+```bash
+uvx tend@latest check
+```
+
+A failure here is a real one — fix it before committing.
 
 Stage all changes:
 
@@ -969,11 +976,10 @@ git add .
 Commit with co-author attribution. Do NOT push without explicit permission.
 
 After pushing the install PR, wait for the `tend-install-test` workflow
-to pass before merging — it verifies the bot+harness secrets are set and
-that the committed workflow files match the generator's output. Merging
-is the user's call. The file
-itself is removed on the next nightly regen, so future PRs won't trigger
-it.
+to pass before merging — it verifies that the committed workflow files
+match the generator's output, the one thing a `pull_request` run can see.
+Merging is the user's call. The file itself is removed on the next
+nightly regen, so future PRs won't trigger it.
 
 ## Summary checklist
 
@@ -992,5 +998,6 @@ line picks the row that matches the chosen harness):
 - [ ] Bot token: `TEND_BOT_TOKEN` set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
 - [ ] Bot access: repo collaborator with write access, invitation accepted
 - [ ] Bot bio: profile bio reflects the authorization stance
+- [ ] `uvx tend@latest check` passes
 - [ ] Committed (push requires explicit permission)
 - [ ] `tend-install-test` workflow passed on the install PR before merging
