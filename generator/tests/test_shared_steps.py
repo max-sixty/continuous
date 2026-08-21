@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from ruamel.yaml import YAML
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MARK_NOTIFICATION_READ = REPO_ROOT / "shared" / "steps" / "mark-notification-read.sh"
 COMPUTE_TOKEN_USAGE = REPO_ROOT / "shared" / "steps" / "compute-token-usage.sh"
 PIN_INSTRUCTION_FILES = REPO_ROOT / "shared" / "steps" / "pin-instruction-files.sh"
+EXCLUDE_LOCAL_SETTINGS = REPO_ROOT / "shared" / "steps" / "exclude-local-settings.sh"
 
 
 def test_pin_instruction_files_does_not_follow_fork_symlinks(tmp_path: Path) -> None:
@@ -244,6 +247,180 @@ def test_pin_instruction_files_removes_fork_only_claude_dir(tmp_path: Path) -> N
 
     assert result.returncode == 0, result.stderr
     assert not (repo / ".claude").exists()
+
+
+# --- exclude-local-settings.sh ----------------------------------------------
+
+
+def _repo_with_overlay(path: Path) -> Callable[..., None]:
+    """A checkout shaped like an adopter's: `.claude/skills/` tracked."""
+    path.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.com")
+    skill = path / ".claude" / "skills" / "running-tend" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("repo guidance\n")
+    git("add", ".")
+    git("commit", "-m", "base")
+    return git
+
+
+def _write_harness_settings(root: Path) -> Path:
+    """What the action's `tee` leaves in the checkout, values and all."""
+    settings = root / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps(
+            {
+                "permissions": {"defaultMode": "bypassPermissions", "allow": []},
+                "skipDangerousModePermissionPrompt": True,
+                "attribution": {"commit": "", "pr": ""},
+            }
+        )
+    )
+    return settings
+
+
+def _run_exclude(cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [BASH, str(EXCLUDE_LOCAL_SETTINGS)],
+        cwd=cwd,
+        env={"PATH": tool_path()},
+        capture_output=True,
+        text=True,
+    )
+
+
+def _staged(cwd: Path) -> list[str]:
+    return subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+
+
+def test_exclude_local_settings_keeps_the_harness_file_out_of_a_broad_add(
+    tmp_path: Path,
+) -> None:
+    """`git add -A` must not stage the settings file the action writes.
+
+    The action writes `.claude/settings.local.json` into the adopter's
+    checkout, where it is untracked and unignored. Adopters track
+    `.claude/skills/` (that is where the `running-tend` overlay lives), so a
+    session that stages broadly sweeps it into the PR it opens — one line of
+    JSON beside a real code change, invisible in review. Merged, it makes
+    `permissions.defaultMode: bypassPermissions` the checked-in default for
+    everyone who clones the repo.
+    """
+    repo = tmp_path / "repo"
+    git = _repo_with_overlay(repo)
+    _write_harness_settings(repo)
+    # An edit the session legitimately makes under the same directory: the
+    # exclusion has to be one path, not `.claude/`.
+    (repo / ".claude" / "skills" / "running-tend" / "extra.md").write_text("more\n")
+
+    result = _run_exclude(repo)
+
+    assert result.returncode == 0, result.stderr
+    git("add", "-A")
+    staged = _staged(repo)
+    assert ".claude/settings.local.json" not in staged, (
+        f"the harness's own settings file was staged: {staged}"
+    )
+    assert ".claude/skills/running-tend/extra.md" in staged, (
+        f"the exclusion swallowed the adopter's own `.claude/` work: {staged}"
+    )
+
+
+def test_exclude_local_settings_covers_linked_worktrees(tmp_path: Path) -> None:
+    """A worktree the agent creates inherits the exclusion.
+
+    `tend-nightly` does its work in linked worktrees under /tmp, and those are
+    where the broad `git add` usually runs. `info/exclude` is read from the
+    common git dir, so the entry covers them — but only if it is written
+    there rather than to a per-worktree path.
+    """
+    repo = tmp_path / "repo"
+    git = _repo_with_overlay(repo)
+
+    result = _run_exclude(repo)
+    assert result.returncode == 0, result.stderr
+
+    worktree = tmp_path / "wt"
+    git("worktree", "add", str(worktree), "-b", "fix/thing")
+    _write_harness_settings(worktree)
+    (worktree / "code.py").write_text("fixed\n")
+
+    subprocess.run(["git", "add", "-A"], cwd=worktree, check=True, capture_output=True)
+    staged = _staged(worktree)
+    assert ".claude/settings.local.json" not in staged, (
+        f"a linked worktree staged the harness's settings file: {staged}"
+    )
+    assert "code.py" in staged
+
+
+def test_exclude_local_settings_appends_once_to_an_unterminated_file(
+    tmp_path: Path,
+) -> None:
+    """Repeat runs add one line, and never glue it onto an existing one.
+
+    Both harness actions can leave an `info/exclude` behind — the PR-event
+    config restore writes `/.claude-pr/` into it — and a file whose last line
+    lacks a newline would otherwise absorb the append, silently changing the
+    pattern already there as well as losing this one.
+    """
+    repo = tmp_path / "repo"
+    _repo_with_overlay(repo)
+    exclude = repo / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("/.claude-pr/")
+
+    for _ in range(2):
+        assert _run_exclude(repo).returncode == 0
+
+    assert exclude.read_text().splitlines() == [
+        "/.claude-pr/",
+        "/.claude/settings.local.json",
+    ]
+
+
+def test_exclude_local_settings_no_ops_outside_a_checkout(tmp_path: Path) -> None:
+    """No git repo is not a failure — the step would fail the whole run."""
+    result = _run_exclude(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_claude_action_excludes_its_settings_before_running_the_agent() -> None:
+    """The script protects nobody unless the action runs it, and runs it first.
+
+    Nothing in CI executes the composite action end to end, so the wiring is
+    asserted here: the exclusion has to be in place before the agent starts
+    staging anything.
+    """
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+    steps = action["runs"]["steps"]
+    excludes = [
+        i
+        for i, s in enumerate(steps)
+        if "exclude-local-settings.sh" in s.get("run", "")
+    ]
+    runs_agent = [i for i, s in enumerate(steps) if s.get("id") == "claude"]
+
+    assert excludes, "claude/action.yaml never runs exclude-local-settings.sh"
+    assert runs_agent, "claude/action.yaml has no agent step to order against"
+    assert excludes[0] < runs_agent[0], (
+        "the exclusion runs after the agent, which may already have staged the file"
+    )
 
 
 # `gh api` stand-in. Records every invocation so a test can assert which calls

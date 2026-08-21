@@ -255,6 +255,17 @@ runs:
       env:
         TEND_SANDBOX_SETUP: ${{ inputs.sandbox_setup }}
 
+    # The settings.local.json the next step writes lands in the adopter's
+    # checkout untracked, next to the `.claude/skills/` they do track — so a
+    # session that stages broadly commits `bypassPermissions` into the PR it
+    # opens. Exclude it before the agent starts. As the sandbox user, which owns
+    # the workspace (and its .git) from setup-sandbox.sh onwards.
+    - name: Exclude harness settings from git
+      shell: bash
+      run: |
+        sudo -u "$SANDBOX" bash \
+          "${{ github.action_path }}/../shared/steps/exclude-local-settings.sh"
+
     # Run the agent headless. `claude -p` (print mode) runs one turn to
     # completion and exits — no Ink UI, no TTY, no first-run onboarding — so
     # completion is detected from the process exit code plus the final
