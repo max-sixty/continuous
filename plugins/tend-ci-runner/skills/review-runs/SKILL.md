@@ -281,7 +281,7 @@ gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,sta
   --jq '.[] | select(.closedAt > "'$SINCE'")'
 ```
 
-Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, leaving labels and state untouched, is equally a correction, and on an issue-heavy repo it is the most common one. No disposition query can see it. Read the threads where the bot commented in the window and count a contradiction as a finding:
+Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, leaving labels and state untouched, is equally a correction, and on an issue-heavy repo it is the most common one. A `CHANGES_REQUESTED` review on a bot PR leaves labels and state untouched too, and where the bot authors most of the PRs it is the *first* place a maintainer writes. No disposition query can see either. Read the threads where the bot commented in the window and count a contradiction as a finding:
 
 ```bash
 # Human replies in the window, on any issue or PR thread. Both endpoints are
@@ -300,7 +300,22 @@ done
 
 `since` filters on `updated_at`, not `created_at`, so results include older comments edited inside the window — a comment created days before `$SINCE` is a real hit, not a broken filter. That is worth having (an edited claim is still a correction); the projection reports both timestamps so the reason a row qualified is visible.
 
-Write "no maintainer corrections" into the tracking issue only after that query ran — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate.
+Neither endpoint above returns a review **body**: `pulls/comments` carries inline review comments only, and a review's body lives at `pulls/{n}/reviews`. So a `CHANGES_REQUESTED` whose correction is written in the body returns nothing from both calls — not less, nothing. There is no repo-wide `since` endpoint for reviews, so loop over the PRs updated in the window:
+
+```bash
+SINCE=$(cat /tmp/review-runs-since)
+for p in $(gh pr list --state all --limit 200 --search "updated:>=${SINCE%T*}" \
+             --json number --jq '.[].number'); do
+  gh api --paginate "repos/$REPO/pulls/$p/reviews?per_page=100" \
+    --jq ".[] | select(.user.login != \"$BOT_LOGIN\" and .submitted_at >= \"$SINCE\"
+                       and (.body | length) > 0)
+          | {pr: $p, at: .submitted_at, state: .state, url: .html_url, body: .body[0:300]}"
+done
+```
+
+`(.body | length) > 0` is load-bearing: GitHub wraps a standalone inline reply in an empty-bodied review container, so without it every thread where anyone replied inline reports a correction. `--search` takes a date, not a timestamp — hence `${SINCE%T*}`; it over-selects by up to a day, and the exact `submitted_at` filter inside the loop is what windows the result.
+
+Write "no maintainer corrections" into the tracking issue only after all three queries ran — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate.
 
 ## Step 5: Deduplicate
 
