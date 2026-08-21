@@ -273,10 +273,12 @@ For each analyzed run, compare what the bot did against what happened next. The 
 mention, notifications, weekly, and review-reviewers runs get the same treatment: find the bot's output and check whether it was accepted.
 
 ```bash
-# Bot PR dispositions — merged or closed in the window. Re-read Step 1's
-# anchor: unset here, an empty string compares less than every non-null
-# `closedAt` and the check silently stops being windowed at all.
+# Bot PR dispositions — merged or closed in the window. Shell variables don't
+# survive between tool calls, so every block in this step re-establishes both:
+# unset, `$SINCE` compares less than every non-null `closedAt` and `$BOT_LOGIN`
+# matches nobody, and each filter silently stops filtering.
 SINCE=$(cat /tmp/review-runs-since)
+BOT_LOGIN=$(gh api user --jq '.login')
 gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,state,closedAt \
   --jq '.[] | select(.closedAt > "'$SINCE'")'
 ```
@@ -291,6 +293,8 @@ Dispositions — merged, closed, relabeled, reverted — are only half the signa
 # ones a fresh correction sits in. The bot's own comments consume that budget
 # before the filter runs, so a busy day truncates with nothing in the output
 # to say so.
+SINCE=$(cat /tmp/review-runs-since)
+BOT_LOGIN=$(gh api user --jq '.login')
 for endpoint in issues pulls; do
   gh api --paginate "repos/$REPO/$endpoint/comments?since=$SINCE&per_page=100" \
     --jq '.[] | select(.user.login != "'"$BOT_LOGIN"'")
@@ -304,7 +308,8 @@ Neither endpoint above returns a review **body**: `pulls/comments` carries inlin
 
 ```bash
 SINCE=$(cat /tmp/review-runs-since)
-for p in $(gh pr list --state all --limit 200 --search "updated:>=${SINCE%T*}" \
+BOT_LOGIN=$(gh api user --jq '.login')
+for p in $(gh pr list --state all --limit 200 --search "updated:>=$SINCE" \
              --json number --jq '.[].number'); do
   gh api --paginate "repos/$REPO/pulls/$p/reviews?per_page=100" \
     --jq ".[] | select(.user.login != \"$BOT_LOGIN\" and .submitted_at >= \"$SINCE\"
@@ -313,7 +318,7 @@ for p in $(gh pr list --state all --limit 200 --search "updated:>=${SINCE%T*}" \
 done
 ```
 
-`(.body | length) > 0` is load-bearing: GitHub wraps a standalone inline reply in an empty-bodied review container, so without it every thread where anyone replied inline reports a correction. `--search` takes a date, not a timestamp — hence `${SINCE%T*}`; it over-selects by up to a day, and the exact `submitted_at` filter inside the loop is what windows the result.
+`(.body | length) > 0` is load-bearing: GitHub wraps a standalone inline reply in an empty-bodied review container, so without it every thread where anyone replied inline reports a correction. `updated:` matches the PR's own `updated_at`, so the candidate list is only approximately windowed — a PR touched inside the window can carry an older review; the exact `submitted_at` filter inside the loop is what excludes it.
 
 Write "no maintainer corrections" into the tracking issue only after all three queries ran — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate.
 
