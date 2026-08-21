@@ -275,8 +275,9 @@ mention, notifications, weekly, and review-reviewers runs get the same treatment
 ```bash
 # Bot PR dispositions — merged or closed in the window. Shell variables don't
 # survive between tool calls, so every block in this step re-establishes both:
-# unset, `$SINCE` compares less than every non-null `closedAt` and `$BOT_LOGIN`
-# matches nobody, and each filter silently stops filtering.
+# unset, `$SINCE` compares less than every non-null `closedAt`, and an empty
+# `$BOT_LOGIN` stops restricting rather than matching nobody — `--author ""`
+# applies no author filter, and `.user.login != ""` is true for every entry.
 SINCE=$(cat /tmp/review-runs-since)
 BOT_LOGIN=$(gh api user --jq '.login')
 gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,state,closedAt \
