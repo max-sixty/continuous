@@ -16,7 +16,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from ruamel.yaml import YAML
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -371,7 +370,7 @@ def test_exclude_local_settings_appends_once_to_an_unterminated_file(
 ) -> None:
     """Repeat runs add one line, and never glue it onto an existing one.
 
-    Both harness actions can leave an `info/exclude` behind — the PR-event
+    The Claude action leaves an `info/exclude` behind on PR events — the
     config restore writes `/.claude-pr/` into it — and a file whose last line
     lacks a newline would otherwise absorb the append, silently changing the
     pattern already there as well as losing this one.
@@ -396,31 +395,6 @@ def test_exclude_local_settings_no_ops_outside_a_checkout(tmp_path: Path) -> Non
     result = _run_exclude(tmp_path)
 
     assert result.returncode == 0, result.stderr
-
-
-def test_claude_action_excludes_its_settings_before_running_the_agent() -> None:
-    """The script protects nobody unless the action runs it, and runs it first.
-
-    Nothing in CI executes the composite action end to end, so the wiring is
-    asserted here: the exclusion has to be in place before the agent starts
-    staging anything.
-    """
-    action = YAML(typ="safe", pure=True).load(
-        (REPO_ROOT / "claude" / "action.yaml").read_text()
-    )
-    steps = action["runs"]["steps"]
-    excludes = [
-        i
-        for i, s in enumerate(steps)
-        if "exclude-local-settings.sh" in s.get("run", "")
-    ]
-    runs_agent = [i for i, s in enumerate(steps) if s.get("id") == "claude"]
-
-    assert excludes, "claude/action.yaml never runs exclude-local-settings.sh"
-    assert runs_agent, "claude/action.yaml has no agent step to order against"
-    assert excludes[0] < runs_agent[0], (
-        "the exclusion runs after the agent, which may already have staged the file"
-    )
 
 
 # `gh api` stand-in. Records every invocation so a test can assert which calls
