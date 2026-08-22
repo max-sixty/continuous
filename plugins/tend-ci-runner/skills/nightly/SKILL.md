@@ -138,7 +138,7 @@ git config --global user.email "${BOT_ID}+${BOT_LOGIN}@users.noreply.github.com"
 For each conflicted PR authored by `$BOT_LOGIN`, dispatch a subagent to:
 
 1. Check out the PR: `gh pr checkout <number>`
-2. Merge the default branch: `git fetch origin main && git merge origin/main`. Fetch here rather than relying on the detection loop's fetch above — subagents run for minutes, and merging a stale `origin/main` produces a head that is already conflicting when it lands.
+2. Merge the default branch: `git fetch origin main && git merge origin/main` — the detection loop's fetch is minutes stale by the time a subagent runs.
 3. Resolve conflicts (read files, understand both sides), `git add`, `git commit --no-edit`
 4. Push, then confirm the pushed head actually left the conflicted state before polling anything:
 
@@ -148,7 +148,7 @@ For each conflicted PR authored by `$BOT_LOGIN`, dispatch a subagent to:
      || echo "main advanced during the resolution — merge it again and push"
    ```
 
-   Re-merge and push until that test passes; only then wait for CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`. A `CONFLICTING` PR gets **no** `pull_request` run — GitHub can't compute `refs/pull/N/merge`, so no workflow is created — and a poll pinned to that head burns its whole budget before reporting UNVERIFIED, which reads as slow CI rather than absent CI. Nothing else flags it: `pull_request_target` workflows (`tend-review`) still run, so the PR shows a green check and no red anything. If the re-merge keeps losing the race, report the PR as still conflicted rather than as a verified resolution.
+   Re-merge and push until that test passes; only then wait for CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`. A `CONFLICTING` PR gets **no** `pull_request` run — GitHub can't compute `refs/pull/N/merge` — so a poll of that head reports UNVERIFIED rather than red, and the absence reads as slow CI. If the re-merge keeps losing the race, report the PR as still conflicted rather than as a verified resolution.
 5. If conflicts are too complex, `git merge --abort` and comment explaining manual resolution is needed
 
 Run subagents in parallel. Each must work in isolation (`git worktree add /tmp/pr-<number>
