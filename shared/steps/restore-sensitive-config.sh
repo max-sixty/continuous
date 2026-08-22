@@ -6,14 +6,15 @@
 # and merged. Used by the Claude harness action.
 #
 # Path list and ordering mirror claude-code-action's restore-config.ts
-# (src/github/operations/restore-config.ts). Snapshot PR-authored versions to
-# .claude-pr/ first (excluded from git via info/exclude) so review skills can
-# optionally inspect what the PR changed without those files ever being
-# executed. Then delete (so an attacker-controlled .gitmodules can't stall the
-# fetch on credential prompts), then fetch base, then restore. Instruction
-# files at any depth are restored along with the root list; their pathspecs
-# and the reconcile live in lib/pin-instruction-paths.sh, shared with the
-# Codex harness.
+# (src/github/operations/restore-config.ts). Delete first (so an
+# attacker-controlled .gitmodules can't stall the fetch on credential prompts),
+# then fetch base, then restore. Instruction files at any depth are restored
+# along with the root list; their pathspecs and the reconcile live in
+# lib/pin-instruction-paths.sh, shared with the Codex harness. The PR's own
+# versions stay readable at `git show HEAD:<path>`; nothing copies them
+# anywhere, since a copy made here runs as the runner user and would follow a
+# fork-planted symlink into files the agent must never see, such as the
+# checkout credential in .git/config.
 #
 # Known limitation: a PR that legitimately edits .claude/ or CLAUDE.md will have
 # those edits reverted for the duration of this run. Same tradeoff
@@ -56,23 +57,6 @@ if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
 fi
 
 echo "Restoring ${SENSITIVE[*]} from origin/$BASE_REF"
-
-# Snapshot PR-authored versions to .claude-pr/ for optional review
-rm -rf .claude-pr
-for p in "${SENSITIVE[@]}"; do
-  if [ -e "$p" ]; then
-    mkdir -p ".claude-pr/$(dirname "$p")"
-    cp -aL "$p" ".claude-pr/$p" 2>/dev/null || true
-  fi
-done
-if [ -d .claude-pr ]; then
-  EXCLUDE_FILE="$(git rev-parse --git-path info/exclude)"
-  mkdir -p "$(dirname "$EXCLUDE_FILE")"
-  if ! grep -qxF '/.claude-pr/' "$EXCLUDE_FILE" 2>/dev/null; then
-    [ -s "$EXCLUDE_FILE" ] && [ "$(tail -c1 "$EXCLUDE_FILE" | wc -l)" -eq 0 ] && echo "" >> "$EXCLUDE_FILE"
-    echo '/.claude-pr/' >> "$EXCLUDE_FILE"
-  fi
-fi
 
 # Delete BEFORE fetch so attacker-controlled .gitmodules can't stall on
 # credential prompts (git's default fetch.recurseSubmodules=on-demand).

@@ -296,12 +296,11 @@ agent opens and the skills under any directory's `.claude/`. A malicious PR's
 Claude reads it. The restoration is `git restore --source=<base>` in shell:
 base-branch versions are written back, fork-added paths removed, and a
 fork-planted symlink replaced rather than written through. The root path list
-and ordering mirror claude-code-action's `restore-config.ts`. The PR-authored
-versions of the root paths are snapshotted to `.claude-pr/` (added to
-`.git/info/exclude` so they're not tracked) before being overwritten, so review
-skills can optionally inspect what the PR changed without those files ever
-being executed; nested paths are reverted without a snapshot, and the fork's
-version stays readable at `git show HEAD:<path>`.
+and ordering mirror claude-code-action's `restore-config.ts`. The PR's own
+versions stay readable at `git show HEAD:<path>` for a review that wants to see
+what it changed; nothing copies them into the worktree, since a copy made by
+the runner user would follow a fork-planted symlink into files the agent must
+never see, such as the checkout credential in `.git/config`.
 
 **Setup runs on reviewed code.** Adopter `setup:` steps execute as the runner
 user, which holds sudo and, until the sandbox setup strips it, the checkout

@@ -68,11 +68,11 @@ def _write(path: Path, content: str) -> None:
 
 def _tree(root: Path) -> dict[str, str]:
     """Every file under *root* by relative path: its text, or `-> target` for a
-    symlink. Skips `.git/` and the `.claude-pr/` snapshot."""
+    symlink. Skips `.git/`."""
     tree: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root)
-        if rel.parts[0] in {".git", ".claude-pr"}:
+        if rel.parts[0] == ".git":
             continue
         if path.is_symlink():
             tree[str(rel)] = f"-> {path.readlink()}"
@@ -204,10 +204,11 @@ def test_pin_instruction_files_matches_base_for_every_instruction_path(
 def test_restore_sensitive_config_matches_base_for_every_instruction_path(
     tmp_path: Path,
 ) -> None:
-    """Same contract under the Claude harness, plus its own two: the fork's root
-    files are snapshotted to `.claude-pr/` for review skills to read, and the
-    revert stays out of the index so it can't ride into a commit the agent
-    makes later."""
+    """Same contract under the Claude harness, plus its own: the revert stays
+    out of the index so it can't ride into a commit the agent makes later. The
+    end-state check also proves no copy of a fork file was left anywhere the
+    agent can read, a copy made as the runner user having followed the fork's
+    symlinks."""
     repo, outside, event = _tampered_checkout(tmp_path)
 
     result = _pin(RESTORE_SENSITIVE_CONFIG, repo, event)
@@ -215,7 +216,6 @@ def test_restore_sensitive_config_matches_base_for_every_instruction_path(
     assert result.returncode == 0, result.stdout + result.stderr
     assert _tree(repo) == _PINNED
     assert _tree(outside) == _OUTSIDE
-    assert (repo / ".claude-pr" / "CLAUDE.md").read_text() == "EVIL root\n"
     staged = subprocess.run(
         ["git", "diff", "--cached", "--name-only"],
         cwd=repo,
