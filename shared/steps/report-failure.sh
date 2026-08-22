@@ -14,9 +14,15 @@
 # data.
 #
 # A closed outage issue is left closed and a fresh one filed: closing it means
-# the outage was resolved, and reopening would fold the next incident into a
-# stale record. The rate-limit issue takes the opposite policy, for reasons in
-# lib/run-issue.sh.
+# the `review-runs` drain step read every row and re-ran what needed it, and
+# reopening would fold the next incident into a stale record. That drain owns
+# the close — the nightly skill's resolved-issue rule carves this label out,
+# because nightly's cron precedes review-runs' and "nothing has failed since"
+# says nothing about the stranded triggers the rows name. Where an adopter
+# disables `review-runs`, nothing substitutes for it and the close falls to a
+# maintainer against the same criterion — which is why the issue body states
+# the criterion rather than naming the sweep as the only route. The rate-limit
+# issue takes the opposite policy, for reasons in lib/run-issue.sh.
 #
 # Inputs (env): GITHUB_TOKEN (for gh), GITHUB_SERVER_URL, GITHUB_REPOSITORY,
 # GITHUB_RUN_ID, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH (from Actions).
@@ -126,6 +132,6 @@ else
   printf '%s\n\n%s\n\n%s\n' \
     "The bot failed to process a request. This issue tracks failures until the underlying cause is resolved." \
     "$ROW" \
-    "This issue was created automatically. Close it once the outage is resolved." \
+    "This issue was created automatically. Close it once every row above is drained — each stranded trigger re-run, or confirmed no longer needed. The \`tend-review-runs\` sweep does that where it runs." \
     | run_issue_create_and_reconcile "$LABEL" "$TITLE" "$ROW" > /dev/null
 fi

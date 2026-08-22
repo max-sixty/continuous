@@ -89,6 +89,45 @@ def take_controlling_tty():
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
 
+def failure_message(code_file, typed_at, announced):
+    """Why no token came back, in terms of what this run actually saw.
+
+    A caller that already passed `--code-file` is told to pass it, and reads
+    that as the diagnosis, so the causes it can act on are named apart. The
+    loop ends three ways — the deadline, a pty the child closed, and a child
+    already exited — so a message may not assume the window passed either. A
+    run that never announced a URL ended inside `claude setup-token`, whose own
+    output this wrapper swallows, and is the one case where the fix is to go
+    look at that command rather than at the browser.
+    """
+    if typed_at is not None:
+        return (
+            f"Error: the code from {code_file} was typed into the prompt and no "
+            "token came back, so the authorize page rejected it. A code belongs "
+            "to the run whose challenge issued it and dies with that run; "
+            "approve the URL this run printed."
+        )
+    if not announced:
+        return (
+            "Error: `claude setup-token` ended without offering an authorize "
+            "URL, so it failed before the browser was ever involved. Its output "
+            "is not echoed here — the TUI carries the token — so run that "
+            "command directly to see what it said."
+        )
+    if not code_file:
+        return (
+            "Error: no sk-ant-oat01-… token in TUI output. If the browser showed "
+            "a code to copy, rerun with --code-file and write it to that path."
+        )
+    return (
+        f"Error: the authorize URL went unapproved — nothing was written to "
+        f"{code_file} and the browser never came back to the CLI. This run "
+        f"waits up to {TIMEOUT_SECONDS}s for an approval, which takes a person "
+        "at the browser throughout; a rerun issues a fresh URL that replaces "
+        "this one."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--code-file", help="path to watch for a `code#state` string")
@@ -185,10 +224,7 @@ def main():
             token = final.group(0).decode()
 
     if not token:
-        sys.exit(
-            "Error: no sk-ant-oat01-… token in TUI output. If the browser showed "
-            "a code to copy, rerun with --code-file and write it to that path."
-        )
+        sys.exit(failure_message(args.code_file, typed_at, announced))
     if len(token) > MAX_TOKEN_LENGTH:
         sys.exit(f"Error: extracted token has implausible length ({len(token)} chars)")
     print(token)

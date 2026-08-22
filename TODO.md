@@ -45,11 +45,20 @@ enough that the per-log read cost is material. Until then the agent-driven
 path covers the same ground, and survives no longer than the 30-day
 artifact retention either way.
 
-## Auth: GitHub App alternatives to PAT
+## Auth: GitHub App alternatives to PAT — not planned
 
-Both alternatives replace the classic PAT (long-lived, leak-permanent) with
-a GitHub App installation token (~1 h lifetime, repo-scoped). This is the
-single highest-impact change for token-leak risk.
+**Not planned (2026-06-14).** Both alternatives below replace the classic
+PAT (long-lived, leak-permanent) with a GitHub App installation token (~1 h
+lifetime, repo-scoped), the single highest-impact change for token-leak risk
+on its own merits. Neither is being pursued: both require tend to stand up
+and operate a hosted service (a token-minting endpoint or a full webhook
+handler), which gives up tend's defining property of stamping workflow files
+into the adopter's repo and running nothing of its own. The credential proxy
+keeps the PAT out of the agent on the Claude harness, and the environment gate
+keeps it out of any workflow the bot can start on its own. What remains is that
+the PAT is long-lived, and that the Codex harness still passes it directly; both
+are accepted, and `docs/security-model.md` records them. The analysis is kept
+for the record.
 
 ### Model A: token-minting service
 

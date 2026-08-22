@@ -34,11 +34,11 @@ If a finding doesn't meet the threshold, **skip it** — don't create a PR, don'
 Classify what the failure costs:
 
 - **Wrong outward action** — a false-green verdict, a stale approval left standing, a wrong claim posted, an issue closed in error. Each occurrence does standing damage; real complexity is justified to prevent it.
-- **Wasted compute** — a no-op session, a duplicated survey, a run lost to a blip that a later tick retries. Each occurrence costs cents and self-corrects.
+- **Wasted compute** — a no-op session, a duplicated survey, a run lost to a blip that a later tick retries, a runner-hour burned by a slow or hung job. Each occurrence leaves no standing damage.
 
 Classify by what the observed occurrence itself left on the public record. A hypothetical chain from waste to a wrong outward action ("the lost run could have left a stale approval standing") doesn't upgrade the class — the wrong action has to have occurred.
 
-A waste-class failure supports only a fix that is itself nearly free: a cadence value, a deleted step, a one-line condition, machinery removed. One that needs new mechanism — a retry framework, another skip-gate, scheduling arithmetic, a cache — fails this gate at any occurrence count; a mechanism compressed into one dense line is still a mechanism, so judge by what the fix leaves behind (logic a future session must re-derive, a rule every later run loads, failure modes of its own), not its line count. Record the waste in the evidence store with its cost; if the aggregate grows to matter, escalate the number to the maintainer, who owns the simple levers (cadence, disabling a workflow). The reasoning behind this gate is **Weighing a Fix** in `/tend-ci-runner:running-in-ci`.
+A waste-class failure supports only a fix that is itself nearly free under the whole-change remedy test in **Weighing a Fix** in `/tend-ci-runner:running-in-ci`; evaluate repeated settings as one proposed change. One that needs new mechanism — a retry framework, another skip-gate, scheduling arithmetic, a cache — fails this gate at any occurrence count; a mechanism compressed into one dense line is still a mechanism, so judge by what the fix leaves behind (logic a future session must re-derive, a rule every later run loads, failure modes of its own), not its line count. Record the waste in the evidence store with its cost; if the aggregate grows to matter, escalate the number to the maintainer, who owns the simple levers (cadence, disabling a workflow).
 
 ### Structural vs. stochastic failures
 

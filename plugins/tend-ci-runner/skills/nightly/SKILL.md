@@ -173,7 +173,10 @@ gh pr list --state open --limit 200 --json number,title,headRefName
 
 For each open issue, check whether recent commits or the current codebase state already resolve it. If resolved, comment with the evidence (commits, CI runs, or code state that resolves the issue). Close the issue with `gh issue close` when:
 
-- The bot opened the issue itself to report a transient condition (e.g., a "Nightly tests failed" report from a prior run) and the condition has clearly resolved — the fix PR is merged and the relevant CI on `main` is passing. Skip this case where closing the issue is itself a signal rather than a record of resolution: a body containing "Do not close manually" (recurring trackers with their own lifecycle), or the `tend-rate-limit` label, where a maintainer's close is what lifts the bot past its own rate limit. Closing that one as the bot lifts nothing — the preflight counts only closes by a person — but it clears a decision still waiting on one.
+- The bot opened the issue itself to report a transient condition (e.g., a "Nightly tests failed" report from a prior run) and the condition has clearly resolved — the fix PR is merged and the relevant CI on `main` is passing. Skip this case where closing the issue is itself a signal rather than a record of resolution:
+  - a body containing "Do not close manually" — recurring trackers with their own lifecycle.
+  - the `tend-outage` label. Its rows name the triggers a failed run stranded, and the close belongs to `review-runs`' drain step, which reports each row re-run or confirmed no longer needed. "Nothing has failed since" answers a different question, and nightly's cron precedes `review-runs`' under the generated defaults — closing it here drops the rows before the only step that reads them.
+  - the `tend-rate-limit` label, where a maintainer's close is what lifts the bot past its own rate limit. Closing that one as the bot lifts nothing — the preflight counts only closes by a person — but it clears a decision still waiting on one.
 - The repo's guidance (e.g., `running-tend` skill) explicitly authorizes closing issues.
 
 Otherwise, leave it open for a maintainer to close.
@@ -331,6 +334,8 @@ Before acting on findings, check for duplicates and existing work:
 gh issue list --state open --limit 200 --json number,title
 gh pr list --state open --limit 200 --json number,title,headRefName
 ```
+
+That projection orients you; it does not clear a finding. It omits both states a prior rejection lives in — closed PRs, and the comment bodies of an open issue — so per finding, before writing code, run the searches under **Fetch the prior rejection before re-deriving a fix** in `/tend-ci-runner:running-in-ci`.
 
 The default action is a PR, not an issue. If there's a plausible fix, make it — explain uncertainty in the PR description.
 
