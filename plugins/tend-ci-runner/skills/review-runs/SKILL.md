@@ -272,54 +272,44 @@ For each analyzed run, compare what the bot did against what happened next. The 
 
 mention, notifications, weekly, and review-reviewers runs get the same treatment: find the bot's output and check whether it was accepted.
 
+Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, or requesting changes on a bot PR, leaves labels and state untouched and is equally a correction; where the bot authors most of the PRs, a review body is the *first* place a maintainer writes. Three queries, one block, so the anchor and the login are established once:
+
 ```bash
-# Bot PR dispositions — merged or closed in the window. Shell variables don't
-# survive between tool calls, so every block in this step re-establishes both:
-# unset, `$SINCE` compares less than every non-null `closedAt`, and an empty
-# `$BOT_LOGIN` stops restricting rather than matching nobody — `--author ""`
-# applies no author filter, and `.user.login != ""` is true for every entry.
+# Both filters fail open when unset — `--author ""` applies no author filter,
+# `.user.login != ""` is true for every entry, and an empty `$SINCE` compares
+# less than every non-null `closedAt`. Exported so jq can read them as `$ENV`.
 SINCE=$(cat /tmp/review-runs-since)
 BOT_LOGIN=$(gh api user --jq '.login')
+export SINCE BOT_LOGIN
+
+# Bot PR dispositions — merged or closed in the window.
 gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,state,closedAt \
-  --jq '.[] | select(.closedAt > "'$SINCE'")'
-```
+  --jq '.[] | select(.closedAt > $ENV.SINCE)'
 
-Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, leaving labels and state untouched, is equally a correction, and on an issue-heavy repo it is the most common one. A `CHANGES_REQUESTED` review on a bot PR leaves labels and state untouched too, and where the bot authors most of the PRs it is the *first* place a maintainer writes. No disposition query can see either. Read the threads where the bot commented in the window and count a contradiction as a finding:
-
-```bash
-# Human replies in the window, on any issue or PR thread. Both endpoints are
-# repo-wide and take `since`, so this is two calls regardless of thread count.
-# `--paginate` is required, not cosmetic: the response is ascending by
-# `created_at`, so a single 100-item page drops the *newest* comments — the
-# ones a fresh correction sits in. The bot's own comments consume that budget
-# before the filter runs, so a busy day truncates with nothing in the output
-# to say so.
-SINCE=$(cat /tmp/review-runs-since)
-BOT_LOGIN=$(gh api user --jq '.login')
+# Human replies on any issue or PR thread. Both endpoints are repo-wide and
+# take `since`, so this is two calls regardless of thread count. `--paginate`
+# is required, not cosmetic: the response is ascending by `created_at`, so a
+# single 100-item page drops the *newest* comments — the ones a fresh
+# correction sits in — and the bot's own comments consume that budget first.
 for endpoint in issues pulls; do
   gh api --paginate "repos/$REPO/$endpoint/comments?since=$SINCE&per_page=100" \
-    --jq '.[] | select(.user.login != "'"$BOT_LOGIN"'")
+    --jq '.[] | select(.user.login != $ENV.BOT_LOGIN)
           | {created: .created_at, updated: .updated_at, url: .html_url, body: .body[0:300]}'
 done
-```
 
-`since` filters on `updated_at`, not `created_at`, so results include older comments edited inside the window — a comment created days before `$SINCE` is a real hit, not a broken filter. That is worth having (an edited claim is still a correction); the projection reports both timestamps so the reason a row qualified is visible.
-
-Neither endpoint above returns a review **body**: `pulls/comments` carries inline review comments only, and a review's body lives at `pulls/{n}/reviews`. So a `CHANGES_REQUESTED` whose correction is written in the body returns nothing from both calls — not less, nothing. There is no repo-wide `since` endpoint for reviews, so loop over the PRs updated in the window:
-
-```bash
-SINCE=$(cat /tmp/review-runs-since)
-BOT_LOGIN=$(gh api user --jq '.login')
+# Review bodies, which neither endpoint above returns: `pulls/comments`
+# carries inline comments only. There is no repo-wide `since` endpoint for
+# reviews, so loop over the PRs updated in the window.
 for p in $(gh pr list --state all --limit 200 --search "updated:>=$SINCE" \
              --json number --jq '.[].number'); do
   gh api --paginate "repos/$REPO/pulls/$p/reviews?per_page=100" \
-    --jq ".[] | select(.user.login != \"$BOT_LOGIN\" and .submitted_at >= \"$SINCE\"
+    --jq '.[] | select(.user.login != $ENV.BOT_LOGIN and .submitted_at >= $ENV.SINCE
                        and (.body | length) > 0)
-          | {pr: $p, at: .submitted_at, state: .state, url: .html_url, body: .body[0:300]}"
+          | {at: .submitted_at, state: .state, url: .html_url, body: .body[0:300]}'
 done
 ```
 
-`(.body | length) > 0` is load-bearing: GitHub wraps a standalone inline reply in an empty-bodied review container, so without it every thread where anyone replied inline reports a correction. `updated:` matches the PR's own `updated_at`, so the candidate list is only approximately windowed — a PR touched inside the window can carry an older review; the exact `submitted_at` filter inside the loop is what excludes it.
+`since` filters on `updated_at`, so an older comment edited inside the window is a real hit, not a broken filter — worth having, and the projection reports both timestamps so the reason a row qualified is visible. `(.body | length) > 0` is load-bearing: GitHub wraps a standalone inline reply in an empty-bodied review container, so without it every thread where anyone replied inline reports a correction. `updated:` windows the PR rather than the review, so the `submitted_at` filter inside the loop is what makes the review window exact.
 
 Write "no maintainer corrections" into the tracking issue only after all three queries ran — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate.
 
