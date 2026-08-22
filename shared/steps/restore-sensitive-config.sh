@@ -5,16 +5,13 @@
 # commands. Restore them from the PR base branch, which a maintainer reviewed
 # and merged. Used by the Claude harness action.
 #
-# Path list and ordering mirror claude-code-action's restore-config.ts
-# (src/github/operations/restore-config.ts). Delete first (so an
-# attacker-controlled .gitmodules can't stall the fetch on credential prompts),
-# then fetch base, then restore. Instruction files at any depth are restored
-# along with the root list; their pathspecs and the reconcile live in
-# lib/pin-instruction-paths.sh, shared with the Codex harness. The PR's own
-# versions stay readable at `git show HEAD:<path>`; nothing copies them
-# anywhere, since a copy made here runs as the runner user and would follow a
-# fork-planted symlink into files the agent must never see, such as the
-# checkout credential in .git/config.
+# The root list is claude-code-action's restore-config.ts set
+# (src/github/operations/restore-config.ts) minus the instruction files, which
+# lib/pin-instruction-paths.sh covers at every depth for both harnesses. The
+# PR's own versions stay readable at `git show HEAD:<path>`; nothing copies
+# them anywhere, since a copy made here runs as the runner user and would
+# follow a fork-planted symlink into files the agent must never see, such as
+# the checkout credential in .git/config.
 #
 # Known limitation: a PR that legitimately edits .claude/ or CLAUDE.md will have
 # those edits reverted for the duration of this run. Same tradeoff
@@ -31,7 +28,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/pin-instruction-paths.sh
 . "${SCRIPT_DIR}/lib/pin-instruction-paths.sh"
 
-SENSITIVE=(.claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md AGENTS.md .husky)
+SENSITIVE=(.mcp.json .claude.json .gitmodules .ripgreprc .husky)
 
 case "$GITHUB_EVENT_NAME" in
   pull_request_target|pull_request_review|pull_request_review_comment)
@@ -56,14 +53,8 @@ if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
   exit 0
 fi
 
-echo "Restoring ${SENSITIVE[*]} from origin/$BASE_REF"
-
-# Delete BEFORE fetch so attacker-controlled .gitmodules can't stall on
-# credential prompts (git's default fetch.recurseSubmodules=on-demand).
-for p in "${SENSITIVE[@]}"; do
-  rm -rf "$p"
-done
-
+# `--no-recurse-submodules` keeps an attacker-controlled .gitmodules from
+# sending the fetch to a host of the fork's choosing.
 git fetch origin "$BASE_REF" --depth=1 --no-recurse-submodules
 
 pin_to_base "origin/$BASE_REF" "${SENSITIVE[@]}" "${INSTRUCTION_PATHSPECS[@]}"

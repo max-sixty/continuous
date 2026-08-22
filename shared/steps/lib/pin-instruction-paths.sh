@@ -31,6 +31,7 @@ pin_to_base() {
   mapfile -d '' paths < <(git diff --no-renames --name-only -z "$ref" -- "$@")
   if [ ${#paths[@]} -gt 0 ]; then
     git restore --source="$ref" --worktree -- "${paths[@]}"
+    printf '%s\n' "${paths[@]}"
   fi
   echo "Pinned ${#paths[@]} path(s) to $ref"
 }
