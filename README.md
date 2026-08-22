@@ -157,11 +157,11 @@ proxy that injects them per host. The agent holds only dummies, so code
 running in the session can't read the real secrets. The Codex harness passes
 them directly.
 
-**Config pinning** — the action restores `.claude/`, `.mcp.json`,
-`.claude.json`, `.gitmodules`, `.ripgreprc`, and every `CLAUDE.md`,
-`CLAUDE.local.md`, and `AGENTS.md` from the base branch before the agent
-starts, blocking both startup-time code execution and prompt injection from a
-PR's own copy of those files.
+**Config pinning** — the action restores `.mcp.json`, `.claude.json`,
+`.gitmodules`, `.ripgreprc`, and every `CLAUDE.md`, `CLAUDE.local.md`,
+`AGENTS.md`, and `.claude/` in the tree, at any depth, from the base branch
+before the agent starts, blocking both startup-time code execution and prompt
+injection from a PR's own copy of those files.
 
 **Rate limiting** — Burst detection (10 PRs and 10 issues per 20 minutes,
 checked independently) and daily spike detection halt the bot before runaway
