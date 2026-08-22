@@ -272,46 +272,15 @@ For each analyzed run, compare what the bot did against what happened next. The 
 
 mention, notifications, weekly, and review-reviewers runs get the same treatment: find the bot's output and check whether it was accepted.
 
-Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, or requesting changes on a bot PR, leaves labels and state untouched and is equally a correction; where the bot authors most of the PRs, a review body is the *first* place a maintainer writes. Three queries, one block, so the anchor and the login are established once:
+Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, or requesting changes on a bot PR, leaves labels and state untouched and is equally a correction; where the bot authors most of the PRs, a review body is the *first* place a maintainer writes. The script collects all three — dispositions, thread comments, review bodies — for the window:
 
 ```bash
-# Both filters fail open when unset — `--author ""` applies no author filter,
-# `.user.login != ""` is true for every entry, and an empty `$SINCE` compares
-# less than every non-null `closedAt`. Exported so jq can read them as `$ENV`.
-SINCE=$(cat /tmp/review-runs-since)
-BOT_LOGIN=$(gh api user --jq '.login')
-export SINCE BOT_LOGIN
-
-# Bot PR dispositions — merged or closed in the window.
-gh pr list --author "$BOT_LOGIN" --state all --limit 200 --json number,title,state,closedAt \
-  --jq '.[] | select(.closedAt > $ENV.SINCE)'
-
-# Human replies on any issue or PR thread. Both endpoints are repo-wide and
-# take `since`, so this is two calls regardless of thread count. `--paginate`
-# is required, not cosmetic: the response is ascending by `created_at`, so a
-# single 100-item page drops the *newest* comments — the ones a fresh
-# correction sits in — and the bot's own comments consume that budget first.
-for endpoint in issues pulls; do
-  gh api --paginate "repos/$REPO/$endpoint/comments?since=$SINCE&per_page=100" \
-    --jq '.[] | select(.user.login != $ENV.BOT_LOGIN)
-          | {created: .created_at, updated: .updated_at, url: .html_url, body: .body[0:300]}'
-done
-
-# Review bodies, which neither endpoint above returns: `pulls/comments`
-# carries inline comments only. There is no repo-wide `since` endpoint for
-# reviews, so loop over the PRs updated in the window.
-for p in $(gh pr list --state all --limit 200 --search "updated:>=$SINCE" \
-             --json number --jq '.[].number'); do
-  gh api --paginate "repos/$REPO/pulls/$p/reviews?per_page=100" \
-    --jq '.[] | select(.user.login != $ENV.BOT_LOGIN and .submitted_at >= $ENV.SINCE
-                       and (.body | length) > 0)
-          | {at: .submitted_at, state: .state, url: .html_url, body: .body[0:300]}'
-done
+"${CLAUDE_PLUGIN_ROOT}/scripts/review-runs-corrections.sh" "$(cat /tmp/review-runs-since)"
 ```
 
-`since` filters on `updated_at`, so an older comment edited inside the window is a real hit, not a broken filter — worth having, and the projection reports both timestamps so the reason a row qualified is visible. `(.body | length) > 0` is load-bearing: GitHub wraps a standalone inline reply in an empty-bodied review container, so without it every thread where anyone replied inline reports a correction. `updated:` windows the PR rather than the review, so the `submitted_at` filter inside the loop is what makes the review window exact.
+Read every row: a correction is a maintainer contradicting a bot claim, not merely replying. Empty `dispositions`, `comments`, and `reviews` is the all-clear.
 
-Write "no maintainer corrections" into the tracking issue only after all three queries ran — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate.
+Write "no maintainer corrections" into the tracking issue only after the script ran and returned empty — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate. The script exits non-zero rather than reporting an empty window when the anchor or the bot login is missing, since both filters fail open.
 
 ## Step 5: Deduplicate
 
