@@ -40,7 +40,9 @@ FAKE_GH = (
 case "$*" in
   "api user"*)             emit '{"login":"'"$BOT_LOGIN"'"}' ;;
   # The reviews candidate list is the only `pr list` carrying --search.
-  "pr list"*--search*)     emit "$(cat "$CANDIDATES_JSON")" ;;
+  "pr list"*--search*)
+    [ -n "${SEARCH_FAILS:-}" ] && { echo "API rate limit exceeded" >&2; exit 1; }
+    emit "$(cat "$CANDIDATES_JSON")" ;;
   "pr list"*)              emit "$(cat "$BOT_PRS_JSON")" ;;
   *"/issues/comments"*)    emit "$(cat "$ISSUE_COMMENTS_JSON")" ;;
   *"/pulls/comments"*)     emit "$(cat "$PR_COMMENTS_JSON")" ;;
@@ -138,6 +140,20 @@ def test_an_unresolvable_bot_login_is_an_error(env: dict[str, str]) -> None:
 
     assert result.returncode == 2
     assert "bot login" in result.stderr
+
+
+def test_a_failed_candidate_search_aborts_rather_than_reporting_no_reviews(
+    env: dict[str, str],
+) -> None:
+    """The candidate query runs on the search API's 30 req/min budget, so it is
+    the call most likely to fail — and inline in the `for` list its failure is
+    invisible to `set -e`, leaving `reviews: []` to read as an all-clear."""
+    env["SEARCH_FAILS"] = "1"
+
+    result = _run(env, SINCE)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
 
 
 def test_a_quiet_window_reports_empty_lists(env: dict[str, str]) -> None:

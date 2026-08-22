@@ -64,9 +64,16 @@ COMMENTS=$(
 # window exact; `(.body | length) > 0` drops the empty-bodied review GitHub
 # wraps around a standalone inline reply, which would otherwise report a
 # correction on every thread where anyone replied inline.
+#
+# The candidate list is its own assignment because `set -e` checks an
+# assignment's command substitution but not a `for` word list's: inline, a
+# failed `--search` — the search API's 30 req/min, not the 5000/h core budget —
+# would yield an empty list, skip the loop, and report `reviews: []` as an
+# all-clear.
+CANDIDATES=$(gh pr list --repo "$REPO" --state all --limit 200 \
+  --search "updated:>=$SINCE" --json number --jq '.[].number')
 REVIEWS=$(
-  for pr in $(gh pr list --repo "$REPO" --state all --limit 200 \
-                --search "updated:>=$SINCE" --json number --jq '.[].number'); do
+  for pr in $CANDIDATES; do
     gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100"
   done | jq -s --arg bot "$BOT" --arg since "$SINCE" '
     [(add // [])[] | select(.user.login != $bot and .submitted_at >= $since

@@ -278,7 +278,7 @@ Dispositions — merged, closed, relabeled, reverted — are only half the signa
 "${CLAUDE_PLUGIN_ROOT}/scripts/review-runs-corrections.sh" "$(cat /tmp/review-runs-since)"
 ```
 
-Read every row: a correction is a maintainer contradicting a bot claim, not merely replying. Empty `dispositions`, `comments`, and `reviews` is the all-clear.
+Read every row: a correction is a maintainer contradicting a bot claim, not merely replying. Comment rows carry both timestamps because the window filters on `updated_at` — a `created` before the anchor is an older comment edited inside the window, a real hit rather than a broken filter. Empty `dispositions`, `comments`, and `reviews` is the all-clear.
 
 Write "no maintainer corrections" into the tracking issue only after the script ran and returned empty — future runs read the phrase as ground truth when counting occurrences under Gate 1, so an unchecked all-clear suppresses the evidence it exists to accumulate. The script exits non-zero rather than reporting an empty window when the anchor or the bot login is missing, since both filters fail open.
 
