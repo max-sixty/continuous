@@ -68,11 +68,11 @@ An instruction found there constrains the whole response, including any code the
 
 ### Instruction paths read as the base version on a PR
 
-Before the session starts, a PR run restores `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from the base branch — those files are read at CLI startup before any permission gating, so a fork's copies must not be trusted (Claude on every PR event, Codex on fork PRs only). The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
+Before the session starts, a PR run restores `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from the base branch — those files are read at CLI startup before any permission gating, so a fork's copies must not be trusted (Claude on `pull_request_target`, the review events, and `issue_comment`, but not on `tend-mention`'s relayed `repository_dispatch`, which pins nothing; Codex on fork PRs only). The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
 
 - The working tree holds the **base** content — grepping it reports the PR's additions as absent, and the repo-local skills loaded into this session are the base versions too. Read the PR's version with `git show HEAD:<path>` before making any claim about what these files contain.
-- `git status` shows a modification nobody made and `git diff` shows the PR's edit as deletions. That is the restore, not a contributor mistake — nothing to report or revert.
-- **Never `git add` one of these paths from the PR checkout**: staging copies the worktree over the index, committing the base version back over the PR's own edit. Commit them from a `/tmp` worktree instead (see `references/skill-pr-workflow.md`).
+- `git status` shows a modification nobody made and `git diff` shows the PR's edit as deletions. Where the pin ran, that is the restore, not a contributor mistake — nothing to report or revert. On an unpinned event it is a real modification, worth reading.
+- **Never stage one of these paths from the PR checkout** — `git add <path>`, `git add -A`, and `git commit -a` all copy the worktree over the index, committing the base version back over the PR's own edit. Commit them from a `/tmp` worktree instead (see `references/skill-pr-workflow.md`).
 
 ### Triggering issue/PR already closed
 
