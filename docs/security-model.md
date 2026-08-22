@@ -16,12 +16,10 @@ Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
 `.claude/skills/running-tend/SKILL.md`, the adopter-owned overlay the rest of
 the docs name. Not a `docs/agent-notes.md` of its own: fork-PR instruction
-pinning covers `CLAUDE.md` and `AGENTS.md` at any depth under both harnesses
-(`shared/steps/restore-sensitive-config.sh` for Claude, which also pins every
-`CLAUDE.local.md` and every `.claude/` in the tree;
-`shared/steps/pin-instruction-files.sh` for Codex, which pins `.claude/` at the
-root only), so notes parked outside those paths are read from the fork's own
-tree.
+pinning covers `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` at
+any depth under both harnesses (`shared/steps/restore-sensitive-config.sh` for
+Claude, `shared/steps/pin-instruction-files.sh` for Codex), so notes parked
+outside those paths are read from the fork's own tree.
 
 ## Threats
 
@@ -290,24 +288,20 @@ SHA) bounds that trust to a reviewed, immutable point.
 
 **Config pinning.** The Claude harness actions restore RCE-relevant config from
 the PR base branch before the agent starts: `.claude/`, `.mcp.json`, `.claude.json`,
-`.gitmodules`, `.ripgreprc`, `.husky` at the root, plus every `CLAUDE.md`,
-`CLAUDE.local.md`, `AGENTS.md`, and nested `.claude/` elsewhere in the tree —
-Claude Code discovers all three instruction filenames natively and loads the one
-nearest the file the agent opens, so a fork's `site/CLAUDE.md` reaches the
-session as readily as a root one, and a repo whose `CLAUDE.md` is a one-line
-`@AGENTS.md` pointer gets its real guidance from `AGENTS.md`. Directory-scoped
-skill discovery makes a nested `.claude/` the same channel by another route: the
-CLI loads `apps/web/.claude/skills/<name>/SKILL.md` for work under `apps/web/`,
-and a skill's `description` enters the system prompt whether or not the agent
-invokes it — so a fork can plant the first nested `.claude/` a repo has ever
-had. All of it as a prompt-injection defense. A malicious PR's `SessionStart`
-hook, MCP server, or injected `CLAUDE.md` is reverted before Claude reads it. The
-restoration runs in shell; the root path list and ordering mirror
-claude-code-action's `restore-config.ts`. The PR-authored versions of the root
-paths are snapshotted to `.claude-pr/` (added to `.git/info/exclude` so they're
-not tracked) before being overwritten, so review skills can optionally inspect
-what the PR changed without those files ever being executed; nested instruction
-files are reverted, and fork-added ones deleted, without a snapshot.
+`.gitmodules`, `.ripgreprc`, `.husky` at the root, plus — as a prompt-injection
+defense — every `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` at
+any depth, since Claude Code loads the instruction file nearest the file the
+agent opens and the skills under any directory's `.claude/`. A malicious PR's
+`SessionStart` hook, MCP server, or injected `CLAUDE.md` is reverted before
+Claude reads it. The restoration is `git restore --source=<base>` in shell:
+base-branch versions are written back, fork-added paths removed, and a
+fork-planted symlink replaced rather than written through. The root path list
+and ordering mirror claude-code-action's `restore-config.ts`. The PR-authored
+versions of the root paths are snapshotted to `.claude-pr/` (added to
+`.git/info/exclude` so they're not tracked) before being overwritten, so review
+skills can optionally inspect what the PR changed without those files ever
+being executed; nested paths are reverted without a snapshot, and the fork's
+version stays readable at `git show HEAD:<path>`.
 
 **Setup runs on reviewed code.** Adopter `setup:` steps execute as the runner
 user, which holds sudo and, until the sandbox setup strips it, the checkout
