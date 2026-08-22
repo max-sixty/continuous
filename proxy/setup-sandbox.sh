@@ -68,6 +68,22 @@ if ! id "$SANDBOX" >/dev/null 2>&1; then
 fi
 log "user $SANDBOX uid=$(id -u "$SANDBOX")"
 
+# A global ignore for the one file the harness leaves in the checkout. The Run
+# Claude step writes `.claude/settings.local.json` into the workspace, untracked
+# and unignored, next to the `.claude/skills/` adopters do track — so a session
+# that stages broadly (`git add -A`) sweeps `defaultMode: bypassPermissions`
+# into the PR it opens. Global rather than the checkout's `info/exclude`: it
+# covers every repo and worktree the agent touches, and writes nothing into the
+# adopter's `.git`. core.excludesFile is pinned rather than left to git's XDG
+# default path, which a runner XDG_CONFIG_HOME leaking through sudo would move
+# out from under it.
+sudo -u "$SANDBOX" mkdir -p "${AGENT_HOME}/.config/git"
+printf '/.claude/settings.local.json\n' \
+  | sudo -u "$SANDBOX" tee "${AGENT_HOME}/.config/git/ignore" >/dev/null
+sudo -u "$SANDBOX" env HOME="$AGENT_HOME" XDG_CONFIG_HOME="${AGENT_HOME}/.config" \
+  git config --global core.excludesFile "${AGENT_HOME}/.config/git/ignore"
+log "global gitignore at ${AGENT_HOME}/.config/git/ignore"
+
 # Decide the Anthropic auth scheme ONCE, here: unset the losing variable so
 # the proxy (which inherits this shell's env) can never disagree with the
 # dummy the agent gets — the addon injects whichever scheme it sees set,

@@ -333,14 +333,9 @@ runs:
             attribution: {commit: "", pr: ""}
           }' > "$RUNNER_TEMP/tend-settings.json"
         # The file below lands in the adopter's checkout untracked, next to the
-        # `.claude/skills/` they do track — so a session that stages broadly
-        # commits `bypassPermissions` into the PR it opens. Exclude it here,
-        # beside the write it guards, so the two can't drift apart. As the
-        # sandbox user, which owns the workspace (and its .git) from
-        # setup-sandbox.sh onwards.
-        sudo -u "$SANDBOX" bash \
-          "${{ github.action_path }}/../shared/steps/exclude-local-settings.sh"
-
+        # `.claude/skills/` they do track. setup-sandbox.sh's global gitignore
+        # for the sandbox user keeps a broad `git add -A` from committing
+        # `bypassPermissions` into the PR the session opens.
         sudo -u "$SANDBOX" mkdir -p "$GITHUB_WORKSPACE/.claude"
         sudo -u "$SANDBOX" tee "$GITHUB_WORKSPACE/.claude/settings.local.json" \
           < "$RUNNER_TEMP/tend-settings.json" >/dev/null
