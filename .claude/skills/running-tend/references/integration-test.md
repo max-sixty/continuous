@@ -253,6 +253,11 @@ on the session-log artifact, which the tend harness action uploads
 unconditionally on every invocation, distinguishes the two.
 
 ```bash
+# Self-contained, like §6: shell state does not survive between blocks, so
+# §4's $TS is already gone. The stamp only has to be unique per run, not to
+# match §4's — §6 finds this PR by title prefix, never by timestamp.
+TS=$(date -u +%Y%m%d-%H%M%S)
+
 WORK=$(mktemp -d)
 gh repo clone tend-agent/tend-integration "$WORK"
 cd "$WORK"
