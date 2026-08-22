@@ -24,11 +24,16 @@ INSTRUCTION_PATHSPECS=(':(glob)**/CLAUDE.md' ':(glob)**/CLAUDE.local.md' ':(glob
 # list first because `restore` refuses a pathspec that matches nothing on
 # either side. `--no-renames` keeps both ends of a file the fork moved in that
 # list; with rename detection the diff would name only the destination.
+# `--ignore-submodules=none` keeps a fork's .gitmodules from hiding a gitlink
+# it planted at one of these paths. `wait` surfaces the diff's own exit status,
+# which the process substitution would otherwise drop: an unresolvable <ref>
+# fails the step instead of pinning nothing.
 pin_to_base() {
   local ref=$1
   shift
   local -a paths
-  mapfile -d '' paths < <(git diff --no-renames --name-only -z "$ref" -- "$@")
+  mapfile -d '' paths < <(git diff --no-renames --ignore-submodules=none --name-only -z "$ref" -- "$@")
+  wait "$!"
   if [ ${#paths[@]} -gt 0 ]; then
     git restore --source="$ref" --worktree -- "${paths[@]}"
     printf '%s\n' "${paths[@]}"

@@ -91,11 +91,15 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 def _fork_pr(
-    tmp_path: Path, base: dict[str, str], tamper: Callable[[Path], None]
+    tmp_path: Path,
+    base: dict[str, str],
+    tamper: Callable[[Path], None],
+    base_ref: str = "main",
 ) -> tuple[Path, Path]:
     """A fork PR's checkout as `actions/checkout` leaves it: a clone of an
     origin holding *base*, with *tamper*'s changes committed on top and
-    `origin/main` at the base. Returns (repo, event)."""
+    `origin/main` at the base. The event names *base_ref* as the PR's base.
+    Returns (repo, event)."""
     origin = tmp_path / "origin"
     repo = tmp_path / "repo"
     origin.mkdir()
@@ -114,10 +118,10 @@ def _fork_pr(
         json.dumps(
             {
                 "pull_request": {
-                    "base": {"ref": "main"},
+                    "base": {"ref": base_ref},
                     "head": {"repo": {"fork": True}},
                 },
-                "repository": {"default_branch": "main"},
+                "repository": {"default_branch": base_ref},
             }
         )
     )
@@ -244,6 +248,27 @@ def test_pinning_leaves_a_pr_that_touches_no_instruction_path_alone(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert _tree(repo) == {"README.md": "fork readme\n"}
+
+
+@pytest.mark.parametrize(
+    "script", [PIN_INSTRUCTION_FILES, RESTORE_SENSITIVE_CONFIG], ids=["codex", "claude"]
+)
+def test_pinning_fails_when_the_base_ref_is_missing(
+    tmp_path: Path, script: Path
+) -> None:
+    """A base the checkout doesn't hold fails the step. The alternative, a diff
+    against nothing that lists nothing, would let the agent start on the
+    fork's instruction files with a log line saying 0 paths were pinned."""
+    repo, event = _fork_pr(
+        tmp_path,
+        {"CLAUDE.md": "root guidance\n"},
+        lambda repo: _write(repo / "CLAUDE.md", "EVIL root\n"),
+        base_ref="missing",
+    )
+
+    result = _pin(script, repo, event)
+
+    assert result.returncode != 0, result.stdout + result.stderr
 
 
 # `gh api` stand-in. Records every invocation so a test can assert which calls
