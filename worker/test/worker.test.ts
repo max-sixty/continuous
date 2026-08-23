@@ -196,7 +196,7 @@ describe("refreshActivity", () => {
   const ISSUE_FILTER =
     "-label:tend-outage -label:tend-rate-limit -label:review-runs-tracking -label:review-reviewers-tracking -label:nightly-cleanup";
 
-  it("fans out one Search query per bucket per bot — sums counts, merges + sorts recent, counts this week", async () => {
+  it("issues one Search query per bucket covering every bot — merges + sorts recent, counts this week", async () => {
     const { __test } = await import("../src/index");
     const nowMs = Date.now();
     const daysAgo = (n: number) => new Date(nowMs - n * 86_400_000).toISOString();
@@ -252,15 +252,13 @@ describe("refreshActivity", () => {
           { repo: "o/b", bot_name: "bot-b" },
         ],
       ],
-      // bots sorted → bot-a, bot-b. Buckets in declared order: prs, issues, reviews, comments.
-      [searchUrl("author:bot-a is:pr"), { total_count: 7, items: [item("o/a", 1, "pull", recentA), item("o/a", 2, "pull", oldA)] }],
-      [searchUrl("author:bot-b is:pr"), { total_count: 3, items: [item("o/b", 9, "pull", oldB)] }],
-      [searchUrl(`author:bot-a is:issue ${ISSUE_FILTER}`), { total_count: 2, items: [item("o/a", 5, "issues", recentB)] }],
-      [searchUrl(`author:bot-b is:issue ${ISSUE_FILTER}`), { total_count: 0, items: [] }],
-      [searchUrl("reviewed-by:bot-a"), { total_count: 9, items: [item("o/a", 4, "pull", recentA)] }],
-      [searchUrl("reviewed-by:bot-b"), { total_count: 5, items: [item("o/b", 7, "pull", oldB)] }],
-      [searchUrl("commenter:bot-a -author:bot-a -reviewed-by:bot-a"), { total_count: 12, items: [item("o/a", 3, "pull", recentA)] }],
-      [searchUrl("commenter:bot-b -author:bot-b -reviewed-by:bot-b"), { total_count: 4, items: [item("o/b", 8, "issues", recentB)] }],
+      // bots sorted → bot-a, bot-b, folded into ONE query per bucket via
+      // repeated (OR'd) qualifiers. Buckets in declared order: prs, issues,
+      // reviews, comments. Four Search requests total, not 4×2.
+      [searchUrl("author:bot-a author:bot-b is:pr"), { total_count: 10, items: [item("o/a", 1, "pull", recentA), item("o/a", 2, "pull", oldA), item("o/b", 9, "pull", oldB)] }],
+      [searchUrl(`author:bot-a author:bot-b is:issue ${ISSUE_FILTER}`), { total_count: 2, items: [item("o/a", 5, "issues", recentB)] }],
+      [searchUrl("reviewed-by:bot-a reviewed-by:bot-b"), { total_count: 14, items: [item("o/a", 4, "pull", recentA), item("o/b", 7, "pull", oldB)] }],
+      [searchUrl("commenter:bot-a commenter:bot-b -author:bot-a -author:bot-b -reviewed-by:bot-a -reviewed-by:bot-b"), { total_count: 16, items: [item("o/a", 3, "pull", recentA), item("o/b", 8, "issues", recentB)] }],
       // Follow-ups: pick the latest entry by the bot; the worker should land on the deepest URL.
       [reviewCommentUrl("o/a", 4), [
         reviewComment("o/a", 4, "someone-else", 100, recentB),
@@ -285,7 +283,7 @@ describe("refreshActivity", () => {
     const out = await __test.refreshActivity(env);
 
     expect(out.prs).toEqual({
-      count: 10, // 7 + 3
+      count: 10, // the combined query's total_count
       count_this_week: 1, // o/a#1 recent; o/a#2 and o/b#9 old
       recent: [
         { repo: "o/a", title: "o/a#1", url: "https://github.com/o/a/pull/1", at: recentA },
@@ -301,7 +299,7 @@ describe("refreshActivity", () => {
       ],
     });
     expect(out.reviews).toEqual({
-      count: 14, // 9 + 5
+      count: 14,
       count_this_week: 1, // o/a#4 recent; o/b#7 old
       recent: [
         // url resolved to the bot's most recent inline comment, not the PR top.
@@ -310,7 +308,7 @@ describe("refreshActivity", () => {
       ],
     });
     expect(out.comments).toEqual({
-      count: 16, // 12 + 4
+      count: 16,
       count_this_week: 2,
       recent: [
         // newest comment by the bot wins (302 vs 301).
@@ -319,6 +317,42 @@ describe("refreshActivity", () => {
       ],
     });
     expect(out.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  });
+
+  it("spends 4 Search requests regardless of consumer count — Search allows 30/minute", async () => {
+    const { __test } = await import("../src/index");
+    // The bound is the reason the queries are combined: one request per bot
+    // per bucket crossed 30/minute at 8 consumers, and because the fallback
+    // TTL is 30s a structurally oversized refresh re-attempts forever instead
+    // of draining. 20 consumers here — 4·N would be 80.
+    const consumers = Array.from({ length: 20 }, (_, i) => ({
+      repo: `o/r${i}`,
+      bot_name: `bot-${i}`,
+    }));
+    let searchCalls = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/data/consumers.json")) {
+        return new Response(JSON.stringify(consumers), { status: 200 });
+      }
+      if (url.includes("/search/issues")) {
+        searchCalls++;
+        return new Response(JSON.stringify({ total_count: 0, items: [] }), {
+          status: 200,
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as unknown as typeof fetch;
+
+    const env = {
+      GITHUB_TOKEN: "tok",
+      CACHE: makeFakeKv(),
+      ALLOWED_ORIGIN: "*",
+      REPOS_URL:
+        "https://raw.githubusercontent.com/max-sixty/tend/main/data/consumers.json",
+    };
+    await __test.refreshActivity(env);
+    expect(searchCalls).toBe(4);
   });
 
   it("falls back to the parent URL when the follow-up fetch fails", async () => {

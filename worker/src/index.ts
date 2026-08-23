@@ -163,12 +163,24 @@ const ISSUE_LABEL_FILTER = BOOKKEEPING_LABELS.map((l) => `-label:${l}`).join(" "
 // "what's tend been up to" narrative is deferred to a Phase 2 LLM summary
 // (see TODO.md).
 //
-// `q` for each /activity bucket — "the bot …":
-const BUCKET_QUERIES: Record<ActivityBucketName, (bot: string) => string> = {
-  prs: (b) => `author:${b} is:pr`, // …opened these PRs
-  issues: (b) => `author:${b} is:issue ${ISSUE_LABEL_FILTER}`, // …opened these issues (minus its own bookkeeping)
-  reviews: (b) => `reviewed-by:${b}`, // …reviewed these PRs (approve / request-changes / review comment)
-  comments: (b) => `commenter:${b} -author:${b} -reviewed-by:${b}`, // …commented on these PRs/issues (not its own, not folded in from a review)
+// Each bucket is ONE Search request covering every bot, not one per bot.
+// Repeating a qualifier ORs it (`author:a author:b` = either), so the whole
+// consumer list folds into a single query and the refresh costs 4 Search
+// requests regardless of how many consumers there are. That bound is the
+// point: Search allows 30 requests/minute, so the old bot-by-bot fanout
+// (4·N) crossed the limit at 8 consumers and every refresh after that would
+// have sunk — see searchIssues. Negated qualifiers still AND, so the
+// `comments` exclusions drop anything authored/reviewed by *any* bot.
+const or = (bots: string[], qualifier: string) =>
+  bots.map((b) => `${qualifier}:${b}`).join(" ");
+
+// `q` for each /activity bucket — "some bot …":
+const BUCKET_QUERIES: Record<ActivityBucketName, (bots: string[]) => string> = {
+  prs: (bs) => `${or(bs, "author")} is:pr`, // …opened these PRs
+  issues: (bs) => `${or(bs, "author")} is:issue ${ISSUE_LABEL_FILTER}`, // …opened these issues (minus its own bookkeeping)
+  reviews: (bs) => or(bs, "reviewed-by"), // …reviewed these PRs (approve / request-changes / review comment)
+  comments: (bs) =>
+    `${or(bs, "commenter")} ${or(bs, "-author")} ${or(bs, "-reviewed-by")}`, // …commented on these PRs/issues (not a bot's own, not folded in from a review)
 };
 
 // Per-route freshness budgets, in seconds. `ok` applies to a good refresh;
@@ -534,30 +546,24 @@ async function refreshActivity(env: Env): Promise<ActivityResponse> {
 
   await Promise.all(
     (Object.keys(BUCKET_QUERIES) as ActivityBucketName[]).map(async (name) => {
-      const pages = await Promise.all(
-        bots.map(async (b) => ({
-          bot: b,
-          page: await searchIssues(BUCKET_QUERIES[name](b), env.GITHUB_TOKEN),
-        })),
-      );
-      const items: Array<SearchItem & { bot: string }> = [];
-      let count = 0;
+      const page = await searchIssues(BUCKET_QUERIES[name](bots), env.GITHUB_TOKEN);
+      const items = page.items ?? [];
       let countThisWeek = 0;
-      for (const { bot, page } of pages) {
-        count += page.total_count ?? 0;
-        for (const it of page.items ?? []) {
-          items.push({ ...it, bot });
-          if (Date.parse(it.updated_at) >= weekAgoMs) countThisWeek++;
-        }
+      for (const it of items) {
+        if (Date.parse(it.updated_at) >= weekAgoMs) countThisWeek++;
       }
       items.sort((a, b) =>
         a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0,
       );
       const top = items.slice(0, RECENT_PER_BUCKET);
       const recent = await Promise.all(
-        top.map((it) => toRecentItem(name, it, env.GITHUB_TOKEN)),
+        top.map((it) => toRecentItem(name, it, bots, env.GITHUB_TOKEN)),
       );
-      out[name] = { count, count_this_week: countThisWeek, recent };
+      out[name] = {
+        count: page.total_count ?? 0,
+        count_this_week: countThisWeek,
+        recent,
+      };
     }),
   );
   return out;
@@ -569,9 +575,13 @@ async function refreshActivity(env: Env): Promise<ActivityResponse> {
 // Follow-up failure (404, transient error, race where Search saw the action
 // but the comment isn't queryable yet) falls back to the parent URL — better
 // than dropping the row.
+// A combined query doesn't say which bot matched, so the follow-up matches
+// against the whole consumer list. It reads the same single page either way —
+// no extra requests — and only one bot acts in a given repo in practice.
 async function toRecentItem(
   bucket: ActivityBucketName,
-  it: SearchItem & { bot: string },
+  it: SearchItem,
+  bots: string[],
   token: string,
 ): Promise<RecentItem> {
   const repo = repoFromApiUrl(it.repository_url);
@@ -581,11 +591,11 @@ async function toRecentItem(
     at: it.updated_at,
   };
   if (bucket === "reviews") {
-    const deep = await findBotReviewUrl(repo, it.number, it.bot, token);
+    const deep = await findBotReviewUrl(repo, it.number, bots, token);
     return { ...base, url: deep ?? it.html_url };
   }
   if (bucket === "comments") {
-    const deep = await findBotCommentUrl(repo, it.number, it.bot, token);
+    const deep = await findBotCommentUrl(repo, it.number, bots, token);
     return { ...base, url: deep ?? it.html_url };
   }
   return { ...base, url: it.html_url };
@@ -601,7 +611,7 @@ async function toRecentItem(
 async function findBotReviewUrl(
   repo: string,
   n: number,
-  bot: string,
+  bots: string[],
   token: string,
 ): Promise<string | null> {
   const url = `${GITHUB_API}/repos/${repo}/pulls/${n}/comments?per_page=100`;
@@ -614,7 +624,7 @@ async function findBotReviewUrl(
     const comments = (await resp.json()) as IssueCommentObject[];
     return latestByBot(
       comments,
-      bot,
+      bots,
       (c) => c.created_at,
       (c) => c.html_url,
     );
@@ -624,14 +634,14 @@ async function findBotReviewUrl(
   }
 }
 
-// Latest issue/PR-conversation comment authored by `bot` — `created_at` desc.
-// (Inline PR review comments live at a different endpoint; the comments
-// bucket excludes `reviewed-by:<bot>`, so the bot's contribution is an
-// issue-style comment.) Returns null on failure (caller falls back).
+// Latest issue/PR-conversation comment authored by one of `bots` —
+// `created_at` desc. (Inline PR review comments live at a different endpoint;
+// the comments bucket excludes `reviewed-by:<bot>`, so the bot's contribution
+// is an issue-style comment.) Returns null on failure (caller falls back).
 async function findBotCommentUrl(
   repo: string,
   n: number,
-  bot: string,
+  bots: string[],
   token: string,
 ): Promise<string | null> {
   const url = `${GITHUB_API}/repos/${repo}/issues/${n}/comments?per_page=100`;
@@ -644,7 +654,7 @@ async function findBotCommentUrl(
     const comments = (await resp.json()) as IssueCommentObject[];
     return latestByBot(
       comments,
-      bot,
+      bots,
       (c) => c.created_at,
       (c) => c.html_url,
     );
@@ -656,14 +666,15 @@ async function findBotCommentUrl(
 
 function latestByBot<T extends { user?: { login?: string } | null }>(
   entries: T[],
-  bot: string,
+  bots: string[],
   ts: (e: T) => string | undefined,
   href: (e: T) => string | undefined,
 ): string | null {
   let bestTs = "";
   let bestUrl: string | null = null;
   for (const e of entries) {
-    if (e.user?.login !== bot) continue;
+    const login = e.user?.login;
+    if (login === undefined || !bots.includes(login)) continue;
     const t = ts(e);
     const h = href(e);
     if (typeof t !== "string" || typeof h !== "string") continue;
@@ -700,8 +711,15 @@ function repoFromApiUrl(repositoryUrl: string): string {
 // short-fallbacks (30s) and retries. We do NOT degrade a failure to `{}` —
 // that cached an all-zero payload as a successful refresh at the full budget,
 // pinning "0 PRs / 0 reviews / …" on the site for up to the stale-serve window
-// on a transient Search error (429 from the 4·N fanout, a 5xx blip). A real
-// empty bucket is a 200 with `total_count: 0`, so genuine zeros still pass.
+// on a transient Search error (a 429, a 5xx blip). A real empty bucket is a
+// 200 with `total_count: 0`, so genuine zeros still pass.
+//
+// Refusing to degrade only survives a *transient* failure: the fallback TTL
+// is 30s, so a structural failure re-attempts about twice a minute and never
+// drains. That is why BUCKET_QUERIES keeps the refresh at 4 requests — a
+// fanout that sits above Search's 30/minute sinks every refresh, and the
+// site's sections hide themselves rather than erroring, so it shows as a
+// blank page rather than an alarm.
 async function searchIssues(query: string, token: string): Promise<SearchResponse> {
   const params = new URLSearchParams({
     q: query,

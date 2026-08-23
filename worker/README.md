@@ -17,7 +17,7 @@ Base URL: `https://api.tend-src.com`. `Access-Control-Allow-Origin: *`
 Unauthenticated GitHub REST is 60 req/hour/IP and the Search API is 10
 req/min/IP — both shared across everyone behind a NAT. A single
 currently-tending poll fans out one `actions/runs` call per consumer repo every
-30 s; `/activity` fans out one Search query per bucket per bot. One browser tab
+30 s; `/activity` issues one Search query per bucket. One browser tab
 would exhaust those quotas in minutes. The Worker holds an authenticated token
 (5,000 req/hour, 30 Search req/min) and caches each route at the colo, so
 origin load is bounded by the freshness budget, not by viewer count. Static
@@ -54,15 +54,31 @@ not the data layer.
 ### `/activity`
 
 Recent things tend has done, in primitive buckets — one Search query per
-bucket per bot (`sort=updated`): the page yields both the `recent` items and
-the lifetime `count` (`total_count`); `count_this_week` is counted off the
-page, so it saturates around one page (~100) per bot per bucket — fine for a
-headline number. The fanout is 4·N concurrent Search requests against the
-30 req/min Search cap, so a single fanout stays clear up to ~7 bots. The KV
-sharing tier (see [Caching](#caching)) bounds how often a fanout fires by the
-freshness budget network-wide rather than letting it scale with colo count or
-traffic, so near-simultaneous fanouts that would stack against the cap stay
-rare.
+bucket (`sort=updated`): the page yields both the `recent` items and the
+lifetime `count` (`total_count`); `count_this_week` is counted off the page,
+so it saturates around one page (~100) per bucket — fine for a headline
+number.
+
+Each query covers every bot at once. Repeating a qualifier ORs it
+(`author:a author:b` matches either), so the consumer list folds into a single
+query and a refresh costs **4 Search requests regardless of how many consumers
+there are**. That bound is the point: the cap is 30 req/min, so the earlier
+one-query-per-bot shape (4·N) crossed it at 8 consumers. Nothing about that
+failure is loud — `searchIssues` throws on a non-OK status and the throw sinks
+the whole refresh, the `activity` fallback TTL is 30 s so it re-attempts about
+twice a minute and never drains, and the site hides a section whose fetch
+returned nothing rather than erroring. The visible result would have been a
+blank stat strip. The KV sharing tier (see [Caching](#caching)) still bounds
+how often a refresh fires, but it is no longer what keeps the burst under the
+cap.
+
+Two consequences of combining, both benign at present. A `count` no longer
+double-counts an item two bots both touched (possible for `reviews` and
+`comments`, not for `author:`-keyed buckets, and unobserved — each bot works
+in its own repo). And the matching bot is no longer named in the result, so
+the deep-link follow-up below matches the whole consumer list instead of one
+login; it reads the same single page either way, so it costs no extra
+requests.
 
 ```jsonc
 {
@@ -89,12 +105,16 @@ reviews — the inline-comment endpoint, since tend's reviews are
 parent URL if the follow-up fails. For `prs` and `issues`, `url` is the
 parent issue/PR — that is what the bot created.
 
-| bucket | Search query | "the bot …" |
+`<bots>` below stands for the qualifier repeated once per consumer bot. Negated
+qualifiers AND rather than OR, so `comments` excludes anything authored or
+reviewed by *any* bot, not just the one that commented.
+
+| bucket | Search query | "some bot …" |
 | --- | --- | --- |
-| `prs` | `author:<bot> is:pr` | opened these PRs (any state) |
-| `issues` | `author:<bot> is:issue` minus five bookkeeping labels (`tend-outage`, `tend-rate-limit`, `review-runs-tracking`, `review-reviewers-tracking`, `nightly-cleanup`) | opened these issues, filed against the repo — tend's own outage and tracking issues are excluded |
-| `reviews` | `reviewed-by:<bot>` | reviewed these PRs (approve / request-changes / review comment) — by volume, tend's main action |
-| `comments` | `commenter:<bot> -author:<bot> -reviewed-by:<bot>` | commented on these PRs/issues — excludes its own threads and items already in `reviews` |
+| `prs` | `author:<bots> is:pr` | opened these PRs (any state) |
+| `issues` | `author:<bots> is:issue` minus five bookkeeping labels (`tend-outage`, `tend-rate-limit`, `review-runs-tracking`, `review-reviewers-tracking`, `nightly-cleanup`) | opened these issues, filed against the repo — tend's own outage and tracking issues are excluded |
+| `reviews` | `reviewed-by:<bots>` | reviewed these PRs (approve / request-changes / review comment) — by volume, tend's main action |
+| `comments` | `commenter:<bots> -author:<bots> -reviewed-by:<bots>` | commented on these PRs/issues — excludes bots' own threads and items already in `reviews` |
 
 > **TODO — Phase 2:** a consumer (a scheduled job, or the Worker calling Claude)
 > reads `/activity` and writes a short prose summary of what tend's been up to;
@@ -144,8 +164,10 @@ out to GitHub on its own. `/activity` adds a **KV tier** (`activity:v1`)
 behind the hot tier: a refresh publishes its rendered payload to KV, a global
 store, so a refresh in one colo serves every other colo. The GitHub fanout
 then fires about once per freshness budget across the whole network instead of
-once per colo. That keeps the 4·N Search burst clear of the 30 req/min cap
-whatever the colo count. KV survives deploys and outlives the colo cache, so a
+once per colo. With the burst itself fixed at 4 requests, that is now headroom
+rather than the thing keeping it under the 30 req/min cap — it bounds how many
+near-simultaneous refreshes can stack, whatever the colo count. KV survives
+deploys and outlives the colo cache, so a
 viewer waits on the fanout only when colo cache and KV are both empty: the
 first request ever, or after an idle longer than KV's retention.
 `/currently-tending` skips KV; its 30 s budget is under KV's 60 s floor, and
@@ -182,7 +204,7 @@ data/consumers.json on main
 Cloudflare Worker (tend-website)
   ├─ reads data/consumers.json via raw URL (KV-cached 1 h)
   ├─ /currently-tending: fans out actions/runs per repo (in-progress, tend-*)
-  ├─ /activity:          fans out one Search query per bucket per bot,
+  ├─ /activity:          one Search query per bucket, all bots OR'd (4 total),
   │                      payload shared across colos via KV (activity:v1)
   └─ each route stale-while-revalidate from the colo cache, served at api.tend-src.com
 ```
@@ -251,8 +273,9 @@ out.
 
 For `/currently-tending` a cold colo cache costs the full N actions/runs
 fanout, bounded to one cold refresh per budget per colo. For `/activity` the
-KV tier collapses that to roughly one 4·N Search fanout per budget across the
-whole network: a cold or stale colo reads `activity:v1` first and fans out only
+KV tier collapses that to roughly one 4-request Search refresh per budget
+across the whole network: a cold or stale colo reads `activity:v1` first and
+refreshes only
 when KV is stale too, so neither colo count nor traffic multiplies the GitHub
 load.
 
