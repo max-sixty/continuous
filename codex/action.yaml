@@ -55,7 +55,7 @@ inputs:
   codex_version:
     default: "0.149.0"
     description: >-
-      `@openai/codex` npm version to install (e.g. `0.147.0`). Must ship
+      `@openai/codex` npm version to install. Must ship
       the `codex plugin add` subcommand (PR #21396, first released in
       `rust-v0.131.0-alpha.17`). That was `alpha`-only when the pin was
       first set; stable carries it now, so this tracks `latest`. CI's
