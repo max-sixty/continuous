@@ -72,6 +72,14 @@ blank stat strip. The KV sharing tier (see [Caching](#caching)) still bounds
 how often a refresh fires, but it is no longer what keeps the burst under the
 cap.
 
+The request count is now constant, but query *length* still grows with the
+consumer list — `comments` is the longest at three qualifiers per bot, and
+measured ~570 characters at 8 consumers. That is the ceiling this shape has
+left, replacing the old ~7-bot one; it fails the same silent way, so if the
+consumer list grows several times over, check a `comments` query against live
+Search before assuming it still returns 200. The 20-consumer test asserts the
+request count against a mocked `fetch` and says nothing about that.
+
 Two consequences of combining, both benign at present. A `count` no longer
 double-counts an item two bots both touched (possible for `reviews` and
 `comments`, not for `author:`-keyed buckets, and unobserved — each bot works
@@ -125,9 +133,10 @@ reviewed by *any* bot, not just the one that commented.
 
 ### Multi-bot semantics
 
-Everything is **merged across bots**: each `/activity` bucket sums `count` and
-`count_this_week` over all tend bots, and its `recent` list is the union of all
-bots' recent items, sorted newest-first; `currently_tending` is the union of all
+Everything is **merged across bots**: each `/activity` bucket is one Search
+query covering every bot, so `count` and `count_this_week` are union counts
+over all tend bots rather than per-bot sums, and its `recent` list is the
+newest items across all of them; `currently_tending` is the union of all
 bots' in-progress runs. Activity is *not* scoped to consumer repos — `count`
 comes from Search's `total_count`, which can't be filtered post-hoc — but a tend
 bot only acts in its own repo, so this is a distinction without a difference in

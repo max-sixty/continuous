@@ -88,8 +88,8 @@ interface RecentItem {
 }
 
 interface ActivityBucket {
-  count: number; // lifetime — Search total_count, summed across bots
-  count_this_week: number; // last 7 days; saturates ~one page per bot per bucket
+  count: number; // lifetime — the combined query's Search total_count
+  count_this_week: number; // last 7 days; saturates ~one page (100) per bucket
   recent: RecentItem[]; // newest-first, merged across bots
 }
 
@@ -130,9 +130,9 @@ const WORKFLOW_PREFIX = "tend-";
 // repo, then we filter to tend-* client-side. 30 (GitHub's default) is
 // cheap and avoids tend runs being pushed off by busier non-tend traffic.
 const PER_PAGE_RUNS = 30;
-// /activity: one Search page per bucket per bot. 100 is Search's max page
-// and one request; we keep the newest RECENT_PER_BUCKET for the feed and
-// count the rest of the page towards "this week".
+// /activity: one Search page per bucket, covering every bot. 100 is Search's
+// max page and one request; we keep the newest RECENT_PER_BUCKET for the feed
+// and count the rest of the page towards "this week".
 const SEARCH_PAGE = 100;
 const RECENT_PER_BUCKET = 10;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -151,7 +151,13 @@ const BOOKKEEPING_LABELS = [
   "review-reviewers-tracking",
   "nightly-cleanup",
 ];
-const ISSUE_LABEL_FILTER = BOOKKEEPING_LABELS.map((l) => `-label:${l}`).join(" ");
+// Repeat a Search qualifier once per value. Positive qualifiers OR
+// (`author:a author:b` matches either); negated ones AND (`-label:x -label:y`
+// excludes both).
+const qualify = (qualifier: string, values: string[]) =>
+  values.map((v) => `${qualifier}:${v}`).join(" ");
+
+const ISSUE_LABEL_FILTER = qualify("-label", BOOKKEEPING_LABELS);
 
 // Why primitive buckets, not a job taxonomy: GitHub records mechanical facts
 // (PR opened, review submitted, comment created), but tend's jobs (review /
@@ -163,24 +169,25 @@ const ISSUE_LABEL_FILTER = BOOKKEEPING_LABELS.map((l) => `-label:${l}`).join(" "
 // "what's tend been up to" narrative is deferred to a Phase 2 LLM summary
 // (see TODO.md).
 //
-// Each bucket is ONE Search request covering every bot, not one per bot.
-// Repeating a qualifier ORs it (`author:a author:b` = either), so the whole
-// consumer list folds into a single query and the refresh costs 4 Search
-// requests regardless of how many consumers there are. That bound is the
+// Each bucket is ONE Search request covering every bot, not one per bot: the
+// whole consumer list folds into a single query via `qualify`, so a refresh
+// costs 4 Search requests whatever the consumer count. That bound is the
 // point: Search allows 30 requests/minute, so the old bot-by-bot fanout
 // (4·N) crossed the limit at 8 consumers and every refresh after that would
-// have sunk — see searchIssues. Negated qualifiers still AND, so the
+// have sunk — see searchIssues. Negated qualifiers AND rather than OR, so the
 // `comments` exclusions drop anything authored/reviewed by *any* bot.
-const or = (bots: string[], qualifier: string) =>
-  bots.map((b) => `${qualifier}:${b}`).join(" ");
-
+//
+// What still grows with the consumer count is query *length* — `comments` is
+// the longest at three qualifiers per bot, ~570 characters at 8 consumers.
+// That, not the request count, is what bounds this shape now.
+//
 // `q` for each /activity bucket — "some bot …":
 const BUCKET_QUERIES: Record<ActivityBucketName, (bots: string[]) => string> = {
-  prs: (bs) => `${or(bs, "author")} is:pr`, // …opened these PRs
-  issues: (bs) => `${or(bs, "author")} is:issue ${ISSUE_LABEL_FILTER}`, // …opened these issues (minus its own bookkeeping)
-  reviews: (bs) => or(bs, "reviewed-by"), // …reviewed these PRs (approve / request-changes / review comment)
+  prs: (bs) => `${qualify("author", bs)} is:pr`, // …opened these PRs
+  issues: (bs) => `${qualify("author", bs)} is:issue ${ISSUE_LABEL_FILTER}`, // …opened these issues (minus its own bookkeeping)
+  reviews: (bs) => qualify("reviewed-by", bs), // …reviewed these PRs (approve / request-changes / review comment)
   comments: (bs) =>
-    `${or(bs, "commenter")} ${or(bs, "-author")} ${or(bs, "-reviewed-by")}`, // …commented on these PRs/issues (not a bot's own, not folded in from a review)
+    `${qualify("commenter", bs)} ${qualify("-author", bs)} ${qualify("-reviewed-by", bs)}`, // …commented on these PRs/issues (not a bot's own, not folded in from a review)
 };
 
 // Per-route freshness budgets, in seconds. `ok` applies to a good refresh;
@@ -601,7 +608,8 @@ async function toRecentItem(
   return { ...base, url: it.html_url };
 }
 
-// Latest inline review comment on a PR authored by `bot` — `created_at` desc.
+// Latest inline review comment on a PR authored by one of `bots` —
+// `created_at` desc.
 // We deliberately don't anchor on the review summary (`#pullrequestreview-…`):
 // tend's reviews are typically `COMMENTED` with an empty body wrapping inline
 // comments, so the review anchor scrolls nowhere on the conversation page.
