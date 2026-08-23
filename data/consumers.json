@@ -4,12 +4,20 @@
     "bot_name": "prql-bot"
   },
   {
+    "repo": "diffplug/dormouse",
+    "bot_name": "dormouse-bot"
+  },
+  {
     "repo": "jakobtfaber/Faber2026",
     "bot_name": "tend-jakobtfaber"
   },
   {
     "repo": "max-sixty/cargo-affected",
     "bot_name": "cargo-affected-bot"
+  },
+  {
+    "repo": "max-sixty/leaf",
+    "bot_name": "leaf-agent"
   },
   {
     "repo": "max-sixty/tend",
