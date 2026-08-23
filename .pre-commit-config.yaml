@@ -34,7 +34,7 @@ repos:
   # doesn't see them. Run shellcheck directly to keep that coverage. -S warning
   # matches actionlint's default severity.
   - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.11.0.1
+    rev: v0.11.0.1-1
     hooks:
       - id: shellcheck
         args: ["-S", "warning"]
