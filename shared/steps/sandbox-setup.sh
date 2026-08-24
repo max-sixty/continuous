@@ -17,7 +17,8 @@
 # tool, warming a cache, generating a file).
 #
 # Inputs (env): TEND_SANDBOX_SETUP (the commands; empty → the report only),
-# SANDBOX and AGENT_ENV_FILE (exported by setup-sandbox.sh via $GITHUB_ENV).
+# SANDBOX, AGENT_ENV_FILE and AGENT_PATH (exported by setup-sandbox.sh via
+# $GITHUB_ENV).
 # Used by the Claude harness action.
 set -euo pipefail
 
@@ -43,23 +44,36 @@ fi
 # had its chance to close it. Reported, not fatal: most of what a runner carries
 # is irrelevant to a given session, and only the adopter knows which tools their
 # gate needs — asserting that belongs in their own `sandbox_setup:`.
+# `-r` as well as `-d`: listing a dir needs read, executing from it needs only
+# traverse, so a 0711 PATH dir would list empty and report everything in it as
+# missing. Skipping it under-reports instead, which is the right way for a
+# diagnostic to be wrong.
 list_commands='
 IFS=:
 for dir in $1; do
-  [ -d "$dir" ] || continue
+  { [ -d "$dir" ] && [ -r "$dir" ]; } || continue
   for f in "$dir"/*; do
     if [ -f "$f" ] && [ -x "$f" ]; then printf "%s\n" "${f##*/}"; fi
   done
 done'
-agent_path="$(sed -n 's/^PATH=//p' "$AGENT_ENV_FILE")"
 # The sandbox side runs as the sandbox user, so the -x test answers the question
 # that matters: can THAT uid execute it, not does the file exist.
-missing="$(comm -23 \
-  <(bash -c "$list_commands" _ "$PATH" | sort -u) \
-  <(sudo -u "$SANDBOX" bash -c "$list_commands" _ "$agent_path" | sort -u))"
-if [ -n "$missing" ]; then
-  echo "[sandbox-setup] on the runner's PATH, not the agent's:" \
-    "$(tr '\n' ' ' <<<"$missing")"
-  echo "[sandbox-setup] if the session needs one of those, install it as the" \
-    "sandbox user with sandbox_setup: in .config/tend.yaml"
+runner_commands="$(bash -c "$list_commands" _ "$PATH" | sort -u)"
+agent_commands="$(sudo -u "$SANDBOX" bash -c "$list_commands" _ "$AGENT_PATH" | sort -u)"
+# Nothing on the agent's side means the listing failed, not that the agent has
+# no commands — it always resolves /usr/bin. Reporting then would name every
+# command the runner has. And `comm` exits 1 on input it judges unsorted, which
+# under `set -e` would make this diagnostic the thing that kills the run.
+# Neither failure may cost more than the report itself.
+if [ -z "$agent_commands" ]; then
+  echo "[sandbox-setup] could not list the agent's PATH; no reachability report"
+else
+  missing="$(comm -23 <(printf '%s\n' "$runner_commands") \
+    <(printf '%s\n' "$agent_commands") || true)"
+  if [ -n "$missing" ]; then
+    echo "[sandbox-setup] on the runner's PATH, not the agent's:" \
+      "$(tr '\n' ' ' <<<"$missing")"
+    echo "[sandbox-setup] if the session needs one of those, install it as the" \
+      "sandbox user with sandbox_setup: in .config/tend.yaml"
+  fi
 fi

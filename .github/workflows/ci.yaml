@@ -91,7 +91,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
       # Stand in for an adopter `setup:` step. Installing under $HOME and
       # announcing the dir through GITHUB_PATH is what the cargo-install
       # actions do; the addition lands in the next step's PATH, exactly as
@@ -110,6 +109,12 @@ jobs:
           ACTION_PATH: ${{ github.workspace }}
           TEND_UV_DIR: ${{ runner.temp }}/tend-uv
           UV_CACHE_DIR: ${{ runner.temp }}/tend-mitmproxy-uv
+          # The adopter lever, exercised on its supported input: a `~` entry
+          # expands to the sandbox home and wins the front of the PATH. Its
+          # unsupported input — a runner-home dir, which would put the
+          # credential-holding home on the agent's PATH — is refused by
+          # setup-sandbox.sh before the env file is written.
+          TEND_SANDBOX_PATH: "~/.cargo/bin"
         run: |
           set -o pipefail
           MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
@@ -128,25 +133,46 @@ jobs:
               exit 1
               ;;
           esac
+          case "$agent_path" in
+            /home/tend-sandbox/.cargo/bin:*) ;;
+            *)
+              echo "::error::sandbox_path's ~ entry did not expand to the front: $agent_path"
+              exit 1
+              ;;
+          esac
       # No sandbox_setup, so this is the report alone — the state an adopter is
       # in before they know they need the lever.
       - name: Name what the agent cannot reach
         run: |
           set -o pipefail
           bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report.log"
-          grep -q "not the agent's:.*tend-probe" "$RUNNER_TEMP/report.log"
+          report=$(grep "not the agent's:" "$RUNNER_TEMP/report.log" || true)
+          case "$report" in
+            *tend-probe*) ;;
+            *) echo "::error::the report did not name the planted tool: $report"; exit 1 ;;
+          esac
+          # git is on both PATHs, so naming it would mean the diff had degraded
+          # into reporting the runner's whole PATH.
+          case "$report" in
+            *" git "*) echo "::error::the report named a reachable command: $report"; exit 1 ;;
+          esac
       # And the lever closes it. ~runner resolves through passwd, so the copy
       # doesn't depend on where the runner's home sits.
       - name: sandbox_setup closes the gap
         env:
+          # The shape docs/tend.example.yaml documents: copy the binary in,
+          # then RUN it — `command -v` would pass for a copied script whose
+          # interpreter or libraries still live in the runner's home.
           TEND_SANDBOX_SETUP: |
             mkdir -p ~/.local/bin
             cp ~runner/.cargo-install/tend-probe/bin/tend-probe ~/.local/bin/
-            command -v tend-probe >/dev/null || { echo "missing: tend-probe"; exit 1; }
+            tend-probe
         run: |
           set -o pipefail
           bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report-after.log"
-          if grep -q tend-probe "$RUNNER_TEMP/report-after.log"; then
+          # Scoped to the report line: the echoed sandbox_setup commands name
+          # the tool too, and matching those would fail this spuriously.
+          if grep "not the agent's:" "$RUNNER_TEMP/report-after.log" | grep -q tend-probe; then
             echo "::error::still unreachable after sandbox_setup copied it in"
             exit 1
           fi

@@ -88,9 +88,9 @@ inputs:
     description: >-
       Newline-separated directories prepended to the sandbox agent's PATH,
       before the agent launches. A leading `~` expands to the sandbox home.
-      Reaches a dir under the sandbox home or a system location — not a tool a
-      `setup:` step installed under the runner's home, which the sandbox has no
-      copy of. Use `sandbox_setup` for that.
+      Reaches a dir under the sandbox home or a system location. An entry under
+      the runner's home is refused: the sandbox has no copy of it, and that home
+      is the one dir the agent's PATH must never carry. Use `sandbox_setup`.
   sandbox_env:
     default: ""
     description: >-
@@ -104,8 +104,8 @@ inputs:
       install and before the agent runs, with the agent's launch env and the
       workspace as cwd. For on-disk setup (installing a tool, warming a cache);
       env-only tweaks don't persist — use sandbox_path/sandbox_env for those.
-      This is also where a tool a `setup:` step installed under the runner's
-      home gets into the sandbox, and where to assert it arrived.
+      It is also how a tool that `setup:` installed under the runner's home
+      reaches the agent: install or copy it here, then run it to prove it works.
 
 outputs:
   token_usage:

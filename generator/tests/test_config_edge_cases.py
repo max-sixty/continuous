@@ -1034,11 +1034,31 @@ def test_setup_with_sandbox_lever_is_quiet(
         setup:
           - uses: taiki-e/install-action@v2
         sandbox_setup:
-          - command -v cargo-nextest
+          - cargo-nextest --version
     """),
     )
     Config.load(path)
     assert "`setup:` runs as the runner" not in capsys.readouterr().err
+
+
+def test_setup_note_survives_an_env_only_lever(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `sandbox_env` can't put a tool anywhere, so it must not be the cheap way
+    # to silence the note — otherwise the quietest fix is the one that changes
+    # nothing about what the agent can run.
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        setup:
+          - uses: taiki-e/install-action@v2
+        sandbox_env:
+          RUST_BACKTRACE: "1"
+    """),
+    )
+    Config.load(path)
+    assert "`setup:` runs as the runner" in capsys.readouterr().err
 
 
 def test_setup_note_skipped_under_codex(

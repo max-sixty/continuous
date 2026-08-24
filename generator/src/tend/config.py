@@ -524,24 +524,31 @@ class Config:
                     "`setup:` section already reaches its environment.",
                     err=True,
                 )
-        elif setup and "claude" in effective_harnesses:
-            # The converse shape: `setup:` steps, a Claude harness, and nothing
-            # reaching into the sandbox. `setup:` runs as the runner, and what
-            # it installs under the runner's home is invisible to the agent —
-            # no error, just a missing command mid-session, which a session
-            # works around rather than reports. Whether a given `setup:` lands
-            # somewhere reachable isn't knowable here (`setup-*` actions do,
-            # `cargo install` doesn't), so this points at the lever rather than
-            # diagnosing; the run itself logs which commands actually went
-            # missing.
+        if (
+            setup
+            and not (sandbox_path or sandbox_setup)
+            and "claude" in effective_harnesses
+        ):
+            # The converse shape: `setup:` steps, a Claude harness, and neither
+            # lever that can put a tool on the agent's PATH. `setup:` runs as
+            # the runner, and what it installs under the runner's home is
+            # invisible to the agent — no error, just a missing command
+            # mid-session, which a session works around rather than reports.
+            # Which one a given `setup:` step is isn't knowable here (`setup-*`
+            # actions install somewhere reachable, `cargo install` doesn't), so
+            # this points at the lever and says plainly when there's nothing to
+            # do; the run itself names the commands that actually went missing.
+            # `sandbox_env` deliberately doesn't silence it — it can't put a
+            # tool anywhere.
             click.echo(
                 "Note: `setup:` runs as the runner, outside the Claude "
-                "sandbox. What it installs in a system location (the "
-                "`setup-*` actions) reaches the agent; what lands under the "
-                "runner's home (`cargo install`, `pip install --user`) does "
-                "not, silently. Install those with `sandbox_setup:`, ending "
-                "the list with a `command -v` check per tool. Each run logs "
-                "the sandbox PATH and what it could not resolve.",
+                "sandbox. A `setup-*` action installs into a system location "
+                "and reaches the agent; `cargo install` and `pip install "
+                "--user` land under the runner's home and do not. If any of "
+                "your `setup:` steps are the second kind, install those tools "
+                "again under `sandbox_setup:` and run each one there to prove "
+                "it works. Otherwise there is nothing to do — every run logs "
+                "the sandbox PATH and any command it could not resolve.",
                 err=True,
             )
 
