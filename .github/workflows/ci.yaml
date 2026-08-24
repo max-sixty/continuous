@@ -136,7 +136,8 @@ jobs:
           chmod 755 "$bin/tend-probe" "$HOME/.local/bin/tend-local" \
             "$HOME/.cargo/bin/tend-pinned" "$relative/tend-relative/bin/tend-relative" \
             "$sdk/17/bin/tend-alias" "$workspace_bin/tend-workspace" \
-            /usr/local/bin/tend-fallback "$bin/tend-capability"
+            "$bin/tend-capability"
+          sudo chmod 755 /usr/local/bin/tend-fallback
           chmod 700 "$bin/tend-private" "$bin/tend-fallback"
           chmod 777 "$bin/tend-writable"
           chmod 4755 "$bin/tend-setid"
