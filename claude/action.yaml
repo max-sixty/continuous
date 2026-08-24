@@ -88,9 +88,9 @@ inputs:
     description: >-
       Newline-separated directories prepended to the sandbox agent's PATH,
       before the agent launches. A leading `~` expands to the sandbox home.
-      Reaches a dir under the sandbox home or a system location. An entry under
-      the runner's home is refused: runner PATH entries are mirrored into the
-      sandbox home automatically, while the source home stays off PATH.
+      Reaches a dir under the sandbox home, the checkout, or a system location.
+      Other runner-home entries are refused: runner PATH installs are copied
+      into the sandbox home automatically, while the source home stays off PATH.
   sandbox_env:
     default: ""
     description: >-

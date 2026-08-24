@@ -80,10 +80,10 @@ jobs:
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
   # These scripts need a second uid, sudo, and a hosted-runner PATH, so exercise
-  # them for real. The planted tools cover a self-contained installer root,
-  # Python-style libraries beside ~/.local/bin, a collision with /etc/skel,
-  # and files the sandbox must refuse. The real Rust action guards the nastiest
-  # failure: resolving rustc successfully but at a different version than CI.
+  # them for real. The planted tools cover sibling dependencies, a symlinked
+  # SDK root, the checkout, privilege metadata, special files, private/writable
+  # refusals, and an /etc/skel collision. The real Rust action guards the
+  # nastiest failure: resolving rustc at a different version than CI.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
@@ -98,21 +98,47 @@ jobs:
       - name: Plant runner-home tools
         run: |
           bin="$HOME/.cargo-install/tend-probe/bin"
-          mkdir -p "$bin" "$HOME/.local/bin" "$HOME/.local/lib/tend" "$HOME/.cargo/bin"
+          relative="$RUNNER_TEMP/tend-node/node_modules"
+          sdk="$HOME/.sdkman/candidates/java"
+          workspace_bin="$GITHUB_WORKSPACE/.tend-probe/bin"
+          mkdir -p "$bin" "$HOME/.local/bin" "$HOME/.local/lib/tend" \
+            "$HOME/.cargo/bin" "$relative/.bin" "$relative/tend-relative/bin" \
+            "$sdk/17/bin" "$workspace_bin"
           printf '#!/bin/sh\necho probe\n' >"$bin/tend-probe"
           printf '#!/bin/sh\necho private\n' >"$bin/tend-private"
           printf '#!/bin/sh\necho writable\n' >"$bin/tend-writable"
+          printf '#!/bin/sh\necho runner-private\n' >"$bin/tend-fallback"
           # shellcheck disable=SC2016
           printf '#!/bin/sh\ncat "$HOME/.local/lib/tend/value"\n' >"$HOME/.local/bin/tend-local"
           printf 'runner-library\n' >"$HOME/.local/lib/tend/value"
           printf '#!/bin/sh\necho pinned\n' >"$HOME/.cargo/bin/tend-pinned"
-          chmod 755 "$bin/tend-probe" "$HOME/.local/bin/tend-local" "$HOME/.cargo/bin/tend-pinned"
-          chmod 700 "$bin/tend-private"
+          printf '#!/bin/sh\necho relative\n' >"$relative/tend-relative/bin/tend-relative"
+          ln -s ../tend-relative/bin/tend-relative "$relative/.bin/tend-relative"
+          printf '#!/bin/sh\necho alias\n' >"$sdk/17/bin/tend-alias"
+          ln -s 17 "$sdk/current"
+          printf '#!/bin/sh\necho workspace\n' >"$workspace_bin/tend-workspace"
+          printf '#!/bin/sh\necho system-fallback\n' | \
+            sudo tee /usr/local/bin/tend-fallback >/dev/null
+          cp /bin/true "$bin/tend-setid" "$bin/tend-capability"
+          mkfifo "$bin/tend-fifo"
+          chmod 755 "$bin/tend-probe" "$HOME/.local/bin/tend-local" \
+            "$HOME/.cargo/bin/tend-pinned" "$relative/tend-relative/bin/tend-relative" \
+            "$sdk/17/bin/tend-alias" "$workspace_bin/tend-workspace" \
+            /usr/local/bin/tend-fallback "$bin/tend-capability"
+          chmod 700 "$bin/tend-private" "$bin/tend-fallback"
           chmod 777 "$bin/tend-writable"
-          echo "$bin" >>"$GITHUB_PATH"
+          chmod 4755 "$bin/tend-setid"
+          sudo setcap cap_net_bind_service=ep "$bin/tend-capability"
+          {
+            echo "$bin"
+            echo "$relative/.bin"
+            echo "$sdk/current/bin"
+            echo "$workspace_bin"
+          } >>"$GITHUB_PATH"
           sudo install -d /etc/skel/.cargo/bin
           printf '#!/bin/sh\necho stale\n' | sudo tee /etc/skel/.cargo/bin/tend-pinned >/dev/null
           sudo chmod 755 /etc/skel/.cargo/bin/tend-pinned
+          ln -s "$bin" "$RUNNER_TEMP/tend-runner-home-alias"
       - name: Set up the sandbox
         env:
           TEND_GH_TOKEN: dummy
@@ -134,12 +160,16 @@ jobs:
             echo "::error::setup-sandbox.sh logged no sandbox PATH"
             exit 1
           fi
-          case ":$agent_path:" in
-            *":$HOME/"* | *":$HOME:"*)
-              echo "::error::a runner-home entry reached the sandbox PATH: $agent_path"
-              exit 1
-              ;;
-          esac
+          IFS=: read -ra agent_path_entries <<<"$agent_path"
+          for path_entry in "${agent_path_entries[@]}"; do
+            case "$path_entry" in
+              "$GITHUB_WORKSPACE" | "$GITHUB_WORKSPACE"/*) ;;
+              "$HOME" | "$HOME"/*)
+                echo "::error::a non-workspace runner-home entry reached the sandbox PATH: $path_entry"
+                exit 1
+                ;;
+            esac
+          done
           case "$agent_path" in
             /home/tend-sandbox/.cargo/bin:*) ;;
             *)
@@ -149,19 +179,38 @@ jobs:
           esac
       - name: Verify mirrored tools and boundary
         run: |
+          source_bin="$HOME/.cargo-install/tend-probe/bin"
           mapfile -t agent_env <"$AGENT_ENV_FILE"
           sudo -u "$SANDBOX" env "${agent_env[@]}" bash -euc '
             test "$(tend-probe)" = probe
             test "$(tend-local)" = runner-library
             test "$(tend-pinned)" = pinned
+            test "$(tend-relative)" = relative
+            test "$(tend-alias)" = alias
+            test "$(tend-workspace)" = workspace
+            test "$(tend-fallback)" = system-fallback
+            tend-setid
+            tend-capability
             case "$(rustc --version)" in "rustc 1.85.0 "*) ;; *) exit 1 ;; esac
             test "$(readlink -f "$JAVA_HOME")" = "$1"
             test ! -e ~/.cargo-install/tend-probe/bin/tend-private
             test ! -e ~/.cargo-install/tend-probe/bin/tend-writable
+            test ! -e ~/.cargo-install/tend-probe/bin/tend-fifo
             test ! -w ~/.cargo-install/tend-probe/bin/tend-probe
+            for command in tend-setid tend-capability; do
+              mode=$(stat -c %a ~/.cargo-install/tend-probe/bin/$command)
+              test $((8#$mode & 06000)) -eq 0
+            done
           ' _ "$(readlink -f "$JAVA_HOME")"
-          test "$HOME/.cargo-install/tend-probe/bin/tend-probe" -ef \
-            /home/tend-sandbox/.cargo-install/tend-probe/bin/tend-probe
+          if test "$source_bin/tend-probe" -ef \
+              /home/tend-sandbox/.cargo-install/tend-probe/bin/tend-probe; then
+            echo "::error::the sandbox tool still shares the runner's inode"
+            exit 1
+          fi
+          test -n "$(getcap "$source_bin/tend-capability")"
+          test -z "$(getcap /home/tend-sandbox/.cargo-install/tend-probe/bin/tend-capability)"
+          grep -q "runner-selected commands not mirrored into sandbox: .*tend-fallback" \
+            "$RUNNER_TEMP/setup.log"
 
           # Refused files remain visible in the diagnostic; successfully
           # mirrored commands do not.
@@ -208,7 +257,7 @@ jobs:
           MITMPROXY_VERSION: "0"
         run: |
           set -o pipefail
-          TEND_SANDBOX_PATH="$HOME/.cargo-install/tend-probe/bin" \
+          TEND_SANDBOX_PATH="$RUNNER_TEMP/tend-runner-home-alias" \
             bash proxy/setup-sandbox.sh >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
           # Actions parses workflow commands out of any step output, so echoing
           # the captured line verbatim would annotate this passing job with the

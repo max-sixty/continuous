@@ -37,10 +37,11 @@ fi
 
 # What the agent won't be able to run. setup-sandbox.sh mirrors public,
 # read-only runner-home tool roots and omits private or writable files. Diffing
-# the two PATHs by resolvable command name names anything still omitted after
-# sandbox_setup has had its chance to close the gap. Reported, not fatal: most
-# of what a runner carries is irrelevant to a given session, and only the
-# adopter knows which tools their gate needs.
+# the two PATHs by command name names anything still unavailable after
+# sandbox_setup has had its chance to close the gap. setup-sandbox.sh separately
+# names a selected source that was not copied, so a same-name system fallback is
+# not silent. Reported, not fatal: only the adopter knows which tools its gate
+# needs.
 # A dir the lister can't read lists nothing (the glob stays literal), so its
 # commands read as missing on that side. That's a false positive the diff can't
 # distinguish from a real one; PATH directories are public on hosted runners.
