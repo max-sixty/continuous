@@ -172,31 +172,28 @@ bot_name: my-project-bot
 #
 # `setup:` above runs as the RUNNER user, around the composite action. The
 # `claude` harness runs the agent as a separate, non-sudo sandbox user with a
-# fixed env allowlist, so env changes don't carry in, and the sandbox's PATH is
-# the runner's with every runner-home entry dropped — deliberately, since that
-# home holds the credentials the sandbox exists to keep away from the agent. So
-# a `setup:` step that installs into a system location (`/opt/hostedtoolcache/...`,
-# where the `setup-*` actions install) reaches the agent; one that installs into
-# the runner's home (`cargo install`, `pip install --user`, an action with its
-# own install root) does not, and nothing fails when it doesn't — the agent just
-# finds no such command. Tend installs no language toolchain into the sandbox, so
-# what `setup:` leaves somewhere the agent can reach is all it gets, at the
-# version you pinned. These three keys reach INSIDE that sandbox, before the
-# agent launches:
+# fixed env allowlist. Tool directories that `setup:` adds to the runner's PATH
+# carry over automatically: system paths stay in place, while a runner-home
+# install root is mirrored at the same location under the sandbox home. The
+# mirror keeps only files that another user can read but not write. This covers
+# user installs (`pip install --user`, `uv tool install`, `cargo install`) and
+# install actions without putting the runner's credential-holding home on PATH.
+# Rust's selected toolchain and a PATH-matched `JAVA_HOME` carry over with their
+# shims. A skipped private or writable command is named in the job log.
+#
+# Tend installs no language toolchain of its own. The agent gets the versions
+# selected in `setup:`. Other env changes do not cross the fixed allowlist; use
+# these keys for additions inside the sandbox:
 #
 # - `sandbox_path`: directories prepended to the sandbox PATH. A leading `~`
-#   expands to the sandbox home. This is the fix for a toolchain the sandbox can
-#   already open but that isn't on its PATH — under the sandbox home (e.g.
-#   rustup's shims), or a system dir whose installer never announced it through
-#   `$GITHUB_PATH` (one that did is already on the agent's PATH, no key needed):
+#   expands to the sandbox home. Use it for a system directory the installer did
+#   not add to PATH, or for a tool installed by `sandbox_setup:` off PATH:
 #
 #     sandbox_path:
-#       - ~/.cargo/bin
+#       - /opt/my-tool/bin
 #
-#   It is NOT the fix for a tool a `setup:` step installed under the RUNNER's
-#   home: `~` expands to the sandbox home, which holds no copy of it, and naming
-#   the runner-home path instead is refused when the sandbox is built, since that
-#   is the one dir the agent's PATH must never carry. Use `sandbox_setup:`.
+#   A runner-home source path is refused. Entries already on the runner's PATH
+#   need no config; Tend mirrors them into the sandbox home.
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
 #   keys are rejected at `init`, and again inside the sandbox so a hand-edited
@@ -220,32 +217,12 @@ bot_name: my-project-bot
 #   and plugins install and before the agent runs, with the workspace as cwd.
 #   The workspace holds the PR's tree by then, so this is where installing the
 #   project's dependencies belongs (`uv sync`, `npm ci`), alongside other
-#   on-disk effects like warming a cache. Env-only tweaks don't persist across
+#   on-disk effects like warming a cache. It can also reinstall a private tool
+#   that the runner-home mirror refused. Env-only tweaks don't persist across
 #   the command's shell — use sandbox_path/sandbox_env:
 #
 #     sandbox_setup:
 #       - uv sync
-#
-#   It is also how a tool from `setup:` reaches the agent, since `setup:` runs as
-#   the runner. A self-contained binary can be copied across; anything that
-#   resolves its own libraries through `$HOME` (a `pip install --user` console
-#   script, a `uv tool` shim) has to be installed again here, because the copy
-#   would keep pointing into the runner's home. Then end the block by RUNNING
-#   each tool your CI gate needs — `command -v` only proves a name resolves, and
-#   `command -v a b c` exits 0 if ANY one of the three does:
-#
-#     sandbox_setup:
-#       - mkdir -p ~/.local/bin
-#       - cp ~runner/.cargo-install/cargo-nextest/bin/cargo-nextest ~/.local/bin/
-#       - uv tool install pre-commit
-#       - cargo-nextest --version
-#       - pre-commit --version
-#
-#   The commands run under `bash -e`, so a tool that is missing or broken fails
-#   the job there, rather than surfacing as a session that quietly skipped the
-#   check. Every run logs the sandbox PATH, and once these commands finish, any
-#   command the runner resolves that the agent can't — so a tool you never wrote
-#   a check for still shows up in the job log.
 #
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.

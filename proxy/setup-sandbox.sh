@@ -367,9 +367,34 @@ AGENT_PATH="$(IFS=:; printf '%s' "${_agent_path[*]}")"
 # what an adopter expected. sandbox-setup.sh reports the consequence — which
 # commands the runner resolves and the agent can't — after sandbox_setup runs.
 log "sandbox PATH: ${AGENT_PATH}"
+
+# setup-java both prepends its JDK's bin and exports JAVA_HOME. PATH already
+# crosses safely above; carry the matching home too so Gradle/Maven do not use
+# sudo's image-default JAVA_HOME while `java` resolves the adopter's pinned JDK.
+_agent_java_home=
+if [ -n "${JAVA_HOME:-}" ]; then
+  _runner_java_home=$(readlink -f -- "$JAVA_HOME") || _runner_java_home=
+  _runner_java=$(command -v java 2>/dev/null || true)
+  _runner_java=$(readlink -f -- "${_runner_java:-/nonexistent}") || _runner_java=
+  case "${_runner_java}" in
+    "${_runner_java_home}"/bin/*)
+      case "${_runner_java_home}" in
+        "${runner_home}"/*)
+          _agent_java_home="${AGENT_HOME}/${_runner_java_home#"${runner_home}"/}"
+          ;;
+        *) _agent_java_home="${_runner_java_home}" ;;
+      esac
+      ;;
+  esac
+fi
+if [ -n "${_agent_java_home}" ] && \
+   ! { [ -d "${_agent_java_home}" ] && sudo -u "$SANDBOX" test -x "${_agent_java_home}"; }; then
+  _agent_java_home=
+fi
 cat >"$AGENT_ENV_FILE" <<EOF
 HOME=${AGENT_HOME}
 PATH=${AGENT_PATH}
+${_agent_java_home:+JAVA_HOME=${_agent_java_home}}
 XDG_CONFIG_HOME=${AGENT_HOME}/.config
 XDG_CACHE_HOME=${AGENT_HOME}/.cache
 XDG_DATA_HOME=${AGENT_HOME}/.local/share

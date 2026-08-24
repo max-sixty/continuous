@@ -4,9 +4,10 @@
 # TEND_SANDBOX_SETUP) INSIDE the sandbox, as the non-sudo sandbox user, then
 # report which commands the runner can resolve and the agent cannot.
 #
-# `sandbox_setup:` is the general lever runner-side `setup:` can't provide:
-# `setup:` runs as the runner user around the composite action and never reaches
-# the sandbox env. Commands run with the same launch env the agent gets
+# `setup:` supplies PATH tools before the composite action; setup-sandbox.sh
+# mirrors its public runner-home installs. `sandbox_setup:` handles work that
+# must run inside the sandbox, such as project dependency installation. Commands
+# run with the same launch env the agent gets
 # ($AGENT_ENV_FILE: proxy routing, CA trust, dummy credentials, plus any
 # sandbox_path/sandbox_env additions) and with the workspace as the working
 # directory.
@@ -34,19 +35,15 @@ if [ -n "${TEND_SANDBOX_SETUP:-}" ]; then
   echo "[sandbox-setup] ran adopter sandbox_setup commands as $SANDBOX"
 fi
 
-# What the agent won't be able to run. The sandbox PATH is the runner's with
-# every runner-home entry rewritten to the sandbox's own copy and dropped when
-# that copy doesn't exist (setup-sandbox.sh), so a tool a `setup:` step
-# installed under /home/runner is simply absent — no error, nothing in the log,
-# until the agent hits `command not found` mid-session and works around it
-# (skipping the check, or reaching for a weaker substitute). Diffing the two
-# PATHs by resolvable command name names the gap here, after sandbox_setup has
-# had its chance to close it. Reported, not fatal: most of what a runner carries
-# is irrelevant to a given session, and only the adopter knows which tools their
-# gate needs — asserting that belongs in their own `sandbox_setup:`.
+# What the agent won't be able to run. setup-sandbox.sh mirrors public,
+# read-only runner-home tool roots and omits private or writable files. Diffing
+# the two PATHs by resolvable command name names anything still omitted after
+# sandbox_setup has had its chance to close the gap. Reported, not fatal: most
+# of what a runner carries is irrelevant to a given session, and only the
+# adopter knows which tools their gate needs.
 # A dir the lister can't read lists nothing (the glob stays literal), so its
 # commands read as missing on that side. That's a false positive the diff can't
-# tell from a real one; PATH dirs are 0755 on a runner, so it stays theoretical.
+# distinguish from a real one; PATH directories are public on hosted runners.
 list_commands='
 IFS=:
 for dir in $1; do

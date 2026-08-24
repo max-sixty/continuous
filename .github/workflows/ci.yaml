@@ -79,29 +79,40 @@ jobs:
           kill "$pid" 2>/dev/null || true
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
-  # setup-sandbox.sh and sandbox-setup.sh need a second uid, sudo, and a runner
-  # PATH to derive from, so no Python test reaches them. This job runs both for
-  # real, against the shape that hides a missing toolchain: a `setup:` step that
-  # installs into the runner's own home (what `cargo install` and the install
-  # actions do) with no sandbox lever set. Two things must hold — the sandbox
-  # PATH carries no /home/runner entry across, since that rewrite is the
-  # credential boundary, and what it therefore can't reach is named in the log
-  # rather than discovered by the agent mid-session.
+  # These scripts need a second uid, sudo, and a hosted-runner PATH, so exercise
+  # them for real. The planted tools cover a self-contained installer root,
+  # Python-style libraries beside ~/.local/bin, a collision with /etc/skel,
+  # and files the sandbox must refuse. The real Rust action guards the nastiest
+  # failure: resolving rustc successfully but at a different version than CI.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      # Stand in for an adopter `setup:` step. Installing under $HOME and
-      # announcing the dir through GITHUB_PATH is what the cargo-install
-      # actions do; the addition lands in the next step's PATH, exactly as
-      # setup-sandbox.sh sees it in a real run.
-      - name: Install a tool the way an adopter's setup does
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+      - name: Plant runner-home tools
         run: |
           bin="$HOME/.cargo-install/tend-probe/bin"
-          mkdir -p "$bin"
+          mkdir -p "$bin" "$HOME/.local/bin" "$HOME/.local/lib/tend" "$HOME/.cargo/bin"
           printf '#!/bin/sh\necho probe\n' >"$bin/tend-probe"
-          chmod +x "$bin/tend-probe"
+          printf '#!/bin/sh\necho private\n' >"$bin/tend-private"
+          printf '#!/bin/sh\necho writable\n' >"$bin/tend-writable"
+          # shellcheck disable=SC2016
+          printf '#!/bin/sh\ncat "$HOME/.local/lib/tend/value"\n' >"$HOME/.local/bin/tend-local"
+          printf 'runner-library\n' >"$HOME/.local/lib/tend/value"
+          printf '#!/bin/sh\necho pinned\n' >"$HOME/.cargo/bin/tend-pinned"
+          chmod 755 "$bin/tend-probe" "$HOME/.local/bin/tend-local" "$HOME/.cargo/bin/tend-pinned"
+          chmod 700 "$bin/tend-private"
+          chmod 777 "$bin/tend-writable"
           echo "$bin" >>"$GITHUB_PATH"
+          sudo install -d /etc/skel/.cargo/bin
+          printf '#!/bin/sh\necho stale\n' | sudo tee /etc/skel/.cargo/bin/tend-pinned >/dev/null
+          sudo chmod 755 /etc/skel/.cargo/bin/tend-pinned
       - name: Set up the sandbox
         env:
           TEND_GH_TOKEN: dummy
@@ -109,11 +120,7 @@ jobs:
           ACTION_PATH: ${{ github.workspace }}
           TEND_UV_DIR: ${{ runner.temp }}/tend-uv
           UV_CACHE_DIR: ${{ runner.temp }}/tend-mitmproxy-uv
-          # The adopter lever, exercised on its supported input: a `~` entry
-          # expands to the sandbox home and wins the front of the PATH. Its
-          # unsupported input — a runner-home dir, which would put the
-          # credential-holding home on the agent's PATH — is refused by
-          # setup-sandbox.sh before the env file is written.
+          # The adopter lever still wins over the automatic mirror.
           TEND_SANDBOX_PATH: "~/.cargo/bin"
         run: |
           set -o pipefail
@@ -140,40 +147,50 @@ jobs:
               exit 1
               ;;
           esac
-      # No sandbox_setup, so this is the report alone — the state an adopter is
-      # in before they know they need the lever.
-      - name: Name what the agent cannot reach
+      - name: Verify mirrored tools and boundary
         run: |
+          mapfile -t agent_env <"$AGENT_ENV_FILE"
+          sudo -u "$SANDBOX" env "${agent_env[@]}" bash -euc '
+            test "$(tend-probe)" = probe
+            test "$(tend-local)" = runner-library
+            test "$(tend-pinned)" = pinned
+            case "$(rustc --version)" in "rustc 1.85.0 "*) ;; *) exit 1 ;; esac
+            test "$(readlink -f "$JAVA_HOME")" = "$1"
+            test ! -e ~/.cargo-install/tend-probe/bin/tend-private
+            test ! -e ~/.cargo-install/tend-probe/bin/tend-writable
+            test ! -w ~/.cargo-install/tend-probe/bin/tend-probe
+          ' _ "$(readlink -f "$JAVA_HOME")"
+          test "$HOME/.cargo-install/tend-probe/bin/tend-probe" -ef \
+            /home/tend-sandbox/.cargo-install/tend-probe/bin/tend-probe
+
+          # Refused files remain visible in the diagnostic; successfully
+          # mirrored commands do not.
           set -o pipefail
           bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report.log"
           report=$(grep "not the agent's:" "$RUNNER_TEMP/report.log" || true)
           case "$report" in
-            *tend-probe*) ;;
-            *) echo "::error::the report did not name the planted tool: $report"; exit 1 ;;
+            *tend-private*tend-writable*) ;;
+            *) echo "::error::the report did not name both refused tools: $report"; exit 1 ;;
           esac
-          # git is on both PATHs, so naming it would mean the diff had degraded
-          # into reporting the runner's whole PATH.
           case "$report" in
-            *" git "*) echo "::error::the report named a reachable command: $report"; exit 1 ;;
+            *tend-probe* | *tend-local* | *tend-pinned* | *" git "*)
+              echo "::error::the report named a reachable command: $report"
+              exit 1
+              ;;
           esac
-      # And the lever closes it. ~runner resolves through passwd, so the copy
-      # doesn't depend on where the runner's home sits.
-      - name: sandbox_setup closes the gap
+      # And the lever closes an intentional mirror refusal. Reinstall rather
+      # than copy: the runner source is private by definition.
+      - name: sandbox_setup closes the private-tool gap
         env:
-          # The shape docs/tend.example.yaml documents: copy the binary in,
-          # then RUN it — `command -v` would pass for a copied script whose
-          # interpreter or libraries still live in the runner's home.
           TEND_SANDBOX_SETUP: |
-            mkdir -p ~/.local/bin
-            cp ~runner/.cargo-install/tend-probe/bin/tend-probe ~/.local/bin/
-            tend-probe
+            printf '#!/bin/sh\necho private\n' >~/.local/bin/tend-private
+            chmod +x ~/.local/bin/tend-private
+            tend-private
         run: |
           set -o pipefail
           bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report-after.log"
-          # Scoped to the report line: the echoed sandbox_setup commands name
-          # the tool too, and matching those would fail this spuriously.
-          if grep "not the agent's:" "$RUNNER_TEMP/report-after.log" | grep -q tend-probe; then
-            echo "::error::still unreachable after sandbox_setup copied it in"
+          if grep "not the agent's:" "$RUNNER_TEMP/report-after.log" | grep -q tend-private; then
+            echo "::error::still unreachable after sandbox_setup installed it"
             exit 1
           fi
       # The refusal path, which is the security-relevant half of the lever: a
