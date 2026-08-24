@@ -44,22 +44,21 @@ fi
 # had its chance to close it. Reported, not fatal: most of what a runner carries
 # is irrelevant to a given session, and only the adopter knows which tools their
 # gate needs — asserting that belongs in their own `sandbox_setup:`.
-# `-r` as well as `-d`: listing a dir needs read, executing from it needs only
-# traverse, so a 0711 PATH dir would list empty and report everything in it as
-# missing. Skipping it under-reports instead, which is the right way for a
-# diagnostic to be wrong.
+# A dir the lister can't read lists nothing (the glob stays literal), so its
+# commands read as missing on that side. That's a false positive the diff can't
+# tell from a real one; PATH dirs are 0755 on a runner, so it stays theoretical.
 list_commands='
 IFS=:
 for dir in $1; do
-  { [ -d "$dir" ] && [ -r "$dir" ]; } || continue
+  [ -d "$dir" ] || continue
   for f in "$dir"/*; do
     if [ -f "$f" ] && [ -x "$f" ]; then printf "%s\n" "${f##*/}"; fi
   done
 done'
 # The sandbox side runs as the sandbox user, so the -x test answers the question
 # that matters: can THAT uid execute it, not does the file exist.
-runner_commands="$(bash -c "$list_commands" _ "$PATH" | sort -u)"
-agent_commands="$(sudo -u "$SANDBOX" bash -c "$list_commands" _ "$AGENT_PATH" | sort -u)"
+runner_commands="$(bash -c "$list_commands" _ "$PATH" | sort -u || true)"
+agent_commands="$(sudo -u "$SANDBOX" bash -c "$list_commands" _ "$AGENT_PATH" | sort -u || true)"
 # Nothing on the agent's side means the listing failed, not that the agent has
 # no commands — it always resolves /usr/bin. Reporting then would name every
 # command the runner has. And `comm` exits 1 on input it judges unsorted, which

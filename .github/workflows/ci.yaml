@@ -176,6 +176,31 @@ jobs:
             echo "::error::still unreachable after sandbox_setup copied it in"
             exit 1
           fi
+      # The refusal path, which is the security-relevant half of the lever: a
+      # runner-home entry would put the credential-holding home on the agent's
+      # PATH, and adopter entries are the only input that never passes through
+      # the rewrite. It exits before the workspace chown, so re-running the
+      # script here disturbs nothing the steps above set up.
+      - name: A runner-home sandbox_path entry is refused
+        env:
+          TEND_GH_TOKEN: dummy
+          TEND_ANTHROPIC_OAUTH_TOKEN: dummy
+          ACTION_PATH: ${{ github.workspace }}
+          TEND_UV_DIR: ${{ runner.temp }}/tend-uv
+          UV_CACHE_DIR: ${{ runner.temp }}/tend-mitmproxy-uv
+          MITMPROXY_VERSION: "0"
+        run: |
+          set -o pipefail
+          TEND_SANDBOX_PATH="$HOME/.cargo-install/tend-probe/bin" \
+            bash proxy/setup-sandbox.sh >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
+          cat "$RUNNER_TEMP/refused.log"
+          if [ "${rc:-0}" -eq 0 ]; then
+            echo "::error::a runner-home sandbox_path entry was accepted"
+            exit 1
+          fi
+          grep -q "::error::sandbox_path entry .* is under the runner's home" \
+            "$RUNNER_TEMP/refused.log"
+
       - name: Restore workspace ownership for checkout cleanup
         if: always()
         run: |
