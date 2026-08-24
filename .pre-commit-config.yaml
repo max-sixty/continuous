@@ -38,7 +38,7 @@ repos:
     hooks:
       - id: shellcheck
         args: ["-S", "warning"]
-        files: ^(shared/steps/.*\.sh|generator/src/tend/templates/.*\.sh|proxy/setup-sandbox\.sh|plugins/.*\.sh|\.config/codex-cloud/environment\.sh)$
+        files: ^(shared/steps/.*\.sh|generator/src/tend/templates/.*\.sh|proxy/.*\.sh|plugins/.*\.sh|\.config/codex-cloud/environment\.sh)$
   - repo: local
     hooks:
       # The Claude Code slash-command preprocessor treats a backticked token
