@@ -95,6 +95,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.0
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv tool install hatch
       - name: Plant runner-home tools
         run: |
           bin="$HOME/.cargo-install/tend-probe/bin"
@@ -116,8 +118,12 @@ jobs:
           printf '[registries.private]\ntoken = "must-not-cross"\n' >"$HOME/.cargo/config.toml"
           mkdir -p "$HOME/.local/share/tend-private"
           printf 'must-not-cross\n' >"$HOME/.local/share/tend-private/token"
+          mkdir -p "$HOME/.local/share/uv/tools/tend-tool"
+          printf '[tool.options]\nindex = [{ url = "https://token@example.invalid" }]\n' \
+            >"$HOME/.local/share/uv/tools/tend-tool/uv-receipt.toml"
           chmod 644 "$HOME/.cargo/credentials.toml" "$HOME/.cargo/config.toml" \
-            "$HOME/.local/share/tend-private/token"
+            "$HOME/.local/share/tend-private/token" \
+            "$HOME/.local/share/uv/tools/tend-tool/uv-receipt.toml"
           printf '#!/bin/sh\necho relative\n' >"$relative/tend-relative/bin/tend-relative"
           ln -s ../tend-relative/bin/tend-relative "$relative/.bin/tend-relative"
           printf '#!/bin/sh\necho alias\n' >"$sdk/17/bin/tend-alias"
@@ -200,6 +206,10 @@ jobs:
         run: |
           source_bin="$HOME/.cargo-install/tend-probe/bin"
           mapfile -t agent_env <"$AGENT_ENV_FILE"
+          if grep -q '^$' "$AGENT_ENV_FILE"; then
+            echo "::error::the agent env file contains an empty argv element"
+            exit 1
+          fi
           sudo -u "$SANDBOX" env "${agent_env[@]}" bash -euc '
             test "$(tend-probe)" = probe
             test "$(tend-local)" = runner-library
@@ -208,6 +218,7 @@ jobs:
             test "$(tend-alias)" = alias
             test "$(tend-workspace)" = workspace
             test "$(tend-fallback)" = system-fallback
+            hatch --version
             tend-setid
             tend-capability
             tend-link-bypass
@@ -219,6 +230,8 @@ jobs:
             test ! -e ~/.cargo/credentials.toml
             test ! -e ~/.cargo/config.toml
             test ! -e ~/.local/share/tend-private
+            test ! -e ~/.local/share/uv/tools/tend-tool/uv-receipt.toml
+            test ! -e ~/.local/share/uv/tools/hatch/uv-receipt.toml
             test ! -w ~/.cargo-install/tend-probe/bin/tend-probe
             for command in tend-setid tend-capability; do
               mode=$(stat -c %a ~/.cargo-install/tend-probe/bin/$command)
@@ -304,6 +317,15 @@ jobs:
           fi
           grep -q "::error::sandbox_path entry .* is under the runner's home" \
             "$RUNNER_TEMP/refused.log"
+
+          GITHUB_WORKSPACE='' bash proxy/setup-sandbox.sh \
+            >"$RUNNER_TEMP/empty-workspace.log" 2>&1 && empty_rc=0 || empty_rc=$?
+          if [ "${empty_rc:-0}" -eq 0 ]; then
+            echo "::error::an empty GITHUB_WORKSPACE was accepted"
+            exit 1
+          fi
+          grep -q "::error::GITHUB_WORKSPACE must name" \
+            "$RUNNER_TEMP/empty-workspace.log"
 
       - name: Restore workspace ownership for checkout cleanup
         if: always()

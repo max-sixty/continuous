@@ -68,6 +68,16 @@ if [ -z "${MITMPROXY_VERSION:-}" ]; then
   echo "::error::MITMPROXY_VERSION is unset; the action must pin it"
   exit 1
 fi
+if [ -z "${GITHUB_WORKSPACE:-}" ] || [ ! -d "$GITHUB_WORKSPACE" ]; then
+  echo "::error::GITHUB_WORKSPACE must name the checked-out repository directory"
+  exit 1
+fi
+GITHUB_WORKSPACE=$(readlink -f -- "$GITHUB_WORKSPACE")
+if [ "$GITHUB_WORKSPACE" = / ]; then
+  echo "::error::GITHUB_WORKSPACE may not be the filesystem root"
+  exit 1
+fi
+export GITHUB_WORKSPACE
 
 # 1. Non-sudo sandbox user. -m gives it /home/tend-sandbox (0755, so the
 #    runner can still read the session logs it writes).
@@ -216,7 +226,8 @@ _runner_path_entry_for_agent() {
 
 _mirror_runner_tree() {
   local source resolved relative destination canonical_destination stage item item_relative
-  local link_target link mirrored
+  local link_target link mirrored omit_uv_receipts
+  local -a file_filters=()
   source="$1"
   resolved=$(readlink -f -- "$source") || return 0
   [ -d "$resolved" ] || return 0
@@ -224,6 +235,11 @@ _mirror_runner_tree() {
     "${runner_home}"/*) ;;
     *) return 0 ;;
   esac
+  omit_uv_receipts=
+  if [ "$resolved" = "${runner_home}/.local/share/uv/tools" ]; then
+    omit_uv_receipts=1
+    file_filters=('!' -name uv-receipt.toml)
+  fi
   relative="${resolved#"${runner_home}"/}"
   destination="${AGENT_HOME}/${relative}"
   canonical_destination=$(realpath -m -- "$destination")
@@ -249,18 +265,20 @@ _mirror_runner_tree() {
 
   # Build an independent filtered copy in a runner-private staging dir. Tar is
   # fed only public directories, public read-only regular files, and symlinks;
-  # it never attempts to copy private files or special inodes. Extended attrs,
-  # ACLs, capabilities, ownership, and set-id bits do not cross the user
-  # boundary. The files end runner-owned and non-writable; only the independent
-  # directories become sandbox-owned, so the agent can replace a file without
-  # changing the runner's source inode.
+  # it never attempts to copy private files, special inodes, or uv tool receipts
+  # (which can persist private-index options but are not needed to execute an
+  # installed entrypoint). Extended attrs, ACLs, capabilities, ownership, and
+  # set-id bits do not cross the user boundary. The files end runner-owned and
+  # non-writable; only the independent directories become sandbox-owned, so the
+  # agent can replace a file without changing the runner's source inode.
   stage=$(mktemp -d "${RUNNER_TEMP}/tend-home-mirror.XXXXXX")
   (
     cd "$resolved"
     find . -mindepth 1 \
       \( -type d \( ! -perm -0005 -o -perm -0002 \) -prune \) -o \
       \( -type d -o -type l -o \
-         \( -type f -perm -0004 ! -perm -0002 ! -uid "$(id -u "$SANDBOX")" \) \
+         \( -type f "${file_filters[@]}" \
+           -perm -0004 ! -perm -0002 ! -uid "$(id -u "$SANDBOX")" \) \
       \) -print0 \
       | tar --null --no-recursion --no-xattrs --no-acls \
           --files-from=- -cf -
@@ -285,6 +303,14 @@ _mirror_runner_tree() {
       unlink "$item"
       continue
     fi
+    if [ -n "$omit_uv_receipts" ]; then
+      case "$link_target" in
+        "${resolved}"/*/uv-receipt.toml)
+          unlink "$item"
+          continue
+          ;;
+      esac
+    fi
     # Decide from the canonical target, not the link text. An innocent-looking
     # /tmp alias can still lead back to the credential-holding runner home.
     link=$(readlink -- "$item")
@@ -306,7 +332,9 @@ _mirror_runner_tree() {
 }
 
 IFS=: read -ra _runner_path <<<"${RUNNER_TOOL_PATH}"
-declare -A _mirrored_roots=()
+declare -A _mirror_candidates=()
+declare -A _sdk_runtime_roots=()
+declare -A _unknown_runtime_layouts=()
 for _d in "${_runner_path[@]}"; do
   [ -n "${_d}" ] || continue
   _resolved_path=$(readlink -f -- "${_d}") || continue
@@ -326,8 +354,10 @@ for _d in "${_runner_path[@]}"; do
   # siblings, and canonical SDK version roots. Go's ~/go/bin, .NET's
   # ~/.dotnet/tools, and isolated installer bins need no expansion.
   _roots=("${_resolved_path}")
+  _known_layout=
   case "${_resolved_path}" in
     "${runner_home}/.local/bin")
+      _known_layout=1
       _roots+=(
         "${runner_home}/.local/lib"
         "${runner_home}/.local/share/uv/tools"
@@ -335,12 +365,19 @@ for _d in "${_runner_path[@]}"; do
       )
       ;;
     "${runner_home}/.cargo/bin")
+      _known_layout=1
       _roots+=("${runner_home}/.rustup")
       ;;
+    "${runner_home}/go/bin" | "${runner_home}/.dotnet/tools" | \
+      "${runner_home}/.cargo-install/"*/bin)
+      _known_layout=1
+      ;;
     */node_modules/.bin)
+      _known_layout=1
       _roots=("${_resolved_path%/.bin}")
       ;;
     */vendor/bin)
+      _known_layout=1
       _roots=("${_resolved_path%/bin}")
       ;;
     "${runner_home}/.sdkman/candidates/"*/*/bin | \
@@ -349,16 +386,35 @@ for _d in "${_runner_path[@]}"; do
       "${runner_home}/.rbenv/versions/"*/bin | \
       "${runner_home}/.jenv/versions/"*/bin | \
       "${runner_home}/.nvm/versions/node/"*/bin)
+      _known_layout=1
       _roots=("${_resolved_path%/bin}")
+      _sdk_runtime_roots["${_roots[0]}"]=1
       ;;
   esac
+  if [ -z "${_known_layout}" ]; then
+    _unknown_runtime_layouts["${_resolved_path}"]=1
+  fi
   for _root in "${_roots[@]}"; do
-    if [ -z "${_mirrored_roots[${_root}]:-}" ]; then
-      _mirror_runner_tree "${_root}"
-      _mirrored_roots["${_root}"]=1
-    fi
+    _mirror_candidates["${_root}"]=1
   done
 done
+
+# An ancestor mirror clears its destination before copying. Process shallower
+# roots first so a later, more specific PATH root always restores its own copy,
+# independent of the runner PATH's order.
+while IFS=$'\t' read -r _depth _root; do
+  [ -n "${_root}" ] || continue
+  _mirror_runner_tree "${_root}"
+done < <(
+  for _root in "${!_mirror_candidates[@]}"; do
+    _slashes="${_root//[!\/]/}"
+    printf '%08d\t%s\n' "${#_slashes}" "${_root}"
+  done | sort -n -k1,1
+)
+if [ "${#_unknown_runtime_layouts[@]}" -gt 0 ]; then
+  log "runner-home PATH layouts copied without companion files: ${!_unknown_runtime_layouts[*]}"
+  log "if one needs sibling runtime files, reinstall it with sandbox_setup:"
+fi
 
 # Name runner-selected commands whose exact source did not survive the mirror.
 # The later reachability report compares command names after sandbox_setup; this
@@ -452,20 +508,23 @@ case "${_runner_java}" in
     _runner_java_home="${_runner_java%/bin/java}"
     case "${_runner_java_home}" in
       "${runner_home}"/*)
-        _agent_java_home="${AGENT_HOME}/${_runner_java_home#"${runner_home}"/}"
+        if [ -n "${_sdk_runtime_roots[${_runner_java_home}]:-}" ]; then
+          _agent_java_home="${AGENT_HOME}/${_runner_java_home#"${runner_home}"/}"
+        else
+          log "did not set JAVA_HOME for exact-only runner layout ${_runner_java_home}"
+        fi
         ;;
       *) _agent_java_home="${_runner_java_home}" ;;
     esac
     ;;
 esac
 if [ -n "${_agent_java_home}" ] && \
-   ! { [ -d "${_agent_java_home}" ] && sudo -u "$SANDBOX" test -x "${_agent_java_home}"; }; then
+   ! sudo -u "$SANDBOX" test -x "${_agent_java_home}/bin/java"; then
   _agent_java_home=
 fi
 cat >"$AGENT_ENV_FILE" <<EOF
 HOME=${AGENT_HOME}
 PATH=${AGENT_PATH}
-${_agent_java_home:+JAVA_HOME=${_agent_java_home}}
 XDG_CONFIG_HOME=${AGENT_HOME}/.config
 XDG_CACHE_HOME=${AGENT_HOME}/.cache
 XDG_DATA_HOME=${AGENT_HOME}/.local/share
@@ -484,6 +543,9 @@ GITHUB_TOKEN=ghp_tendproxydummy000000000000000000000
 CLAUDE_CODE_REMOTE=1
 ${ANTHROPIC_DUMMY}
 EOF
+if [ -n "${_agent_java_home}" ]; then
+  printf 'JAVA_HOME=%s\n' "${_agent_java_home}" >>"$AGENT_ENV_FILE"
+fi
 
 # Adopter env additions (`sandbox_env:` in .config/tend.yaml, threaded in as
 # TEND_SANDBOX_ENV — one NAME=VALUE per line). Appended after the fixed block

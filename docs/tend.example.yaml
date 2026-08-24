@@ -184,6 +184,11 @@ bot_name: my-project-bot
 # skipped source command is named even when the sandbox has an older command
 # with the same name. Checkout paths remain in the checkout.
 #
+# These snapshots contain runtime material from reviewed `setup:` steps, not a
+# credential scrubber for arbitrary package contents. Tend excludes adjacent
+# credential stores and credential-capable uv receipts; do not write secrets
+# into executable or library trees themselves.
+#
 # Tend installs no language toolchain of its own. The agent gets the versions
 # selected in `setup:`. Other env changes do not cross the fixed allowlist; use
 # these keys for additions inside the sandbox:
@@ -197,7 +202,8 @@ bot_name: my-project-bot
 #
 #   A runner-home source path outside the checkout is refused. Entries already
 #   on the runner's PATH normally need no config; Tend copies recognized runtime
-#   files into the sandbox home and reports anything that could not cross.
+#   files into the sandbox home, names skipped commands, and warns when an
+#   unknown layout received only its exact PATH directory.
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
 #   keys are rejected at `init`, and again inside the sandbox so a hand-edited
@@ -214,8 +220,12 @@ bot_name: my-project-bot
 #
 #   Use `sandbox_path` to extend PATH:
 #
+#   `JAVA_HOME` is derived from the JDK selected on the runner PATH, but may be
+#   overridden here for a custom runtime layout:
+#
 #     sandbox_env:
 #       RUST_BACKTRACE: "1"
+#       JAVA_HOME: /opt/custom-jdk
 #
 # - `sandbox_setup`: shell commands run as the sandbox user after the toolchain
 #   and plugins install and before the agent runs, with the workspace as cwd.

@@ -145,14 +145,17 @@ repos:
             case = case.replace("\\\n", "").replace("\n", "")
             shell_set = {n.strip() for n in case.split("|") if n.strip()}
 
-            # The invariant that matters: every key written to AGENT_ENV_FILE is
-            # reserved, so an adopter's sandbox_env can't shadow it. Extract the
-            # heredoc keys and the ${ANTHROPIC_DUMMY} scheme keys (either arm may
-            # be written at runtime) and assert they're a subset of the reserved
-            # set — so a future routing/cred var added to the heredoc without
-            # updating the reserved set fails the commit.
+            # The invariant that matters: every security or identity key written
+            # to AGENT_ENV_FILE is reserved, so sandbox_env can't shadow it.
+            # JAVA_HOME is the one explicit tool-hint exception: an adopter may
+            # override the PATH-derived value for a custom runtime layout.
+            shadowable_agent_env = {"JAVA_HOME"}
             heredoc = re.search(r'cat >"\$AGENT_ENV_FILE" <<EOF\n(.*?)\nEOF', sh, re.S).group(1)
             heredoc_keys = set(re.findall(r'^([A-Za-z_][A-Za-z0-9_]*)=', heredoc, re.M))
+            conditional_heredoc_lines = [line for line in heredoc.splitlines() if ":+" in line]
+            # Optional keys are appended after the heredoc so their absence
+            # cannot create an empty argv element for `env` consumers.
+            heredoc_keys |= set(re.findall(r"printf '([A-Za-z_][A-Za-z0-9_]*)=%s\\n'", sh))
             heredoc_keys |= set(re.findall(r'ANTHROPIC_DUMMY="([A-Za-z_][A-Za-z0-9_]*)=', sh))
 
             # The adopter only meets this set as a rejection at `init`, so the
@@ -167,14 +170,20 @@ repos:
             documented = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", section))
 
             problems = []
+            for line in conditional_heredoc_lines:
+                problems.append(f"conditional AGENT_ENV_FILE heredoc line can expand empty: {line}")
+            for name in sorted(shadowable_agent_env & config_set):
+                problems.append(f"shadowable env-file key '{name}' is also reserved")
             for name in sorted(config_set - shell_set):
                 problems.append(f"'{name}' is reserved in config.py but NOT guarded in setup-sandbox.sh")
             for name in sorted(shell_set - config_set):
                 problems.append(f"'{name}' is guarded in setup-sandbox.sh but NOT reserved in config.py")
-            for name in sorted(heredoc_keys - config_set):
+            for name in sorted(heredoc_keys - config_set - shadowable_agent_env):
                 problems.append(f"'{name}' is written to AGENT_ENV_FILE but NOT reserved in config.py — an adopter's sandbox_env could shadow it")
             for name in sorted(config_set - documented):
                 problems.append(f"'{name}' is reserved in config.py but NOT named in docs/tend.example.yaml's sandbox_env list")
+            for name in sorted(shadowable_agent_env - documented):
+                problems.append(f"shadowable env-file key '{name}' is NOT documented as a sandbox_env override")
 
             for p in problems:
                 print(p)
@@ -183,8 +192,8 @@ repos:
                     "\nERROR: the reserved sandbox_env set drifted between "
                     "config.py, setup-sandbox.sh, the AGENT_ENV_FILE heredoc, "
                     "and docs/tend.example.yaml. The shell case is the security "
-                    "boundary; keep every env-file key reserved, the two sets "
-                    "aligned, and every reserved name documented."
+                    "boundary; keep security keys reserved, explicit tool-hint "
+                    "exceptions documented, and the two reserved sets aligned."
                 )
                 sys.exit(1)
         pass_filenames: false

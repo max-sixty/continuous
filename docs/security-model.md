@@ -330,7 +330,17 @@ installs into its own directory, off `$PATH`, so the process holding both
 credentials starts from a known binary rather than whatever an adopter's
 `setup:` happened to leave on the runner. (`claude` is Node and ignores the
 system trust store, so it trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) The
-Codex harness (`codex/action.yaml`) still passes both the PAT and the model
+runner's credential-holding home itself stays off the agent's PATH. Recognized
+runtime layouts on the runner PATH cross as an independent snapshot: source
+ownership, ACLs, xattrs, capabilities, set-id, and write bits do not. The
+classifier copies exact tool directories plus only the companion trees required
+by known Python, uv, Rust, Node, Composer, Go, .NET, and SDK layouts. Adjacent
+Cargo and uv credential/config stores, and uv tool receipts, do not cross. This
+is a runtime-material boundary, not content inspection: Tend shares the
+contents of recognized runtime roots, including package metadata, so setup
+steps and installers must not place credentials there.
+
+The Codex harness (`codex/action.yaml`) still passes both the PAT and the model
 auth directly to the agent. The merge restriction and the environment gate
 remain the load-bearing boundaries regardless of harness.
 
