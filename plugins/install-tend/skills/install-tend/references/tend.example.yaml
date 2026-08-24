@@ -190,8 +190,9 @@ bot_name: my-project-bot
 #
 #   It is NOT the fix for a tool a `setup:` step installed under the RUNNER's
 #   home — `cargo install`, `pip install --user`, an action with its own install
-#   root. `~` expands to the sandbox home, which holds no copy of it, and the
-#   runner's home is outside what the sandbox may reach. Use `sandbox_setup:`.
+#   root. `~` expands to the sandbox home, which holds no copy of it, and tend
+#   keeps runner-home dirs off the agent's PATH deliberately: that home is where
+#   the credentials live. Use `sandbox_setup:` to put the tool in the sandbox.
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
 #   keys are rejected at `init`, and again inside the sandbox so a hand-edited

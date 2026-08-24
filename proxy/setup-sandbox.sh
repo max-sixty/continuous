@@ -129,8 +129,9 @@ fi
 # with its own install root. `~` there expands to the SANDBOX home, which has no
 # copy of it; naming the runner-home path instead would put a /home/runner entry
 # on the agent's PATH, which is the one thing the rewrite below exists to
-# prevent. Installing the tool as the sandbox user, via `sandbox_setup:`, is
-# what covers that case.
+# prevent. `sandbox_setup:` covers that case — it runs as the sandbox user,
+# which can read a named world-readable file under the runner's home (step 3
+# grants o+x along that path) without the whole dir joining the agent's PATH.
 declare -a _extra_path=()
 if [ -n "${TEND_SANDBOX_PATH:-}" ]; then
   while IFS= read -r dir; do
