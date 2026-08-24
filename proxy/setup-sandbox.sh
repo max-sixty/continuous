@@ -189,10 +189,11 @@ _world_readonly_dir() {
 }
 
 _mirror_runner_tree() {
-  local source resolved relative destination item item_relative target link
-  local mirrored=0
+  local source resolved relative destination stage item item_relative link_target link
+  local mirrored
   source="$1"
   resolved=$(readlink -f -- "$source") || return 0
+  [ -d "$resolved" ] || return 0
   case "$resolved" in
     "${runner_home}"/*) ;;
     *) return 0 ;;
@@ -219,50 +220,65 @@ _mirror_runner_tree() {
     return 0
   fi
 
+  # Build the filtered tree in one runner-private staging dir, then cross the
+  # privilege boundary once. `cp --link` makes this O(tree metadata) rather
+  # than copying toolchains; the fallback covers separate self-hosted mounts.
+  stage=$(mktemp -d "${RUNNER_TEMP}/tend-home-mirror.XXXXXX")
+  if ! cp -a --link --no-preserve=ownership -- "$resolved/." "$stage/" 2>/dev/null; then
+    find "$stage" -type d -exec chmod u+rwx {} +
+    find "$stage" -mindepth 1 -delete
+    cp -a --no-preserve=ownership -- "$resolved/." "$stage/"
+  fi
+  chmod 700 "$stage"
+  # Directories are independent copies, so making them runner-writable cannot
+  # affect the source. Remove whole subtrees whose source directory was not
+  # already public; then remove individual private or writable files.
+  find "$stage" -type d -exec chmod u+rwx {} +
   while IFS= read -r -d '' item; do
     item_relative="${item#"${resolved}"/}"
-    target="${destination}/${item_relative}"
-    if [ -d "$item" ]; then
-      sudo -u "$SANDBOX" mkdir -p "$target"
-      continue
+    if [ -d "$stage/$item_relative" ]; then
+      find "$stage/$item_relative" -depth -delete
     fi
-    sudo -u "$SANDBOX" mkdir -p "$(dirname "$target")"
-    if [ -L "$item" ]; then
-      local link_target
-      link_target=$(readlink -f -- "$item") || continue
-      if [ -f "$link_target" ]; then
-        _world_readonly_file "$link_target" || continue
-      elif [ -d "$link_target" ]; then
-        _world_readonly_dir "$link_target" || continue
-      else
-        continue
-      fi
-      link=$(readlink -- "$item")
-      case "$link" in
-        "${runner_home}") link="$AGENT_HOME" ;;
-        "${runner_home}"/*) link="${AGENT_HOME}/${link#"${runner_home}"/}" ;;
-      esac
-      sudo ln -sfnT -- "$link" "$target"
-      mirrored=$((mirrored + 1))
-      continue
-    fi
-    # Same-filesystem homes take the hard-link path. The copy fallback keeps a
-    # self-hosted runner with separate home mounts working; root owns the copy,
-    # so the sandbox still cannot mutate it.
-    if ! sudo ln -fT -- "$item" "$target" 2>/dev/null; then
-      sudo cp --preserve=mode,timestamps --remove-destination -T -- "$item" "$target"
-    fi
-    if sudo -u "$SANDBOX" test -w "$target"; then
-      sudo unlink "$target"
-      continue
-    fi
-    mirrored=$((mirrored + 1))
   done < <(
-    find "$resolved" -mindepth 1 \
-      \( -type d \( ! -perm -0005 -o -perm -0002 \) -prune \) -o \
-      \( -type d -o \( -type f -perm -0004 ! -perm -0002 \) -o -type l \) \
-      -print0
+    find "$resolved" -mindepth 1 -type d \
+      \( ! -perm -0005 -o -perm -0002 \) -prune -print0
   )
+  find "$stage" -type f \
+    \( ! -perm -0004 -o -perm -0002 -o -uid "$(id -u "$SANDBOX")" \) -delete
+
+  # `cp -a` preserves symlinks without judging their targets. Keep only links
+  # to the same public, read-only material, and retarget absolute runner-home
+  # links to the corresponding sandbox tree.
+  while IFS= read -r -d '' item; do
+    item_relative="${item#"${stage}"/}"
+    link_target=$(readlink -f -- "$resolved/$item_relative") || {
+      unlink "$item"
+      continue
+    }
+    if [ -f "$link_target" ]; then
+      if ! _world_readonly_file "$link_target"; then unlink "$item"; continue; fi
+    elif [ -d "$link_target" ]; then
+      if ! _world_readonly_dir "$link_target"; then unlink "$item"; continue; fi
+    else
+      unlink "$item"
+      continue
+    fi
+    link=$(readlink -- "$item")
+    case "$link" in
+      "${runner_home}") link="$AGENT_HOME" ;;
+      "${runner_home}"/*) link="${AGENT_HOME}/${link#"${runner_home}"/}" ;;
+    esac
+    ln -sfnT -- "$link" "$item"
+  done < <(find "$stage" -type l -print0)
+
+  mirrored=$(find "$stage" -mindepth 1 | wc -l)
+  if ! sudo cp -a --link --no-preserve=ownership -- "$stage/." "$destination/" 2>/dev/null; then
+    sudo find "$destination" -mindepth 1 -delete
+    sudo cp -a --no-preserve=ownership -- "$stage/." "$destination/"
+  fi
+  sudo find "$destination" -type d -exec chown "${SANDBOX}:${SANDBOX}" {} +
+  find "$stage" -mindepth 1 -delete
+  rmdir "$stage"
   log "mirrored $mirrored world-readable entries from $resolved"
 }
 
