@@ -173,6 +173,8 @@ verify() {
   grep -q "runner-selected commands not mirrored into sandbox: .*tend-fallback" \
     "$RUNNER_TEMP/setup.log"
 
+  # Refused files remain visible in the diagnostic; successfully mirrored
+  # commands do not.
   bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report.log"
   report=$(grep "not the agent's:" "$RUNNER_TEMP/report.log" || true)
   case "$report" in
@@ -187,6 +189,8 @@ verify() {
   esac
 }
 
+# The lever closes an intentional mirror refusal. Reinstall rather than copy:
+# the runner source is private by definition.
 verify_sandbox_setup() {
   local setup_commands
   setup_commands=$'printf \'#!/bin/sh\\necho private\\n\' >~/.local/bin/tend-private\nchmod +x ~/.local/bin/tend-private\ntend-private'
@@ -198,6 +202,11 @@ verify_sandbox_setup() {
   fi
 }
 
+# The refusal path, the security-relevant half of the lever: a runner-home
+# entry would put the credential-holding home on the agent's PATH, and adopter
+# entries are the only input that never passes through the rewrite.
+# setup-sandbox.sh exits before the workspace chown, so re-running it here
+# disturbs nothing the steps above set up.
 verify_refusals() {
   local alias rc empty_rc
   set_test_inputs
@@ -211,6 +220,9 @@ verify_refusals() {
   esac
   TEND_SANDBOX_PATH="$alias" \
     bash proxy/setup-sandbox.sh >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
+  # Actions parses workflow commands out of any step output, so echoing the
+  # captured line verbatim would annotate this passing job with the error it
+  # exists to provoke.
   sed 's/^::error::/refused: /' "$RUNNER_TEMP/refused.log"
   if [ "${rc:-0}" -eq 0 ]; then
     echo "::error::a runner-home sandbox_path entry was accepted"
