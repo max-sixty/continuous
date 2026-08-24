@@ -193,7 +193,10 @@ jobs:
           set -o pipefail
           TEND_SANDBOX_PATH="$HOME/.cargo-install/tend-probe/bin" \
             bash proxy/setup-sandbox.sh >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
-          cat "$RUNNER_TEMP/refused.log"
+          # Actions parses workflow commands out of any step output, so echoing
+          # the captured line verbatim would annotate this passing job with the
+          # error it exists to provoke.
+          sed 's/^::error::/refused: /' "$RUNNER_TEMP/refused.log"
           if [ "${rc:-0}" -eq 0 ]; then
             echo "::error::a runner-home sandbox_path entry was accepted"
             exit 1
