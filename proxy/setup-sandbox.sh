@@ -345,12 +345,20 @@ if [ -z "${_seen_path["${AGENT_HOME}/.local/bin"]:-}" ]; then
 fi
 for _d in "${_runner_path[@]}"; do
   [ -n "${_d}" ] || continue
+  _sandbox_home_path=
   case "${_d}" in
     "${runner_home}") continue ;;                                     # never expose the runner home root
-    "${runner_home}"/*) _d="${AGENT_HOME}/${_d#"${runner_home}"/}" ;; # rewrite to the sandbox's own copy
+    "${runner_home}"/*)
+      _d="${AGENT_HOME}/${_d#"${runner_home}"/}"                       # rewrite to the sandbox's own copy
+      _sandbox_home_path=1
+      ;;
   esac
   [ -n "${_seen_path[${_d}]:-}" ] && continue                           # dedup
-  if [ -d "${_d}" ] && sudo -u "${SANDBOX}" test -x "${_d}"; then
+  # Mirrored paths are fresh sandbox-owned trees whose files were filtered
+  # above; existence is the access proof. System dirs are checked as the uid
+  # that will execute from them.
+  if [ -d "${_d}" ] && \
+     { [ -n "${_sandbox_home_path}" ] || sudo -u "${SANDBOX}" test -x "${_d}"; }; then
     _agent_path+=("${_d}")
     _seen_path["${_d}"]=1
   fi
