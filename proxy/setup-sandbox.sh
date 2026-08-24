@@ -398,13 +398,16 @@ for _d in "${_runner_path[@]}"; do
   _d=$(_runner_path_entry_for_agent "${_runner_d}") || continue
   [ -n "${_seen_path[${_d}]:-}" ] && continue                           # dedup
   case "${_d}" in
-    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) _deferred_workspace_path=1 ;;
-    *) _deferred_workspace_path= ;;
+    "${AGENT_HOME}"/* | "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*)
+      _safe_rewritten_path=1
+      ;;
+    *) _safe_rewritten_path= ;;
   esac
-  # Workspace dirs become accessible at the ownership handoff below. Everything
-  # else must already be traversable by the uid that will execute from it; this
-  # keeps a failed mirror from exposing an /etc/skel fallback.
-  if [ -n "${_deferred_workspace_path}" ] || \
+  # A mapped sandbox-home path came from a canonical source that the mirror
+  # cleared, even when every source file was refused; a workspace path becomes
+  # accessible at the ownership handoff below. System dirs must already be
+  # traversable by the uid that will execute from them.
+  if [ -n "${_safe_rewritten_path}" ] || \
      { [ -d "${_d}" ] && sudo -u "${SANDBOX}" test -x "${_d}"; }; then
     _agent_path+=("${_d}")
     _seen_path["${_d}"]=1
