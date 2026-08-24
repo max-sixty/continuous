@@ -43,21 +43,22 @@
 
 set -euo pipefail
 
-PR="$1"
-SHA="$2"
+# Both default rather than relying on `set -u`: an omitted <sha> is the likelier
+# arity mistake, and unbound-variable death exits 1 — the code documented above
+# as red, sending the caller off to diagnose a CI failure that never happened.
+# Defaulting routes a short call into the guard below instead.
+PR="${1:-}"
+SHA="${2:-}"
 OWNER="${GITHUB_REPOSITORY%/*}"
 
 # GraphQL's `GitObjectID!` rejects an abbreviated OID at coercion time, which
 # rollup() cannot tell from a transient failure: without this the loop sleeps
 # through its whole budget before reporting a caller bug, and head_note's
 # string compare then claims the branch advanced to the very commit that was
-# passed in. Rejecting here is also what keeps that note honest — a non-full
-# OID is the only way it can misfire.
-case "$SHA" in
-  "" | *[!0-9a-fA-F]*) SHA_OK=0 ;;
-  *) [ "${#SHA}" -eq 40 ] && SHA_OK=1 || SHA_OK=0 ;;
-esac
-if [ "$SHA_OK" -ne 1 ]; then
+# passed in. head_note can still misfire on the other exit-2 causes above — an
+# unresolvable OID and a merge-ref commit are both full-length and neither is
+# the branch head — so this narrows that note rather than fixing it.
+if [[ ! $SHA =~ ^[0-9a-fA-F]{40}$ ]]; then
   echo "poll-pr-checks.sh: <sha> must be a full 40-char commit OID, got '$SHA' — UNVERIFIED, not green" >&2
   exit 2
 fi

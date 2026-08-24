@@ -420,6 +420,27 @@ def test_abbreviated_sha_is_rejected_at_entry(env: dict[str, str]) -> None:
     assert not Path(env["GH_CALLS"]).exists(), "the bad argument reached the API"
 
 
+def test_omitted_sha_is_rejected_not_reported_red(env: dict[str, str]) -> None:
+    """Omitting <sha> is the likelier arity mistake, and `set -u` would kill the
+    script with exit 1 — the code this file documents as red, which sends the
+    caller off to diagnose a CI failure that never happened. It has to land on
+    the same UNVERIFIED path as any other unusable argument."""
+    _serve(env, _resp(_check_run("tests")))
+
+    result = subprocess.run(
+        [BASH, str(POLL_PR_CHECKS), "7"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    out = result.stdout + result.stderr
+
+    assert result.returncode == 2, out
+    assert "UNVERIFIED, not green" in out
+    assert "unbound variable" not in out
+    assert not Path(env["GH_CALLS"]).exists(), "the short call reached the API"
+
+
 def test_moved_head_is_reported_not_absorbed(env: dict[str, str]) -> None:
     """Another actor pushing while we poll must not retarget the verdict: the
     result stays the pinned SHA's, with the move called out."""
