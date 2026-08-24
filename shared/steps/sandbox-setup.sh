@@ -4,10 +4,9 @@
 # TEND_SANDBOX_SETUP) INSIDE the sandbox, as the non-sudo sandbox user, then
 # report which commands the runner can resolve and the agent cannot.
 #
-# `setup:` supplies PATH tools before the composite action; setup-sandbox.sh
-# mirrors public files from recognized runner-home runtime layouts.
-# `sandbox_setup:` handles work that must run inside the sandbox, such as project
-# dependency installation. Commands run with the same launch env the agent gets
+# `sandbox_setup:` is the general lever runner-side `setup:` cannot provide:
+# `setup:` runs as the runner user around the composite action, while these
+# commands run with the same launch env the agent gets
 # ($AGENT_ENV_FILE: proxy routing, CA trust, dummy credentials, plus any
 # sandbox_path/sandbox_env additions) and with the workspace as the working
 # directory.
@@ -18,8 +17,8 @@
 # tool, warming a cache, generating a file).
 #
 # Inputs (env): TEND_SANDBOX_SETUP (the commands; empty → the report only),
-# SANDBOX, AGENT_ENV_FILE and AGENT_PATH (exported by setup-sandbox.sh via
-# $GITHUB_ENV).
+# SANDBOX, AGENT_ENV_FILE, AGENT_PATH and TEND_BLOCKED_PATH (exported by
+# setup-sandbox.sh via $GITHUB_ENV).
 # Used by the Claude harness action.
 set -euo pipefail
 
@@ -35,13 +34,11 @@ if [ -n "${TEND_SANDBOX_SETUP:-}" ]; then
   echo "[sandbox-setup] ran adopter sandbox_setup commands as $SANDBOX"
 fi
 
-# What the agent won't be able to run. setup-sandbox.sh mirrors public,
-# read-only files from recognized runner-home runtime layouts and omits private
-# or writable files. Diffing the two PATHs by command name names anything still
-# unavailable after sandbox_setup has had its chance to close the gap.
-# setup-sandbox.sh separately names a selected source that was not copied, so a
-# same-name system fallback is not silent. Reported, not fatal: only the adopter
-# knows which tools its gate needs.
+# What the agent will not be able to run. Shared system/toolcache paths cross
+# the UID boundary; runner-home paths do not. Home-selected commands have
+# failure shims before shared paths so they cannot silently change version;
+# sandbox_setup can shadow a shim from .local/bin. Reported, not fatal: only the
+# adopter knows which tools its gate needs.
 # A dir the lister can't read lists nothing (the glob stays literal), so its
 # commands read as missing on that side. That's a false positive the diff can't
 # distinguish from a real one; PATH directories are public on hosted runners.
@@ -67,9 +64,25 @@ if [ -z "$agent_commands" ]; then
 else
   missing="$(comm -23 <(printf '%s\n' "$runner_commands") \
     <(printf '%s\n' "$agent_commands") || true)"
-  if [ -n "$missing" ]; then
-    echo "[sandbox-setup] on the runner's PATH, not the agent's:" \
-      "$(tr '\n' ' ' <<<"$missing")"
+  # A blocker itself is executable, so the name diff above sees it. Add it back
+  # only while no earlier sandbox_path/.local/bin command has replaced it.
+  blocked=
+  if [ -n "${TEND_BLOCKED_PATH:-}" ] && [ -d "$TEND_BLOCKED_PATH" ]; then
+    blocked="$(sudo -u "$SANDBOX" /usr/bin/bash -c '
+IFS=:
+for shim in "$2"/*; do
+  name=${shim##*/}
+  for dir in $1; do
+    if [ "$dir" = "$2" ]; then printf "%s\n" "$name"; break; fi
+    if [ -f "$dir/$name" ] && [ -x "$dir/$name" ]; then break; fi
+  done
+done' _ "$AGENT_PATH" "$TEND_BLOCKED_PATH" | sort -u || true)"
+  fi
+  unavailable="$({ printf '%s\n' "$missing"; printf '%s\n' "$blocked"; } \
+    | sed '/^$/d' | sort -u || true)"
+  if [ -n "$unavailable" ]; then
+    echo "[sandbox-setup] on the runner's PATH, unavailable to the agent:" \
+      "$(tr '\n' ' ' <<<"$unavailable")"
     echo "[sandbox-setup] if the session needs one of those, install it as the" \
       "sandbox user with sandbox_setup: in .config/tend.yaml"
   fi

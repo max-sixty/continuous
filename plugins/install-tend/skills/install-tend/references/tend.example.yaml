@@ -172,26 +172,15 @@ bot_name: my-project-bot
 #
 # `setup:` above runs as the RUNNER user, around the composite action. The
 # `claude` harness runs the agent as a separate, non-sudo sandbox user with a
-# fixed env allowlist. Tool directories that `setup:` adds to the runner's PATH
-# carry over automatically: system paths stay in place, while recognized
-# runner-home runtime layouts are copied to the same location under the sandbox
-# home. The independent snapshot keeps only files that another user can read but
-# not write. This covers user installs (`pip install --user`, `uv tool install`,
-# `cargo install`, Go and .NET tools), Node/Composer package bins, and common SDK
-# version directories without putting the runner's credential-holding home on
-# PATH. Rust's selected toolchain carries with its shims, and `JAVA_HOME` follows
-# the JDK selected on PATH. Unknown layouts copy only their PATH directory. A
-# skipped source command is named even when the sandbox has an older command
-# with the same name. Checkout paths remain in the checkout.
+# fixed env allowlist. Shared system and hosted-toolcache PATH entries carry
+# over, which covers the standard setup-node/python/go/java/uv actions. Paths
+# under the runner's home do not: that home may contain credentials, and Tend
+# does not try to classify its files as tools or secrets. Use `sandbox_setup:`
+# for home-scoped installs such as `cargo install`, `pip install --user`, or
+# `uv tool install`.
 #
-# These snapshots contain runtime material from reviewed `setup:` steps, not a
-# credential scrubber for arbitrary package contents. Tend excludes adjacent
-# credential stores and credential-capable uv receipts; do not write secrets
-# into executable or library trees themselves.
-#
-# Tend installs no language toolchain of its own. The agent gets the versions
-# selected in `setup:`. Other env changes do not cross the fixed allowlist; use
-# these keys for additions inside the sandbox:
+# Tend installs no language toolchain of its own. These keys make deliberate
+# additions inside the sandbox:
 #
 # - `sandbox_path`: directories prepended to the sandbox PATH. A leading `~`
 #   expands to the sandbox home. Use it for a system directory the installer did
@@ -200,10 +189,7 @@ bot_name: my-project-bot
 #     sandbox_path:
 #       - /opt/my-tool/bin
 #
-#   A runner-home source path outside the checkout is refused. Entries already
-#   on the runner's PATH normally need no config; Tend copies recognized runtime
-#   files into the sandbox home, names skipped commands, and warns when an
-#   unknown layout received only its exact PATH directory.
+#   A runner-home source path outside the checkout is refused.
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
 #   keys are rejected at `init`, and again inside the sandbox so a hand-edited
@@ -218,25 +204,23 @@ bot_name: my-project-bot
 #   - the sandbox's own locations — `HOME`, `PATH`, `XDG_CONFIG_HOME`,
 #     `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`
 #
-#   Use `sandbox_path` to extend PATH:
-#
-#   `JAVA_HOME` is derived from the JDK selected on the runner PATH, but may be
-#   overridden here for a custom runtime layout:
-#
 #     sandbox_env:
 #       RUST_BACKTRACE: "1"
-#       JAVA_HOME: /opt/custom-jdk
+#
+#   Setup-step env changes do not cross automatically. If a build needs one
+#   (for example `JAVA_HOME` rather than `java` on PATH), add it explicitly.
 #
 # - `sandbox_setup`: shell commands run as the sandbox user after the toolchain
 #   and plugins install and before the agent runs, with the workspace as cwd.
 #   The workspace holds the PR's tree by then, so this is where installing the
 #   project's dependencies belongs (`uv sync`, `npm ci`), alongside other
-#   on-disk effects like warming a cache. It can also reinstall a private tool
-#   that the runner-home mirror refused. Env-only tweaks don't persist across
-#   the command's shell — use sandbox_path/sandbox_env:
+#   on-disk effects like warming a cache. Env-only tweaks don't persist across
+#   the command's shell — use sandbox_path/sandbox_env. End installer commands
+#   by running the tool so a broken install fails before the agent starts:
 #
 #     sandbox_setup:
-#       - uv sync
+#       - uv tool install pre-commit
+#       - pre-commit --version
 #
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.

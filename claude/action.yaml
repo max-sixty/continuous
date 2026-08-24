@@ -89,9 +89,8 @@ inputs:
       Newline-separated directories prepended to the sandbox agent's PATH,
       before the agent launches. A leading `~` expands to the sandbox home.
       Reaches a dir under the sandbox home, the checkout, or a system location.
-      Other runner-home entries are refused: recognized runtime layouts already
-      on the runner PATH are copied into the sandbox home automatically, while
-      the source home stays off PATH.
+      Other runner-home entries are refused because that home may contain
+      credentials; use sandbox_setup for home-scoped installs.
   sandbox_env:
     default: ""
     description: >-
@@ -105,6 +104,8 @@ inputs:
       install and before the agent runs, with the agent's launch env and the
       workspace as cwd. For on-disk setup (installing a tool, warming a cache);
       env-only tweaks don't persist — use sandbox_path/sandbox_env for those.
+      It is also how a tool that setup installed under the runner's home reaches
+      the agent: install it again here under the sandbox user's home.
 
 outputs:
   token_usage:
@@ -210,7 +211,9 @@ runs:
         key: tend-mitmproxy-${{ runner.os }}-${{ inputs.mitmproxy_version }}
 
     - name: Set up credential-isolation sandbox
-      shell: bash
+      # Resolve the interpreter outside adopter-controlled PATH: this step is
+      # the only one that receives both real credentials.
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
         TEND_GH_TOKEN: ${{ inputs.github_token }}
         # The real Anthropic credential goes ONLY to the proxy (this runner-
@@ -229,7 +232,7 @@ runs:
         # the agent env file. sandbox_setup (commands) runs in a later step.
         TEND_SANDBOX_PATH: ${{ inputs.sandbox_path }}
         TEND_SANDBOX_ENV: ${{ inputs.sandbox_env }}
-      run: bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
+      run: /usr/bin/bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
 
     # Install the claude binary into the sandbox user's home. Nothing else —
     # a language toolchain here would shadow the adopter's on the sandbox PATH.

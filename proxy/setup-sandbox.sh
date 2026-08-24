@@ -17,7 +17,8 @@
 #      agent step also points NODE_EXTRA_CA_CERTS at the exported PROXY_CA_CERT.)
 #
 # Exports for later steps via $GITHUB_ENV: SANDBOX, AGENT_HOME, PROXY_URL,
-# TEND_RUN_DIR, PROXY_CA_CERT, AGENT_ENV_FILE, AGENT_PATH.
+# TEND_RUN_DIR, PROXY_CA_CERT, AGENT_ENV_FILE, AGENT_PATH,
+# TEND_BLOCKED_PATH.
 #
 # Inputs (env): TEND_GH_TOKEN (real PAT), TEND_ANTHROPIC_OAUTH_TOKEN and/or
 # TEND_ANTHROPIC_API_KEY (real Anthropic credential, injected for
@@ -135,16 +136,11 @@ fi
 # through sudo into the sandbox — uv would then write its receipt/cache and any
 # XDG-aware tool its config under the runner's home, which the sandbox UID can't.
 # Adopter PATH additions (`sandbox_path:` in .config/tend.yaml, threaded in as
-# TEND_SANDBOX_PATH — one dir per line). These are the adopter's explicit opt-in
-# and are prepended ahead of the auto-derived toolchains below (so their tools
-# win), with a leading `~` expanded to the sandbox home (the adopter doesn't
-# know the sandbox username).
-#
-# What this lever reaches is a dir under the sandbox home or a system location.
-# Runner-home PATH entries are mirrored automatically below; naming the source
-# runner-home path here would instead put the credential-holding home itself on
-# the agent's PATH, so it remains refused.
-runner_home="${HOME:-/home/runner}"
+# TEND_SANDBOX_PATH — one dir per line). These are prepended ahead of the
+# runner's shared tool paths, with a leading `~` expanded to the sandbox home.
+# A runner-home source remains forbidden: unlike the checkout, that home can
+# contain credentials unrelated to the selected tool.
+runner_home=$(readlink -f -- "${HOME:-/home/runner}")
 declare -a _extra_path=()
 if [ -n "${TEND_SANDBOX_PATH:-}" ]; then
   while IFS= read -r dir; do
@@ -153,9 +149,8 @@ if [ -n "${TEND_SANDBOX_PATH:-}" ]; then
     # tilde literally; they are not shell tilde expansion). SC2088 misreads this.
     # shellcheck disable=SC2088
     case "$dir" in "~") dir="$AGENT_HOME" ;; "~/"*) dir="${AGENT_HOME}/${dir#\~/}" ;; esac
-    # These entries are prepended verbatim, so they are the one way a
-    # runner-home dir could reach the agent's PATH — the rewrite below can't
-    # catch what never passes through it. Refuse rather than drop: the config
+    # These entries are prepended verbatim, so they bypass the automatic PATH
+    # filter below. Refuse rather than drop: the config
     # asked for something this lever cannot do, and the fix is a different one.
     resolved_dir=$(readlink -f -- "$dir" 2>/dev/null || true)
     case "${resolved_dir:-$dir}" in
@@ -170,358 +165,113 @@ if [ -n "${TEND_SANDBOX_PATH:-}" ]; then
 fi
 
 AGENT_ENV_FILE="${RUNNER_TEMP}/tend-agent-env"
-# Derive the sandbox PATH from the runner's captured tool PATH rather than
-# hardcoding a base set. RUNNER_TOOL_PATH already holds every toolchain dir the
-# runner image and adopter setup put on PATH — the
-# /etc/skel-seeded language homes (.cargo/bin, .dotnet/tools, .config/composer/
-# vendor/bin, …) plus system dirs (/opt/pipx_bin, /usr/local/.ghcup/bin,
-# /usr/bin, …). `useradd -m` copied /etc/skel into the sandbox's OWN home, so
-# each runner-home toolchain has a sibling under ${AGENT_HOME}. Before rewriting
-# a runner-home entry, copy its exact directory or the closed set of companion
-# runtime trees below into that sibling. The runner copy replaces /etc/skel, so
-# a pinned tool cannot silently fall back to the image default.
-#
-# Security boundary: except for the checkout handed to the agent below, the PATH
-# carries no runner-home entry. A file mode is not a credential classifier, so
-# the generic rule copies only the PATH directory, never its whole parent. The
-# closed companion list covers known runtime layouts without sweeping in Cargo
-# credentials or unrelated ~/.local/share data. Within those roots, only files
-# that are world-readable and not world-writable cross. Directories are
-# recreated sandbox-owned, so the agent may replace a tool in its own home but
-# cannot change the runner's independent source inode.
-_world_readonly_file() {
-  local mode
-  mode=$(stat -c '%a' -- "$1") || return 1
-  mode=$((8#${mode}))
-  (( (mode & 0004) != 0 && (mode & 0002) == 0 ))
-}
-
-_world_readonly_dir() {
-  local mode
-  mode=$(stat -c '%a' -- "$1") || return 1
-  mode=$((8#${mode}))
-  (( (mode & 0005) == 0005 && (mode & 0002) == 0 ))
-}
-
-_runner_path_entry_for_agent() {
-  local entry resolved
-  entry="$1"
-  resolved=$(readlink -f -- "$entry") || {
-    case "$entry" in
-      "${runner_home}" | "${runner_home}"/*) return 1 ;;
-      *) printf '%s' "$entry"; return 0 ;;
-    esac
-  }
-  case "$resolved" in
-    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*)
-      printf '%s' "$resolved"
-      ;;
-    "${runner_home}") return 1 ;;
-    "${runner_home}"/*)
-      printf '%s' "${AGENT_HOME}/${resolved#"${runner_home}"/}"
-      ;;
-    *) printf '%s' "$resolved" ;;
-  esac
-}
-
-_mirror_runner_tree() {
-  local source resolved relative destination canonical_destination stage item item_relative
-  local link_target link mirrored omit_uv_receipts
-  local -a file_filters=()
-  source="$1"
-  resolved=$(readlink -f -- "$source") || return 0
-  [ -d "$resolved" ] || return 0
-  case "$resolved" in
-    "${runner_home}"/*) ;;
-    *) return 0 ;;
-  esac
-  omit_uv_receipts=
-  if [ "$resolved" = "${runner_home}/.local/share/uv/tools" ]; then
-    omit_uv_receipts=1
-    file_filters=('!' -name uv-receipt.toml)
-  fi
-  relative="${resolved#"${runner_home}"/}"
-  destination="${AGENT_HOME}/${relative}"
-  canonical_destination=$(realpath -m -- "$destination")
-  if [ "$canonical_destination" != "$destination" ]; then
-    echo "::error::refusing sandbox mirror destination through a symlink: $destination"
-    exit 1
-  fi
-
-  # The destination is a fresh useradd copy, not adopter state. Clear it so a
-  # private runner file is absent rather than leaving a same-named skel default,
-  # and so the runner's pinned version wins every collision.
-  if [ -L "$destination" ] || { [ -e "$destination" ] && [ ! -d "$destination" ]; }; then
-    echo "::error::sandbox mirror destination is not a directory: $destination"
-    exit 1
-  fi
-  sudo -u "$SANDBOX" mkdir -p "$destination"
-  sudo find "$destination" -mindepth 1 -delete
-
-  if ! _world_readonly_dir "$resolved"; then
-    log "did not mirror private or writable runner tool root $resolved"
-    return 0
-  fi
-
-  # Build an independent filtered copy in a runner-private staging dir. Tar is
-  # fed only public directories, public read-only regular files, and symlinks;
-  # it never attempts to copy private files, special inodes, or uv tool receipts
-  # (which can persist private-index options but are not needed to execute an
-  # installed entrypoint). Extended attrs, ACLs, capabilities, ownership, and
-  # set-id bits do not cross the user boundary. The files end runner-owned and
-  # non-writable; only the independent directories become sandbox-owned, so the
-  # agent can replace a file without changing the runner's source inode.
-  stage=$(mktemp -d "${RUNNER_TEMP}/tend-home-mirror.XXXXXX")
-  (
-    cd "$resolved"
-    find . -mindepth 1 \
-      \( -type d \( ! -perm -0005 -o -perm -0002 \) -prune \) -o \
-      \( -type d -o -type l -o \
-         \( -type f "${file_filters[@]}" \
-           -perm -0004 ! -perm -0002 ! -uid "$(id -u "$SANDBOX")" \) \
-      \) -print0 \
-      | tar --null --no-recursion --no-xattrs --no-acls \
-          --files-from=- -cf -
-  ) | tar -C "$stage" --no-same-owner --no-xattrs --no-acls -xf -
-  find "$stage" -type d -exec chmod u+rwx,u-s,g-s {} +
-  find "$stage" -type f -exec chmod a-w,u-s,g-s {} +
-
-  # Tar preserves symlinks without judging their targets. Keep only links to the
-  # same public, read-only material, and retarget absolute runner-home links to
-  # the corresponding sandbox tree.
-  while IFS= read -r -d '' item; do
-    item_relative="${item#"${stage}"/}"
-    link_target=$(readlink -f -- "$resolved/$item_relative") || {
-      unlink "$item"
-      continue
-    }
-    if [ -f "$link_target" ]; then
-      if ! _world_readonly_file "$link_target"; then unlink "$item"; continue; fi
-    elif [ -d "$link_target" ]; then
-      if ! _world_readonly_dir "$link_target"; then unlink "$item"; continue; fi
-    else
-      unlink "$item"
-      continue
-    fi
-    if [ -n "$omit_uv_receipts" ]; then
-      case "$link_target" in
-        "${resolved}"/*/uv-receipt.toml)
-          unlink "$item"
-          continue
-          ;;
-      esac
-    fi
-    # Decide from the canonical target, not the link text. An innocent-looking
-    # /tmp alias can still lead back to the credential-holding runner home.
-    link=$(readlink -- "$item")
-    case "$link_target" in
-      "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) link="$link_target" ;;
-      "${runner_home}") link="$AGENT_HOME" ;;
-      "${runner_home}"/*)
-        link="${AGENT_HOME}/${link_target#"${runner_home}"/}"
-        ;;
-    esac
-    ln -sfnT -- "$link" "$item"
-  done < <(find "$stage" -type l -print0)
-
-  mirrored=$(find "$stage" -mindepth 1 | wc -l)
-  sudo rmdir "$destination"
-  sudo mv -- "$stage" "$destination"
-  sudo find "$destination" -type d -exec chown "${SANDBOX}:${SANDBOX}" {} +
-  log "mirrored $mirrored world-readable entries from $resolved"
-}
-
+# `setup:` actions that install into shared system or hosted-toolcache paths
+# work unchanged. Entries under the runner's home do not cross the UID boundary:
+# a file mode cannot tell a runtime from a credential. Home-scoped installs
+# belong in `sandbox_setup:`, which runs as the sandbox user.
 IFS=: read -ra _runner_path <<<"${RUNNER_TOOL_PATH}"
-declare -A _mirror_candidates=()
-declare -A _sdk_runtime_roots=()
-declare -A _unknown_runtime_layouts=()
-for _d in "${_runner_path[@]}"; do
-  [ -n "${_d}" ] || continue
-  _resolved_path=$(readlink -f -- "${_d}") || continue
-  case "${_resolved_path}" in
-    "${runner_home}"/*) ;;
-    *) continue ;;
-  esac
-  # A repo may deliberately add its own bin dir to PATH, but copying the whole
-  # checkout would duplicate untrusted project code. Step 3 hands that tree to
-  # the sandbox separately; sandbox_path remains the explicit PATH lever.
-  case "${_resolved_path}" in
-    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) continue ;;
-  esac
-  # Default unknown layouts to the exact PATH directory. Expand only closed,
-  # evidenced runtime layouts: user-site Python and uv companions, rustup's
-  # selected toolchain, package-manager trees whose bin entries are symlinks to
-  # siblings, and canonical SDK version roots. Go's ~/go/bin, .NET's
-  # ~/.dotnet/tools, and isolated installer bins need no expansion.
-  _roots=("${_resolved_path}")
-  _known_layout=
-  case "${_resolved_path}" in
-    "${runner_home}/.local/bin")
-      _known_layout=1
-      _roots+=(
-        "${runner_home}/.local/lib"
-        "${runner_home}/.local/share/uv/tools"
-        "${runner_home}/.local/share/uv/python"
-      )
-      ;;
-    "${runner_home}/.cargo/bin")
-      _known_layout=1
-      _roots+=("${runner_home}/.rustup")
-      ;;
-    "${runner_home}/go/bin" | "${runner_home}/.dotnet/tools" | \
-      "${runner_home}/.cargo-install/"*/bin)
-      _known_layout=1
-      ;;
-    */node_modules/.bin)
-      _known_layout=1
-      _roots=("${_resolved_path%/.bin}")
-      ;;
-    */vendor/bin)
-      _known_layout=1
-      _roots=("${_resolved_path%/bin}")
-      ;;
-    "${runner_home}/.sdkman/candidates/"*/*/bin | \
-      "${runner_home}/.asdf/installs/"*/*/bin | \
-      "${runner_home}/.pyenv/versions/"*/bin | \
-      "${runner_home}/.rbenv/versions/"*/bin | \
-      "${runner_home}/.jenv/versions/"*/bin | \
-      "${runner_home}/.nvm/versions/node/"*/bin)
-      _known_layout=1
-      _roots=("${_resolved_path%/bin}")
-      _sdk_runtime_roots["${_roots[0]}"]=1
-      ;;
-  esac
-  if [ -z "${_known_layout}" ]; then
-    _unknown_runtime_layouts["${_resolved_path}"]=1
-  fi
-  for _root in "${_roots[@]}"; do
-    _mirror_candidates["${_root}"]=1
-  done
-done
-
-# An ancestor mirror clears its destination before copying. Process shallower
-# roots first so a later, more specific PATH root always restores its own copy,
-# independent of the runner PATH's order.
-while IFS=$'\t' read -r _depth _root; do
-  [ -n "${_root}" ] || continue
-  _mirror_runner_tree "${_root}"
-done < <(
-  for _root in "${!_mirror_candidates[@]}"; do
-    _slashes="${_root//[!\/]/}"
-    printf '%08d\t%s\n' "${#_slashes}" "${_root}"
-  done | sort -n -k1,1
-)
-if [ "${#_unknown_runtime_layouts[@]}" -gt 0 ]; then
-  log "runner-home PATH layouts copied without companion files: ${!_unknown_runtime_layouts[*]}"
-  log "if one needs sibling runtime files, reinstall it with sandbox_setup:"
-fi
-
-# Name runner-selected commands whose exact source did not survive the mirror.
-# The later reachability report compares command names after sandbox_setup; this
-# source-level check also catches a private `rustc` or `python` silently falling
-# through to an older system binary with the same name.
-declare -A _seen_runner_commands=()
-declare -a _unmirrored_commands=()
-for _runner_dir in "${_runner_path[@]}"; do
-  [ -d "${_runner_dir}" ] && [ -r "${_runner_dir}" ] || continue
-  _expected_dir=$(_runner_path_entry_for_agent "${_runner_dir}") || continue
-  case "${_expected_dir}" in
-    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) _check_mirror= ;;
-    "${AGENT_HOME}"/*) _check_mirror=1 ;;
-    *) _check_mirror= ;;
-  esac
-  for _command_path in "${_runner_dir}"/*; do
-    [ -f "${_command_path}" ] && [ -x "${_command_path}" ] || continue
-    _command_name="${_command_path##*/}"
-    [ -n "${_seen_runner_commands[${_command_name}]:-}" ] && continue
-    _seen_runner_commands["${_command_name}"]=1
-    # The workspace is deliberately preserved and becomes accessible when step
-    # 3 hands the checkout to the sandbox; testing it before that chown lies.
-    if [ -n "${_check_mirror}" ] && \
-       ! sudo -u "$SANDBOX" test -x "${_expected_dir}/${_command_name}"; then
-      _unmirrored_commands+=("${_command_name}")
-    fi
-  done
-done
-if [ "${#_unmirrored_commands[@]}" -gt 0 ]; then
-  log "runner-selected commands not mirrored into sandbox: ${_unmirrored_commands[*]}"
-fi
-
-declare -A _seen_path=()
 declare -a _agent_path=()
-# Adopter-declared dirs win over everything, .local/bin included: prepend them
-# first and verbatim (trusted opt-in, so not existence-tested like the derived
-# entries below — the dir may be populated by a later `setup:` step) so an
-# adopter dir can shadow a same-named binary in .local/bin.
+declare -a _blocked_home_command=()
+_add_agent_path() {
+  local existing
+  for existing in "${_agent_path[@]}"; do
+    [ "$existing" = "$1" ] && return
+  done
+  _agent_path+=("$1")
+}
+_add_blocked_command() {
+  local existing
+  for existing in "${_blocked_home_command[@]}"; do
+    [ "$existing" = "$1" ] && return
+  done
+  _blocked_home_command+=("$1")
+}
+# Adopter-declared dirs are trusted opt-ins and may be populated later by
+# `sandbox_setup:`.
 for _d in ${_extra_path[@]+"${_extra_path[@]}"}; do
-  [ -n "${_seen_path[${_d}]:-}" ] && continue
-  _agent_path+=("${_d}")
-  _seen_path["${_d}"]=1
+  _add_agent_path "${_d}"
 done
-# .local/bin next, ahead of the auto-derived toolchains below.
-if [ -z "${_seen_path["${AGENT_HOME}/.local/bin"]:-}" ]; then
-  _agent_path+=("${AGENT_HOME}/.local/bin")
-  _seen_path["${AGENT_HOME}/.local/bin"]=1
-fi
+# .local/bin next, ahead of the runner's shared paths.
+_add_agent_path "${AGENT_HOME}/.local/bin"
+_agent_prefix_count=${#_agent_path[@]}
+declare -a _dropped_home_path=()
 for _d in "${_runner_path[@]}"; do
   [ -n "${_d}" ] || continue
-  _runner_d="${_d}"
-  _d=$(_runner_path_entry_for_agent "${_runner_d}") || continue
-  [ -n "${_seen_path[${_d}]:-}" ] && continue                           # dedup
-  case "${_d}" in
-    "${AGENT_HOME}"/* | "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*)
-      _safe_rewritten_path=1
+  _resolved_path=$(readlink -f -- "${_d}" 2>/dev/null) || continue
+  _drop_home=
+  case "${_resolved_path}" in
+    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*)
+      _d="${_resolved_path}"
+      _shared_path=1
       ;;
-    *) _safe_rewritten_path= ;;
+    "${runner_home}" | "${runner_home}"/*)
+      _dropped_home_path+=("${_resolved_path}")
+      _drop_home=1
+      ;;
+    *)
+      _d="${_resolved_path}"
+      _shared_path=
+      ;;
   esac
-  # A mapped sandbox-home path came from a canonical source that the mirror
-  # cleared, even when every source file was refused; a workspace path becomes
-  # accessible at the ownership handoff below. System dirs must already be
-  # traversable by the uid that will execute from them.
-  if [ -n "${_safe_rewritten_path}" ] || \
+  # A command selected from the dropped home must not silently fall through to
+  # an older same-named command on a shared path. `type -P` answers from the
+  # captured runner PATH without executing adopter-controlled code.
+  if [ -n "${_drop_home}" ] && [ -d "${_resolved_path}" ] && \
+     [ -r "${_resolved_path}" ]; then
+    for _command_path in "${_resolved_path}"/*; do
+      [ -f "${_command_path}" ] && [ -x "${_command_path}" ] || continue
+      _command_name=${_command_path##*/}
+      _selected_command=$(PATH="$RUNNER_TOOL_PATH" type -P -- "${_command_name}" || true)
+      if [ -n "${_selected_command}" ] && \
+         [ "$(readlink -f -- "$(dirname -- "${_selected_command}")")" = \
+           "${_resolved_path}" ]; then
+        _add_blocked_command "${_command_name}"
+      fi
+    done
+  fi
+  [ -z "${_drop_home}" ] || continue
+  # The workspace becomes accessible at the ownership handoff below. Shared
+  # system/toolcache dirs must already be traversable by the sandbox uid.
+  if [ -n "${_shared_path}" ] || \
      { [ -d "${_d}" ] && sudo -u "${SANDBOX}" test -x "${_d}"; }; then
-    _agent_path+=("${_d}")
-    _seen_path["${_d}"]=1
+    _add_agent_path "${_d}"
   fi
 done
+if [ "${#_dropped_home_path[@]}" -gt 0 ]; then
+  log "runner-home PATH entries unavailable in sandbox: ${_dropped_home_path[*]}"
+  log "install any required home-scoped tools with sandbox_setup:"
+fi
 # Guarantee the base system dirs even if the runner PATH somehow lacks them.
 for _d in /usr/local/bin /usr/bin /bin; do
-  [ -n "${_seen_path[${_d}]:-}" ] && continue
-  _agent_path+=("${_d}")
-  _seen_path["${_d}"]=1
+  _add_agent_path "${_d}"
 done
-AGENT_PATH="$(IFS=:; printf '%s' "${_agent_path[*]}")"
-# The composed PATH, in the log: it is the only place the tilde expansion and
-# the runner-home rewrite are visible, and both are silent when they don't find
-# what an adopter expected. sandbox-setup.sh reports the consequence — which
-# commands the runner resolves and the agent can't — after sandbox_setup runs.
-log "sandbox PATH: ${AGENT_PATH}"
-
-# Derive JAVA_HOME from the canonical `java` selected on PATH. setup-java
-# prepends that JDK, while sudo can retain the image default's stale JAVA_HOME;
-# PATH is the one source of truth shared with the agent.
-_agent_java_home=
-_runner_java=$(PATH="$RUNNER_TOOL_PATH" command -v java 2>/dev/null || true)
-_runner_java=$(readlink -f -- "${_runner_java:-/nonexistent}") || _runner_java=
-case "${_runner_java}" in
-  */bin/java)
-    _runner_java_home="${_runner_java%/bin/java}"
-    case "${_runner_java_home}" in
-      "${runner_home}"/*)
-        if [ -n "${_sdk_runtime_roots[${_runner_java_home}]:-}" ]; then
-          _agent_java_home="${AGENT_HOME}/${_runner_java_home#"${runner_home}"/}"
-        else
-          log "did not set JAVA_HOME for exact-only runner layout ${_runner_java_home}"
-        fi
-        ;;
-      *) _agent_java_home="${_runner_java_home}" ;;
-    esac
-    ;;
-esac
-if [ -n "${_agent_java_home}" ] && \
-   ! sudo -u "$SANDBOX" test -x "${_agent_java_home}/bin/java"; then
-  _agent_java_home=
+# Put generic failure shims after adopter paths and .local/bin, but before the
+# shared runner paths. `sandbox_setup:` can therefore replace a home-selected
+# command explicitly; otherwise invoking it fails instead of changing version.
+TEND_BLOCKED_PATH=
+if [ "${#_blocked_home_command[@]}" -gt 0 ]; then
+  TEND_BLOCKED_PATH="${AGENT_HOME}/.tend-blocked/bin"
+  sudo -u "$SANDBOX" mkdir -p "$TEND_BLOCKED_PATH"
+  printf '%s\n' '#!/bin/sh' \
+    'printf "tend: %s came from the runner home and is unavailable; install it with sandbox_setup:\n" "${0##*/}" >&2' \
+    'exit 127' \
+    | sudo -u "$SANDBOX" tee "${TEND_BLOCKED_PATH%/bin}/unavailable" >/dev/null
+  sudo -u "$SANDBOX" chmod +x "${TEND_BLOCKED_PATH%/bin}/unavailable"
+  for _command_name in "${_blocked_home_command[@]}"; do
+    sudo -u "$SANDBOX" ln -s ../unavailable "${TEND_BLOCKED_PATH}/${_command_name}"
+  done
+  _agent_path=(
+    "${_agent_path[@]:0:${_agent_prefix_count}}"
+    "$TEND_BLOCKED_PATH"
+    "${_agent_path[@]:${_agent_prefix_count}}"
+  )
+  log "runner-home commands blocked from shared fallbacks: ${_blocked_home_command[*]}"
 fi
+AGENT_PATH="$(IFS=:; printf '%s' "${_agent_path[*]}")"
+# The composed PATH is logged so sandbox_path expansion and dropped locations
+# are visible. sandbox-setup.sh reports missing commands after sandbox_setup
+# has had its chance to install them.
+log "sandbox PATH: ${AGENT_PATH}"
 cat >"$AGENT_ENV_FILE" <<EOF
 HOME=${AGENT_HOME}
 PATH=${AGENT_PATH}
@@ -543,9 +293,6 @@ GITHUB_TOKEN=ghp_tendproxydummy000000000000000000000
 CLAUDE_CODE_REMOTE=1
 ${ANTHROPIC_DUMMY}
 EOF
-if [ -n "${_agent_java_home}" ]; then
-  printf 'JAVA_HOME=%s\n' "${_agent_java_home}" >>"$AGENT_ENV_FILE"
-fi
 
 # Adopter env additions (`sandbox_env:` in .config/tend.yaml, threaded in as
 # TEND_SANDBOX_ENV — one NAME=VALUE per line). Appended after the fixed block
@@ -595,6 +342,7 @@ fi
   echo "PROXY_CA_CERT=${PROXY_CA_CERT}"
   echo "AGENT_ENV_FILE=${AGENT_ENV_FILE}"
   echo "AGENT_PATH=${AGENT_PATH}"
+  echo "TEND_BLOCKED_PATH=${TEND_BLOCKED_PATH}"
 } >>"$GITHUB_ENV"
 
 # 2. Neutralize the credential actions/checkout persisted for git. Modern

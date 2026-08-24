@@ -80,31 +80,18 @@ jobs:
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
   # These scripts need a second uid, sudo, and a hosted-runner PATH, so exercise
-  # them for real. The planted tools cover sibling dependencies, a symlinked
-  # SDK root, the checkout, privilege metadata, special files, private/writable
-  # refusals, and an /etc/skel collision. The real Rust action guards the
-  # nastiest failure: resolving rustc at a different version than CI.
+  # the real boundary: shared paths cross, runner-home paths do not, and
+  # sandbox_setup can install a required home-scoped tool explicitly.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
-      - uses: astral-sh/setup-uv@v10.0.1
-      - run: uv tool install hatch
-      - name: Plant runner-home tools
+      - name: Plant PATH-boundary fixtures
         run: bash proxy/test-setup-sandbox.sh plant
       - name: Set up the sandbox
         run: bash proxy/test-setup-sandbox.sh setup
-      - name: Verify mirrored tools and boundary
+      - name: Verify the boundary and sandbox_setup
         run: bash proxy/test-setup-sandbox.sh verify
-      - name: sandbox_setup closes the private-tool gap
-        run: bash proxy/test-setup-sandbox.sh verify-sandbox-setup
       - name: Refuse unsafe sandbox configuration
         run: bash proxy/test-setup-sandbox.sh verify-refusals
       - name: Restore workspace ownership for checkout cleanup
