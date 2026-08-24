@@ -32,8 +32,9 @@
 # Exit codes:
 #   0  every gating check on <sha> settled green
 #   1  red — failing checks and their run URLs on stdout
-#   2  no usable rollup for <sha> — UNVERIFIED, not green. An unresolvable
-#      OID; an ephemeral merge-ref commit, which carries none; a commit with
+#   2  no usable rollup for <sha> — UNVERIFIED, not green. A <sha> that isn't
+#      a full 40-hex OID, rejected at entry; an unresolvable OID; an
+#      ephemeral merge-ref commit, which carries none; a commit with
 #      zero checks and zero statuses (a push every workflow's paths filter
 #      excludes — the rollup is null then too, so "nothing to gate on" is
 #      indistinguishable from "nothing answered"); or a page walk that could
@@ -45,6 +46,21 @@ set -euo pipefail
 PR="$1"
 SHA="$2"
 OWNER="${GITHUB_REPOSITORY%/*}"
+
+# GraphQL's `GitObjectID!` rejects an abbreviated OID at coercion time, which
+# rollup() cannot tell from a transient failure: without this the loop sleeps
+# through its whole budget before reporting a caller bug, and head_note's
+# string compare then claims the branch advanced to the very commit that was
+# passed in. Rejecting here is also what keeps that note honest — a non-full
+# OID is the only way it can misfire.
+case "$SHA" in
+  "" | *[!0-9a-fA-F]*) SHA_OK=0 ;;
+  *) [ "${#SHA}" -eq 40 ] && SHA_OK=1 || SHA_OK=0 ;;
+esac
+if [ "$SHA_OK" -ne 1 ]; then
+  echo "poll-pr-checks.sh: <sha> must be a full 40-char commit OID, got '$SHA' — UNVERIFIED, not green" >&2
+  exit 2
+fi
 NAME="${GITHUB_REPOSITORY#*/}"
 
 # One query returns check runs *and* legacy status contexts, a page at a
