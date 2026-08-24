@@ -125,7 +125,8 @@ jobs:
           printf '#!/bin/sh\necho workspace\n' >"$workspace_bin/tend-workspace"
           printf '#!/bin/sh\necho system-fallback\n' | \
             sudo tee /usr/local/bin/tend-fallback >/dev/null
-          cp /bin/true "$bin/tend-setid" "$bin/tend-capability"
+          cp /bin/true "$bin/tend-setid"
+          cp /bin/true "$bin/tend-capability"
           runner_alias="/tmp/tend-runner-home-alias-$GITHUB_RUN_ID"
           inode_alias="/tmp/tend-runner-inode-alias-$GITHUB_RUN_ID"
           ln -s "$bin" "$runner_alias"
