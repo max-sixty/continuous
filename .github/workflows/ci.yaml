@@ -79,6 +79,84 @@ jobs:
           kill "$pid" 2>/dev/null || true
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
+  # setup-sandbox.sh and sandbox-setup.sh need a second uid, sudo, and a runner
+  # PATH to derive from, so no Python test reaches them. This job runs both for
+  # real, against the shape that hides a missing toolchain: a `setup:` step that
+  # installs into the runner's own home (what `cargo install` and the install
+  # actions do) with no sandbox lever set. Two things must hold — the sandbox
+  # PATH carries no /home/runner entry across, since that rewrite is the
+  # credential boundary, and what it therefore can't reach is named in the log
+  # rather than discovered by the agent mid-session.
+  test-sandbox:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      # Stand in for an adopter `setup:` step. Installing under $HOME and
+      # announcing the dir through GITHUB_PATH is what the cargo-install
+      # actions do; the addition lands in the next step's PATH, exactly as
+      # setup-sandbox.sh sees it in a real run.
+      - name: Install a tool the way an adopter's setup does
+        run: |
+          bin="$HOME/.cargo-install/tend-probe/bin"
+          mkdir -p "$bin"
+          printf '#!/bin/sh\necho probe\n' >"$bin/tend-probe"
+          chmod +x "$bin/tend-probe"
+          echo "$bin" >>"$GITHUB_PATH"
+      - name: Set up the sandbox
+        env:
+          TEND_GH_TOKEN: dummy
+          TEND_ANTHROPIC_OAUTH_TOKEN: dummy
+          ACTION_PATH: ${{ github.workspace }}
+          TEND_UV_DIR: ${{ runner.temp }}/tend-uv
+          UV_CACHE_DIR: ${{ runner.temp }}/tend-mitmproxy-uv
+        run: |
+          set -o pipefail
+          MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
+          export MITMPROXY_VERSION
+          UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml) \
+            bash shared/steps/install-proxy-uv.sh
+          bash proxy/setup-sandbox.sh | tee "$RUNNER_TEMP/setup.log"
+          agent_path=$(sed -n 's/^\[setup-sandbox\] sandbox PATH: //p' "$RUNNER_TEMP/setup.log")
+          if [ -z "$agent_path" ]; then
+            echo "::error::setup-sandbox.sh logged no sandbox PATH"
+            exit 1
+          fi
+          case ":$agent_path:" in
+            *":$HOME/"* | *":$HOME:"*)
+              echo "::error::a runner-home entry reached the sandbox PATH: $agent_path"
+              exit 1
+              ;;
+          esac
+      # No sandbox_setup, so this is the report alone — the state an adopter is
+      # in before they know they need the lever.
+      - name: Name what the agent cannot reach
+        run: |
+          set -o pipefail
+          bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report.log"
+          grep -q "not the agent's:.*tend-probe" "$RUNNER_TEMP/report.log"
+      # And the lever closes it. ~runner resolves through passwd, so the copy
+      # doesn't depend on where the runner's home sits.
+      - name: sandbox_setup closes the gap
+        env:
+          TEND_SANDBOX_SETUP: |
+            mkdir -p ~/.local/bin
+            cp ~runner/.cargo-install/tend-probe/bin/tend-probe ~/.local/bin/
+            command -v tend-probe >/dev/null || { echo "missing: tend-probe"; exit 1; }
+        run: |
+          set -o pipefail
+          bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report-after.log"
+          if grep -q tend-probe "$RUNNER_TEMP/report-after.log"; then
+            echo "::error::still unreachable after sandbox_setup copied it in"
+            exit 1
+          fi
+      - name: Restore workspace ownership for checkout cleanup
+        if: always()
+        run: |
+          if [ -n "${SANDBOX:-}" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          fi
+
   # The weekly rule that governed `codex_version` asked for a confirmation
   # nothing here could produce ("bump only to a release confirmed to run under
   # `codex exec`"): no OPENAI_API_KEY reaches this repo's runs and no workflow

@@ -510,12 +510,12 @@ class Config:
         # render gate (macros.yaml.j2 emits them per effective harness): a
         # top-level `codex` with a per-workflow `claude` override does apply
         # them, so don't warn there.
+        effective_harnesses = {harness} | {
+            wf.harness
+            for wf in workflows.values()
+            if wf.enabled and wf.harness is not None
+        }
         if sandbox_path or sandbox_env or sandbox_setup:
-            effective_harnesses = {harness} | {
-                wf.harness
-                for wf in workflows.values()
-                if wf.enabled and wf.harness is not None
-            }
             if "claude" not in effective_harnesses:
                 click.echo(
                     "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
@@ -524,6 +524,26 @@ class Config:
                     "`setup:` section already reaches its environment.",
                     err=True,
                 )
+        elif setup and "claude" in effective_harnesses:
+            # The converse shape: `setup:` steps, a Claude harness, and nothing
+            # reaching into the sandbox. `setup:` runs as the runner, and what
+            # it installs under the runner's home is invisible to the agent —
+            # no error, just a missing command mid-session, which a session
+            # works around rather than reports. Whether a given `setup:` lands
+            # somewhere reachable isn't knowable here (`setup-*` actions do,
+            # `cargo install` doesn't), so this points at the lever rather than
+            # diagnosing; the run itself logs which commands actually went
+            # missing.
+            click.echo(
+                "Note: `setup:` runs as the runner, outside the Claude "
+                "sandbox. What it installs in a system location (the "
+                "`setup-*` actions) reaches the agent; what lands under the "
+                "runner's home (`cargo install`, `pip install --user`) does "
+                "not, silently. Install those with `sandbox_setup:`, ending "
+                "the list with a `command -v` check per tool. Each run logs "
+                "the sandbox PATH and what it could not resolve.",
+                err=True,
+            )
 
         allowed = secrets.get("allowed", [])
         if not isinstance(allowed, list) or not all(

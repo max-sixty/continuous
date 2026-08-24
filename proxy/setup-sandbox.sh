@@ -116,10 +116,17 @@ fi
 # TEND_SANDBOX_PATH — one dir per line). These are the adopter's explicit opt-in
 # and are prepended ahead of the auto-derived toolchains below (so their tools
 # win), with a leading `~` expanded to the sandbox home (the adopter doesn't
-# know the sandbox username). This is the durable lever for tools an adopter
-# installs at runtime in a `setup:` step (e.g. `cargo-nextest`): those land in
-# the runner's home, aren't seeded into /etc/skel, so the auto-derivation below
-# can't reach them — `sandbox_path: ["~/.cargo/bin"]` covers them.
+# know the sandbox username).
+#
+# What this lever reaches is what the sandbox can already open: a dir under the
+# sandbox home, or a system location (`/opt/hostedtoolcache/...`, where the
+# `setup-*` actions install). It does NOT reach a tool a `setup:` step installed
+# under the RUNNER's home — `cargo install`, `pip install --user`, an action
+# with its own install root. `~` there expands to the SANDBOX home, which has no
+# copy of it; naming the runner-home path instead would put a /home/runner entry
+# on the agent's PATH, which is the one thing the rewrite below exists to
+# prevent. Installing the tool as the sandbox user, via `sandbox_setup:`, is
+# what covers that case.
 declare -a _extra_path=()
 if [ -n "${TEND_SANDBOX_PATH:-}" ]; then
   while IFS= read -r dir; do
@@ -158,8 +165,9 @@ AGENT_ENV_FILE="${RUNNER_TEMP}/tend-agent-env"
 #
 # (Tools an adopter installs at runtime in a `setup:` step land in the runner's
 # home, not /etc/skel, so they're absent from the sandbox home and this rewrite
-# finds nothing to point at — reaching those is what the `sandbox_path:` lever
-# above is for.)
+# finds nothing to point at. `sandbox_setup:` — which runs as the sandbox user —
+# is what installs those where the agent can reach them; sandbox-setup.sh names
+# whatever is still unreachable once it has run.)
 runner_home="${HOME:-/home/runner}"
 declare -A _seen_path=()
 declare -a _agent_path=()
@@ -197,6 +205,11 @@ for _d in /usr/local/bin /usr/bin /bin; do
   _seen_path["${_d}"]=1
 done
 AGENT_PATH="$(IFS=:; printf '%s' "${_agent_path[*]}")"
+# The composed PATH, in the log: it is the only place the tilde expansion and
+# the runner-home rewrite are visible, and both are silent when they don't find
+# what an adopter expected. sandbox-setup.sh reports the consequence — which
+# commands the runner resolves and the agent can't — after sandbox_setup runs.
+log "sandbox PATH: ${AGENT_PATH}"
 cat >"$AGENT_ENV_FILE" <<EOF
 HOME=${AGENT_HOME}
 PATH=${AGENT_PATH}

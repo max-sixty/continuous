@@ -1004,6 +1004,62 @@ def test_sandbox_levers_warn_on_codex(
     assert "apply only to the Claude harness" in capsys.readouterr().err
 
 
+def test_setup_without_sandbox_lever_notes_the_gap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `setup:` steps under the Claude harness with nothing reaching into the
+    # sandbox: whatever they install under the runner's home never reaches the
+    # agent, which is invisible until a session hits `command not found`.
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        setup:
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-nextest
+    """),
+    )
+    Config.load(path)
+    assert "`setup:` runs as the runner" in capsys.readouterr().err
+
+
+def test_setup_with_sandbox_lever_is_quiet(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        setup:
+          - uses: taiki-e/install-action@v2
+        sandbox_setup:
+          - command -v cargo-nextest
+    """),
+    )
+    Config.load(path)
+    assert "`setup:` runs as the runner" not in capsys.readouterr().err
+
+
+def test_setup_note_skipped_under_codex(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # No sandbox under codex — `setup:` already runs in the agent's own
+    # environment, so there is no gap to point at.
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        harness: codex
+        model: gpt-5.5
+        setup:
+          - uses: taiki-e/install-action@v2
+    """),
+    )
+    Config.load(path)
+    assert "`setup:` runs as the runner" not in capsys.readouterr().err
+
+
 def test_sandbox_levers_no_warn_with_claude_override(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

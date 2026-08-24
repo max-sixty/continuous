@@ -1,31 +1,65 @@
 #!/usr/bin/env bash
-# Run the adopter's `sandbox_setup:` commands (from .config/tend.yaml, threaded
-# in as TEND_SANDBOX_SETUP) INSIDE the sandbox, as the non-sudo sandbox user,
-# after the toolchain and plugins are installed and just before the agent runs.
-# This is the general lever runner-side `setup:` can't provide: `setup:` runs as
-# the runner user around the composite action and never reaches the sandbox
-# env. Commands run with the same launch env the agent gets ($AGENT_ENV_FILE:
-# proxy routing, CA trust, dummy credentials, plus any sandbox_path/sandbox_env
-# additions) and with the workspace as the working directory.
+# Finish preparing the sandbox, immediately before the agent runs: execute the
+# adopter's `sandbox_setup:` commands (from .config/tend.yaml, threaded in as
+# TEND_SANDBOX_SETUP) INSIDE the sandbox, as the non-sudo sandbox user, then
+# report which commands the runner can resolve and the agent cannot.
+#
+# `sandbox_setup:` is the general lever runner-side `setup:` can't provide:
+# `setup:` runs as the runner user around the composite action and never reaches
+# the sandbox env. Commands run with the same launch env the agent gets
+# ($AGENT_ENV_FILE: proxy routing, CA trust, dummy credentials, plus any
+# sandbox_path/sandbox_env additions) and with the workspace as the working
+# directory.
 #
 # Env-only tweaks (PATH, exported vars) do NOT persist to the agent from here —
 # a child shell's exports die with it. Use `sandbox_path:` / `sandbox_env:` for
 # those; use `sandbox_setup:` for actions with on-disk effects (installing a
 # tool, warming a cache, generating a file).
 #
-# Inputs (env): TEND_SANDBOX_SETUP (the commands; empty → no-op), SANDBOX and
-# AGENT_ENV_FILE (exported by setup-sandbox.sh via $GITHUB_ENV). Used by the
-# Claude harness action.
+# Inputs (env): TEND_SANDBOX_SETUP (the commands; empty → the report only),
+# SANDBOX and AGENT_ENV_FILE (exported by setup-sandbox.sh via $GITHUB_ENV).
+# Used by the Claude harness action.
 set -euo pipefail
 
-[ -n "${TEND_SANDBOX_SETUP:-}" ] || exit 0
+if [ -n "${TEND_SANDBOX_SETUP:-}" ]; then
+  # Run as the sandbox user with the agent's launch env. The commands go through
+  # `bash -c`'s argument: no temp file (so no sandbox-side read permission on a
+  # runner-owned path), and not stdin (so a setup command that reads stdin — an
+  # installer prompt, `read` — can't swallow the remaining lines and exit 0).
+  # `-e` inside so a failing setup command fails the step loudly rather than
+  # silently proceeding to the run.
+  mapfile -t AGENT_ENV <"$AGENT_ENV_FILE"
+  sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" bash -eo pipefail -c "$TEND_SANDBOX_SETUP"
+  echo "[sandbox-setup] ran adopter sandbox_setup commands as $SANDBOX"
+fi
 
-# Run as the sandbox user with the agent's launch env. The commands go through
-# `bash -c`'s argument: no temp file (so no sandbox-side read permission on a
-# runner-owned path), and not stdin (so a setup command that reads stdin — an
-# installer prompt, `read` — can't swallow the remaining lines and exit 0). `-e`
-# inside so a failing setup command fails the step loudly rather than silently
-# proceeding to the run.
-mapfile -t AGENT_ENV <"$AGENT_ENV_FILE"
-sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" bash -eo pipefail -c "$TEND_SANDBOX_SETUP"
-echo "[sandbox-setup] ran adopter sandbox_setup commands as $SANDBOX"
+# What the agent won't be able to run. The sandbox PATH is the runner's with
+# every runner-home entry rewritten to the sandbox's own copy and dropped when
+# that copy doesn't exist (setup-sandbox.sh), so a tool a `setup:` step
+# installed under /home/runner is simply absent — no error, nothing in the log,
+# until the agent hits `command not found` mid-session and works around it
+# (skipping the check, or reaching for a weaker substitute). Diffing the two
+# PATHs by resolvable command name names the gap here, after sandbox_setup has
+# had its chance to close it. Reported, not fatal: most of what a runner carries
+# is irrelevant to a given session, and only the adopter knows which tools their
+# gate needs — asserting that belongs in their own `sandbox_setup:`.
+list_commands='
+IFS=:
+for dir in $1; do
+  [ -d "$dir" ] || continue
+  for f in "$dir"/*; do
+    if [ -f "$f" ] && [ -x "$f" ]; then printf "%s\n" "${f##*/}"; fi
+  done
+done'
+agent_path="$(sed -n 's/^PATH=//p' "$AGENT_ENV_FILE")"
+# The sandbox side runs as the sandbox user, so the -x test answers the question
+# that matters: can THAT uid execute it, not does the file exist.
+missing="$(comm -23 \
+  <(bash -c "$list_commands" _ "$PATH" | sort -u) \
+  <(sudo -u "$SANDBOX" bash -c "$list_commands" _ "$agent_path" | sort -u))"
+if [ -n "$missing" ]; then
+  echo "[sandbox-setup] on the runner's PATH, not the agent's:" \
+    "$(tr '\n' ' ' <<<"$missing")"
+  echo "[sandbox-setup] if the session needs one of those, install it as the" \
+    "sandbox user with sandbox_setup: in .config/tend.yaml"
+fi

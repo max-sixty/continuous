@@ -181,11 +181,17 @@ bot_name: my-project-bot
 # that sandbox, before the agent launches:
 #
 # - `sandbox_path`: directories prepended to the sandbox PATH. A leading `~`
-#   expands to the sandbox home. This is the fix for a toolchain installed in
-#   the sandbox home but off PATH (e.g. rustup's shims):
+#   expands to the sandbox home. This is the fix for a toolchain the sandbox can
+#   already open but doesn't have on PATH — under the sandbox home (e.g.
+#   rustup's shims), or in a system location a `setup:` step installed into:
 #
 #     sandbox_path:
 #       - ~/.cargo/bin
+#
+#   It is NOT the fix for a tool a `setup:` step installed under the RUNNER's
+#   home — `cargo install`, `pip install --user`, an action with its own install
+#   root. `~` expands to the sandbox home, which holds no copy of it, and the
+#   runner's home is outside what the sandbox may reach. Use `sandbox_setup:`.
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
 #   keys are rejected at `init`, and again inside the sandbox so a hand-edited
@@ -214,6 +220,20 @@ bot_name: my-project-bot
 #
 #     sandbox_setup:
 #       - uv sync
+#
+#   It is also how a tool from `setup:` reaches the agent, since `setup:` runs as
+#   the runner: install it again here, or copy the binary across. End the block
+#   by asserting the tools your CI gate needs are on the agent's PATH, so a miss
+#   fails the job instead of surfacing as a session that quietly skipped the
+#   check. `command -v a b c` exits 0 if ANY of them resolves, so loop:
+#
+#     sandbox_setup:
+#       - cp ~runner/.cargo-install/cargo-nextest/bin/cargo-nextest ~/.local/bin/
+#       - cp ~runner/.local/bin/pre-commit ~/.local/bin/
+#       - for c in cargo-nextest pre-commit; do command -v "$c" >/dev/null || { echo "missing: $c"; exit 1; }; done
+#
+#   Each run logs the sandbox PATH and the commands the runner resolves that the
+#   agent can't, so a gap that predates the assertion is visible in the job log.
 #
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.

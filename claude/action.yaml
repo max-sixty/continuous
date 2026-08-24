@@ -88,7 +88,9 @@ inputs:
     description: >-
       Newline-separated directories prepended to the sandbox agent's PATH,
       before the agent launches. A leading `~` expands to the sandbox home.
-      Runner-side `setup:` steps can't reach the sandbox env; this can.
+      Reaches a dir under the sandbox home or a system location — not a tool a
+      `setup:` step installed under the runner's home, which the sandbox has no
+      copy of. Use `sandbox_setup` for that.
   sandbox_env:
     default: ""
     description: >-
@@ -102,6 +104,8 @@ inputs:
       install and before the agent runs, with the agent's launch env and the
       workspace as cwd. For on-disk setup (installing a tool, warming a cache);
       env-only tweaks don't persist — use sandbox_path/sandbox_env for those.
+      This is also where a tool a `setup:` step installed under the runner's
+      home gets into the sandbox, and where to assert it arrived.
 
 outputs:
   token_usage:
@@ -248,7 +252,9 @@ runs:
 
     # Run the adopter's `sandbox_setup:` commands inside the sandbox, as the
     # sandbox user, after the toolchain + plugins are in place and before the
-    # agent launches. No-op when the input is empty.
+    # agent launches, then log which commands the runner's PATH resolves and the
+    # agent's does not. The report runs whether or not the input is set — an
+    # empty `sandbox_setup:` is exactly the config a missing tool hides in.
     - name: Run adopter sandbox setup
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/sandbox-setup.sh"
