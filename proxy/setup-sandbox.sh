@@ -354,11 +354,11 @@ for _d in "${_runner_path[@]}"; do
       ;;
   esac
   [ -n "${_seen_path[${_d}]:-}" ] && continue                           # dedup
-  # Mirrored paths are fresh sandbox-owned trees whose files were filtered
-  # above; existence is the access proof. System dirs are checked as the uid
-  # that will execute from them.
-  if [ -d "${_d}" ] && \
-     { [ -n "${_sandbox_home_path}" ] || sudo -u "${SANDBOX}" test -x "${_d}"; }; then
+  # A rewritten path names only the sandbox home and is safe even when empty;
+  # later sandbox_setup commands may populate it. System dirs are checked as
+  # the uid that will execute from them.
+  if [ -n "${_sandbox_home_path}" ] || \
+     { [ -d "${_d}" ] && sudo -u "${SANDBOX}" test -x "${_d}"; }; then
     _agent_path+=("${_d}")
     _seen_path["${_d}"]=1
   fi
