@@ -122,16 +122,10 @@ fi
 # win), with a leading `~` expanded to the sandbox home (the adopter doesn't
 # know the sandbox username).
 #
-# What this lever reaches is what the sandbox can already open: a dir under the
-# sandbox home, or a system location (`/opt/hostedtoolcache/...`, where the
-# `setup-*` actions install). It does NOT reach a tool a `setup:` step installed
-# under the RUNNER's home — `cargo install`, `pip install --user`, an action
-# with its own install root. `~` there expands to the SANDBOX home, which has no
-# copy of it; naming the runner-home path instead would put a /home/runner entry
-# on the agent's PATH, which is the one thing the rewrite below exists to
-# prevent. `sandbox_setup:` covers that case — it runs as the sandbox user,
-# which can read a named world-readable file under the runner's home (step 3
-# grants o+x along that path) without the whole dir joining the agent's PATH.
+# What this lever reaches is a dir under the sandbox home or a system location.
+# Runner-home PATH entries are mirrored automatically below; naming the source
+# runner-home path here would instead put the credential-holding home itself on
+# the agent's PATH, so it remains refused.
 runner_home="${HOME:-/home/runner}"
 declare -a _extra_path=()
 if [ -n "${TEND_SANDBOX_PATH:-}" ]; then
@@ -162,29 +156,161 @@ AGENT_ENV_FILE="${RUNNER_TEMP}/tend-agent-env"
 # /etc/skel-seeded language homes (.cargo/bin, .dotnet/tools, .config/composer/
 # vendor/bin, …) plus system dirs (/opt/pipx_bin, /usr/local/.ghcup/bin,
 # /usr/bin, …). `useradd -m` copied /etc/skel into the sandbox's OWN home, so
-# each runner-home toolchain has a sibling under ${AGENT_HOME}. We translate by
-# rewriting a leading ${runner_home} -> ${AGENT_HOME} and keeping the entry only
-# when it now exists and the sandbox UID can traverse it. This pulls every
-# seeded toolchain across with zero per-language code — cargo, dotnet, ghcup,
-# composer all arrive on the same rule, so there is no per-language allowlist to
-# grow.
+# each runner-home toolchain has a sibling under ${AGENT_HOME}. Before rewriting
+# a runner-home entry, mirror its install root into that sibling. A PATH dir
+# named `bin` gets its parent (so Python's ~/.local/bin also brings the
+# ~/.local/lib it imports); another PATH dir gets its own tree. The runner copy
+# replaces the /etc/skel copy, so a setup action's pinned tool cannot silently
+# fall back to the image default.
 #
-# Security boundary: the `case` rewrite below is the SOLE credential boundary. It
-# maps every runner-home prefix to the sandbox's own copy and drops the bare
-# runner-home root, so no /home/runner path ever reaches the sandbox PATH — and
-# the runner home is where the real credentials live. Do NOT relax that rewrite
-# trusting the `sudo -u "$SANDBOX" test -x` below as a backstop: it is not one.
-# It happens to fail here only because step 3 hasn't run yet; step 3 grants o+x
-# on every ancestor of $GITHUB_WORKSPACE (which lives under the runner home), so
-# from then on the sandbox UID can traverse /home/runner and `test -x` passes for
-# any world-executable dir beneath it. Reorder anything and that test filters
-# nothing: an un-rewritten runner-home path would sail through it.
+# Security boundary: the PATH still carries no runner-home entry. Mirroring is
+# limited to roots already announced on PATH, never the checkout, and only
+# hard-links files that are world-readable and not world-writable. Directories
+# are recreated sandbox-owned, so the agent may replace a tool in its own home
+# but cannot change the runner's inode. A private credential file is absent by
+# construction, not by a filename blocklist.
 #
-# (Tools an adopter installs at runtime in a `setup:` step land in the runner's
-# home, not /etc/skel, so they're absent from the sandbox home and this rewrite
-# finds nothing to point at. `sandbox_setup:` — which runs as the sandbox user —
-# is what installs those where the agent can reach them; sandbox-setup.sh names
-# whatever is still unreachable once it has run.)
+# Rust is the one companion tree: ~/.cargo/bin contains rustup shims, while the
+# selected toolchain and default live in ~/.rustup. Mirroring only the PATH root
+# would keep returning the sandbox image's toolchain after an adopter pinned a
+# different one with dtolnay/rust-toolchain.
+_world_readonly_file() {
+  local mode
+  mode=$(stat -c '%a' -- "$1") || return 1
+  mode=$((8#${mode}))
+  (( (mode & 0004) != 0 && (mode & 0002) == 0 ))
+}
+
+_world_readonly_dir() {
+  local mode
+  mode=$(stat -c '%a' -- "$1") || return 1
+  mode=$((8#${mode}))
+  (( (mode & 0005) == 0005 && (mode & 0002) == 0 ))
+}
+
+_mirror_runner_tree() {
+  local source resolved relative destination item item_relative target link
+  local mirrored=0
+  source="$1"
+  resolved=$(readlink -f -- "$source") || return 0
+  case "$resolved" in
+    "${runner_home}"/*) ;;
+    *) return 0 ;;
+  esac
+  relative="${resolved#"${runner_home}"/}"
+  destination="${AGENT_HOME}/${relative}"
+  case "$destination" in
+    "${AGENT_HOME}"/*) ;;
+    *) echo "::error::refusing unsafe sandbox mirror destination '$destination'"; exit 1 ;;
+  esac
+
+  # The destination is a fresh useradd copy, not adopter state. Clear it so a
+  # private runner file is absent rather than leaving a same-named skel default,
+  # and so the runner's pinned version wins every collision.
+  if [ -e "$destination" ] && [ ! -d "$destination" ]; then
+    echo "::error::sandbox mirror destination is not a directory: $destination"
+    exit 1
+  fi
+  sudo -u "$SANDBOX" mkdir -p "$destination"
+  sudo find "$destination" -mindepth 1 -delete
+
+  if ! _world_readonly_dir "$resolved"; then
+    log "did not mirror private or writable runner tool root $resolved"
+    return 0
+  fi
+
+  while IFS= read -r -d '' item; do
+    item_relative="${item#"${resolved}"/}"
+    target="${destination}/${item_relative}"
+    if [ -d "$item" ]; then
+      sudo -u "$SANDBOX" mkdir -p "$target"
+      continue
+    fi
+    sudo -u "$SANDBOX" mkdir -p "$(dirname "$target")"
+    if [ -L "$item" ]; then
+      local link_target
+      link_target=$(readlink -f -- "$item") || continue
+      if [ -f "$link_target" ]; then
+        _world_readonly_file "$link_target" || continue
+      elif [ -d "$link_target" ]; then
+        _world_readonly_dir "$link_target" || continue
+      else
+        continue
+      fi
+      link=$(readlink -- "$item")
+      case "$link" in
+        "${runner_home}") link="$AGENT_HOME" ;;
+        "${runner_home}"/*) link="${AGENT_HOME}/${link#"${runner_home}"/}" ;;
+      esac
+      sudo ln -sfnT -- "$link" "$target"
+      mirrored=$((mirrored + 1))
+      continue
+    fi
+    # Same-filesystem homes take the hard-link path. The copy fallback keeps a
+    # self-hosted runner with separate home mounts working; root owns the copy,
+    # so the sandbox still cannot mutate it.
+    if ! sudo ln -fT -- "$item" "$target" 2>/dev/null; then
+      sudo cp --preserve=mode,timestamps --remove-destination -T -- "$item" "$target"
+    fi
+    if sudo -u "$SANDBOX" test -w "$target"; then
+      sudo unlink "$target"
+      continue
+    fi
+    mirrored=$((mirrored + 1))
+  done < <(
+    find "$resolved" -mindepth 1 \
+      \( -type d \( ! -perm -0005 -o -perm -0002 \) -prune \) -o \
+      \( -type d -o \( -type f -perm -0004 ! -perm -0002 \) -o -type l \) \
+      -print0
+  )
+  log "mirrored $mirrored world-readable entries from $resolved"
+}
+
+IFS=: read -ra _runner_path <<<"${PATH}"
+declare -A _mirrored_roots=()
+for _d in "${_runner_path[@]}"; do
+  [ -n "${_d}" ] || continue
+  case "${_d}" in
+    "${runner_home}" | "${runner_home}"/*) ;;
+    *) continue ;;
+  esac
+  _resolved_path=$(readlink -f -- "${_d}") || continue
+  case "${_resolved_path}" in
+    "${runner_home}"/*) ;;
+    *) continue ;;
+  esac
+  # A repo may deliberately add its own bin dir to PATH, but copying the whole
+  # checkout would duplicate untrusted project code. Step 3 hands that tree to
+  # the sandbox separately; sandbox_path remains the explicit PATH lever.
+  case "${_resolved_path}" in
+    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) continue ;;
+  esac
+  if [ -n "${RUNNER_TEMP:-}" ]; then
+    case "${_resolved_path}" in
+      "${RUNNER_TEMP}") continue ;;
+      "${RUNNER_TEMP}"/*) _root="${_resolved_path}" ;;
+      */bin) _root="${_resolved_path%/bin}" ;;
+      *) _root="${_resolved_path}" ;;
+    esac
+  else
+    case "${_resolved_path}" in
+      */bin) _root="${_resolved_path%/bin}" ;;
+      *) _root="${_resolved_path}" ;;
+    esac
+  fi
+  [ "${_root}" != "${runner_home}" ] || _root="${_resolved_path}"
+  if [ -z "${_mirrored_roots[${_root}]:-}" ]; then
+    _mirror_runner_tree "${_root}"
+    _mirrored_roots["${_root}"]=1
+  fi
+  if [ "${_resolved_path}" = "${runner_home}/.cargo/bin" ] && \
+     [ -d "${runner_home}/.rustup" ] && \
+     [ -z "${_mirrored_roots[${runner_home}/.rustup]:-}" ]; then
+    _mirror_runner_tree "${runner_home}/.rustup"
+    _mirrored_roots["${runner_home}/.rustup"]=1
+  fi
+done
+
 declare -A _seen_path=()
 declare -a _agent_path=()
 # Adopter-declared dirs win over everything, .local/bin included: prepend them
@@ -201,7 +327,6 @@ if [ -z "${_seen_path["${AGENT_HOME}/.local/bin"]:-}" ]; then
   _agent_path+=("${AGENT_HOME}/.local/bin")
   _seen_path["${AGENT_HOME}/.local/bin"]=1
 fi
-IFS=: read -ra _runner_path <<<"${PATH}"
 for _d in "${_runner_path[@]}"; do
   [ -n "${_d}" ] || continue
   case "${_d}" in
