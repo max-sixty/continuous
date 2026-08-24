@@ -80,8 +80,12 @@ log "user $SANDBOX uid=$(id -u "$SANDBOX")"
 sudo -u "$SANDBOX" mkdir -p "${AGENT_HOME}/.config/git"
 printf '/.claude/settings.local.json\n' \
   | sudo -u "$SANDBOX" tee "${AGENT_HOME}/.config/git/ignore" >/dev/null
+# `git -C` because this runs before step 3 grants the sandbox traversal of the
+# workspace: every sudo'd command inherits the runner's cwd there, and git stats
+# its cwd on startup whatever the command — under a 0750 /home/runner that is
+# `fatal: failed to stat`, exit 128, before the agent ever launches.
 sudo -u "$SANDBOX" env HOME="$AGENT_HOME" XDG_CONFIG_HOME="${AGENT_HOME}/.config" \
-  git config --global core.excludesFile "${AGENT_HOME}/.config/git/ignore"
+  git -C "$AGENT_HOME" config --global core.excludesFile "${AGENT_HOME}/.config/git/ignore"
 log "global gitignore at ${AGENT_HOME}/.config/git/ignore"
 
 # Decide the Anthropic auth scheme ONCE, here: unset the losing variable so
