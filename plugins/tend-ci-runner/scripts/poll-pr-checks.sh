@@ -33,7 +33,7 @@
 #   0  every gating check on <sha> settled green
 #   1  red — failing checks and their run URLs on stdout
 #   2  no usable rollup for <sha> — UNVERIFIED, not green. A <sha> that isn't
-#      a full 40-hex OID, rejected at entry; an unresolvable OID; an
+#      a full 40-char lowercase OID, rejected at entry; an unresolvable OID; an
 #      ephemeral merge-ref commit, which carries none; a commit with
 #      zero checks and zero statuses (a push every workflow's paths filter
 #      excludes — the rollup is null then too, so "nothing to gate on" is
@@ -55,11 +55,17 @@ OWNER="${GITHUB_REPOSITORY%/*}"
 # rollup() cannot tell from a transient failure: without this the loop sleeps
 # through its whole budget before reporting a caller bug, and head_note's
 # string compare then claims the branch advanced to the very commit that was
-# passed in. head_note can still misfire on the other exit-2 causes above — an
-# unresolvable OID and a merge-ref commit are both full-length and neither is
-# the branch head — so this narrows that note rather than fixing it.
-if [[ ! $SHA =~ ^[0-9a-fA-F]{40}$ ]]; then
-  echo "poll-pr-checks.sh: <sha> must be a full 40-char commit OID, got '$SHA' — UNVERIFIED, not green" >&2
+# passed in. Lowercase-only for the same reason from the other direction:
+# GraphQL coerces an uppercase OID happily, but head_note compares it against
+# `headRefOid`, which comes back lowercase — so an uppercase argument
+# mismatches its own commit and trails every verdict with that spurious note.
+# Nothing here emits uppercase (`git rev-parse` and `headRefOid` are both
+# lowercase), so rejecting it costs no real caller. head_note can still
+# misfire on the other exit-2 causes above — an unresolvable OID and a
+# merge-ref commit are both full-length and neither is the branch head — so
+# this narrows that note rather than fixing it.
+if [[ ! $SHA =~ ^[0-9a-f]{40}$ ]]; then
+  echo "poll-pr-checks.sh: <sha> must be a full 40-char lowercase commit OID, got '$SHA' — UNVERIFIED, not green" >&2
   exit 2
 fi
 NAME="${GITHUB_REPOSITORY#*/}"

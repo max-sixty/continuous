@@ -420,6 +420,27 @@ def test_abbreviated_sha_is_rejected_at_entry(env: dict[str, str]) -> None:
     assert not Path(env["GH_CALLS"]).exists(), "the bad argument reached the API"
 
 
+def test_uppercase_sha_is_rejected_at_entry(env: dict[str, str]) -> None:
+    """GraphQL coerces an uppercase OID happily, but head_note compares it
+    against `headRefOid`, which comes back lowercase — so an uppercase argument
+    would poll its own commit successfully and then trail every verdict with a
+    spurious "branch advanced" note pointing at that same commit."""
+    _serve(env, _resp(_check_run("tests")))
+
+    result = subprocess.run(
+        [BASH, str(POLL_PR_CHECKS), "7", HEAD_SHA.upper()],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    out = result.stdout + result.stderr
+
+    assert result.returncode == 2, out
+    assert "UNVERIFIED, not green" in out
+    assert "branch advanced" not in out, "head_note fired on the rejected argument"
+    assert not Path(env["GH_CALLS"]).exists(), "the bad argument reached the API"
+
+
 def test_omitted_sha_is_rejected_not_reported_red(env: dict[str, str]) -> None:
     """Omitting <sha> is the likelier arity mistake, and `set -u` would kill the
     script with exit 1 — the code this file documents as red, which sends the
