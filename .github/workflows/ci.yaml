@@ -79,9 +79,15 @@ jobs:
           kill "$pid" 2>/dev/null || true
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
-  # These scripts need a second uid, sudo, and a hosted-runner PATH, so exercise
-  # the real boundary: shared paths cross, runner-home paths do not, and
-  # sandbox_setup can install a required home-scoped tool explicitly.
+  # setup-sandbox.sh and sandbox-setup.sh need a second uid, sudo, and a runner
+  # PATH to derive from, so no Python test reaches them. Running them for real
+  # leaves the runner changed — checkout's persisted git credential deleted,
+  # o+x along the workspace's ancestors, the proxy CA in the system trust store,
+  # mitmdump still on 8899 — so a step added after these needs to expect that;
+  # only the workspace ownership is restored. This job runs both for
+  # real, against the new boundary: shared paths cross, runner-home paths do
+  # not, same-name system fallbacks are blocked, and sandbox_setup can install
+  # a required home-scoped tool explicitly.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
