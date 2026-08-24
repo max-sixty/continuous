@@ -167,23 +167,18 @@ AGENT_ENV_FILE="${RUNNER_TEMP}/tend-agent-env"
 # vendor/bin, …) plus system dirs (/opt/pipx_bin, /usr/local/.ghcup/bin,
 # /usr/bin, …). `useradd -m` copied /etc/skel into the sandbox's OWN home, so
 # each runner-home toolchain has a sibling under ${AGENT_HOME}. Before rewriting
-# a runner-home entry, copy its containing install root into that sibling. One
-# level above the PATH dir brings Python's ~/.local/lib beside ~/.local/bin,
-# packages beside node_modules/.bin, and implementations beside SDK shims. The
-# runner copy replaces /etc/skel, so a pinned tool cannot silently fall back to
-# the image default.
+# a runner-home entry, copy its exact directory or the closed set of companion
+# runtime trees below into that sibling. The runner copy replaces /etc/skel, so
+# a pinned tool cannot silently fall back to the image default.
 #
 # Security boundary: except for the checkout handed to the agent below, the PATH
-# carries no runner-home entry. Mirroring is limited to roots already announced
-# on PATH and copies only files that are world-readable and not world-writable.
-# Directories are recreated sandbox-owned, so the agent may replace a tool in
-# its own home but cannot change the runner's independent source inode. A
-# private credential file is absent by construction, not by a filename blocklist.
-#
-# Rust is the one companion tree: ~/.cargo/bin contains rustup shims, while the
-# selected toolchain and default live in ~/.rustup. Mirroring only the PATH root
-# would keep returning the sandbox image's toolchain after an adopter pinned a
-# different one with dtolnay/rust-toolchain.
+# carries no runner-home entry. A file mode is not a credential classifier, so
+# the generic rule copies only the PATH directory, never its whole parent. The
+# closed companion list covers known runtime layouts without sweeping in Cargo
+# credentials or unrelated ~/.local/share data. Within those roots, only files
+# that are world-readable and not world-writable cross. Directories are
+# recreated sandbox-owned, so the agent may replace a tool in its own home but
+# cannot change the runner's independent source inode.
 _world_readonly_file() {
   local mode
   mode=$(stat -c '%a' -- "$1") || return 1
@@ -201,21 +196,21 @@ _world_readonly_dir() {
 _runner_path_entry_for_agent() {
   local entry resolved
   entry="$1"
-  case "$entry" in
+  resolved=$(readlink -f -- "$entry") || {
+    case "$entry" in
+      "${runner_home}" | "${runner_home}"/*) return 1 ;;
+      *) printf '%s' "$entry"; return 0 ;;
+    esac
+  }
+  case "$resolved" in
+    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*)
+      printf '%s' "$resolved"
+      ;;
     "${runner_home}") return 1 ;;
     "${runner_home}"/*)
-      resolved=$(readlink -f -- "$entry") || return 1
-      case "$resolved" in
-        "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*)
-          printf '%s' "$resolved"
-          ;;
-        "${runner_home}"/*)
-          printf '%s' "${AGENT_HOME}/${resolved#"${runner_home}"/}"
-          ;;
-        *) printf '%s' "$resolved" ;;
-      esac
+      printf '%s' "${AGENT_HOME}/${resolved#"${runner_home}"/}"
       ;;
-    *) printf '%s' "$entry" ;;
+    *) printf '%s' "$resolved" ;;
   esac
 }
 
@@ -290,10 +285,15 @@ _mirror_runner_tree() {
       unlink "$item"
       continue
     fi
+    # Decide from the canonical target, not the link text. An innocent-looking
+    # /tmp alias can still lead back to the credential-holding runner home.
     link=$(readlink -- "$item")
-    case "$link" in
+    case "$link_target" in
+      "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) link="$link_target" ;;
       "${runner_home}") link="$AGENT_HOME" ;;
-      "${runner_home}"/*) link="${AGENT_HOME}/${link#"${runner_home}"/}" ;;
+      "${runner_home}"/*)
+        link="${AGENT_HOME}/${link_target#"${runner_home}"/}"
+        ;;
     esac
     ln -sfnT -- "$link" "$item"
   done < <(find "$stage" -type l -print0)
@@ -309,10 +309,6 @@ IFS=: read -ra _runner_path <<<"${RUNNER_TOOL_PATH}"
 declare -A _mirrored_roots=()
 for _d in "${_runner_path[@]}"; do
   [ -n "${_d}" ] || continue
-  case "${_d}" in
-    "${runner_home}" | "${runner_home}"/*) ;;
-    *) continue ;;
-  esac
   _resolved_path=$(readlink -f -- "${_d}") || continue
   case "${_resolved_path}" in
     "${runner_home}"/*) ;;
@@ -324,24 +320,44 @@ for _d in "${_runner_path[@]}"; do
   case "${_resolved_path}" in
     "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) continue ;;
   esac
-  # Mirror one level above the PATH directory. That is `~/.local` for
-  # `~/.local/bin`, but also captures layouts such as `node_modules/.bin` plus
-  # its sibling packages and SDKMAN/asdf `shims` plus their implementations.
-  # A direct child of the runner home or RUNNER_TEMP remains its own root.
-  _root="${_resolved_path%/*}"
-  case "${_root}" in
-    "${runner_home}" | "${RUNNER_TEMP:-/nonexistent}") _root="${_resolved_path}" ;;
+  # Default unknown layouts to the exact PATH directory. Expand only closed,
+  # evidenced runtime layouts: user-site Python and uv companions, rustup's
+  # selected toolchain, package-manager trees whose bin entries are symlinks to
+  # siblings, and canonical SDK version roots. Go's ~/go/bin, .NET's
+  # ~/.dotnet/tools, and isolated installer bins need no expansion.
+  _roots=("${_resolved_path}")
+  case "${_resolved_path}" in
+    "${runner_home}/.local/bin")
+      _roots+=(
+        "${runner_home}/.local/lib"
+        "${runner_home}/.local/share/uv/tools"
+        "${runner_home}/.local/share/uv/python"
+      )
+      ;;
+    "${runner_home}/.cargo/bin")
+      _roots+=("${runner_home}/.rustup")
+      ;;
+    */node_modules/.bin)
+      _roots=("${_resolved_path%/.bin}")
+      ;;
+    */vendor/bin)
+      _roots=("${_resolved_path%/bin}")
+      ;;
+    "${runner_home}/.sdkman/candidates/"*/*/bin | \
+      "${runner_home}/.asdf/installs/"*/*/bin | \
+      "${runner_home}/.pyenv/versions/"*/bin | \
+      "${runner_home}/.rbenv/versions/"*/bin | \
+      "${runner_home}/.jenv/versions/"*/bin | \
+      "${runner_home}/.nvm/versions/node/"*/bin)
+      _roots=("${_resolved_path%/bin}")
+      ;;
   esac
-  if [ -z "${_mirrored_roots[${_root}]:-}" ]; then
-    _mirror_runner_tree "${_root}"
-    _mirrored_roots["${_root}"]=1
-  fi
-  if [ "${_resolved_path}" = "${runner_home}/.cargo/bin" ] && \
-     [ -d "${runner_home}/.rustup" ] && \
-     [ -z "${_mirrored_roots[${runner_home}/.rustup]:-}" ]; then
-    _mirror_runner_tree "${runner_home}/.rustup"
-    _mirrored_roots["${runner_home}/.rustup"]=1
-  fi
+  for _root in "${_roots[@]}"; do
+    if [ -z "${_mirrored_roots[${_root}]:-}" ]; then
+      _mirror_runner_tree "${_root}"
+      _mirrored_roots["${_root}"]=1
+    fi
+  done
 done
 
 # Name runner-selected commands whose exact source did not survive the mirror.
@@ -354,8 +370,9 @@ for _runner_dir in "${_runner_path[@]}"; do
   [ -d "${_runner_dir}" ] && [ -r "${_runner_dir}" ] || continue
   _expected_dir=$(_runner_path_entry_for_agent "${_runner_dir}") || continue
   case "${_expected_dir}" in
-    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) _workspace_entry=1 ;;
-    *) _workspace_entry= ;;
+    "${GITHUB_WORKSPACE}" | "${GITHUB_WORKSPACE}"/*) _check_mirror= ;;
+    "${AGENT_HOME}"/*) _check_mirror=1 ;;
+    *) _check_mirror= ;;
   esac
   for _command_path in "${_runner_dir}"/*; do
     [ -f "${_command_path}" ] && [ -x "${_command_path}" ] || continue
@@ -364,11 +381,9 @@ for _runner_dir in "${_runner_path[@]}"; do
     _seen_runner_commands["${_command_name}"]=1
     # The workspace is deliberately preserved and becomes accessible when step
     # 3 hands the checkout to the sandbox; testing it before that chown lies.
-    if [ -z "${_workspace_entry}" ] && \
+    if [ -n "${_check_mirror}" ] && \
        ! sudo -u "$SANDBOX" test -x "${_expected_dir}/${_command_name}"; then
-      case "${_runner_dir}" in
-        "${runner_home}"/*) _unmirrored_commands+=("${_command_name}") ;;
-      esac
+      _unmirrored_commands+=("${_command_name}")
     fi
   done
 done

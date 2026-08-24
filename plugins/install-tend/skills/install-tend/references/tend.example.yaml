@@ -173,14 +173,16 @@ bot_name: my-project-bot
 # `setup:` above runs as the RUNNER user, around the composite action. The
 # `claude` harness runs the agent as a separate, non-sudo sandbox user with a
 # fixed env allowlist. Tool directories that `setup:` adds to the runner's PATH
-# carry over automatically: system paths stay in place, while a runner-home
-# install root is copied to the same location under the sandbox home. The
-# independent snapshot keeps only files that another user can read but not write. This covers
-# user installs (`pip install --user`, `uv tool install`, `cargo install`) and
-# install actions without putting the runner's credential-holding home on PATH.
-# Rust's selected toolchain carries with its shims, and `JAVA_HOME` follows the
-# JDK selected on PATH. A skipped source command is named even when the sandbox
-# has an older command with the same name. Checkout paths remain in the checkout.
+# carry over automatically: system paths stay in place, while recognized
+# runner-home runtime layouts are copied to the same location under the sandbox
+# home. The independent snapshot keeps only files that another user can read but
+# not write. This covers user installs (`pip install --user`, `uv tool install`,
+# `cargo install`, Go and .NET tools), Node/Composer package bins, and common SDK
+# version directories without putting the runner's credential-holding home on
+# PATH. Rust's selected toolchain carries with its shims, and `JAVA_HOME` follows
+# the JDK selected on PATH. Unknown layouts copy only their PATH directory. A
+# skipped source command is named even when the sandbox has an older command
+# with the same name. Checkout paths remain in the checkout.
 #
 # Tend installs no language toolchain of its own. The agent gets the versions
 # selected in `setup:`. Other env changes do not cross the fixed allowlist; use
@@ -194,7 +196,8 @@ bot_name: my-project-bot
 #       - /opt/my-tool/bin
 #
 #   A runner-home source path outside the checkout is refused. Entries already
-#   on the runner's PATH need no config; Tend copies them into the sandbox home.
+#   on the runner's PATH normally need no config; Tend copies recognized runtime
+#   files into the sandbox home and reports anything that could not cross.
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
 #   keys are rejected at `init`, and again inside the sandbox so a hand-edited

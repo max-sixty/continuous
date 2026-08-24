@@ -112,6 +112,12 @@ jobs:
           printf '#!/bin/sh\ncat "$HOME/.local/lib/tend/value"\n' >"$HOME/.local/bin/tend-local"
           printf 'runner-library\n' >"$HOME/.local/lib/tend/value"
           printf '#!/bin/sh\necho pinned\n' >"$HOME/.cargo/bin/tend-pinned"
+          printf 'registry-token = "must-not-cross"\n' >"$HOME/.cargo/credentials.toml"
+          printf '[registries.private]\ntoken = "must-not-cross"\n' >"$HOME/.cargo/config.toml"
+          mkdir -p "$HOME/.local/share/tend-private"
+          printf 'must-not-cross\n' >"$HOME/.local/share/tend-private/token"
+          chmod 644 "$HOME/.cargo/credentials.toml" "$HOME/.cargo/config.toml" \
+            "$HOME/.local/share/tend-private/token"
           printf '#!/bin/sh\necho relative\n' >"$relative/tend-relative/bin/tend-relative"
           ln -s ../tend-relative/bin/tend-relative "$relative/.bin/tend-relative"
           printf '#!/bin/sh\necho alias\n' >"$sdk/17/bin/tend-alias"
@@ -120,6 +126,11 @@ jobs:
           printf '#!/bin/sh\necho system-fallback\n' | \
             sudo tee /usr/local/bin/tend-fallback >/dev/null
           cp /bin/true "$bin/tend-setid" "$bin/tend-capability"
+          runner_alias="/tmp/tend-runner-home-alias-$GITHUB_RUN_ID"
+          inode_alias="/tmp/tend-runner-inode-alias-$GITHUB_RUN_ID"
+          ln -s "$bin" "$runner_alias"
+          ln -s "$bin/tend-setid" "$inode_alias"
+          ln -s "$inode_alias" "$bin/tend-link-bypass"
           mkfifo "$bin/tend-fifo"
           chmod 755 "$bin/tend-probe" "$HOME/.local/bin/tend-local" \
             "$HOME/.cargo/bin/tend-pinned" "$relative/tend-relative/bin/tend-relative" \
@@ -134,11 +145,11 @@ jobs:
             echo "$relative/.bin"
             echo "$sdk/current/bin"
             echo "$workspace_bin"
+            echo "$runner_alias"
           } >>"$GITHUB_PATH"
           sudo install -d /etc/skel/.cargo/bin
           printf '#!/bin/sh\necho stale\n' | sudo tee /etc/skel/.cargo/bin/tend-pinned >/dev/null
           sudo chmod 755 /etc/skel/.cargo/bin/tend-pinned
-          ln -s "$bin" "$RUNNER_TEMP/tend-runner-home-alias"
       - name: Set up the sandbox
         env:
           TEND_GH_TOKEN: dummy
@@ -177,6 +188,12 @@ jobs:
               exit 1
               ;;
           esac
+          case ":$agent_path:" in
+            *":/tmp/tend-runner-home-alias-$GITHUB_RUN_ID:"*)
+              echo "::error::an external alias exposed its runner-home target: $agent_path"
+              exit 1
+              ;;
+          esac
       - name: Verify mirrored tools and boundary
         run: |
           source_bin="$HOME/.cargo-install/tend-probe/bin"
@@ -191,11 +208,15 @@ jobs:
             test "$(tend-fallback)" = system-fallback
             tend-setid
             tend-capability
+            tend-link-bypass
             case "$(rustc --version)" in "rustc 1.85.0 "*) ;; *) exit 1 ;; esac
             test "$(readlink -f "$JAVA_HOME")" = "$1"
             test ! -e ~/.cargo-install/tend-probe/bin/tend-private
             test ! -e ~/.cargo-install/tend-probe/bin/tend-writable
             test ! -e ~/.cargo-install/tend-probe/bin/tend-fifo
+            test ! -e ~/.cargo/credentials.toml
+            test ! -e ~/.cargo/config.toml
+            test ! -e ~/.local/share/tend-private
             test ! -w ~/.cargo-install/tend-probe/bin/tend-probe
             for command in tend-setid tend-capability; do
               mode=$(stat -c %a ~/.cargo-install/tend-probe/bin/$command)
@@ -205,6 +226,11 @@ jobs:
           if test "$source_bin/tend-probe" -ef \
               /home/tend-sandbox/.cargo-install/tend-probe/bin/tend-probe; then
             echo "::error::the sandbox tool still shares the runner's inode"
+            exit 1
+          fi
+          if test "$source_bin/tend-setid" -ef \
+              /home/tend-sandbox/.cargo-install/tend-probe/bin/tend-link-bypass; then
+            echo "::error::a copied symlink still reaches its runner-owned inode"
             exit 1
           fi
           test -n "$(getcap "$source_bin/tend-capability")"
@@ -257,7 +283,14 @@ jobs:
           MITMPROXY_VERSION: "0"
         run: |
           set -o pipefail
-          TEND_SANDBOX_PATH="$RUNNER_TEMP/tend-runner-home-alias" \
+          alias="/tmp/tend-runner-home-alias-$GITHUB_RUN_ID"
+          case "$alias" in
+            "$HOME" | "$HOME"/*)
+              echo "::error::the canonical-refusal fixture is lexically under HOME"
+              exit 1
+              ;;
+          esac
+          TEND_SANDBOX_PATH="$alias" \
             bash proxy/setup-sandbox.sh >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
           # Actions parses workflow commands out of any step output, so echoing
           # the captured line verbatim would annotate this passing job with the
