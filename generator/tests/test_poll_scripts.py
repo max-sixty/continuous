@@ -416,6 +416,9 @@ def test_a_rollup_already_read_outranks_a_later_absence(
     assert "is not a commit in owner/repo" not in out, (
         "the verdict overruled a rollup this run had already read"
     )
+    # A bare negative passes on any run that fails to produce the string at
+    # all; a retained $R routes this to the cap report, so pin that exit.
+    assert result.returncode == 3, out
 
 
 def test_the_sentinel_at_the_grace_recheck_never_reads_green(
