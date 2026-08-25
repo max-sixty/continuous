@@ -30,7 +30,9 @@
 # diffs them, so a red one is drift in the code under poll and has to gate. The
 # generator hardcodes both names, so the match is stable rather than a guess
 # about adopter naming, and it is keyed on the workflow — a repo's own job
-# named `review` still gates.
+# named `review` still gates. `test_poll_exemptions_match_the_agentless_generated_workflows`
+# pins the two sets as complements, so a second agentless generated workflow
+# goes red there rather than inheriting the exemption and reading green here.
 #
 # Filtering to empty is not green. A rollup holding only exempt entries answers
 # nothing about this commit — the same state as no rollup at all — and this
@@ -173,15 +175,14 @@ rollup() {
     | map(if any(.[]; .status != "COMPLETED")
           then first(.[] | select(.status != "COMPLETED"))
           else max_by(.startedAt) end)
-    | if length == 0 then empty else
-      {pending: [.[] | select(.status != "COMPLETED") | .name],
+    | select(length > 0)
+    | {pending: [.[] | select(.status != "COMPLETED") | .name],
        failed: [.[] | select(.status == "COMPLETED")
                 | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT"
                          or .conclusion == "STARTUP_FAILURE"
                          or .conclusion == "ACTION_REQUIRED"
                          or .conclusion == "ERROR")
-                | "\(.name) \(.url)"]}
-      end' 2>/dev/null || true
+                | "\(.name) \(.url)"]}' 2>/dev/null || true
 }
 
 # A moved head is reported as a distinct outcome, never silently absorbed:
