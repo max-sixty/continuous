@@ -40,9 +40,12 @@ def test_pinned_mitmproxy_matches_the_action() -> None:
 
 def _allow_hosts_regex() -> re.Pattern[str]:
     setup = (REPO_ROOT / "proxy" / "setup-sandbox.sh").read_text()
-    match = re.search(r"--allow-hosts '([^']*)'", setup)
-    assert match, "no single-quoted --allow-hosts flag in proxy/setup-sandbox.sh"
-    return re.compile(match.group(1))
+    # `[^']*` spans newlines, so a stray example in a comment would silently
+    # win the first match — require exactly one occurrence.
+    found = re.findall(r"--allow-hosts '([^']*)'", setup)
+    assert len(found) == 1, "expected one --allow-hosts flag in proxy/setup-sandbox.sh"
+    # mitmproxy compiles --allow-hosts with re.IGNORECASE; model that here.
+    return re.compile(found[0], re.IGNORECASE)
 
 
 def test_allow_hosts_regex_covers_every_injected_host() -> None:
@@ -51,9 +54,10 @@ def test_allow_hosts_regex_covers_every_injected_host() -> None:
     # intercepted, so its dummy is never swapped for the real secret and every
     # call to it 401s — with the proxy alive, the CA trusted and both files
     # looking correct in isolation. Both sides carry a "keep in sync" comment;
-    # only this asserts it. mitmproxy matches the pattern against the connection
-    # address, so check the bare host and the host:port form the regex's own
-    # optional port group exists to admit.
+    # only this asserts it. mitmproxy appends the port to every candidate it
+    # matches (peer address, Host header, SNI), so `host:port` is the form
+    # interception actually turns on — the bare host is extra strictness, not
+    # what production feeds the regex.
     allow_hosts = _allow_hosts_regex()
     for host in BASIC_HOSTS | TOKEN_HOSTS | ANTHROPIC_HOSTS:
         assert allow_hosts.search(host), f"{host} is injected but never intercepted"
