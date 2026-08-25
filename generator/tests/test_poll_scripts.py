@@ -137,6 +137,11 @@ NULL_ROLLUP = json.dumps(
     {"data": {"repository": {"object": {"statusCheckRollup": None}}}}
 )
 
+# GitHub answers an OID that resolves to nothing with a *successful* response
+# carrying a null `object` — distinct from NULL_ROLLUP, where the commit
+# exists and merely has no rollup.
+NO_SUCH_COMMIT = json.dumps({"data": {"repository": {"object": None}}})
+
 
 @pytest.fixture
 def env(tmp_path: Path) -> dict[str, str]:
@@ -333,6 +338,42 @@ def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
 
     assert result.returncode == 2
     assert "UNVERIFIED, not green" in result.stdout
+
+
+def test_unresolvable_oid_is_terminal_not_a_transient_blip(
+    env: dict[str, str],
+) -> None:
+    """A well-formed 40-hex OID that names no object passes the entry guard, and
+    GitHub answers it with a *successful* response whose `object` is null — the
+    same empty rollup a transient failure produces. Read as a blip it burns the
+    whole nine-iteration budget and then trails a "branch advanced" note naming
+    the real head, which nobody pushed to. `object: null` says exactly one
+    thing, so it is a verdict on the second sighting, not a retry."""
+    Path(env["HEAD_JSON"]).write_text(json.dumps({"headRefOid": "c" * 40}))
+    _serve(env, NO_SUCH_COMMIT)
+
+    result = _poll(env)
+    out = result.stdout + result.stderr
+
+    assert result.returncode == 2, out
+    assert "UNVERIFIED, not green" in out
+    assert HEAD_SHA in out
+    assert "branch advanced" not in out, "head_note qualified an OID with no commit"
+    assert Path(env["GRAPHQL_CALLS"]).read_text().strip() == "2", (
+        "an unresolvable OID kept polling instead of returning a verdict"
+    )
+
+
+def test_one_absent_sighting_is_not_a_verdict(env: dict[str, str]) -> None:
+    """A commit pushed seconds earlier can read as absent through brief
+    replication lag; exiting on the first sighting would turn a genuine push
+    into a spurious UNVERIFIED."""
+    _serve(env, NO_SUCH_COMMIT, _resp(_check_run("tests")))
+
+    result = _poll(env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "green" in result.stdout
 
 
 def test_paginates_past_the_first_page(env: dict[str, str]) -> None:

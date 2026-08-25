@@ -33,7 +33,8 @@
 #   0  every gating check on <sha> settled green
 #   1  red — failing checks and their run URLs on stdout
 #   2  no usable rollup for <sha> — UNVERIFIED, not green. A <sha> that isn't
-#      a full 40-char lowercase OID, rejected at entry; an unresolvable OID; an
+#      a full 40-char lowercase OID, rejected at entry; an OID that resolves to
+#      no object, reported on its own line and without waiting out the loop; an
 #      ephemeral merge-ref commit, which carries none; a commit with
 #      zero checks and zero statuses (a push every workflow's paths filter
 #      excludes — the rollup is null then too, so "nothing to gate on" is
@@ -60,10 +61,10 @@ OWNER="${GITHUB_REPOSITORY%/*}"
 # `headRefOid`, which comes back lowercase — so an uppercase argument
 # mismatches its own commit and trails every verdict with that spurious note.
 # Nothing here emits uppercase (`git rev-parse` and `headRefOid` are both
-# lowercase), so rejecting it costs no real caller. head_note can still
-# misfire on the other exit-2 causes above — an unresolvable OID and a
-# merge-ref commit are both full-length and neither is the branch head — so
-# this narrows that note rather than fixing it.
+# lowercase), so rejecting it costs no real caller. A well-formed OID naming
+# no object passes this guard and is caught in the loop instead; a merge-ref
+# commit is full-length and real, and remains the one exit-2 cause head_note
+# can still misfire on.
 if [[ ! $SHA =~ ^[0-9a-f]{40}$ ]]; then
   echo "poll-pr-checks.sh: <sha> must be a full 40-char lowercase commit OID, got '$SHA' — UNVERIFIED, not green" >&2
   exit 2
@@ -79,9 +80,16 @@ NAME="${GITHUB_REPOSITORY#*/}"
 # terminal CheckConclusionStates that land in neither bucket if forgotten, so
 # a job that never started would read as green. CANCELLED stays excluded: a
 # cancelled sibling is not a verdict on this commit. Empty output means no
-# usable rollup — an errors envelope, an unresolvable OID, a null rollup, and
-# a pagination that could not be finished all land there, and none of them may
-# read as settled green.
+# usable rollup — an errors envelope, a null rollup, and a pagination that
+# could not be finished all land there, and none of them may read as settled
+# green. `NOSUCHCOMMIT` is emitted instead when the OID names no object: an
+# errors envelope never reaches that test (`gh api graphql` exits non-zero on
+# one, and the `|| return 0` below already returns empty for it), so a
+# successful response carrying a null `object` means exactly one thing — this
+# OID is not an object in this repository. A real commit with no rollup is a
+# different shape (`object` non-null, `statusCheckRollup` null), so the two
+# don't collide. Conflated with the empty case it reads as a transient blip
+# and the loop retries an OID that will never appear.
 rollup() {
   local resp page nodes cursor
   local -a cursor_arg
@@ -115,6 +123,10 @@ rollup() {
             }
           }
         }' 2>/dev/null) || return 0
+    if [ "$(printf '%s' "$resp" | jq -r '.data.repository.object' 2>/dev/null)" = "null" ]; then
+      printf 'NOSUCHCOMMIT'
+      return 0
+    fi
     page=$(printf '%s' "$resp" | jq -c \
       '.data.repository.object.statusCheckRollup.contexts | select(. != null)' \
       2>/dev/null) || return 0
@@ -172,9 +184,27 @@ head_note() {
 # doesn't discard what earlier polls saw — the cap report below still names
 # the pending checks.
 R=""
+absent=0
 for _ in $(seq 1 9); do
   sleep 60
   cur=$(rollup)
+  # An OID that resolves to nothing will not start resolving, so retrying it
+  # only spends the budget to arrive at the same answer nine minutes later.
+  # Two consecutive sightings rather than one: a commit pushed seconds earlier
+  # can read as absent through brief replication lag, and exiting on the first
+  # would turn a genuine push into a spurious UNVERIFIED. head_note is skipped
+  # — with no commit behind the OID there is no "still $SHA's result" to
+  # qualify, and comparing it against the live head is what manufactured the
+  # false "branch advanced" claim.
+  if [ "$cur" = "NOSUCHCOMMIT" ]; then
+    absent=$((absent + 1))
+    if [ "$absent" -ge 2 ]; then
+      echo "$SHA is not a commit in $GITHUB_REPOSITORY — UNVERIFIED, not green"
+      exit 2
+    fi
+    continue
+  fi
+  absent=0
   [ -z "$cur" ] && continue
   R="$cur"
   [ "$(printf '%s' "$R" | jq '.pending | length')" -gt 0 ] && continue
@@ -182,7 +212,10 @@ for _ in $(seq 1 9); do
   # two later; re-check once before trusting pending == 0.
   sleep 30
   cur=$(rollup)
-  [ -z "$cur" ] && continue
+  # The sentinel is not a rollup: reaching $R it would blow up the jq below
+  # and fall through to green. It cannot follow a resolving poll in practice,
+  # so treat it as this iteration's blip rather than a second exit path.
+  case "$cur" in "" | NOSUCHCOMMIT) continue ;; esac
   R="$cur"
   [ "$(printf '%s' "$R" | jq '.pending | length')" -gt 0 ] && continue
 
