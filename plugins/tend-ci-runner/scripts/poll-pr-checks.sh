@@ -190,15 +190,21 @@ for _ in $(seq 1 9); do
   cur=$(rollup)
   # An OID that resolves to nothing will not start resolving, so retrying it
   # only spends the budget to arrive at the same answer nine minutes later.
-  # Two consecutive sightings rather than one: a commit pushed seconds earlier
-  # can read as absent through brief replication lag, and exiting on the first
-  # would turn a genuine push into a spurious UNVERIFIED. head_note is skipped
-  # — with no commit behind the OID there is no "still $SHA's result" to
-  # qualify, and comparing it against the live head is what manufactured the
-  # false "branch advanced" claim.
+  # Two sightings rather than one: a commit pushed seconds earlier can read as
+  # absent through brief replication lag, and exiting on the first would turn a
+  # genuine push into a spurious UNVERIFIED. They need not be adjacent — only a
+  # rollup clears the count, per the comment below. A non-empty $R is the other
+  # direction of the same rule: this run has already read and reduced that
+  # commit's rollup, so no later null overturns it, and the sentinel is a blip
+  # whatever the count — which is how the grace re-check below already treats
+  # it. Without that guard the script states a commit is not in the repository
+  # having just reported its checks, the same shape of contradicted claim as
+  # the "branch advanced" note. head_note is skipped — with no commit behind
+  # the OID there is no "still $SHA's result" to qualify, and comparing it
+  # against the live head is what manufactured that false claim.
   if [ "$cur" = "NOSUCHCOMMIT" ]; then
     absent=$((absent + 1))
-    if [ "$absent" -ge 2 ]; then
+    if [ "$absent" -ge 2 ] && [ -z "$R" ]; then
       echo "$SHA is not a commit in $GITHUB_REPOSITORY — UNVERIFIED, not green"
       exit 2
     fi

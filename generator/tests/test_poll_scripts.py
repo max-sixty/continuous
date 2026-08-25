@@ -400,6 +400,24 @@ def test_a_blip_between_two_sightings_does_not_reset_the_count(
     )
 
 
+def test_a_rollup_already_read_outranks_a_later_absence(
+    env: dict[str, str],
+) -> None:
+    """A rollup this run reduced is proof the OID resolves, so a later `object:
+    null` is a blip however many times it repeats — the grace re-check already
+    treats it that way. Ungated, the count reaches the verdict and the script
+    states the commit is not in the repository having just reported its checks,
+    the same contradicted claim the "branch advanced" note made."""
+    _serve(env, _resp(_check_run("tests")), NO_SUCH_COMMIT)
+
+    result = _poll(env)
+    out = result.stdout + result.stderr
+
+    assert "is not a commit in owner/repo" not in out, (
+        "the verdict overruled a rollup this run had already read"
+    )
+
+
 def test_the_sentinel_at_the_grace_recheck_never_reads_green(
     env: dict[str, str],
 ) -> None:
