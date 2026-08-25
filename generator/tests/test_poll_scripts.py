@@ -329,9 +329,10 @@ def test_error_status_context_is_red(env: dict[str, str]) -> None:
 
 
 def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
-    """A merge-ref commit or unresolvable OID returns a null rollup —
-    byte-identical to settled green if reduced naively. It must route to
-    UNVERIFIED."""
+    """A merge-ref commit returns a null rollup — byte-identical to settled
+    green if reduced naively. It must route to UNVERIFIED. An OID that names
+    no object is no longer this shape: it answers `object: null` and gets the
+    sentinel's verdict below, so NULL_ROLLUP stands for a real commit alone."""
     _serve(env, NULL_ROLLUP)
 
     result = _poll(env)
