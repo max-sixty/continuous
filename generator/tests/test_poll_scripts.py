@@ -345,6 +345,49 @@ def test_a_repo_check_named_like_tend_still_gates(env: dict[str, str]) -> None:
     assert "review https://github.com/o/r/actions/runs/404/job/1" in result.stdout
 
 
+def test_install_test_gates_despite_the_tend_prefix(env: dict[str, str]) -> None:
+    """`tend-install-test` carries the prefix but runs no agent — it
+    regenerates the committed workflow files and diffs them, so a red one is
+    drift in the code under poll and is the one `tend-*` verdict that counts."""
+    _serve(
+        env,
+        _resp(
+            _check_run("tests"),
+            _check_run(
+                "install-test",
+                conclusion="FAILURE",
+                workflow="tend-install-test",
+                run_id=909,
+            ),
+        ),
+    )
+
+    result = _poll(env | {"GITHUB_WORKFLOW": "tend-nightly"})
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "install-test https://github.com/o/r/actions/runs/909/job/1" in result.stdout
+
+
+def test_filtering_to_empty_never_reads_green(env: dict[str, str]) -> None:
+    """A rollup holding only exempt entries answers nothing about the commit,
+    which is the null-rollup state reached by another route — and this
+    exemption makes it routine, since `tend-review` registers within seconds of
+    the push while the repo's own checks may not have. Reducing it to
+    `{pending: [], failed: []}` would be byte-identical to settled green."""
+    _serve(
+        env,
+        _resp(
+            _check_run("review", status="IN_PROGRESS", workflow="tend-review"),
+            _check_run("handle", workflow="tend-mention", run_id=888),
+        ),
+    )
+
+    result = _poll(env | {"GITHUB_WORKFLOW": "tend-nightly"})
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "UNVERIFIED, not green" in result.stdout
+
+
 def test_pending_status_context_gates(env: dict[str, str]) -> None:
     _serve(env, _resp(_check_run("tests"), _status_ctx("codecov/patch", "PENDING")))
 

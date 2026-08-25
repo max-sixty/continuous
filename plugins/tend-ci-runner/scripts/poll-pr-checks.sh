@@ -19,15 +19,25 @@
 # Filters out the current run's own check run ($GITHUB_RUN_ID — in flight for
 # as long as this loop runs), sibling runs of the same workflow
 # ($GITHUB_WORKFLOW — queued behind this run's concurrency group, so waiting
-# on them deadlocks), and every other generated `tend-*` workflow. No tend
-# agent job is a verdict on the code — red ones included, which are tend
-# outages the caller cannot act on from here — and `tend-review` fires on the
-# very `synchronize` this poll is verifying, so its agent job starts seconds
-# after the loop and routinely outlives the cap. Without this clause every
-# session that pushes to a PR reports UNVERIFIED with every repo check already
-# green. The generator hardcodes the `tend-` prefix in each workflow's `name:`,
-# so the match is stable rather than a guess about adopter naming, and it is
-# keyed on the workflow — a repo's own job named `review` still gates.
+# on them deadlocks), and every other generated `tend-*` workflow bar
+# `tend-install-test`. No tend *agent* job is a verdict on the code — red ones
+# included, which are tend outages the caller cannot act on from here — and
+# `tend-review` fires on the very `synchronize` this poll is verifying, so its
+# agent job starts seconds after the loop and routinely outlives the cap.
+# Without this clause every session that pushes to a PR reports UNVERIFIED with
+# every repo check already green. `tend-install-test` is the one generated
+# workflow that runs no agent: it regenerates the committed workflow files and
+# diffs them, so a red one is drift in the code under poll and has to gate. The
+# generator hardcodes both names, so the match is stable rather than a guess
+# about adopter naming, and it is keyed on the workflow — a repo's own job
+# named `review` still gates.
+#
+# Filtering to empty is not green. A rollup holding only exempt entries answers
+# nothing about this commit — the same state as no rollup at all — and this
+# exemption makes that routine, since `tend-review` registers within seconds of
+# the push while the repo's own checks may not have. The reduction emits
+# nothing in that case, so the loop keeps polling and the cap reports
+# UNVERIFIED rather than green.
 #
 # Check runs are grouped per (check name, workflow): a
 # group with any non-terminal entry is pending, and a fully-terminal group is
@@ -47,8 +57,10 @@
 #      ephemeral merge-ref commit, which carries none; a commit with
 #      zero checks and zero statuses (a push every workflow's paths filter
 #      excludes — the rollup is null then too, so "nothing to gate on" is
-#      indistinguishable from "nothing answered"); or a page walk that could
-#      not be finished, where an unread node could hide a failure
+#      indistinguishable from "nothing answered"); a rollup whose every entry
+#      the filters above exempted, which reaches that same state by another
+#      route; or a page walk that could not be finished, where an unread node
+#      could hide a failure
 #   3  poll cap hit with checks still pending — UNVERIFIED, not green
 
 set -euo pipefail
@@ -89,9 +101,9 @@ NAME="${GITHUB_REPOSITORY#*/}"
 # terminal CheckConclusionStates that land in neither bucket if forgotten, so
 # a job that never started would read as green. CANCELLED stays excluded: a
 # cancelled sibling is not a verdict on this commit. Empty output means no
-# usable rollup — an errors envelope, an unresolvable OID, a null rollup, and
-# a pagination that could not be finished all land there, and none of them may
-# read as settled green.
+# usable rollup — an errors envelope, an unresolvable OID, a null rollup, a
+# rollup every entry of which was exempted above, and a pagination that could
+# not be finished all land there, and none of them may read as settled green.
 rollup() {
   local resp page nodes cursor
   local -a cursor_arg
@@ -155,18 +167,21 @@ rollup() {
        end
      | select(.url | test($own) | not)
      | select($wf == "" or .workflow != $wf)
-     | select(.workflow | startswith("tend-") | not)]
+     | select(.workflow == "tend-install-test"
+              or (.workflow | startswith("tend-") | not))]
     | group_by([.name, .workflow])
     | map(if any(.[]; .status != "COMPLETED")
           then first(.[] | select(.status != "COMPLETED"))
           else max_by(.startedAt) end)
-    | {pending: [.[] | select(.status != "COMPLETED") | .name],
+    | if length == 0 then empty else
+      {pending: [.[] | select(.status != "COMPLETED") | .name],
        failed: [.[] | select(.status == "COMPLETED")
                 | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT"
                          or .conclusion == "STARTUP_FAILURE"
                          or .conclusion == "ACTION_REQUIRED"
                          or .conclusion == "ERROR")
-                | "\(.name) \(.url)"]}' 2>/dev/null || true
+                | "\(.name) \(.url)"]}
+      end' 2>/dev/null || true
 }
 
 # A moved head is reported as a distinct outcome, never silently absorbed:
@@ -209,7 +224,7 @@ for _ in $(seq 1 9); do
 done
 
 if [ -z "$R" ]; then
-  echo "no rollup returned for $SHA — UNVERIFIED, not green"
+  echo "no gating check settled on $SHA — UNVERIFIED, not green"
   head_note
   exit 2
 fi
