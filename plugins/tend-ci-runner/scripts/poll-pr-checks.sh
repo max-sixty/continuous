@@ -204,8 +204,12 @@ for _ in $(seq 1 9); do
     fi
     continue
   fi
-  absent=0
+  # Only a rollup resets the count. An empty $cur is a transient failure —
+  # no answer about the OID — so clearing the count on one would let a blip
+  # between two sightings drop the run back into the cap path, with the same
+  # nine minutes of sleeping and the same false "branch advanced" note.
   [ -z "$cur" ] && continue
+  absent=0
   R="$cur"
   [ "$(printf '%s' "$R" | jq '.pending | length')" -gt 0 ] && continue
   # A just-settled matrix can register its `if: always()` omnibus a second or

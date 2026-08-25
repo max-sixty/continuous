@@ -356,8 +356,9 @@ def test_unresolvable_oid_is_terminal_not_a_transient_blip(
     out = result.stdout + result.stderr
 
     assert result.returncode == 2, out
-    assert "UNVERIFIED, not green" in out
-    assert HEAD_SHA in out
+    # The pre-fix path prints `no rollup returned for <sha> — UNVERIFIED, not
+    # green`, which matches a looser assert on either half; pin the verdict.
+    assert f"{HEAD_SHA} is not a commit in owner/repo" in out
     assert "branch advanced" not in out, "head_note qualified an OID with no commit"
     assert Path(env["GRAPHQL_CALLS"]).read_text().strip() == "2", (
         "an unresolvable OID kept polling instead of returning a verdict"
@@ -374,6 +375,48 @@ def test_one_absent_sighting_is_not_a_verdict(env: dict[str, str]) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "green" in result.stdout
+
+
+def test_a_blip_between_two_sightings_does_not_reset_the_count(
+    env: dict[str, str],
+) -> None:
+    """An empty rollup answers nothing about the OID, so it is not evidence
+    against an absence already seen. Resetting the count on one lets absences
+    alternating with blips never reach the verdict, dropping an unresolvable
+    OID back into the cap path — the nine-minute wait and the false "branch
+    advanced" note this verdict exists to remove."""
+    Path(env["HEAD_JSON"]).write_text(json.dumps({"headRefOid": "c" * 40}))
+    _serve(env, NO_SUCH_COMMIT, NULL_ROLLUP, NO_SUCH_COMMIT, NULL_ROLLUP)
+
+    result = _poll(env)
+    out = result.stdout + result.stderr
+
+    assert result.returncode == 2, out
+    assert f"{HEAD_SHA} is not a commit in owner/repo" in out
+    assert "branch advanced" not in out
+    assert Path(env["GRAPHQL_CALLS"]).read_text().strip() == "3", (
+        "an interleaved blip re-armed the count instead of being skipped"
+    )
+
+
+def test_the_sentinel_at_the_grace_recheck_never_reads_green(
+    env: dict[str, str],
+) -> None:
+    """The sentinel is not a rollup: reaching $R it makes both `-gt 0` tests
+    die with `integer expression expected`, so the red branch is skipped and
+    the script falls through to `echo green`. This pins the guard that keeps a
+    settled-then-absent sequence from reporting a red commit as green."""
+    _serve(
+        env,
+        _resp(_check_run("tests")),
+        NO_SUCH_COMMIT,
+        _resp(_check_run("tests", conclusion="FAILURE", run_id=707)),
+    )
+
+    result = _poll(env)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "tests https://github.com/o/r/actions/runs/707/job/1" in result.stdout
 
 
 def test_paginates_past_the_first_page(env: dict[str, str]) -> None:
