@@ -56,7 +56,7 @@ plant() {
 }
 
 setup() {
-  local agent_path
+  local agent_path path_entry
   set_inputs
   export TEND_SANDBOX_PATH="$GITHUB_WORKSPACE/.tend-explicit/bin"
   MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
@@ -67,12 +67,15 @@ setup() {
 
   agent_path=$(sed -n 's/^\[setup-sandbox\] sandbox PATH: //p' "$RUNNER_TEMP/setup.log")
   test -n "$agent_path"
-  case ":$agent_path:" in
-    *":$HOME/"* | *":$HOME:"*)
-      echo "::error::a runner-home entry reached the sandbox PATH: $agent_path"
-      exit 1
-      ;;
-  esac
+  while IFS= read -r path_entry; do
+    case "$path_entry" in
+      "$GITHUB_WORKSPACE" | "$GITHUB_WORKSPACE"/*) ;;
+      "$HOME" | "$HOME"/*)
+        echo "::error::a non-workspace runner-home entry reached the sandbox PATH: $path_entry"
+        exit 1
+        ;;
+    esac
+  done < <(tr : '\n' <<<"$agent_path")
   case "$agent_path" in
     "$GITHUB_WORKSPACE/.tend-explicit/bin":*) ;;
     *) echo "::error::sandbox_path did not lead the PATH: $agent_path"; exit 1 ;;
@@ -153,12 +156,13 @@ cleanup() {
   local shared
   shared="/opt/tend-sandbox-test-$GITHUB_RUN_ID/bin"
   if [ -n "${SANDBOX:-}" ]; then
-    sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+    /usr/bin/sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
   fi
-  sudo rm -f /usr/local/bin/tend-probe "$shared/tend-shared"
-  sudo rmdir "$shared" "${shared%/bin}" 2>/dev/null || true
-  sudo rm -f /etc/skel/.tend-seeded/bin/tend-seeded
-  sudo rmdir /etc/skel/.tend-seeded/bin /etc/skel/.tend-seeded 2>/dev/null || true
+  /usr/bin/sudo rm -f /usr/local/bin/tend-probe "$shared/tend-shared"
+  /usr/bin/sudo rmdir "$shared" "${shared%/bin}" 2>/dev/null || true
+  /usr/bin/sudo rm -f /etc/skel/.tend-seeded/bin/tend-seeded
+  /usr/bin/sudo rmdir /etc/skel/.tend-seeded/bin \
+    /etc/skel/.tend-seeded 2>/dev/null || true
 }
 
 case "${1:-}" in
