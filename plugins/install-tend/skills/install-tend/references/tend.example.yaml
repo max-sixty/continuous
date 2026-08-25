@@ -172,12 +172,12 @@ bot_name: my-project-bot
 #
 # `setup:` above runs as the RUNNER user, around the composite action. The
 # `claude` harness runs the agent as a separate, non-sudo sandbox user with a
-# fixed env allowlist. Shared system and hosted-toolcache PATH entries carry
-# over, which covers the standard setup-node/python/go/java/uv actions. Paths
-# under the runner's home do not: that home may contain credentials, and Tend
-# does not try to classify its files as tools or secrets. Use `sandbox_setup:`
-# for home-scoped installs such as `cargo install`, `pip install --user`, or
-# `uv tool install`.
+# fixed env allowlist. Shared system/hosted-toolcache paths and independently
+# seeded paths already present under the sandbox home carry over. Changes that
+# `setup:` makes under the runner's home do not: that home may contain
+# credentials, and Tend does not classify its files as tools or secrets. Use
+# `sandbox_setup:` for home-scoped installs or version changes such as
+# `cargo install`, `pip install --user`, or `uv tool install`.
 #
 # Tend installs no language toolchain of its own. These keys make deliberate
 # additions inside the sandbox:

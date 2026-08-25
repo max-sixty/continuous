@@ -166,9 +166,9 @@ fi
 
 AGENT_ENV_FILE="${RUNNER_TEMP}/tend-agent-env"
 # `setup:` actions that install into shared system or hosted-toolcache paths
-# work unchanged. Entries under the runner's home do not cross the UID boundary:
-# a file mode cannot tell a runtime from a credential. Home-scoped installs
-# belong in `sandbox_setup:`, which runs as the sandbox user.
+# work unchanged. A runner-home path uses an independently seeded counterpart
+# already present under the sandbox home; runner-home files themselves never
+# cross the UID boundary. Later home-scoped installs belong in `sandbox_setup:`.
 IFS=: read -ra _runner_path <<<"${RUNNER_TOOL_PATH}"
 declare -a _agent_path=()
 declare -a _blocked_home_command=()
@@ -204,9 +204,20 @@ for _d in "${_runner_path[@]}"; do
       _d="${_resolved_path}"
       _shared_path=1
       ;;
-    "${runner_home}" | "${runner_home}"/*)
+    "${runner_home}")
       _dropped_home_path+=("${_resolved_path}")
       _drop_home=1
+      ;;
+    "${runner_home}"/*)
+      _sandbox_home_path="${AGENT_HOME}/${_resolved_path#"${runner_home}"/}"
+      if [ -d "${_sandbox_home_path}" ] && \
+         sudo -u "${SANDBOX}" test -x "${_sandbox_home_path}"; then
+        _d="${_sandbox_home_path}"
+        _shared_path=
+      else
+        _dropped_home_path+=("${_resolved_path}")
+        _drop_home=1
+      fi
       ;;
     *)
       _d="${_resolved_path}"
@@ -253,12 +264,12 @@ if [ "${#_blocked_home_command[@]}" -gt 0 ]; then
   TEND_BLOCKED_PATH="${AGENT_HOME}/.tend-blocked/bin"
   sudo -u "$SANDBOX" mkdir -p "$TEND_BLOCKED_PATH"
   printf '%s\n' '#!/bin/sh' \
-    'printf "tend: %s came from the runner home and is unavailable; install it with sandbox_setup:\n" "${0##*/}" >&2' \
+    'printf "tend: %s came from the runner home and is unavailable; install it into ~/.local/bin with sandbox_setup or configure sandbox_path\n" "${0##*/}" >&2' \
     'exit 127' \
     | sudo -u "$SANDBOX" tee "${TEND_BLOCKED_PATH%/bin}/unavailable" >/dev/null
   sudo -u "$SANDBOX" chmod +x "${TEND_BLOCKED_PATH%/bin}/unavailable"
   for _command_name in "${_blocked_home_command[@]}"; do
-    sudo -u "$SANDBOX" ln -s ../unavailable "${TEND_BLOCKED_PATH}/${_command_name}"
+    sudo -u "$SANDBOX" ln -sfn ../unavailable "${TEND_BLOCKED_PATH}/${_command_name}"
   done
   _agent_path=(
     "${_agent_path[@]:0:${_agent_prefix_count}}"
