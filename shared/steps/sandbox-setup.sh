@@ -18,7 +18,7 @@
 #
 # Inputs (env): TEND_SANDBOX_SETUP (the commands; empty → the report only),
 # SANDBOX, AGENT_ENV_FILE, AGENT_PATH and TEND_BLOCKED_PATH (exported by
-# setup-sandbox.sh via $GITHUB_ENV).
+# setup-sandbox.sh via $GITHUB_ENV), GITHUB_WORKFLOW from Actions.
 # Used by the Claude harness action.
 set -euo pipefail
 
@@ -29,8 +29,15 @@ if [ -n "${TEND_SANDBOX_SETUP:-}" ]; then
   # installer prompt, `read` — can't swallow the remaining lines and exit 0).
   # `-e` inside so a failing setup command fails the step loudly rather than
   # silently proceeding to the run.
+  # `sudo env` replaces the environment with only what is listed. GITHUB_WORKFLOW
+  # is named so it carries across. One `sandbox_setup:` block runs for every
+  # workflow, and a command scopes itself to one by its name — the same string a
+  # runner-side `setup:` step matches with `if: github.workflow == '…'`. It goes
+  # last because `env` takes the final assignment of a name, so an adopter's
+  # `sandbox_env:` cannot displace it.
   mapfile -t AGENT_ENV <"$AGENT_ENV_FILE"
-  sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" bash -eo pipefail -c "$TEND_SANDBOX_SETUP"
+  sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" GITHUB_WORKFLOW="$GITHUB_WORKFLOW" \
+    bash -eo pipefail -c "$TEND_SANDBOX_SETUP"
   echo "[sandbox-setup] ran adopter sandbox_setup commands as $SANDBOX"
 fi
 

@@ -128,7 +128,10 @@ verify() {
       ;;
   esac
 
-  setup_commands=$'mkdir -p ~/.local/bin\ncp ~runner/.cargo-install/tend-probe/bin/tend-probe ~/.local/bin/\ntend-probe'
+  # `sudo env` would drop GITHUB_WORKFLOW; sandbox_setup names it so a command
+  # can scope itself to one workflow. `test -n` so an empty value fails here
+  # rather than passing the grep vacuously.
+  setup_commands=$'mkdir -p ~/.local/bin\ncp ~runner/.cargo-install/tend-probe/bin/tend-probe ~/.local/bin/\ntend-probe\ntest -n "$GITHUB_WORKFLOW"\necho "sandbox_setup workflow: $GITHUB_WORKFLOW"'
   TEND_SANDBOX_SETUP="$setup_commands" \
     bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report-after.log"
   if grep 'unavailable to the agent:' "$RUNNER_TEMP/report-after.log" | grep -q tend-probe; then
@@ -136,6 +139,7 @@ verify() {
     exit 1
   fi
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-probe)" = probe
+  grep -qF "sandbox_setup workflow: $GITHUB_WORKFLOW" "$RUNNER_TEMP/report-after.log"
 }
 
 # An explicit runner-home path is the one route that could bypass the rewrite.

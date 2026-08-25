@@ -222,6 +222,15 @@ bot_name: my-project-bot
 #       - uv tool install pre-commit
 #       - pre-commit --version
 #
+#   One block runs for every workflow. `$GITHUB_WORKFLOW` names the one this
+#   run belongs to, so a command can scope itself to the workflows that need
+#   it. It is the same string a `setup:` step matches with
+#   `if: github.workflow == '...'`, so a gated install and its assertion name
+#   the same workflows:
+#
+#     sandbox_setup:
+#       - 'if [ "$GITHUB_WORKFLOW" = tend-weekly ]; then nix --version; fi'
+#
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.
 
