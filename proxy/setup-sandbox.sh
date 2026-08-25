@@ -430,7 +430,9 @@ log "starting proxy"
 # BASIC_HOSTS / TOKEN_HOSTS / ANTHROPIC_HOSTS frozensets in inject_credentials.py
 # (which own the credential boundary). A host in those sets but missing here is
 # never intercepted, so its dummy is never swapped for the real secret and auth
-# fails with a 401.
+# fails with a 401. The `test_allow_hosts_regex_*` tests in
+# proxy/test_inject_credentials.py parse this flag's single-quoted argument, so
+# keep it on one line and singly quoted.
 nohup "$UVX" --from "$MITMPROXY" mitmdump \
   -s "${ACTION_PATH}/proxy/inject_credentials.py" \
   --listen-host 127.0.0.1 --listen-port "$PROXY_PORT" \
