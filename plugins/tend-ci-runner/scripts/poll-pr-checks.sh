@@ -17,9 +17,19 @@
 # indistinguishable without admin scope.
 #
 # Filters out the current run's own check run ($GITHUB_RUN_ID — in flight for
-# as long as this loop runs) and sibling runs of the same workflow
+# as long as this loop runs), sibling runs of the same workflow
 # ($GITHUB_WORKFLOW — queued behind this run's concurrency group, so waiting
-# on them deadlocks). Check runs are grouped per (check name, workflow): a
+# on them deadlocks), and every other generated `tend-*` workflow. No tend
+# agent job is a verdict on the code — red ones included, which are tend
+# outages the caller cannot act on from here — and `tend-review` fires on the
+# very `synchronize` this poll is verifying, so its agent job starts seconds
+# after the loop and routinely outlives the cap. Without this clause every
+# session that pushes to a PR reports UNVERIFIED with every repo check already
+# green. The generator hardcodes the `tend-` prefix in each workflow's `name:`,
+# so the match is stable rather than a guess about adopter naming, and it is
+# keyed on the workflow — a repo's own job named `review` still gates.
+#
+# Check runs are grouped per (check name, workflow): a
 # group with any non-terminal entry is pending, and a fully-terminal group is
 # judged by its latest entry — a concurrency-cancelled run's check runs stay
 # on the commit forever, and an `if: always()` omnibus whose dependency was
@@ -144,7 +154,8 @@ rollup() {
           startedAt: ""}
        end
      | select(.url | test($own) | not)
-     | select($wf == "" or .workflow != $wf)]
+     | select($wf == "" or .workflow != $wf)
+     | select(.workflow | startswith("tend-") | not)]
     | group_by([.name, .workflow])
     | map(if any(.[]; .status != "COMPLETED")
           then first(.[] | select(.status != "COMPLETED"))

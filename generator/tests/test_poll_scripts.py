@@ -308,6 +308,43 @@ def test_own_run_and_same_workflow_are_filtered(env: dict[str, str]) -> None:
     assert result.returncode == 0, result.stdout
 
 
+def test_other_tend_workflows_do_not_gate(env: dict[str, str]) -> None:
+    """`tend-review` fires on the very push this poll is verifying, so its
+    agent job is created seconds after the loop starts and routinely outlives
+    the 9-minute cap — every session that pushes to a PR would report
+    UNVERIFIED with every repo check already green. No tend agent job is a
+    verdict on the code, so none of them gate, red or pending."""
+    env = env | {"GITHUB_WORKFLOW": "tend-nightly"}
+    _serve(
+        env,
+        _resp(
+            _check_run("tests"),
+            _check_run("review", status="IN_PROGRESS", workflow="tend-review"),
+            _check_run(
+                "handle", conclusion="FAILURE", workflow="tend-mention", run_id=888
+            ),
+        ),
+    )
+
+    result = _poll(env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_repo_check_named_like_tend_still_gates(env: dict[str, str]) -> None:
+    """The exemption is keyed on the *workflow* the generator names, not the
+    check-run name — a repo's own job called `review` still gates."""
+    _serve(
+        env,
+        _resp(_check_run("review", conclusion="FAILURE", workflow="ci", run_id=404)),
+    )
+
+    result = _poll(env | {"GITHUB_WORKFLOW": "tend-nightly"})
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "review https://github.com/o/r/actions/runs/404/job/1" in result.stdout
+
+
 def test_pending_status_context_gates(env: dict[str, str]) -> None:
     _serve(env, _resp(_check_run("tests"), _status_ctx("codecov/patch", "PENDING")))
 
