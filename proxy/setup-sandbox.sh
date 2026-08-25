@@ -208,6 +208,9 @@ for _d in "${_runner_path[@]}"; do
       _dropped_home_path+=("${_resolved_path}")
       _drop_home=1
       ;;
+    # This rewrite is the whole filter for runner-home entries. The later
+    # `test -x` is not a security backstop: it rejects /home/runner only before
+    # the workspace handoff grants traversal on the checkout's ancestors.
     "${runner_home}"/*)
       _sandbox_home_path="${AGENT_HOME}/${_resolved_path#"${runner_home}"/}"
       if [ -d "${_sandbox_home_path}" ] && \
@@ -264,7 +267,7 @@ if [ "${#_blocked_home_command[@]}" -gt 0 ]; then
   TEND_BLOCKED_PATH="${AGENT_HOME}/.tend-blocked/bin"
   sudo -u "$SANDBOX" mkdir -p "$TEND_BLOCKED_PATH"
   printf '%s\n' '#!/bin/sh' \
-    'printf "tend: %s came from the runner home and is unavailable; install it into ~/.local/bin with sandbox_setup or configure sandbox_path\n" "${0##*/}" >&2' \
+    'printf "tend: %s came from the runner home and is unavailable; install it into ~/.local/bin with sandbox_setup, or point sandbox_path at a copy outside the runner home\n" "${0##*/}" >&2' \
     'exit 127' \
     | sudo -u "$SANDBOX" tee "${TEND_BLOCKED_PATH%/bin}/unavailable" >/dev/null
   sudo -u "$SANDBOX" chmod +x "${TEND_BLOCKED_PATH%/bin}/unavailable"

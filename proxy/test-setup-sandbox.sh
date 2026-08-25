@@ -58,7 +58,10 @@ plant() {
 setup() {
   local agent_path path_entry
   set_inputs
-  export TEND_SANDBOX_PATH="$GITHUB_WORKSPACE/.tend-explicit/bin"
+  # The workspace path leads; a literal `~` exercises expansion against the
+  # sandbox home. The configured directory may be populated later.
+  # shellcheck disable=SC2088
+  export TEND_SANDBOX_PATH="$GITHUB_WORKSPACE/.tend-explicit/bin"$'\n~/.tend-tilde/bin'
   MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
   export MITMPROXY_VERSION
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml) \
@@ -83,6 +86,10 @@ setup() {
   case ":$agent_path:" in
     *:/home/tend-sandbox/.tend-seeded/bin:*) ;;
     *) echo "::error::sandbox-owned counterpart omitted from PATH: $agent_path"; exit 1 ;;
+  esac
+  case ":$agent_path:" in
+    *:/home/tend-sandbox/.tend-tilde/bin:*) ;;
+    *) echo "::error::sandbox_path ~ was not expanded: $agent_path"; exit 1 ;;
   esac
   grep -q 'runner-home PATH entries unavailable in sandbox:' "$RUNNER_TEMP/setup.log"
   grep -q 'runner-home commands blocked from shared fallbacks:.*tend-probe' \
