@@ -228,7 +228,7 @@ class Config:
                     "and regenerates workflows in one step)."
                 )
             raise click.ClickException(f"Config not found: {path}")
-        with path.open() as f:
+        with path.open(encoding="utf-8") as f:
             raw = _YAML.load(f) or {}
 
         if not isinstance(raw, dict):

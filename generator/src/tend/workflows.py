@@ -278,7 +278,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     skip_condition = "steps.gate.outputs.should_run == 'true'"
     gate_script = (
         importlib.resources.files("tend") / "templates" / "review-gate.sh"
-    ).read_text()
+    ).read_text(encoding="utf-8")
 
     content = _REVIEW_TMPL.render(
         cfg=eff,
@@ -304,7 +304,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     eff = _effective_cfg(cfg, wf)
     check_script = (
         importlib.resources.files("tend") / "templates" / "mention-verify.sh"
-    ).read_text()
+    ).read_text(encoding="utf-8")
 
     content = _MENTION_TMPL.render(
         cfg=eff,
@@ -415,7 +415,7 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     )
     check_script = (
         importlib.resources.files("tend") / "templates" / "notifications-check.sh"
-    ).read_text()
+    ).read_text(encoding="utf-8")
 
     content = _NOTIFICATIONS_TMPL.render(
         cfg=eff,
