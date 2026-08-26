@@ -183,7 +183,7 @@ def main():
                 announced = True
 
         if typed_at is None and args.code_file and os.path.exists(args.code_file):
-            with open(args.code_file) as fh:
+            with open(args.code_file, encoding="utf-8") as fh:
                 code = fh.read().strip()
             if code:
                 os.write(master, code.encode())
