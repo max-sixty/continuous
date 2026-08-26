@@ -23,8 +23,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=lib/gha-context-env.sh
-. "${SCRIPT_DIR}/lib/gha-context-env.sh"
+# shellcheck source=lib/sandbox-launch-env.sh
+. "${SCRIPT_DIR}/lib/sandbox-launch-env.sh"
 
 if [ -n "${TEND_SANDBOX_SETUP:-}" ]; then
   # Run as the sandbox user with the agent's launch env. The commands go through
@@ -33,13 +33,13 @@ if [ -n "${TEND_SANDBOX_SETUP:-}" ]; then
   # installer prompt, `read` — can't swallow the remaining lines and exit 0).
   # `-e` inside so a failing setup command fails the step loudly rather than
   # silently proceeding to the run.
-  # `sudo env` replaces the environment with only what is listed, so the
-  # GITHUB_* context is re-passed from lib/gha-context-env.sh: one
-  # `sandbox_setup:` block runs for every workflow and event, and a command
-  # scopes itself with $GITHUB_WORKFLOW or $GITHUB_EVENT_NAME.
-  mapfile -t AGENT_ENV <"$AGENT_ENV_FILE"
-  gha_context_env
-  sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" "${GHA_CONTEXT_ENV[@]}" \
+  # `sudo env` replaces the environment with only what is listed, so the launch
+  # env is rebuilt from lib/sandbox-launch-env.sh — the same composition the
+  # agent gets, GITHUB_* context included: one `sandbox_setup:` block runs for
+  # every workflow and event, and a command scopes itself with $GITHUB_WORKFLOW
+  # or $GITHUB_EVENT_NAME.
+  sandbox_launch_env "$AGENT_ENV_FILE"
+  sudo -u "$SANDBOX" env "${SANDBOX_LAUNCH_ENV[@]}" \
     bash -eo pipefail -c "$TEND_SANDBOX_SETUP"
   echo "[sandbox-setup] ran adopter sandbox_setup commands as $SANDBOX"
 fi

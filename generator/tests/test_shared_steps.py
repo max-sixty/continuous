@@ -2467,12 +2467,15 @@ def test_report_failure_leaves_a_human_comment_naming_the_run(
     )
 
 
-# The GITHUB_* context that crosses into the sandbox. The denylist is the only
+# The environment the sandbox user is launched with. The denylist is the only
 # thing keeping the real PAT and the runner's own command-file paths out of a
 # uid that runs adopter code, and `proxy/test-setup-sandbox.sh` represents all
 # five withheld paths with GITHUB_ENV alone — so drop one of the other four from
-# the `case` and that suite still passes. These pin every name on both sides.
-GHA_CONTEXT_ENV_LIB = REPO_ROOT / "shared" / "steps" / "lib" / "gha-context-env.sh"
+# the `case` and that suite still passes. These pin every name on both sides,
+# and the order the two halves are composed in.
+SANDBOX_LAUNCH_ENV_LIB = (
+    REPO_ROOT / "shared" / "steps" / "lib" / "sandbox-launch-env.sh"
+)
 
 WITHHELD = (
     "GITHUB_TOKEN",
@@ -2484,18 +2487,23 @@ WITHHELD = (
 )
 
 
-def _gha_context_env(env: dict[str, str]) -> list[str]:
-    """The NAME=VALUE pairs the lib would hand `sudo … env`, given `env`.
+def _sandbox_launch_env(
+    tmp_path: Path, env: dict[str, str], env_file: str = ""
+) -> list[str]:
+    """The argv the lib would hand `sudo … env`, given the file and `env`.
 
     Under the callers' own `set -euo pipefail`, and NUL-separated bytes because
     a carried value may itself contain a newline.
     """
+    path = tmp_path / "agent-env"
+    path.write_text(env_file)
     result = subprocess.run(
         [
             BASH,
             "-c",
-            f'set -euo pipefail; . "{GHA_CONTEXT_ENV_LIB}"; gha_context_env'
-            '; printf "%s\\0" "${GHA_CONTEXT_ENV[@]}"',
+            f'set -euo pipefail; . "{SANDBOX_LAUNCH_ENV_LIB}"'
+            f'; sandbox_launch_env "{path}"'
+            '; printf "%s\\0" "${SANDBOX_LAUNCH_ENV[@]}"',
         ],
         env={"PATH": "/usr/bin:/bin", **env},
         capture_output=True,
@@ -2504,7 +2512,29 @@ def _gha_context_env(env: dict[str, str]) -> list[str]:
     return [pair.decode() for pair in result.stdout.split(b"\0") if pair]
 
 
-def test_gha_context_env_withholds_every_denied_name() -> None:
+def test_sandbox_launch_env_puts_the_context_after_the_file(tmp_path: Path) -> None:
+    """`sandbox_env:` cannot decide what the run thinks it is.
+
+    An adopter's additions reach the file, and `env` takes the final assignment
+    of a name — so a `sandbox_env: {GITHUB_WORKFLOW: …}` would displace the real
+    one if the halves were composed the other way round. Composing them here is
+    what makes that the function's postcondition rather than a rule each caller
+    has to remember.
+    """
+    pairs = _sandbox_launch_env(
+        tmp_path,
+        {"GITHUB_WORKFLOW": "tend-weekly"},
+        env_file="HOME=/sandbox\nGITHUB_WORKFLOW=spoofed-by-sandbox-env\n",
+    )
+
+    assert pairs == [
+        "HOME=/sandbox",
+        "GITHUB_WORKFLOW=spoofed-by-sandbox-env",
+        "GITHUB_WORKFLOW=tend-weekly",
+    ]
+
+
+def test_sandbox_launch_env_withholds_every_denied_name(tmp_path: Path) -> None:
     """Each of the six is dropped, and dropping it is the only thing that is."""
     carried = {
         "GITHUB_WORKFLOW": "tend-weekly",
@@ -2513,47 +2543,52 @@ def test_gha_context_env_withholds_every_denied_name() -> None:
     }
     env = {**carried, **{name: f"secret-{name}" for name in WITHHELD}}
 
-    pairs = _gha_context_env(env)
+    pairs = _sandbox_launch_env(tmp_path, env)
 
     assert sorted(pairs) == sorted(f"{k}={v}" for k, v in carried.items())
 
 
-def test_gha_context_env_carries_a_name_the_denylist_never_heard_of() -> None:
+def test_sandbox_launch_env_carries_a_name_the_denylist_never_heard_of(
+    tmp_path: Path,
+) -> None:
     """A denylist, not an allowlist: a GITHUB_* Actions adds later crosses.
 
     Losing this is the failure that hides — the agent and the setup commands
     would each be missing a name nobody notices until a skill reaches for it.
     """
-    pairs = _gha_context_env({"GITHUB_A_NAME_FROM_2030": "value"})
+    pairs = _sandbox_launch_env(tmp_path, {"GITHUB_A_NAME_FROM_2030": "value"})
 
     assert pairs == ["GITHUB_A_NAME_FROM_2030=value"]
 
 
-def test_gha_context_env_is_anchored_to_the_prefix() -> None:
+def test_sandbox_launch_env_is_anchored_to_the_prefix(tmp_path: Path) -> None:
     """`^GITHUB_`, so a name that merely contains it stays on the runner.
 
     `MY_GITHUB_TOKEN` and `GITHUBBER_TOKEN` are the shapes that matter: an
     adopter `setup:` step is free to export either, and neither may ride across
     on a prefix the pattern got wrong at one end or the other.
     """
-    pairs = _gha_context_env(
+    pairs = _sandbox_launch_env(
+        tmp_path,
         {
             "MY_GITHUB_TOKEN": "real",
             "GITHUBBER_TOKEN": "also-real",
             "NOT_GITHUB": "x",
             "GITHUB_ACTOR": "someone",
-        }
+        },
     )
 
     assert pairs == ["GITHUB_ACTOR=someone"]
 
 
-def test_gha_context_env_survives_values_a_line_oriented_carrier_could_not() -> None:
+def test_sandbox_launch_env_survives_values_a_line_oriented_carrier_could_not(
+    tmp_path: Path,
+) -> None:
     """Spaces, newlines and globs arrive byte-identical.
 
-    This is what makes an argv array the right carrier: the agent env file is
-    newline-delimited, so a multi-line value there would split into a second
-    line past `sandbox_env`'s reserved-name guard.
+    This is what makes an argv array the right carrier for the context: the
+    agent env file is newline-delimited, so a multi-line value there would split
+    into a second line past `sandbox_env`'s reserved-name guard.
     """
     hostile = {
         "GITHUB_EVENT_NAME": "two\nlines",
@@ -2561,6 +2596,6 @@ def test_gha_context_env_survives_values_a_line_oriented_carrier_could_not() -> 
         "GITHUB_REF_NAME": "*",
     }
 
-    pairs = _gha_context_env(hostile)
+    pairs = _sandbox_launch_env(tmp_path, hostile)
 
     assert sorted(pairs) == sorted(f"{k}={v}" for k, v in hostile.items())

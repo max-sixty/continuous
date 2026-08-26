@@ -367,10 +367,10 @@ runs:
         sudo -u "$SANDBOX" tee "$WRAPPER" < "$RUNNER_TEMP/tend-wrapper.sh" >/dev/null
         sudo -u "$SANDBOX" chmod +x "$WRAPPER"
 
-        # The GITHUB_* context the sandbox gets — the set and its rationale
-        # are in lib/gha-context-env.sh.
-        . "${{ github.action_path }}/../shared/steps/lib/gha-context-env.sh"
-        gha_context_env
+        # The sandbox's launch env: the agent env file plus the GITHUB_*
+        # context, composed in that order — see lib/sandbox-launch-env.sh.
+        . "${{ github.action_path }}/../shared/steps/lib/sandbox-launch-env.sh"
+        sandbox_launch_env "$AGENT_ENV_FILE"
 
         # Launch the agent as the non-sudo sandbox user, backgrounded so the
         # runner can supervise it. Its launch env is $AGENT_ENV_FILE (written by
@@ -381,17 +381,16 @@ runs:
         # traffic tunnels through untouched. No real secret is in this env.
         #
         # The `sudo env VAR=...` form replaces the environment with only
-        # what's listed, so the GITHUB_* context vars are re-passed via
-        # GHA_CONTEXT_ENV above. They are public values, not secrets.
-        mapfile -t AGENT_ENV <"$AGENT_ENV_FILE"
+        # what's listed, so SANDBOX_LAUNCH_ENV above carries it. tend's own
+        # assignments follow it and so win, which is what they want — none is
+        # GITHUB_*-named, so none can displace the context.
         sudo -u "$SANDBOX" env \
-          "${AGENT_ENV[@]}" \
+          "${SANDBOX_LAUNCH_ENV[@]}" \
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB="$CLAUDE_CODE_SUBPROCESS_ENV_SCRUB" \
           BOT_NAME="$BOT_NAME" BOT_ID="$BOT_ID" \
           TEND_MODEL="$TEND_MODEL" TEND_ALLOWED_TOOLS="$TEND_ALLOWED_TOOLS" \
           TEND_SYSTEM_PROMPT="$TEND_SYSTEM_PROMPT" TEND_PROMPT="$TEND_PROMPT" \
           CI="${CI:-true}" \
-          "${GHA_CONTEXT_ENV[@]}" \
           bash "$WRAPPER" >"$STREAM_JSON" 2>"$STDERR_LOG" &
         CLAUDE_PID=$!
         echo "Claude PID: $CLAUDE_PID (running as $SANDBOX, headless claude -p)"

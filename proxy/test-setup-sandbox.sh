@@ -63,9 +63,11 @@ setup() {
   # shellcheck disable=SC2088
   export TEND_SANDBOX_PATH="$GITHUB_WORKSPACE/.tend-explicit/bin"$'\n~/.tend-tilde/bin'
   # `sandbox_env` reserves the credential and routing names, not the GITHUB_*
-  # context, so this entry is accepted and lands in $AGENT_ENV_FILE — earlier on
-  # the `env` line than the context array. verify()'s workflow-name grep is what
-  # holds the array in its trailing position: swap the two and this value wins.
+  # context, so this entry is accepted and lands in $AGENT_ENV_FILE. That the
+  # real workflow name then beats it is lib/sandbox-launch-env.sh's
+  # postcondition, unit-tested there; what this adds is the whole path — a
+  # config value threaded through setup-sandbox.sh into the file, composed by
+  # the lib, landing in a real sandbox under a real uid.
   export TEND_SANDBOX_ENV="GITHUB_WORKFLOW=spoofed-by-sandbox-env"
   MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
   export MITMPROXY_VERSION
@@ -133,12 +135,12 @@ verify() {
       ;;
   esac
 
-  # Both halves of the set lib/gha-context-env.sh defines, asserted from inside
-  # the sandbox. `test -n` on the carried names so an empty value fails here
-  # rather than passing the grep below vacuously; GITHUB_ENV for the withheld
-  # ones, non-vacuous because Actions sets it on the runner. The env file's
-  # dummy token must survive a real one on the runner, so this call supplies a
-  # distinct value and the sandbox asserts it still sees the file's.
+  # Both halves of the set lib/sandbox-launch-env.sh defines, asserted from
+  # inside the sandbox. `test -n` on the carried names so an empty value fails
+  # here rather than passing the grep below vacuously; GITHUB_ENV for the
+  # withheld ones, non-vacuous because Actions sets it on the runner. The env
+  # file's dummy token must survive a real one on the runner, so this call
+  # supplies a distinct value and the sandbox asserts it still sees the file's.
   dummy_token=$(sed -n 's/^GITHUB_TOKEN=//p' "$AGENT_ENV_FILE")
   test -n "$dummy_token"
   test -n "$GITHUB_ENV"

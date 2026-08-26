@@ -118,9 +118,11 @@ else
   ANTHROPIC_DUMMY="ANTHROPIC_API_KEY=sk-ant-api03-tendproxydummy0000000000000000000000000000"
 fi
 
-# The agent's launch environment, one NAME=VALUE per line, consumed by every
-# step that runs something as the sandbox user (mapfile -t + `env "${arr[@]}"`).
-# One file so the plugin-install and Run Claude steps cannot drift. Contents:
+# The agent's launch environment, one NAME=VALUE per line. The two crossings
+# that carry adopter code compose it with the GITHUB_* context, in that order,
+# via shared/steps/lib/sandbox-launch-env.sh; the plugin install reads it
+# straight (mapfile -t + `env "${arr[@]}"`) and takes no context. One file so
+# none of them can drift. Contents:
 # the proxy routing, CA trust for every client family (system store for
 # gh/git/curl is implicit; NODE_EXTRA_CA_CERTS for claude (Node ignores the
 # system store); SSL_CERT_FILE/REQUESTS_CA_BUNDLE for uv and certifi-based

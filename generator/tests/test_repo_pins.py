@@ -72,3 +72,50 @@ def test_action_path_references_resolve(harness: str) -> None:
         if not (REPO_ROOT / harness / ref).resolve().exists()
     ]
     assert not missing, f"{harness}/action.yaml references nothing at: {missing}"
+
+
+# The `sudo -u "$SANDBOX" env` line each adopter-facing crossing builds. Nothing
+# else covers claude/action.yaml's: its inline block is unlinted (the actionlint
+# hook is pinned to ^.github/workflows/), no workflow consumes the action with
+# `uses: ./`, and the test-sandbox job drives shared/steps/sandbox-setup.sh
+# directly without going through the action. Deleting the splat there launches
+# the agent with no PATH, no proxy routing, no CA trust and no credentials.
+CROSSINGS = ("claude/action.yaml", "shared/steps/sandbox-setup.sh")
+GITHUB_ASSIGNMENT = re.compile(r"\bGITHUB_[A-Z_]*=")
+
+
+def _sudo_env_command(body: str, path: str) -> str:
+    """The one `sudo -u "$SANDBOX" env …` command, continuations included."""
+    lines = body.splitlines()
+    starts = [i for i, line in enumerate(lines) if 'sudo -u "$SANDBOX" env' in line]
+    assert len(starts) == 1, f"{path}: expected one sudo env crossing, got {starts}"
+    i = starts[0]
+    command = [lines[i]]
+    while lines[i].rstrip().endswith("\\"):
+        i += 1
+        command.append(lines[i])
+    return "\n".join(command)
+
+
+@pytest.mark.parametrize("crossing", CROSSINGS)
+def test_the_crossing_launches_from_the_composed_env(crossing: str) -> None:
+    """The composed array is on the line, and nothing GITHUB_* follows it.
+
+    sandbox_launch_env puts the context after the agent env file, so an
+    adopter's `sandbox_env:` cannot decide what the run thinks it is. A caller
+    is free to append names of its own — tend's BOT_*/TEND_* assignments do,
+    and have to, since they must beat the file — but a GITHUB_*-named one would
+    land after the context and displace it. Scoped to the single command rather
+    than to file order, so it says "later in this argv", which is the thing that
+    decides who wins.
+    """
+    command = _sudo_env_command((REPO_ROOT / crossing).read_text(), crossing)
+
+    assert '"${SANDBOX_LAUNCH_ENV[@]}"' in command, (
+        f"{crossing}: the crossing does not carry the composed launch env"
+    )
+    trailing = command.split('"${SANDBOX_LAUNCH_ENV[@]}"', 1)[1]
+    assert not GITHUB_ASSIGNMENT.search(trailing), (
+        f"{crossing}: a GITHUB_* assignment follows the composed array, so it "
+        f"displaces the real context: {trailing.strip()}"
+    )
