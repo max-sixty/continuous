@@ -99,7 +99,7 @@ def _sudo_env_command(body: str, path: str) -> str:
 
 @pytest.mark.parametrize("crossing", CROSSINGS)
 def test_the_crossing_launches_from_the_composed_env(crossing: str) -> None:
-    """The composed array is on the line, and nothing GITHUB_* follows it.
+    """Something fills the array, it is on the line, and nothing GITHUB_* follows.
 
     sandbox_launch_env puts the context after the agent env file, so an
     adopter's `sandbox_env:` cannot decide what the run thinks it is. A caller
@@ -108,9 +108,20 @@ def test_the_crossing_launches_from_the_composed_env(crossing: str) -> None:
     land after the context and displace it. Scoped to the single command rather
     than to file order, so it says "later in this argv", which is the thing that
     decides who wins.
-    """
-    command = _sudo_env_command((REPO_ROOT / crossing).read_text(), crossing)
 
+    The call is asserted separately because bash expands `"${arr[@]}"` on an
+    UNSET array to nothing and exits 0, `set -u` included, so a splat with
+    nothing filling it is not an error the shell reports: the crossing would
+    launch with an empty environment — no PATH, no proxy routing, no CA trust,
+    no credentials — and only the child's exit code would say so.
+    """
+    body = (REPO_ROOT / crossing).read_text()
+    command = _sudo_env_command(body, crossing)
+
+    assert 'sandbox_launch_env "$AGENT_ENV_FILE"' in body, (
+        f"{crossing}: nothing composes the launch env, and an unset array "
+        f"splats to nothing, so the crossing would launch with an empty one"
+    )
     assert '"${SANDBOX_LAUNCH_ENV[@]}"' in command, (
         f"{crossing}: the crossing does not carry the composed launch env"
     )
