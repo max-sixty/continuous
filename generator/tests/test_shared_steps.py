@@ -2465,3 +2465,102 @@ def test_report_failure_leaves_a_human_comment_naming_the_run(
         f"deleted a human comment that merely named the run: "
         f"{_deleted(report_failure_env)}"
     )
+
+
+# The GITHUB_* context that crosses into the sandbox. The denylist is the only
+# thing keeping the real PAT and the runner's own command-file paths out of a
+# uid that runs adopter code, and `proxy/test-setup-sandbox.sh` represents all
+# five withheld paths with GITHUB_ENV alone — so drop one of the other four from
+# the `case` and that suite still passes. These pin every name on both sides.
+GHA_CONTEXT_ENV_LIB = REPO_ROOT / "shared" / "steps" / "lib" / "gha-context-env.sh"
+
+WITHHELD = (
+    "GITHUB_TOKEN",
+    "GITHUB_ENV",
+    "GITHUB_PATH",
+    "GITHUB_OUTPUT",
+    "GITHUB_STATE",
+    "GITHUB_STEP_SUMMARY",
+)
+
+
+def _gha_context_env(env: dict[str, str]) -> list[str]:
+    """The NAME=VALUE pairs the lib would hand `sudo … env`, given `env`.
+
+    Under the callers' own `set -euo pipefail`, and NUL-separated bytes because
+    a carried value may itself contain a newline.
+    """
+    result = subprocess.run(
+        [
+            BASH,
+            "-c",
+            f'set -euo pipefail; . "{GHA_CONTEXT_ENV_LIB}"; gha_context_env'
+            '; printf "%s\\0" "${GHA_CONTEXT_ENV[@]}"',
+        ],
+        env={"PATH": "/usr/bin:/bin", **env},
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    return [pair.decode() for pair in result.stdout.split(b"\0") if pair]
+
+
+def test_gha_context_env_withholds_every_denied_name() -> None:
+    """Each of the six is dropped, and dropping it is the only thing that is."""
+    carried = {
+        "GITHUB_WORKFLOW": "tend-weekly",
+        "GITHUB_EVENT_NAME": "schedule",
+        "GITHUB_REPOSITORY": "max-sixty/tend",
+    }
+    env = {**carried, **{name: f"secret-{name}" for name in WITHHELD}}
+
+    pairs = _gha_context_env(env)
+
+    assert sorted(pairs) == sorted(f"{k}={v}" for k, v in carried.items())
+
+
+def test_gha_context_env_carries_a_name_the_denylist_never_heard_of() -> None:
+    """A denylist, not an allowlist: a GITHUB_* Actions adds later crosses.
+
+    Losing this is the failure that hides — the agent and the setup commands
+    would each be missing a name nobody notices until a skill reaches for it.
+    """
+    pairs = _gha_context_env({"GITHUB_A_NAME_FROM_2030": "value"})
+
+    assert pairs == ["GITHUB_A_NAME_FROM_2030=value"]
+
+
+def test_gha_context_env_is_anchored_to_the_prefix() -> None:
+    """`^GITHUB_`, so a name that merely contains it stays on the runner.
+
+    `MY_GITHUB_TOKEN` and `GITHUBBER_TOKEN` are the shapes that matter: an
+    adopter `setup:` step is free to export either, and neither may ride across
+    on a prefix the pattern got wrong at one end or the other.
+    """
+    pairs = _gha_context_env(
+        {
+            "MY_GITHUB_TOKEN": "real",
+            "GITHUBBER_TOKEN": "also-real",
+            "NOT_GITHUB": "x",
+            "GITHUB_ACTOR": "someone",
+        }
+    )
+
+    assert pairs == ["GITHUB_ACTOR=someone"]
+
+
+def test_gha_context_env_survives_values_a_line_oriented_carrier_could_not() -> None:
+    """Spaces, newlines and globs arrive byte-identical.
+
+    This is what makes an argv array the right carrier: the agent env file is
+    newline-delimited, so a multi-line value there would split into a second
+    line past `sandbox_env`'s reserved-name guard.
+    """
+    hostile = {
+        "GITHUB_EVENT_NAME": "two\nlines",
+        "GITHUB_HEAD_REF": "a b  c",
+        "GITHUB_REF_NAME": "*",
+    }
+
+    pairs = _gha_context_env(hostile)
+
+    assert sorted(pairs) == sorted(f"{k}={v}" for k, v in hostile.items())

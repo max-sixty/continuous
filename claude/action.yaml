@@ -367,26 +367,10 @@ runs:
         sudo -u "$SANDBOX" tee "$WRAPPER" < "$RUNNER_TEMP/tend-wrapper.sh" >/dev/null
         sudo -u "$SANDBOX" chmod +x "$WRAPPER"
 
-        # Pass GITHUB_* through as a denylist rather than an explicit
-        # allowlist: most GITHUB_* vars are informational (GITHUB_ACTOR,
-        # GITHUB_API_URL, GITHUB_REF_NAME, GITHUB_WORKSPACE, …) and a
-        # denylist picks up future additions automatically. Skills depend on
-        # them for run-self-reference (branch names, gist headings, dedup of
-        # own check runs) and owner-correct URL construction. Exclude:
-        #   GITHUB_TOKEN — the agent env file carries a dummy; the real
-        #     PAT lives in the proxy. (The file's dummy must not be
-        #     overridden, so the denylist entry is load-bearing.)
-        #   GITHUB_{ENV,PATH,OUTPUT,STATE,STEP_SUMMARY} — paths the
-        #     runner re-reads after this step exits; the sandbox must not
-        #     be handed a channel into later steps' env / PATH / outputs /
-        #     job summary.
-        GHA_VARS=()
-        while IFS= read -r name; do
-          case "$name" in
-            GITHUB_TOKEN|GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY) continue ;;
-          esac
-          GHA_VARS+=("$name=${!name}")
-        done < <(compgen -e | grep '^GITHUB_')
+        # The GITHUB_* context the sandbox gets — the set and its rationale
+        # are in lib/gha-context-env.sh.
+        . "${{ github.action_path }}/../shared/steps/lib/gha-context-env.sh"
+        gha_context_env
 
         # Launch the agent as the non-sudo sandbox user, backgrounded so the
         # runner can supervise it. Its launch env is $AGENT_ENV_FILE (written by
@@ -397,8 +381,8 @@ runs:
         # traffic tunnels through untouched. No real secret is in this env.
         #
         # The `sudo env VAR=...` form replaces the environment with only
-        # what's listed, so the GITHUB_* context vars are re-passed via the
-        # denylist above. They are public values, not secrets.
+        # what's listed, so the GITHUB_* context vars are re-passed via
+        # GHA_CONTEXT_ENV above. They are public values, not secrets.
         mapfile -t AGENT_ENV <"$AGENT_ENV_FILE"
         sudo -u "$SANDBOX" env \
           "${AGENT_ENV[@]}" \
@@ -407,7 +391,7 @@ runs:
           TEND_MODEL="$TEND_MODEL" TEND_ALLOWED_TOOLS="$TEND_ALLOWED_TOOLS" \
           TEND_SYSTEM_PROMPT="$TEND_SYSTEM_PROMPT" TEND_PROMPT="$TEND_PROMPT" \
           CI="${CI:-true}" \
-          "${GHA_VARS[@]}" \
+          "${GHA_CONTEXT_ENV[@]}" \
           bash "$WRAPPER" >"$STREAM_JSON" 2>"$STDERR_LOG" &
         CLAUDE_PID=$!
         echo "Claude PID: $CLAUDE_PID (running as $SANDBOX, headless claude -p)"

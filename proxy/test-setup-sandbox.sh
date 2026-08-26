@@ -62,6 +62,11 @@ setup() {
   # sandbox home. The configured directory may be populated later.
   # shellcheck disable=SC2088
   export TEND_SANDBOX_PATH="$GITHUB_WORKSPACE/.tend-explicit/bin"$'\n~/.tend-tilde/bin'
+  # `sandbox_env` reserves the credential and routing names, not the GITHUB_*
+  # context, so this entry is accepted and lands in $AGENT_ENV_FILE — earlier on
+  # the `env` line than the context array. verify()'s workflow-name grep is what
+  # holds the array in its trailing position: swap the two and this value wins.
+  export TEND_SANDBOX_ENV="GITHUB_WORKFLOW=spoofed-by-sandbox-env"
   MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
   export MITMPROXY_VERSION
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml) \
@@ -98,7 +103,7 @@ setup() {
 }
 
 verify() {
-  local blocked_output rc report setup_commands
+  local blocked_output rc report setup_commands dummy_token
   local -a agent_env
   mapfile -t agent_env <"$AGENT_ENV_FILE"
   blocked_output=$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-probe 2>&1) \
@@ -128,11 +133,26 @@ verify() {
       ;;
   esac
 
-  # `sudo env` would drop GITHUB_WORKFLOW; sandbox_setup names it so a command
-  # can scope itself to one workflow. `test -n` so an empty value fails here
-  # rather than passing the grep vacuously.
-  setup_commands=$'mkdir -p ~/.local/bin\ncp ~runner/.cargo-install/tend-probe/bin/tend-probe ~/.local/bin/\ntend-probe\ntest -n "$GITHUB_WORKFLOW"\necho "sandbox_setup workflow: $GITHUB_WORKFLOW"'
-  TEND_SANDBOX_SETUP="$setup_commands" \
+  # Both halves of the set lib/gha-context-env.sh defines, asserted from inside
+  # the sandbox. `test -n` on the carried names so an empty value fails here
+  # rather than passing the grep below vacuously; GITHUB_ENV for the withheld
+  # ones, non-vacuous because Actions sets it on the runner. The env file's
+  # dummy token must survive a real one on the runner, so this call supplies a
+  # distinct value and the sandbox asserts it still sees the file's.
+  dummy_token=$(sed -n 's/^GITHUB_TOKEN=//p' "$AGENT_ENV_FILE")
+  test -n "$dummy_token"
+  test -n "$GITHUB_ENV"
+  setup_commands=$(printf '%s\n' \
+    'mkdir -p ~/.local/bin' \
+    'cp ~runner/.cargo-install/tend-probe/bin/tend-probe ~/.local/bin/' \
+    'tend-probe' \
+    'test -n "$GITHUB_WORKFLOW"' \
+    'test -n "$GITHUB_EVENT_NAME"' \
+    'test -z "${GITHUB_ENV:-}"' \
+    "test \"\$GITHUB_TOKEN\" = \"$dummy_token\"" \
+    'echo "sandbox_setup workflow: $GITHUB_WORKFLOW"')
+  GITHUB_TOKEN=runner-token-must-not-cross \
+    TEND_SANDBOX_SETUP="$setup_commands" \
     bash shared/steps/sandbox-setup.sh | tee "$RUNNER_TEMP/report-after.log"
   if grep 'unavailable to the agent:' "$RUNNER_TEMP/report-after.log" | grep -q tend-probe; then
     echo "::error::sandbox_setup did not close the tool gap"

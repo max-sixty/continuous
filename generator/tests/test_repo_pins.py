@@ -7,9 +7,11 @@ the pair.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
@@ -47,3 +49,26 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
         f"uv this repo pins ({uv_version}); `uv build` warns and the wheel is "
         "built by a backend a release older than the uv building it"
     )
+
+
+# Every `${{ github.action_path }}/…` reference in the two composite actions.
+# Nothing else reads them: the pre-commit actionlint hook is pinned to
+# ^.github/workflows/, so neither action.yaml is linted at all, and no workflow
+# here consumes the actions with `uses: ./` — they pin a released ref, so an
+# edited body first runs in an adopter's job. A path that resolves nowhere fails
+# its step, for every adopter, on the first run after a release.
+ACTION_PATH_REF = re.compile(r"\$\{\{\s*github\.action_path\s*\}\}/?([^\s\"')]*)")
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_action_path_references_resolve(harness: str) -> None:
+    body = (REPO_ROOT / harness / "action.yaml").read_text()
+    matched = ACTION_PATH_REF.findall(body)
+
+    assert matched, f"{harness}/action.yaml: no github.action_path references"
+    missing = [
+        ref
+        for ref in sorted(set(matched))
+        if not (REPO_ROOT / harness / ref).resolve().exists()
+    ]
+    assert not missing, f"{harness}/action.yaml references nothing at: {missing}"
