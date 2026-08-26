@@ -57,7 +57,11 @@ issues** in `other-repos.md`. Running on tend itself, it means a PR here.
 
 ## Mechanics
 
-For the overlay path. An upstream fix follows `other-repos.md` instead.
+For the overlay path, and for an upstream PR on tend itself — with the bundled
+skill file as step 2's dedup target, and without step 3's read-only-mount
+workaround, since bundled skills live under `plugins/` rather than
+`.claude/skills/`. Filing upstream from a consumer repo follows
+`other-repos.md` instead.
 
 1. **Complete the current task first.** The skill update is always a separate
    PR.

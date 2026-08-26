@@ -499,7 +499,7 @@ Read logs, code, and API data before drawing conclusions. Show evidence: cite lo
 
 When a maintainer corrects the bot's behavior during a run — a repo convention, a repeated mistake, a preference the bot should have known — turn the correction into durable guidance. Route it before you write it: **would every tend consumer want this rule?** If yes it belongs in tend's bundled skills — a PR when this repo *is* tend, otherwise an issue there per **Other Repos**. A bundled skill that is silent on the behavior is a gap upstream, not a signal the rule is local; nor is an upstream fix that has merged but not yet reached the pinned release. The overlay at `.claude/skills/running-tend/SKILL.md` is for what is true of this repo alone: its branch and landing conventions, its test topology, its trackers and labels, its standing exceptions.
 
-Follow `references/skill-pr-workflow.md`: it carries the bar the feedback has to clear, the routing signals in full, and the branch/PR mechanics. Open the PR and exit — don't merge, don't wait, don't ping for review.
+Follow `references/skill-pr-workflow.md`: it carries the bar the feedback has to clear, the routing signals in full, and the branch/PR mechanics. Open it — PR or issue — and exit: don't merge, don't wait, don't ping for review.
 
 ## Tone
 
