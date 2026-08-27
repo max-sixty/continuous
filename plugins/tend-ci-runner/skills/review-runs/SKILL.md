@@ -225,7 +225,7 @@ gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
 jq -c 'select(.conclusion != "success" and .conclusion != "skipped")'
 ```
 
-Zero billable time (`gh api "repos/$REPO/actions/runs/<run-id>/timing" --jq .billable`) plus no artifact means the agent never started, so there is nothing to diagnose — but it does not on its own mean the run stranded anything, because a designed cancellation bills zero too. The trigger is the discriminator, so the re-run test below is the whole decision.
+A run whose agent never started shows it in the jobs endpoint: no jobs at all (`gh api "repos/$REPO/actions/runs/<run-id>/jobs" --jq .total_count` → `0`, the `startup_failure` shape), or a job with `runner_name: ""` and zero `steps` — a `skipped` job is zero-step too, but reports `runner_name: null`. There is nothing to diagnose in either case, and neither shape on its own means the run stranded anything, because a designed cancellation records the same zero steps. The trigger is the discriminator, so the re-run test below is the whole decision. Don't key on billable time: public repos aren't billed for Actions, so `.billable` reports zero on healthy runs too.
 
 **Diagnose first.** The nightly enrichment comment names the cause when it can. When it doesn't, read the session log — quota exhaustion surfaces as a `<synthetic>` assistant message:
 
