@@ -225,7 +225,7 @@ gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
 jq -c 'select(.conclusion != "success" and .conclusion != "skipped")'
 ```
 
-Zero billable time (`gh api "repos/$REPO/actions/runs/<run-id>/timing" --jq .billable`) plus no artifact is the signature of a run whose agent never started, so there is nothing to diagnose and the re-run test below is the whole decision.
+Zero billable time (`gh api "repos/$REPO/actions/runs/<run-id>/timing" --jq .billable`) plus no artifact means the agent never started, so there is nothing to diagnose — but it does not on its own mean the run stranded anything, because a designed cancellation bills zero too. The trigger is the discriminator, so the re-run test below is the whole decision.
 
 **Diagnose first.** The nightly enrichment comment names the cause when it can. When it doesn't, read the session log — quota exhaustion surfaces as a `<synthetic>` assistant message:
 
@@ -237,7 +237,7 @@ jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/ou
 
 A cluster of these is quota exhaustion, not a bug — don't open a fix PR. The reset in the message is an upper bound on the outage, not a schedule: a weekly limit can strand most of a day, and can also clear many hours early. Gate the drain on the clean-run check below, not on the stated reset.
 
-**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. A `cancelled` run is usually the designed eviction rather than an outage: `cancel-in-progress: false` replaces the *queued* sibling when events burst on one thread, and the winning run answers the whole thread, so read the thread for that answer before re-running. What never recovers is an `issues`-event triage that died — nothing re-fires the event, and the notifications poll cannot see an issue the bot never touched. Re-running the bot's own failed workflow needs no maintainer approval.
+**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. A `cancelled` run is usually the designed eviction rather than an outage: `cancel-in-progress: false` replaces the *queued* sibling when events burst on one thread, and the winning run answers the whole thread, so read the thread for that answer before re-running. Two triggers never recover: an `issues`-event triage that died, since nothing re-fires the event and the notifications poll cannot see an issue the bot never touched; and a `tend-ci-fix` run on a still-red default branch, since a later push re-fires it only if CI fails again and a red `main` is a branch people stop pushing to. Re-running the bot's own failed workflow needs no maintainer approval.
 
 ```bash
 gh pr view <n> --json state,headRefOid,reviews \
