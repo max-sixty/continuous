@@ -92,6 +92,7 @@ def test_poll_exemptions_match_the_agentless_generated_workflows(
             "as green — name it back in alongside `tend-install-test`"
         )
 
+
 # Every `${{ github.action_path }}/…` reference in the two composite actions.
 # Nothing else reads them: the pre-commit actionlint hook is pinned to
 # ^.github/workflows/, so neither action.yaml is linted at all, and no workflow
