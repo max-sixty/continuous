@@ -30,7 +30,7 @@ pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, 
 ```
 
 The repo root is a uv workspace, and pytest run from it collects every Python
-test — generator/, proxy/, and the install-tend scripts — so one `pytest` is
+test — generator/, proxy/, shared/steps/, and the install-tend scripts — so one `pytest` is
 the whole Python run. `wt test` (defined in [`.config/wt.toml`](.config/wt.toml))
 adds worker/'s vitest suite and typecheck. Its arguments narrow pytest and
 nothing else, so a filtered run still pays for worker/; `uv run pytest -k render`
