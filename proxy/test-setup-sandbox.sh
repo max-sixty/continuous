@@ -56,7 +56,7 @@ plant() {
 }
 
 setup() {
-  local agent_path path_entry
+  local action_run agent_path path_entry
   set_inputs
   # The workspace path leads; a literal `~` exercises expansion against the
   # sandbox home. The configured directory may be populated later.
@@ -73,7 +73,12 @@ setup() {
   export MITMPROXY_VERSION
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml) \
     bash shared/steps/install-proxy-uv.sh
-  bash proxy/setup-sandbox.sh | tee "$RUNNER_TEMP/setup.log"
+  # Exercise the composite action's entrypoint rather than calling the setup
+  # script directly. The boundary depends on the PATH the action passes in.
+  action_run=$(yq -er '.runs.steps[] | select(.name == "Set up credential-isolation sandbox") | .run' claude/action.yaml)
+  action_run=${action_run//'${{ github.action_path }}'/"$GITHUB_WORKSPACE/claude"}
+  /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run" \
+    | tee "$RUNNER_TEMP/setup.log"
 
   agent_path=$(sed -n 's/^\[setup-sandbox\] sandbox PATH: //p' "$RUNNER_TEMP/setup.log")
   test -n "$agent_path"

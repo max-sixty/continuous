@@ -247,7 +247,7 @@ runs:
         # the agent env file. sandbox_setup (commands) runs in a later step.
         TEND_SANDBOX_PATH: ${{ inputs.sandbox_path }}
         TEND_SANDBOX_ENV: ${{ inputs.sandbox_env }}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
+      run: /usr/bin/env TEND_RUNNER_TOOL_PATH="$PATH" PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
 
     # Install the claude binary into the sandbox user's home. Nothing else —
     # a language toolchain here would shadow the adopter's on the sandbox PATH.
