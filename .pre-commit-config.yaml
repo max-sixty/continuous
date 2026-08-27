@@ -28,11 +28,12 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
-  # The composite actions' shared step bodies live in standalone scripts
-  # (shared/steps/, proxy/, generator/src/tend/templates/, .config/codex-cloud/)
-  # rather than inline `run:` blocks, so actionlint's built-in shellcheck
-  # doesn't see them. Run shellcheck directly to keep that coverage. -S warning
-  # matches actionlint's default severity.
+  # Step bodies in standalone scripts (shared/steps/, proxy/,
+  # generator/src/tend/templates/, .config/codex-cloud/) are invisible to
+  # actionlint's built-in shellcheck, so run shellcheck directly at the same
+  # -S warning severity. The inline `run:` bodies that remain in claude/ and
+  # codex/ are covered by test_inline_run_bodies_pass_shellcheck — actionlint
+  # reads only workflow files, never an action.yaml.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1-1
     hooks:

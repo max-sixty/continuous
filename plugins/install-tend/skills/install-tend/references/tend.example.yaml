@@ -207,8 +207,10 @@ bot_name: my-project-bot
 #     sandbox_env:
 #       RUST_BACKTRACE: "1"
 #
-#   Setup-step env changes do not cross automatically. If a build needs one
-#   (for example `JAVA_HOME` rather than `java` on PATH), add it explicitly.
+#   Setup-step env changes do not cross automatically, except under a `GITHUB_*`
+#   name — those ride the GitHub context, so don't give a secret one. If a build
+#   needs an env change (for example `JAVA_HOME` rather than `java` on PATH),
+#   add it explicitly.
 #
 # - `sandbox_setup`: shell commands run as the sandbox user after the toolchain
 #   and plugins install and before the agent runs, with the workspace as cwd.
@@ -221,6 +223,17 @@ bot_name: my-project-bot
 #     sandbox_setup:
 #       - uv tool install pre-commit
 #       - pre-commit --version
+#
+#   One block runs for every workflow, and the commands see the same GitHub
+#   context the agent does — `$GITHUB_WORKFLOW`, `$GITHUB_EVENT_NAME`,
+#   `$GITHUB_REPOSITORY` and the rest of `GITHUB_*`, straight from Actions — so
+#   a command can scope itself to the workflows or events that need it.
+#   `$GITHUB_WORKFLOW` is the same string a `setup:` step matches with
+#   `if: github.workflow == '...'`, so a gated install and its assertion name
+#   the same workflows:
+#
+#     sandbox_setup:
+#       - 'if [ "$GITHUB_WORKFLOW" = tend-weekly ]; then nix --version; fi'
 #
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.

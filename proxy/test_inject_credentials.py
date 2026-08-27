@@ -6,6 +6,10 @@ Run: ``uv run pytest`` from the repo root, which covers every Python suite.
 from __future__ import annotations
 
 import base64
+import os
+import re
+import subprocess
+import sys
 from importlib.metadata import version
 from pathlib import Path
 
@@ -13,7 +17,12 @@ import pytest
 from mitmproxy.test import tflow, tutils
 from ruamel.yaml import YAML
 
-from inject_credentials import CredentialInjector
+from inject_credentials import (
+    ANTHROPIC_HOSTS,
+    BASIC_HOSTS,
+    TOKEN_HOSTS,
+    CredentialInjector,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +39,92 @@ def test_pinned_mitmproxy_matches_the_action() -> None:
         (REPO_ROOT / "claude" / "action.yaml").read_text()
     )
     assert version("mitmproxy") == action["inputs"]["mitmproxy_version"]["default"]
+
+
+def test_proxy_starts_and_finishes_its_empty_replay(tmp_path: Path) -> None:
+    empty_flows = tmp_path / "empty.flows"
+    empty_flows.touch()
+    confdir = tmp_path / "conf"
+    mitmdump = Path(sys.executable).with_name("mitmdump")
+
+    result = subprocess.run(
+        [
+            mitmdump,
+            "-s",
+            REPO_ROOT / "proxy" / "inject_credentials.py",
+            "--listen-host",
+            "127.0.0.1",
+            "--listen-port",
+            "0",
+            "--set",
+            f"confdir={confdir}",
+            "--allow-hosts",
+            r"^example\.invalid$",
+            "--set",
+            f"rfile={empty_flows}",
+        ],
+        env=os.environ
+        | {
+            "TEND_GH_TOKEN": "dummy",
+            "TEND_ANTHROPIC_OAUTH_TOKEN": "dummy",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "HTTP(S) proxy listening at 127.0.0.1:" in result.stdout
+    assert (confdir / "mitmproxy-ca-cert.pem").is_file()
+
+
+def _allow_hosts_regex() -> re.Pattern[str]:
+    setup = (REPO_ROOT / "proxy" / "setup-sandbox.sh").read_text()
+    # `[^']*` spans newlines, so a stray example in a comment would silently
+    # win the first match — require exactly one occurrence.
+    found = re.findall(r"--allow-hosts '([^']*)'", setup)
+    assert len(found) == 1, "expected one --allow-hosts flag in proxy/setup-sandbox.sh"
+    # mitmproxy compiles --allow-hosts with re.IGNORECASE; model that here.
+    return re.compile(found[0], re.IGNORECASE)
+
+
+def test_allow_hosts_regex_covers_every_injected_host() -> None:
+    # The frozensets scope injection; the --allow-hosts regex in setup-sandbox.sh
+    # scopes TLS interception. A host in a frozenset the regex misses is never
+    # intercepted, so its dummy is never swapped for the real secret and every
+    # call to it 401s — with the proxy alive, the CA trusted and both files
+    # looking correct in isolation. Both sides carry a "keep in sync" comment;
+    # only this asserts it. mitmproxy appends the port to every candidate it
+    # matches (peer address, Host header, SNI), so `host:port` is the form
+    # interception actually turns on — the bare host is extra strictness, not
+    # what production feeds the regex.
+    allow_hosts = _allow_hosts_regex()
+    for host in BASIC_HOSTS | TOKEN_HOSTS | ANTHROPIC_HOSTS:
+        assert allow_hosts.search(host), f"{host} is injected but never intercepted"
+        assert allow_hosts.search(f"{host}:443"), f"{host}:443 is never intercepted"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        # Signed, time-limited URLs; injecting there breaks the download, so the
+        # addon leaves it out of TOKEN_HOSTS and the regex must not widen
+        # interception to it either.
+        "objects.githubusercontent.com",
+        # The lookalikes the injection tests below already refuse a credential
+        # for. Interception is the outer boundary and should refuse them first.
+        "api.github.com.evil.example",
+        "raw.githubusercontent.com.evil.example",
+        "api.anthropic.com.evil.example",
+        "pypi.org",
+    ],
+)
+def test_allow_hosts_regex_intercepts_nothing_extra(host: str) -> None:
+    allow_hosts = _allow_hosts_regex()
+    assert not allow_hosts.search(host), f"{host} should not be intercepted"
+    assert not allow_hosts.search(f"{host}:443"), (
+        f"{host}:443 should not be intercepted"
+    )
 
 
 def test_addon_methods_are_real_mitmproxy_hooks() -> None:

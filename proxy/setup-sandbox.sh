@@ -30,7 +30,7 @@
 # (newline-separated dirs prepended to the sandbox PATH) and TEND_SANDBOX_ENV
 # (newline-separated NAME=VALUE pairs added to the agent env; reserved keys
 # rejected). TEND_SANDBOX_SETUP (commands) is consumed by the separate
-# shared/steps/sandbox-setup.sh step, not here.
+# shared/steps/sandbox_setup.py step, not here.
 set -euo pipefail
 
 # Adopter setup actions intentionally mutate PATH; retain it as toolchain data,
@@ -118,9 +118,11 @@ else
   ANTHROPIC_DUMMY="ANTHROPIC_API_KEY=sk-ant-api03-tendproxydummy0000000000000000000000000000"
 fi
 
-# The agent's launch environment, one NAME=VALUE per line, consumed by every
-# step that runs something as the sandbox user (mapfile -t + `env "${arr[@]}"`).
-# One file so the plugin-install and Run Claude steps cannot drift. Contents:
+# The agent's launch environment, one NAME=VALUE per line. The two crossings
+# that carry adopter code compose it with the GITHUB_* context, in that order,
+# via shared/steps/_sandbox.py; the plugin install reads it straight
+# (mapfile -t + `env "${arr[@]}"`) and takes no context. One file so
+# none of them can drift. Contents:
 # the proxy routing, CA trust for every client family (system store for
 # gh/git/curl is implicit; NODE_EXTRA_CA_CERTS for claude (Node ignores the
 # system store); SSL_CERT_FILE/REQUESTS_CA_BUNDLE for uv and certifi-based
@@ -283,7 +285,7 @@ if [ "${#_blocked_home_command[@]}" -gt 0 ]; then
 fi
 AGENT_PATH="$(IFS=:; printf '%s' "${_agent_path[*]}")"
 # The composed PATH is logged so sandbox_path expansion and dropped locations
-# are visible. sandbox-setup.sh reports missing commands after sandbox_setup
+# are visible. sandbox_setup.py reports missing commands after sandbox_setup
 # has had its chance to install them.
 log "sandbox PATH: ${AGENT_PATH}"
 cat >"$AGENT_ENV_FILE" <<EOF
@@ -430,7 +432,9 @@ log "starting proxy"
 # BASIC_HOSTS / TOKEN_HOSTS / ANTHROPIC_HOSTS frozensets in inject_credentials.py
 # (which own the credential boundary). A host in those sets but missing here is
 # never intercepted, so its dummy is never swapped for the real secret and auth
-# fails with a 401.
+# fails with a 401. The `test_allow_hosts_regex_*` tests in
+# proxy/test_inject_credentials.py parse this flag's single-quoted argument, so
+# keep it on one line and singly quoted.
 nohup "$UVX" --from "$MITMPROXY" mitmdump \
   -s "${ACTION_PATH}/proxy/inject_credentials.py" \
   --listen-host 127.0.0.1 --listen-port "$PROXY_PORT" \

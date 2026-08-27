@@ -4,9 +4,11 @@
 # `uv run pytest` from the repo root the whole Python test run: pytest needs no
 # config of its own, since collecting from the root reaches generator/, proxy/,
 # and the install-tend scripts, and its default `norecursedirs` already skips
-# node_modules and dot-dirs. proxy/ and the install-tend scripts dir aren't
-# packages, so pytest's prepend import mode names their test modules by
-# basename alone — keep those basenames distinct or collection aborts.
+# node_modules and dot-dirs. proxy/, shared/steps/ and the install-tend scripts
+# dir aren't packages, so pytest's prepend import mode names their test modules
+# by basename alone — keep those basenames distinct or collection aborts, and
+# never `from conftest import …` (two dirs have one; shared/steps/_fakes.py is
+# the importable home for its doubles).
 #
 # The floor is 3.12 because mitmproxy needs it; the published package still
 # supports 3.11 (see generator/pyproject.toml), which nothing here can lower.

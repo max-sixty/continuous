@@ -53,7 +53,9 @@ from mitmproxy import http
 # These frozensets are the credential boundary. The proxy's --allow-hosts regex
 # in setup-sandbox.sh scopes TLS interception and must list the same hosts —
 # keep the two in sync (a host here but not in the regex is never intercepted,
-# so its dummy is never swapped and auth 401s).
+# so its dummy is never swapped and auth 401s). The
+# `test_allow_hosts_regex_*` tests in test_inject_credentials.py read that
+# regex out of the script and fail on drift in either direction.
 BASIC_HOSTS = frozenset({"github.com", "codeload.github.com"})
 TOKEN_HOSTS = frozenset(
     {"api.github.com", "uploads.github.com", "raw.githubusercontent.com"}

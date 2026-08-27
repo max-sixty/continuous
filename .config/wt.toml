@@ -19,18 +19,14 @@ exclude = [".venv/"]
 [[post-start]]
 install = "cd site && npm install --prefer-offline --no-audit --no-fund"
 
-# Astro dev server in the background. Output lands in `.git/wt/logs/`
-# (find via `wt config state logs`).
+# Tether owns the whole Astro process group until the worktree is removed.
+# Output lands in `.git/wt/logs/` (find via `wt config state logs`).
 [[post-start]]
-server = "cd site && npm run dev -- --port {{ branch | hash_port }}"
+server = "wt step tether -C site -- npm run dev -- --port {{ branch | hash_port }}"
 
 # Surface the URL in `wt list` — the column dims when nothing is listening.
 [list]
 url = "http://localhost:{{ branch | hash_port }}"
-
-# Stop the dev server when the worktree is removed.
-[[pre-remove]]
-server = "lsof -ti :{{ branch | hash_port }} -sTCP:LISTEN | xargs kill 2>/dev/null || true"
 
 # `wt test` is the whole suite: one pytest from the repo root covers every
 # Python test (generator/, proxy/, the install-tend scripts), and worker/ runs
@@ -38,8 +34,8 @@ server = "lsof -ti :{{ branch | hash_port }} -sTCP:LISTEN | xargs kill 2>/dev/nu
 # and nothing else — every step still runs, so reach for `uv run pytest` when
 # the Python half is all you want.
 #
-# One command per block until the last, so pytest's output streams unprefixed;
-# a step's failure stops the blocks after it.
+# One command per block makes each child finish and get reaped before the next
+# starts. A step's failure stops the blocks after it.
 [[aliases.test]]
 pytest = "uv run pytest {{ args }}"
 
@@ -48,4 +44,6 @@ worker-install = "npm --prefix worker ci --prefer-offline --no-audit --no-fund"
 
 [[aliases.test]]
 worker-test = "npm --prefix worker test"
+
+[[aliases.test]]
 worker-typecheck = "npm --prefix worker run typecheck"

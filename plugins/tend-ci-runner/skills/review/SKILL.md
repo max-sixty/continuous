@@ -135,8 +135,8 @@ Check the project's CLAUDE.md for language-specific review criteria and conventi
 
 **Every review that reaches this step runs a `/tend-ci-runner:code-review` pass over the PR's merged tree** — trivial diffs included; the depth-scaling above sets how deep the pass goes, never whether it happens. It's a structured second pass — correctness and cleanup angles, then a verify pass — that returns findings rather than posting anything, and it runs alongside the manual checks below rather than replacing them. Scale its depth to how core the change is:
 
-- Peripheral or mechanical (docs, config, dependency bumps, test-only): tell it the change is peripheral, so it runs the short angle set in one pass.
-- The project's core logic: tell it the change is core, so it fans the angles out and sweeps for gaps.
+- Peripheral or mechanical (config, dependency bumps, test-only, docs that don't assert how the code behaves): tell it the change is peripheral, so it runs the short angle set in one pass.
+- The project's core logic, or prose asserting how it behaves: tell it the change is core, so it fans the angles out and sweeps for gaps. Prose is checked by reading the code it describes, so a one-line Markdown diff can still be core.
 
 What counts as core is repo-specific; let the project's own guidance (CLAUDE.md, a repo review skill) or your judgment decide. Both passes feed one verdict: fold its findings into the review you submit in step 5. It only reports back — it never posts a review, comment, or commit of its own, so the dedup and single-review path is preserved.
 

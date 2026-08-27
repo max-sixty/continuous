@@ -23,12 +23,11 @@
 // skips KV: its 30s budget is under KV's 60s floor, and its fanout is cheap
 // core REST, not the Search quota that the sharing protects.
 //
-// `/activity` is one Search query per bucket per bot (`sort=updated`): the
-// page yields both the recent items and the lifetime `total_count`; "this
-// week" is counted off the page, so it saturates around one page (~100) per
-// bot per bucket — fine for a headline number. The fanout is 4·N concurrent
-// Search requests against the 30/min Search cap; KV sharing keeps how often
-// it fires independent of colo count and traffic.
+// `/activity` uses one Search query per bucket across all bots. Each page
+// yields recent items and the lifetime `total_count`; "this week" is counted
+// off the page, so it saturates around one page (~100) per bucket. Four
+// concurrent Search requests stay below the 30/minute cap, and KV sharing
+// keeps refresh frequency independent of colo count and traffic.
 //
 // See ../README.md for architecture and the rate-limit reasoning behind
 // the budgets.

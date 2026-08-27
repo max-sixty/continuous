@@ -1,8 +1,8 @@
 # Opening a skill PR from CI
 
 Turning a maintainer's correction into durable guidance: whether it clears the
-bar, and the mechanics of proposing it against the consuming repo's
-`.claude/skills/running-tend/SKILL.md`.
+bar, whether it lands upstream in tend or in the consuming repo's
+`.claude/skills/running-tend/SKILL.md`, and the mechanics of proposing it.
 
 ## Whether to propose
 
@@ -24,20 +24,44 @@ Signals pointing at a generalizable rule: the correction names a pattern
 rather than a task detail, or references a repo convention ("we use
 conventional commits", "PRs go to `develop`").
 
-Don't propose when the feedback is task-specific, when a bundled tend skill
-already covers the lesson (that changes through a PR against tend — see
-**Filing issues** in `other-repos.md`), when confidence that it
+Don't propose when the feedback is task-specific, when confidence that it
 generalizes is low (ask instead), or when it comes from a non-maintainer —
 check `author_association`. Non-maintainers can raise preferences, but only a
 maintainer authorizes codifying them; note the pattern in a reply and let one
 confirm.
 
-When the correction identifies a gap in a **bundled** skill — the same root
-cause would fire in every tend consumer — the fix belongs in tend rather than
-the overlay. Signals: the fix reads as generic guidance any consumer would
-want, and the corrected behavior comes from bundled skill text.
+## Where it lands
+
+Settle the destination before drafting a line, and settle it on one question:
+**would every tend consumer want this rule?** If yes it belongs in tend's
+bundled skills, and what the bundled text currently says doesn't change that:
+
+- **Bundled text is wrong or unclear** — fix it upstream.
+- **Bundled text is silent** — the same gap, usually a wider one, since
+  nothing is enforcing the rule for any consumer. Silence is not evidence the
+  rule is local; it is the commonest reason a maintainer had to correct
+  generic behavior in the first place.
+- **The rule is already merged upstream, but not in the pinned release** — the
+  fix is a release, not a local copy. The lag is temporary and overlay text is
+  permanent: once the release ships, every consumer that forked the rule
+  carries a duplicate someone has to notice and delete, and until then the two
+  copies drift.
+
+The overlay is for what is true of one repo alone — its branch and landing
+conventions, its test topology, its trackers and labels, its standing
+exceptions. A rule that reads as generic guidance goes upstream even when
+writing it locally would be quicker.
+
+From a consumer repo, upstream means an issue on tend, filed per **Filing
+issues** in `other-repos.md`. Running on tend itself, it means a PR here.
 
 ## Mechanics
+
+For the overlay path, and for an upstream PR on tend itself — with the bundled
+skill file as step 2's dedup target, and without step 3's read-only-mount
+workaround, since bundled skills live under `plugins/` rather than
+`.claude/skills/`. Filing upstream from a consumer repo follows
+`other-repos.md` instead.
 
 1. **Complete the current task first.** The skill update is always a separate
    PR.

@@ -6,6 +6,32 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.19
+
+### Improved
+
+- **`sandbox_setup:` receives the agent's GitHub context and uses an explicit home boundary.** Safe `GITHUB_*` values now cross through one shared launch-environment helper, after adopter `sandbox_env:` values so the run context wins. Claude's sandbox inherits shared system and hosted-toolcache paths plus independently seeded sandbox-home tools; later home-scoped installs belong in `sandbox_setup:`. ([#1041](https://github.com/max-sixty/tend/pull/1041), [#1047](https://github.com/max-sixty/tend/pull/1047), [#1048](https://github.com/max-sixty/tend/pull/1048), [#1057](https://github.com/max-sixty/tend/pull/1057), [#1059](https://github.com/max-sixty/tend/pull/1059))
+- **An all-defaults install starts with one three-question dialog.** A connected Chrome session drives signup and registry steps until it reaches a password, CAPTCHA, or 2FA prompt; OAuth and API-key fallbacks keep credentials out of chat. The flow resumes incomplete installs, repairs overlay frontmatter, and runs `tend check` after its prerequisites exist. ([#1009](https://github.com/max-sixty/tend/pull/1009), [#1010](https://github.com/max-sixty/tend/pull/1010), [#1011](https://github.com/max-sixty/tend/pull/1011), [#1012](https://github.com/max-sixty/tend/pull/1012), [#1017](https://github.com/max-sixty/tend/pull/1017), [#1018](https://github.com/max-sixty/tend/pull/1018))
+- **Review depth follows the behavior a change asserts.** Documentation about code behavior gets a core review; a review of the bot's own PR stops at the review so the successor session applies it. Compute-only changes require observed recurrence and one local knob or removal, judged across the whole change. ([e909680](https://github.com/max-sixty/tend/commit/e90968095c68459735e3446ee44d911d64bfc38d), [#1007](https://github.com/max-sixty/tend/pull/1007), [acd9d32](https://github.com/max-sixty/tend/commit/acd9d32bbcb46b23c42817dc0d4922c3044142b5), [#1024](https://github.com/max-sixty/tend/pull/1024))
+- **Bots carry maintainer decisions forward.** Before proposing a fix they search closed PRs and issue comments for rejected attempts, and reusable corrections route to tend's bundled skills instead of a consumer overlay. PR, issue, and commit titles use literal descriptions that stand on their own. ([#1014](https://github.com/max-sixty/tend/pull/1014), [#1022](https://github.com/max-sixty/tend/pull/1022), [#1060](https://github.com/max-sixty/tend/pull/1060), [#1062](https://github.com/max-sixty/tend/pull/1062))
+
+### Fixed
+
+- **Fork PR instruction files are pinned at every depth.** Both harnesses restore `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` from the base tree, without following fork-created symlinks or changing the index. The Claude sandbox also globally ignores its generated `.claude/settings.local.json` so broad staging does not sweep `bypassPermissions` into a PR. ([#1005](https://github.com/max-sixty/tend/pull/1005), [#1029](https://github.com/max-sixty/tend/pull/1029), [#1034](https://github.com/max-sixty/tend/pull/1034))
+- **CI polling handles large check rollups and rejects unusable commit IDs immediately.** `poll-pr-checks.sh` paginates past 100 contexts, preserves fail-closed behavior if a page is unusable, and rejects abbreviated, uppercase, or missing OIDs before sleeping or falsely reporting that the branch advanced. ([#999](https://github.com/max-sixty/tend/pull/999), [#1046](https://github.com/max-sixty/tend/pull/1046))
+- **Scheduled recovery keeps the evidence it needs.** `review-runs` now collects review bodies as well as thread comments and dispositions in a tested script; `nightly` leaves outage trackers for that workflow to drain, and rechecks conflict resolution against freshly fetched `main` before polling CI. `ci-fix` scopes outage escalation by the tracker title as well as its label. ([#1015](https://github.com/max-sixty/tend/pull/1015), [#1021](https://github.com/max-sixty/tend/pull/1021), [#1027](https://github.com/max-sixty/tend/pull/1027), [#1032](https://github.com/max-sixty/tend/pull/1032))
+- **Workflow generation writes valid UTF-8 on non-UTF-8 locales.** All generator text I/O and the OAuth helper now specify UTF-8 explicitly, avoiding cp1252-corrupted workflow YAML on Windows. ([#1058](https://github.com/max-sixty/tend/pull/1058))
+- **The activity feed now uses four GitHub Search requests per refresh.** Each bucket folds every bot into one query instead of making one query per bot, while preserving counts and recent links. ([#1040](https://github.com/max-sixty/tend/pull/1040))
+
+### Documentation
+
+- **Security guidance matches both harnesses' credential surfaces.** It points adopter-specific policy at the pinned overlay, describes the Claude credential proxy and Codex's live credentials, and forbids process or environment output that can expose either harness's values. ([#997](https://github.com/max-sixty/tend/pull/997), [b850ced](https://github.com/max-sixty/tend/commit/b850ced2625d9db2007c95bd1e8133b784cf8f21), [#1044](https://github.com/max-sixty/tend/pull/1044), [#1056](https://github.com/max-sixty/tend/pull/1056))
+
+### Internal
+
+- Claude Code moves to 2.1.241, Codex to 0.149.0, uv to 0.12.5, and `astral-sh/setup-uv` to v10.0.1; repo-local hooks and action pins are refreshed with them. ([#1000](https://github.com/max-sixty/tend/pull/1000), [#1001](https://github.com/max-sixty/tend/pull/1001), [#1002](https://github.com/max-sixty/tend/pull/1002), [#1003](https://github.com/max-sixty/tend/pull/1003), [#1037](https://github.com/max-sixty/tend/pull/1037), [#1038](https://github.com/max-sixty/tend/pull/1038), [#1039](https://github.com/max-sixty/tend/pull/1039))
+- Proxy tests assert that the `--allow-hosts` argument and credential-injection host sets stay in sync. ([#1049](https://github.com/max-sixty/tend/pull/1049))
+
 ## 0.1.18
 
 ### Improved

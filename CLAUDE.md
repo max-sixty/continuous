@@ -100,7 +100,7 @@ tend/
 │   ├── action.yaml       # Codex harness composite action
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
 ├── shared/
-│   ├── steps/            # Shared composite-action step bodies (bash scripts)
+│   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
 │   └── system-prompt.md  # Harness-neutral system prompt base
 ├── proxy/                # Credential-injection proxy (setup-sandbox.sh, addon)
 ├── generator/            # Python package (uvx tend@latest), uv_build backend
