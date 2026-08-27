@@ -49,7 +49,7 @@ gh issue list --state open --author "$BOT_LOGIN" --search "ci-fix: in:title" \
 
 ### 3. Create PR
 
-Re-check per **Dedup recheck immediately before `gh pr create`** in `running-in-ci` — against both sources. A sibling may have opened a fix PR while you worked, and the fix may have landed as a commit on the default branch your checkout predates. If the failure no longer reproduces on the fetched default branch, don't open the PR.
+Re-check per **Dedup recheck immediately before `gh pr create`** in `running-in-ci` — against both sources — and re-run step 1's PR query, which is author-agnostic where that section's is filtered to the bot's own PRs. A sibling or a maintainer may have opened a fix PR while you worked, and the fix may have landed as a commit on the default branch your checkout predates. If the failure no longer reproduces on the fetched default branch, don't open the PR.
 
 ```bash
 git checkout -b fix/ci-<run-id>
