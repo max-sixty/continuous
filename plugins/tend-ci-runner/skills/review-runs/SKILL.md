@@ -211,12 +211,21 @@ After retrieving the timeout cap from the workflow file, flag any job whose dura
 A run that fails files a row on a `tend-outage`-labelled **"Bot temporarily unavailable"** issue, naming the run and the trigger it stranded. Nothing re-runs those triggers — `tend-review` fires only on `pull_request_target`, so a PR whose one review attempt died stays unreviewed until someone pushes. Drain the open issue as part of this sweep.
 
 ```bash
-# Usually empty; no open outage issue means nothing stranded.
+# Usually empty. An empty issue is not evidence nothing was stranded — see below.
 OUTAGE=$(gh issue list --state open --label tend-outage --json number,title \
   --jq '[.[] | select(.title == "Bot temporarily unavailable")][0].number // empty')
 gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
   | grep -oE 'runs/[0-9]+|\| #[0-9]+'
 ```
+
+**The census is the second drain input, and it is the one that catches the worst cases.** The outage row is written by a step *inside* the failing job, so a run that died before reaching that step files nothing and uploads no session log — a `startup_failure` runs zero steps, and a job that never gets a runner, a wedged `actions/checkout`, or a failing `setup:` step die earlier still. They strand the same triggers, and nothing else on the record ever names them. Step 1's census already carries every run's `conclusion`, so filter that rather than re-fetching:
+
+```bash
+# `skipped` is an `if:` gate declining to run, not a failure.
+jq -c 'select(.conclusion != "success" and .conclusion != "skipped")'
+```
+
+Zero billable time (`gh api "repos/$REPO/actions/runs/<run-id>/timing" --jq .billable`) plus no artifact is the signature of a run whose agent never started, so there is nothing to diagnose and the re-run test below is the whole decision.
 
 **Diagnose first.** The nightly enrichment comment names the cause when it can. When it doesn't, read the session log — quota exhaustion surfaces as a `<synthetic>` assistant message:
 
@@ -228,12 +237,13 @@ jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/ou
 
 A cluster of these is quota exhaustion, not a bug — don't open a fix PR. The reset in the message is an upper bound on the outage, not a schedule: a weekly limit can strand most of a day, and can also clear many hours early. Gate the drain on the clean-run check below, not on the stated reset.
 
-**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. Re-running the bot's own failed workflow needs no maintainer approval.
+**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. A `cancelled` run is usually the designed eviction rather than an outage: `cancel-in-progress: false` replaces the *queued* sibling when events burst on one thread, and the winning run answers the whole thread, so read the thread for that answer before re-running. What never recovers is an `issues`-event triage that died — nothing re-fires the event, and the notifications poll cannot see an issue the bot never touched. Re-running the bot's own failed workflow needs no maintainer approval.
 
 ```bash
 gh pr view <n> --json state,headRefOid,reviews \
   --jq '{state, headRefOid, reviewers: [.reviews[].author.login]}'
-gh run rerun <run-id> --failed
+# Not `--failed`: a run that never started has no failed job to select.
+gh run rerun <run-id>
 ```
 
 Close the issue once every row is drained (`gh issue close "$OUTAGE"`); one left open folds the next outage into a stale incident.
