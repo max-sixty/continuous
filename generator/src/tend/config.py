@@ -417,6 +417,25 @@ class Config:
                 )
             if isinstance(wf_raw, dict):
                 watched = wf_raw.get("watched_workflows")
+                branches = wf_raw.get("branches")
+                # Both render straight into the `workflow_run:` trigger through
+                # `tojson`, so an unchecked value reaches the workflow file
+                # verbatim: `watched_workflows: ci` becomes `workflows: "ci"`,
+                # which GitHub matches against nothing, and ci-fix silently
+                # never fires. A number gets no further than `len()` below,
+                # which raises a bare TypeError instead of a config error.
+                for key, value, example in (
+                    ("watched_workflows", watched, '["ci"]'),
+                    ("branches", branches, '["main"]'),
+                ):
+                    if value is not None and (
+                        not isinstance(value, list)
+                        or not all(isinstance(s, str) and s for s in value)
+                    ):
+                        raise click.ClickException(
+                            f"workflows.{name}.{key} must be a list of "
+                            f"non-empty strings (e.g. {key}: {example})"
+                        )
                 if watched is not None and len(watched) == 0 and name == "ci-fix":
                     raise click.ClickException(
                         "watched_workflows: [] is invalid for ci-fix — "
@@ -494,7 +513,7 @@ class Config:
                     prompt=wf_raw.get("prompt", ""),
                     cron=wf_raw.get("cron", ""),
                     watched_workflows=watched,
-                    branches=wf_raw.get("branches"),
+                    branches=branches,
                     workflow_extra=workflow_extra,
                     jobs=jobs_raw,
                     harness=wf_harness,

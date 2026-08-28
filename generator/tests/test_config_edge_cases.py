@@ -458,6 +458,58 @@ def test_watched_workflows_empty_list_rejected(tmp_path: Path) -> None:
         Config.load(path)
 
 
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        # A scalar is the natural typo, and it used to render verbatim into the
+        # trigger as `workflows: "ci"` / `branches: "main"`.
+        ("watched_workflows", "ci"),
+        ("branches", "main"),
+        # A number or bool reached `len()` and raised a bare TypeError.
+        ("watched_workflows", "5"),
+        ("branches", "true"),
+        # A mapping has a length, so it passed the empty-list check and
+        # rendered as a JSON object.
+        ("watched_workflows", "{a: b}"),
+        # An element that isn't a non-empty string renders as `null` / `""`.
+        ("watched_workflows", '["ci", null]'),
+        ("branches", '["main", ""]'),
+    ],
+)
+def test_workflow_list_fields_reject_non_list_of_strings(
+    tmp_path: Path, key: str, value: str
+) -> None:
+    """`watched_workflows` and `branches` go straight into `workflow_run:`."""
+    # Only one entry per key — a duplicate mapping key is its own YAML error.
+    keys = {"watched_workflows": '["ci"]', key: value}
+    body = "".join(f"    {k}: {v}\n" for k, v in keys.items())
+    path = _write_config(
+        tmp_path,
+        f"bot_name: my-bot\nworkflows:\n  ci-fix:\n{body}",
+    )
+    with pytest.raises(
+        ClickException, match=rf"workflows\.ci-fix\.{key} must be a list"
+    ):
+        Config.load(path)
+
+
+def test_branches_explicit_value(tmp_path: Path) -> None:
+    """A valid `branches` list still reaches the rendered trigger."""
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        workflows:
+          ci-fix:
+            watched_workflows: ["ci"]
+            branches: ["main", "release"]
+    """),
+    )
+    cfg = Config.load(path)
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    assert 'branches: ["main", "release"]' in workflows["tend-ci-fix.yaml"].content
+
+
 def test_watched_workflows_explicit_value(tmp_path: Path) -> None:
     """Explicit watched_workflows should be used, no fallback."""
     path = _write_config(
