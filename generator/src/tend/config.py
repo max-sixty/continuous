@@ -436,6 +436,12 @@ class Config:
                             f"workflows.{name}.{key} must be a list of "
                             f"non-empty strings (e.g. {key}: {example})"
                         )
+                if branches is not None and not branches:
+                    raise click.ClickException(
+                        f"workflows.{name}.branches: [] matches no branch — "
+                        "omit the key to default to the repository's default "
+                        "branch, or list the branches to watch."
+                    )
                 if watched is not None and len(watched) == 0 and name == "ci-fix":
                     raise click.ClickException(
                         "watched_workflows: [] is invalid for ci-fix — "

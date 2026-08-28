@@ -493,6 +493,22 @@ def test_workflow_list_fields_reject_non_list_of_strings(
         Config.load(path)
 
 
+def test_branches_empty_list_rejected(tmp_path: Path) -> None:
+    """branches: [] renders a trigger that matches no branch."""
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        workflows:
+          ci-fix:
+            watched_workflows: ["ci"]
+            branches: []
+    """),
+    )
+    with pytest.raises(ClickException, match="branches: .. matches no branch"):
+        Config.load(path)
+
+
 def test_branches_explicit_value(tmp_path: Path) -> None:
     """A valid `branches` list still reaches the rendered trigger."""
     path = _write_config(
