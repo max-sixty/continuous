@@ -293,7 +293,10 @@ def test_queued_replacement_without_startedat_stays_pending(
 def test_own_run_and_same_workflow_are_filtered(env: dict[str, str]) -> None:
     """The current run's own check is pending for the whole loop, and a
     sibling run of the same workflow queues behind this run's concurrency
-    group — waiting on either deadlocks until the cap."""
+    group — waiting on either deadlocks until the cap.
+
+    The sibling's workflow is deliberately not `tend-review`: that exemption
+    would drop the entry on its own, leaving this filter unobserved."""
     env = env | {"GITHUB_WORKFLOW": "tend-nightly"}
     _serve(
         env,
@@ -313,7 +316,10 @@ def test_tend_review_does_not_gate(env: dict[str, str]) -> None:
     """`tend-review` fires on the very push this poll is verifying, so its
     agent job is created seconds after the loop starts and routinely outlives
     the 9-minute cap — every session that pushes to a PR would report
-    UNVERIFIED with every repo check already green."""
+    UNVERIFIED with every repo check already green.
+
+    Both checks are deliberately named `review`: the exemption keys on the
+    workflow, so a repo's own same-named job must survive it."""
     env = env | {"GITHUB_WORKFLOW": "tend-nightly"}
     _serve(
         env,
