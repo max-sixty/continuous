@@ -29,10 +29,10 @@ server = "wt step tether -C site -- npm run dev -- --port {{ branch | hash_port 
 url = "http://localhost:{{ branch | hash_port }}"
 
 # `wt test` is the whole suite: one pytest from the repo root covers every
-# Python test (generator/, proxy/, the install-tend scripts), and worker/ runs
-# its vitest suite and typecheck. Arguments narrow pytest (`wt test -k render`)
-# and nothing else — every step still runs, so reach for `uv run pytest` when
-# the Python half is all you want.
+# Python test (generator/, proxy/, shared/steps/, the install-tend scripts),
+# and worker/ runs its vitest suite and typecheck. Arguments narrow pytest
+# (`wt test -k render`) and nothing else — every step still runs, so reach for
+# `uv run pytest` when the Python half is all you want.
 #
 # One command per block makes each child finish and get reaped before the next
 # starts. A step's failure stops the blocks after it.

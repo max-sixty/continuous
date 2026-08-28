@@ -5,9 +5,10 @@ on:
   pull_request:
 
 jobs:
-  # Every Python test in the repo — pytest collects generator/, proxy/, and the
-  # install-tend scripts from the root — in the root workspace's environment,
-  # whose dev group holds the pinned mitmproxy the proxy addon imports.
+  # Every Python test in the repo — pytest collects generator/, proxy/,
+  # shared/steps/, and the install-tend scripts from the root — in the root
+  # workspace's environment, whose dev group holds the pinned mitmproxy the
+  # proxy addon imports.
   test:
     runs-on: ubuntu-24.04
     steps:
