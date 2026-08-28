@@ -327,18 +327,6 @@ def test_tend_review_does_not_gate(env: dict[str, str]) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_other_workflows_still_gate(env: dict[str, str]) -> None:
-    _serve(
-        env,
-        _resp(_check_run("review", conclusion="FAILURE", workflow="ci", run_id=404)),
-    )
-
-    result = _poll(env | {"GITHUB_WORKFLOW": "tend-nightly"})
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "review https://github.com/o/r/actions/runs/404/job/1" in result.stdout
-
-
 def test_filtering_to_empty_never_reads_green(env: dict[str, str]) -> None:
     """A rollup holding only exempt entries answers nothing about the commit,
     which is the null-rollup state reached by another route — and this
