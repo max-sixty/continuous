@@ -48,6 +48,7 @@ Process the snapshot oldest first. Read the live issue or PR and decide what it 
 - Otherwise use the normal live workflow: `/tend-ci-runner:triage` for an issue, `/tend-ci-runner:review` for an unreviewed PR head, or answer a comment or review thread that asks the bot for something.
 - A closed thread or a human conversation that needs nothing from the bot has the semantic outcome “no action”.
 - A non-conversational subject, such as a release or check suite, also has the outcome “no action”. Default-branch CI recovery belongs to the daily current-state scan.
+- A subject that cannot be read — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would pin the Step 4 cutoff permanently.
 
 Judge deduplication from current state, including bot reviews and bot-authored PRs that cross-reference an issue. The notification timestamp alone does not prove whether a response covered the activity.
 
@@ -63,7 +64,7 @@ IN_PROGRESS=$(gh api \
         | select(.id != $own and .display_title == $title)] | length')
 ```
 
-Issue deduplication includes bot-authored PRs that cross-reference the issue. A PR with `Refs #N` may be the bot's response even when it posted no issue comment:
+Issue deduplication includes bot-authored PRs that cross-reference the issue. A PR with `Refs #N` may be the bot's response even when it posted no issue comment. Pad the notification time by 60 seconds because GitHub's notification index can trail the event that produced it:
 
 ```bash
 BOT_LOGIN=$(gh api user --jq .login)
@@ -89,9 +90,13 @@ gh api "notifications/threads/<thread-id>" -X PATCH
 Set the acknowledgement cutoff from the oldest unresolved same-repository item. If every same-repository item has an outcome, use the snapshot cutoff. Otherwise set it to one second before the unresolved item's `updated_at`:
 
 ```bash
-ACK_CUTOFF=$CUTOFF
-# When the first unresolved item was updated at $UNRESOLVED_AT:
-ACK_CUTOFF=$(date -u -d "$UNRESOLVED_AT -1 second" +%Y-%m-%dT%H:%M:%SZ)
+# $UNRESOLVED_AT is the first unresolved same-repository item's `updated_at`,
+# empty when every same-repository item has an outcome.
+if [ -n "$UNRESOLVED_AT" ]; then
+  ACK_CUTOFF=$(date -u -d "$UNRESOLVED_AT -1 second" +%Y-%m-%dT%H:%M:%SZ)
+else
+  ACK_CUTOFF=$CUTOFF
+fi
 gh api "repos/$GITHUB_REPOSITORY/notifications" -X PUT \
   -f last_read_at="$ACK_CUTOFF" --silent
 ```

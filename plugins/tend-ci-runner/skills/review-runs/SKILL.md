@@ -210,25 +210,6 @@ After retrieving the timeout cap from the workflow file, flag any job whose dura
 
 The failed-run census and the `tend-outage` issue diagnose availability. Do not replay historical workflow runs to recover their event payloads: issue and PR recovery belongs to the unread notification queue, which applies the current workflow and current repository state.
 
-Read every row from the current outage tracker. The issue body holds the first
-row and later rows are comments:
-
-```bash
-gh issue list --state open --label tend-outage --author @me --limit 100 \
-  --json number,title \
-  --jq '[.[] | select(.title == "Bot temporarily unavailable") | .number]
-    | sort | .[0] // empty' > /tmp/review-runs-outage-number
-OUTAGE=$(cat /tmp/review-runs-outage-number)
-if [ -n "$OUTAGE" ]; then
-  gh issue view "$OUTAGE" --json body,comments \
-    > /tmp/review-runs-outage-initial.json
-  jq -r '.body, .comments[].body' /tmp/review-runs-outage-initial.json
-fi
-```
-
-Use each row to identify what the failed run may have missed. Diagnose it, then
-check the current issue, PR, or default-branch CI through the live scan below.
-
 As a daily backstop for delayed notifications, retention, edited activity, and repaired subscriptions, inspect the live repository for:
 
 - an open issue with no bot response to the latest human activity;
@@ -236,29 +217,32 @@ As a daily backstop for delayed notifications, retention, edited activity, and r
 - failing default-branch CI with no bot fix in progress.
 
 Handle live work through the normal triage, review, or CI-fix guidance. Keep
-failed runs in the report as diagnostic evidence. After every outage row is
-diagnosed and the current-state scan has handled any work that still applies,
-read the same tracker again immediately before closing it. This catches rows
-appended while the scan was running:
+failed runs in the report as diagnostic evidence.
+
+After the exhaustive live scan, find the canonical current outage tracker and
+read every row. The issue body holds the first row and later rows are comments.
+Fail the sweep if the lookup fails; that is different from finding no open
+tracker:
 
 ```bash
-OUTAGE=$(cat /tmp/review-runs-outage-number)
+if ! OUTAGE=$(gh issue list --state open --label tend-outage --author @me \
+  --limit 100 --json number,title \
+  --jq '[.[] | select(.title == "Bot temporarily unavailable") | .number]
+    | sort | .[0] // empty'); then
+  echo "Could not read the outage tracker" >&2
+  exit 1
+fi
 if [ -n "$OUTAGE" ]; then
-  gh issue view "$OUTAGE" --json body,comments \
-    > /tmp/review-runs-outage-final.json
-  jq -r '.body, .comments[].body' /tmp/review-runs-outage-final.json
+  gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body'
 fi
 ```
 
-Diagnose any rows that were absent from the initial read and handle any live
-work they identify. Then close that exact tracker if it is still open:
+Use every row to identify what the failed run may have missed. Diagnose it and
+handle any applicable current work. If a tracker was found, close the exact
+issue number returned above:
 
 ```bash
-OUTAGE=$(cat /tmp/review-runs-outage-number)
-if [ -n "$OUTAGE" ] \
-  && [ "$(gh issue view "$OUTAGE" --json state --jq .state)" = "OPEN" ]; then
-  gh issue close "$OUTAGE" --reason completed
-fi
+gh issue close <outage-number> --reason completed
 ```
 
 ## Step 2: Token usage report
