@@ -244,7 +244,7 @@ gh pr view <n> --json state,headRefOid,reviews \
   --jq '{state, headRefOid, reviewers: [.reviews[].author.login]}'
 ```
 
-**A re-run is not the recovery for every trigger.** Two never re-fire on their own, so a row whose re-run is unavailable or refused is drained by naming what would recover it, not by closing it:
+**A re-run is not the recovery for every trigger.** Only `schedule` re-fires unaided, so a row whose re-run is unavailable or refused is drained by naming what would recover it, not by closing it:
 
 | Stranded trigger | Recovery |
 |---|---|
@@ -256,14 +256,21 @@ gh pr view <n> --json state,headRefOid,reviews \
 **A re-run replays the workflow file from the original run's commit**, so it re-uses the action ref that commit pinned. Where the outage cause was an action-version regression, the fix ships as a pin bump on the default branch and every stranded run sits behind it by construction — the re-run reproduces the failure verbatim and files a fresh outage row, so the drain re-opens what it is draining. This is the shape where the drain looks safest, because the census does show a later clean run. Compare the refs first; if they differ, report the row as needing a fresh trigger instead of re-running it.
 
 ```bash
-WF=.github/workflows/<workflow>.yaml
-HEAD_SHA=$(gh api "repos/$REPO/actions/runs/<run-id>" --jq .head_sha)
-# The contents API, not `git show`: the runner's checkout is shallow, so the
-# stranded run's commit is usually not local. The working tree is the default
+# `.path` and `.head_sha` both come from the one runs call: the census names
+# the workflow, not its file, and guessing the file name from the name is what
+# the timeout-cap step above already warns against.
+read -r WF HEAD_SHA < <(gh api "repos/$REPO/actions/runs/<run-id>" --jq '"\(.path) \(.head_sha)"')
+# The contents API, not `git show`: the stranded run's commit may not be
+# reachable locally (fork head, deleted branch). Capture rather than piping
+# straight into `diff` — an unreadable file leaves both sides empty, and `diff`
+# then exits 0, which reads as a matching ref. The working tree is the default
 # branch, so it is the other side of the comparison.
-diff <(gh api "repos/$REPO/contents/$WF?ref=$HEAD_SHA" \
-         -H 'Accept: application/vnd.github.raw' | grep 'uses: max-sixty/tend/') \
-     <(grep 'uses: max-sixty/tend/' "$WF")
+if PINNED=$(gh api "repos/$REPO/contents/$WF?ref=$HEAD_SHA" \
+              -H 'Accept: application/vnd.github.raw' | grep 'uses: max-sixty/tend/'); then
+  diff <(echo "$PINNED") <(grep 'uses: max-sixty/tend/' "$WF")
+else
+  echo "$WF unreadable at $HEAD_SHA — needs a fresh trigger, not a re-run"
+fi
 ```
 
 **Exit 0 is not a dispatch.** A run that never got a runner has no attempt to replay: `gh run rerun` succeeds, `run_attempt` stays at 1, and `status` sits at `queued` indefinitely. That also drops the run out of the census — Step 1 fetches `status=completed`, so a run left queued never surfaces again and the false all-clear is permanent, which is worse than the original silence. Re-read the run afterwards and treat an unchanged `run_attempt` as *not drained*.
@@ -271,6 +278,9 @@ diff <(gh api "repos/$REPO/contents/$WF?ref=$HEAD_SHA" \
 ```bash
 # Not `--failed`: a run that never started has no failed job to select.
 gh run rerun <run-id>
+# Sleep before reading: the new attempt record takes a few seconds to surface,
+# so an immediate re-read reports attempt 1 on a re-run that did dispatch.
+sleep 30
 gh api "repos/$REPO/actions/runs/<run-id>" --jq '{status, conclusion, run_attempt}'
 ```
 
