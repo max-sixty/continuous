@@ -19,20 +19,8 @@
 # Filters out the current run's own check run ($GITHUB_RUN_ID — in flight for
 # as long as this loop runs), sibling runs of the same workflow
 # ($GITHUB_WORKFLOW — queued behind this run's concurrency group, so waiting
-# on them deadlocks), and every other generated `tend-*` workflow bar
-# `tend-install-test`. No tend *agent* job is a verdict on the code — red ones
-# included, which are tend outages the caller cannot act on from here — and
-# `tend-review` fires on the very `synchronize` this poll is verifying, so its
-# agent job starts seconds after the loop and routinely outlives the cap.
-# Without this clause every session that pushes to a PR reports UNVERIFIED with
-# every repo check already green. `tend-install-test` is the one generated
-# workflow that runs no agent: it regenerates the committed workflow files and
-# diffs them, so a red one is drift in the code under poll and has to gate. The
-# generator hardcodes both names, so the match is stable rather than a guess
-# about adopter naming, and it is keyed on the workflow — a repo's own job
-# named `review` still gates. `test_poll_exemptions_match_the_agentless_generated_workflows`
-# pins the two sets as complements, so a second agentless generated workflow
-# goes red there rather than inheriting the exemption and reading green here.
+# on them deadlocks), and `tend-review`, whose agent job starts on the push this
+# poll verifies and routinely outlives the cap. Other workflows still gate.
 #
 # Filtering to empty is not green. A rollup holding only exempt entries answers
 # nothing about this commit — the same state as no rollup at all — and this
@@ -169,8 +157,7 @@ rollup() {
        end
      | select(.url | test($own) | not)
      | select($wf == "" or .workflow != $wf)
-     | select(.workflow == "tend-install-test"
-              or (.workflow | startswith("tend-") | not))]
+     | select(.workflow != "tend-review")]
     | group_by([.name, .workflow])
     | map(if any(.[]; .status != "COMPLETED")
           then first(.[] | select(.status != "COMPLETED"))
