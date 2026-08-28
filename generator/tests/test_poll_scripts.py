@@ -51,6 +51,9 @@ FAKE_GH = (
       cat "$f"
     fi
     ;;
+  "api repos/owner/repo/commits/"*)
+    [ "${COMMIT_EXISTS:-true}" = "true" ]
+    ;;
   "pr view")
     emit "$(cat "$HEAD_JSON")"
     ;;
@@ -361,15 +364,26 @@ def test_error_status_context_is_red(env: dict[str, str]) -> None:
 
 
 def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
-    """A merge-ref commit or unresolvable OID returns a null rollup —
-    byte-identical to settled green if reduced naively. It must route to
-    UNVERIFIED."""
+    """A real commit can have no rollup, which is byte-identical to settled
+    green if reduced naively. It must route to UNVERIFIED."""
     _serve(env, NULL_ROLLUP)
 
     result = _poll(env)
 
     assert result.returncode == 2
     assert "UNVERIFIED, not green" in result.stdout
+
+
+def test_unresolvable_oid_is_rejected_before_polling(env: dict[str, str]) -> None:
+    env["COMMIT_EXISTS"] = "false"
+
+    result = _poll(env)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f"could not resolve {HEAD_SHA} as a commit in owner/repo" in result.stdout
+    assert not Path(env["GRAPHQL_CALLS"]).exists()
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert calls.count(f"api repos/owner/repo/commits/{HEAD_SHA}") == 2
 
 
 def test_paginates_past_the_first_page(env: dict[str, str]) -> None:

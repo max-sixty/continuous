@@ -43,7 +43,7 @@
 #   0  every gating check on <sha> settled green
 #   1  red — failing checks and their run URLs on stdout
 #   2  no usable rollup for <sha> — UNVERIFIED, not green. A <sha> that isn't
-#      a full 40-char lowercase OID, rejected at entry; an unresolvable OID; an
+#      a full 40-char lowercase OID or does not resolve to a commit; an
 #      ephemeral merge-ref commit, which carries none; a commit with
 #      zero checks and zero statuses (a push every workflow's paths filter
 #      excludes — the rollup is null then too, so "nothing to gate on" is
@@ -72,13 +72,23 @@ OWNER="${GITHUB_REPOSITORY%/*}"
 # `headRefOid`, which comes back lowercase — so an uppercase argument
 # mismatches its own commit and trails every verdict with that spurious note.
 # Nothing here emits uppercase (`git rev-parse` and `headRefOid` are both
-# lowercase), so rejecting it costs no real caller. head_note can still
-# misfire on the other exit-2 causes above — an unresolvable OID and a
-# merge-ref commit are both full-length and neither is the branch head — so
-# this narrows that note rather than fixing it.
+# lowercase), so rejecting it costs no real caller. A merge-ref commit is
+# full-length and real, and remains the one exit-2 cause head_note can still
+# misfire on.
 if [[ ! $SHA =~ ^[0-9a-f]{40}$ ]]; then
   echo "poll-pr-checks.sh: <sha> must be a full 40-char lowercase commit OID, got '$SHA' — UNVERIFIED, not green" >&2
   exit 2
+fi
+
+# The REST commit endpoint distinguishes an OID that names no commit from a
+# real commit with no check rollup. Retry once for a just-pushed commit before
+# rejecting the input; keeping this outside rollup() avoids poll-loop state.
+if ! gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --silent 2>/dev/null; then
+  sleep 10
+  if ! gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --silent 2>/dev/null; then
+    echo "could not resolve $SHA as a commit in $GITHUB_REPOSITORY — UNVERIFIED, not green"
+    exit 2
+  fi
 fi
 NAME="${GITHUB_REPOSITORY#*/}"
 
@@ -91,9 +101,9 @@ NAME="${GITHUB_REPOSITORY#*/}"
 # terminal CheckConclusionStates that land in neither bucket if forgotten, so
 # a job that never started would read as green. CANCELLED stays excluded: a
 # cancelled sibling is not a verdict on this commit. Empty output means no
-# usable rollup — an errors envelope, an unresolvable OID, a null rollup, a
-# rollup every entry of which was exempted above, and a pagination that could
-# not be finished all land there, and none of them may read as settled green.
+# usable rollup — an errors envelope, a null rollup, a rollup every entry of
+# which was exempted above, and a pagination that could not be finished all
+# land there, and none of them may read as settled green.
 rollup() {
   local resp page nodes cursor
   local -a cursor_arg
