@@ -294,12 +294,13 @@ def test_own_run_and_same_workflow_are_filtered(env: dict[str, str]) -> None:
     """The current run's own check is pending for the whole loop, and a
     sibling run of the same workflow queues behind this run's concurrency
     group — waiting on either deadlocks until the cap."""
+    env = env | {"GITHUB_WORKFLOW": "tend-nightly"}
     _serve(
         env,
         _resp(
             _check_run("tests"),
             _check_run("review", status="IN_PROGRESS", run_id=555, workflow="x"),
-            _check_run("handle", status="QUEUED", workflow="tend-review", run_id=777),
+            _check_run("handle", status="QUEUED", workflow="tend-nightly", run_id=777),
         ),
     )
 
@@ -317,7 +318,7 @@ def test_tend_review_does_not_gate(env: dict[str, str]) -> None:
     _serve(
         env,
         _resp(
-            _check_run("tests"),
+            _check_run("review"),
             _check_run("review", status="IN_PROGRESS", workflow="tend-review"),
         ),
     )
