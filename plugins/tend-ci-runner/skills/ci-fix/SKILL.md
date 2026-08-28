@@ -49,7 +49,7 @@ gh issue list --state open --author "$BOT_LOGIN" --search "ci-fix: in:title" \
 
 ### 3. Create PR
 
-Re-check for existing fix PRs (one may have been created while you worked).
+Re-run step 1's author-agnostic PR query, then follow **Dedup recheck immediately before `gh pr create`** in `running-in-ci` to check for a fix committed to the default branch. If the failure no longer reproduces there, don't open the PR.
 
 ```bash
 git checkout -b fix/ci-<run-id>
