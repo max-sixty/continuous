@@ -181,7 +181,7 @@ FETCH_FROM=$(date -u -d "$SINCE - 24 hours" +%Y-%m-%dT%H:%M:%SZ)
 for workflow in $(gh api --paginate repos/$REPO/actions/workflows --jq ".workflows[] | select(.name | test(\"$PREFIX_RE\")) | .id"); do
   gh api --paginate "repos/$REPO/actions/workflows/$workflow/runs?created=>=$FETCH_FROM&status=completed&per_page=100" \
     --jq ".workflow_runs[] | select(.updated_at >= \"$SINCE\") | {databaseId: .id, conclusion, createdAt: .created_at, updatedAt: .updated_at, name: .name}"
-done
+done | tee /tmp/review-runs-census.jsonl
 ```
 
 If no runs found, report "no runs to review" and exit.
@@ -222,7 +222,8 @@ gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
 
 ```bash
 # `skipped` is an `if:` gate declining to run, not a failure.
-jq -c 'select(.conclusion != "success" and .conclusion != "skipped")'
+jq -c 'select(.conclusion != "success" and .conclusion != "skipped")' \
+  /tmp/review-runs-census.jsonl
 ```
 
 For each census failure absent from the outage issue, confirm the trigger's work is still missing. Treat a cancelled run as a designed eviction when another run answered the same thread. Report a stranded trigger as a finding, and leave any outage issue open until a human or fresh trigger recovers it. Do not re-run a census-only row automatically: it has no failure record showing which jobs are safe to replay.
