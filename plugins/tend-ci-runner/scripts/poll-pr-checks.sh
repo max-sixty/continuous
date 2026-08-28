@@ -74,7 +74,7 @@ fi
 if ! gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --silent 2>/dev/null; then
   sleep 10
   if ! gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --silent 2>/dev/null; then
-    echo "$SHA is not a commit in $GITHUB_REPOSITORY — UNVERIFIED, not green"
+    echo "could not resolve $SHA as a commit in $GITHUB_REPOSITORY — UNVERIFIED, not green"
     exit 2
   fi
 fi

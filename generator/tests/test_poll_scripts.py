@@ -343,7 +343,7 @@ def test_unresolvable_oid_is_rejected_before_polling(env: dict[str, str]) -> Non
     result = _poll(env)
 
     assert result.returncode == 2, result.stdout + result.stderr
-    assert f"{HEAD_SHA} is not a commit in owner/repo" in result.stdout
+    assert f"could not resolve {HEAD_SHA} as a commit in owner/repo" in result.stdout
     assert not Path(env["GRAPHQL_CALLS"]).exists()
     calls = Path(env["GH_CALLS"]).read_text()
     assert calls.count(f"api repos/owner/repo/commits/{HEAD_SHA}") == 2
