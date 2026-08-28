@@ -296,19 +296,62 @@ def test_queued_replacement_without_startedat_stays_pending(
 def test_own_run_and_same_workflow_are_filtered(env: dict[str, str]) -> None:
     """The current run's own check is pending for the whole loop, and a
     sibling run of the same workflow queues behind this run's concurrency
-    group — waiting on either deadlocks until the cap."""
+    group — waiting on either deadlocks until the cap.
+
+    The sibling's workflow is deliberately not `tend-review`: that exemption
+    would drop the entry on its own, leaving this filter unobserved."""
+    env = env | {"GITHUB_WORKFLOW": "tend-nightly"}
     _serve(
         env,
         _resp(
             _check_run("tests"),
             _check_run("review", status="IN_PROGRESS", run_id=555, workflow="x"),
-            _check_run("handle", status="QUEUED", workflow="tend-review", run_id=777),
+            _check_run("handle", status="QUEUED", workflow="tend-nightly", run_id=777),
         ),
     )
 
     result = _poll(env)
 
     assert result.returncode == 0, result.stdout
+
+
+def test_tend_review_does_not_gate(env: dict[str, str]) -> None:
+    """`tend-review` fires on the very push this poll is verifying, so its
+    agent job is created seconds after the loop starts and routinely outlives
+    the 9-minute cap — every session that pushes to a PR would report
+    UNVERIFIED with every repo check already green.
+
+    Both checks are deliberately named `review`: the exemption keys on the
+    workflow, so a repo's own same-named job must survive it."""
+    env = env | {"GITHUB_WORKFLOW": "tend-nightly"}
+    _serve(
+        env,
+        _resp(
+            _check_run("review"),
+            _check_run("review", status="IN_PROGRESS", workflow="tend-review"),
+        ),
+    )
+
+    result = _poll(env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_filtering_to_empty_never_reads_green(env: dict[str, str]) -> None:
+    """A rollup holding only exempt entries answers nothing about the commit,
+    which is the null-rollup state reached by another route — and this
+    exemption makes it routine, since `tend-review` registers within seconds of
+    the push while the repo's own checks may not have. Reducing it to
+    `{pending: [], failed: []}` would be byte-identical to settled green."""
+    _serve(
+        env,
+        _resp(_check_run("review", status="IN_PROGRESS", workflow="tend-review")),
+    )
+
+    result = _poll(env | {"GITHUB_WORKFLOW": "tend-nightly"})
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "UNVERIFIED, not green" in result.stdout
 
 
 def test_pending_status_context_gates(env: dict[str, str]) -> None:

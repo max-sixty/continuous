@@ -17,9 +17,19 @@
 # indistinguishable without admin scope.
 #
 # Filters out the current run's own check run ($GITHUB_RUN_ID — in flight for
-# as long as this loop runs) and sibling runs of the same workflow
+# as long as this loop runs), sibling runs of the same workflow
 # ($GITHUB_WORKFLOW — queued behind this run's concurrency group, so waiting
-# on them deadlocks). Check runs are grouped per (check name, workflow): a
+# on them deadlocks), and `tend-review`, whose agent job starts on the push this
+# poll verifies and routinely outlives the cap. Other workflows still gate.
+#
+# Filtering to empty is not green. A rollup holding only exempt entries answers
+# nothing about this commit — the same state as no rollup at all — and this
+# exemption makes that routine, since `tend-review` registers within seconds of
+# the push while the repo's own checks may not have. The reduction emits
+# nothing in that case, so the loop keeps polling and the cap reports
+# UNVERIFIED rather than green.
+#
+# Check runs are grouped per (check name, workflow): a
 # group with any non-terminal entry is pending, and a fully-terminal group is
 # judged by its latest entry — a concurrency-cancelled run's check runs stay
 # on the commit forever, and an `if: always()` omnibus whose dependency was
@@ -37,8 +47,10 @@
 #      ephemeral merge-ref commit, which carries none; a commit with
 #      zero checks and zero statuses (a push every workflow's paths filter
 #      excludes — the rollup is null then too, so "nothing to gate on" is
-#      indistinguishable from "nothing answered"); or a page walk that could
-#      not be finished, where an unread node could hide a failure
+#      indistinguishable from "nothing answered"); a rollup whose every entry
+#      the filters above exempted, which reaches that same state by another
+#      route; or a page walk that could not be finished, where an unread node
+#      could hide a failure
 #   3  poll cap hit with checks still pending — UNVERIFIED, not green
 
 set -euo pipefail
@@ -89,9 +101,9 @@ NAME="${GITHUB_REPOSITORY#*/}"
 # terminal CheckConclusionStates that land in neither bucket if forgotten, so
 # a job that never started would read as green. CANCELLED stays excluded: a
 # cancelled sibling is not a verdict on this commit. Empty output means no
-# usable rollup — an errors envelope, a null rollup, and a pagination that
-# could not be finished all land there, and none of them may read as settled
-# green.
+# usable rollup — an errors envelope, a null rollup, a rollup every entry of
+# which was exempted above, and a pagination that could not be finished all
+# land there, and none of them may read as settled green.
 rollup() {
   local resp page nodes cursor
   local -a cursor_arg
@@ -154,11 +166,13 @@ rollup() {
           startedAt: ""}
        end
      | select(.url | test($own) | not)
-     | select($wf == "" or .workflow != $wf)]
+     | select($wf == "" or .workflow != $wf)
+     | select(.workflow != "tend-review")]
     | group_by([.name, .workflow])
     | map(if any(.[]; .status != "COMPLETED")
           then first(.[] | select(.status != "COMPLETED"))
           else max_by(.startedAt) end)
+    | select(length > 0)
     | {pending: [.[] | select(.status != "COMPLETED") | .name],
        failed: [.[] | select(.status == "COMPLETED")
                 | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT"
@@ -208,7 +222,7 @@ for _ in $(seq 1 9); do
 done
 
 if [ -z "$R" ]; then
-  echo "no rollup returned for $SHA — UNVERIFIED, not green"
+  echo "no gating check settled on $SHA — UNVERIFIED, not green"
   head_note
   exit 2
 fi
