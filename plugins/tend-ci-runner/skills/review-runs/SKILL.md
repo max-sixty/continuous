@@ -237,16 +237,44 @@ jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/ou
 
 A cluster of these is quota exhaustion, not a bug — don't open a fix PR. The reset in the message is an upper bound on the outage, not a schedule: a weekly limit can strand most of a day, and can also clear many hours early. Gate the drain on the clean-run check below, not on the stated reset.
 
-**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. A `cancelled` run is usually the designed eviction rather than an outage: `cancel-in-progress: false` replaces the *queued* sibling when events burst on one thread, and the winning run answers the whole thread, so read the thread for that answer before re-running. Two triggers never recover: an `issues`-event triage that died, since nothing re-fires the event and the notifications poll cannot see an issue the bot never touched; and a `tend-ci-fix` run on a still-red default branch, since a later push re-fires it only if CI fails again and a red `main` is a branch people stop pushing to. Re-running the bot's own failed workflow needs no maintainer approval.
+**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. A `cancelled` run is usually the designed eviction rather than an outage: `cancel-in-progress: false` replaces the *queued* sibling when events burst on one thread, and the winning run answers the whole thread, so read the thread for that answer before re-running. Re-running the bot's own failed workflow needs no maintainer approval.
 
 ```bash
 gh pr view <n> --json state,headRefOid,reviews \
   --jq '{state, headRefOid, reviewers: [.reviews[].author.login]}'
-# Not `--failed`: a run that never started has no failed job to select.
-gh run rerun <run-id>
 ```
 
-Close the issue once every row is drained (`gh issue close "$OUTAGE"`); one left open folds the next outage into a stale incident.
+**A re-run is not the recovery for every trigger.** Two never re-fire on their own, so a row whose re-run is unavailable or refused is drained by naming what would recover it, not by closing it:
+
+| Stranded trigger | Recovery |
+|---|---|
+| `schedule` | the next tick |
+| `pull_request_target` (review) | a push, or close-and-reopen — `reopened` is in the trigger's `types` |
+| `workflow_run` (ci-fix) | another failing run of the watched workflow; a push that turns CI green re-fires nothing, and a still-red default branch is one people stop pushing to |
+| `issues: opened` (triage) | nothing re-fires it, and the notifications poll cannot see an issue the bot never touched — an `@`-mention on the issue, or a human |
+
+**A re-run replays the workflow file from the original run's commit**, so it re-uses the action ref that commit pinned. Where the outage cause was an action-version regression, the fix ships as a pin bump on the default branch and every stranded run sits behind it by construction — the re-run reproduces the failure verbatim and files a fresh outage row, so the drain re-opens what it is draining. This is the shape where the drain looks safest, because the census does show a later clean run. Compare the refs first; if they differ, report the row as needing a fresh trigger instead of re-running it.
+
+```bash
+WF=.github/workflows/<workflow>.yaml
+HEAD_SHA=$(gh api "repos/$REPO/actions/runs/<run-id>" --jq .head_sha)
+# The contents API, not `git show`: the runner's checkout is shallow, so the
+# stranded run's commit is usually not local. The working tree is the default
+# branch, so it is the other side of the comparison.
+diff <(gh api "repos/$REPO/contents/$WF?ref=$HEAD_SHA" \
+         -H 'Accept: application/vnd.github.raw' | grep 'uses: max-sixty/tend/') \
+     <(grep 'uses: max-sixty/tend/' "$WF")
+```
+
+**Exit 0 is not a dispatch.** A run that never got a runner has no attempt to replay: `gh run rerun` succeeds, `run_attempt` stays at 1, and `status` sits at `queued` indefinitely. That also drops the run out of the census — Step 1 fetches `status=completed`, so a run left queued never surfaces again and the false all-clear is permanent, which is worse than the original silence. Re-read the run afterwards and treat an unchanged `run_attempt` as *not drained*.
+
+```bash
+# Not `--failed`: a run that never started has no failed job to select.
+gh run rerun <run-id>
+gh api "repos/$REPO/actions/runs/<run-id>" --jq '{status, conclusion, run_attempt}'
+```
+
+Close the issue once every row is drained (`gh issue close "$OUTAGE"`); one left open folds the next outage into a stale incident. A row whose re-run never dispatched, or whose recovery is a fresh trigger nobody has fired, is not drained — leave the issue open and name what each needs.
 
 ## Step 2: Token usage report
 
