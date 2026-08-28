@@ -226,7 +226,7 @@ jq -c 'select(.conclusion != "success" and .conclusion != "skipped")' \
   /tmp/review-runs-census.jsonl
 ```
 
-For each census failure absent from the outage issue, confirm the trigger's work is still missing. Treat a cancelled run as a designed eviction when another run answered the same thread. Report a stranded trigger as a finding, and leave any outage issue open until a human or fresh trigger recovers it. Do not re-run a census-only row automatically: it has no failure record showing which jobs are safe to replay.
+For each census failure absent from the outage issue, confirm the trigger's work is still missing. Treat a cancelled run as a designed eviction when another run answered the same thread. Report a stranded trigger as a finding; a census-only failure is not a row on the outage issue and does not hold its close. Do not re-run a census-only row automatically: it has no failure record showing which jobs are safe to replay.
 
 **Diagnose first.** The nightly enrichment comment names the cause when it can. When it doesn't, read the session log — quota exhaustion surfaces as a `<synthetic>` assistant message:
 
