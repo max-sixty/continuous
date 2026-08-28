@@ -18,13 +18,38 @@ def test_notification_skill_uses_one_paginated_cutoff_snapshot() -> None:
     assert "sort_by(.updated_at)" in skill
 
 
-def test_notification_skill_acknowledges_without_racing_new_activity() -> None:
+def test_notification_skill_uses_a_bounded_repository_acknowledgement() -> None:
     skill = _read("plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md")
 
     assert "repos/$GITHUB_REPOSITORY/notifications" in skill
-    assert 'last_read_at="$CUTOFF"' in skill
+    assert 'last_read_at="$ACK_CUTOFF"' in skill
+    assert '"$UNRESOLVED_AT -1 second"' in skill
     assert "Never acknowledge a same-repository thread individually." in skill
     assert "notifications/threads/<thread-id>" in skill
+
+
+def test_notification_skill_pins_the_fragile_dedup_queries() -> None:
+    skill = _read("plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md")
+
+    assert ".display_title == $title" in skill
+    assert "issues/$NUMBER/timeline?per_page=100" in skill
+    assert '.event == "cross-referenced"' in skill
+
+
+def test_review_runs_pins_current_state_recovery() -> None:
+    skill = _read("plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md")
+
+    assert "--state open --label tend-outage --author @me --limit 100" in skill
+    assert "| sort | .[0] // empty" in skill
+    assert "> /tmp/review-runs-outage-number" in skill
+    assert "> /tmp/review-runs-outage-initial.json" in skill
+    assert "> /tmp/review-runs-outage-final.json" in skill
+    assert 'gh issue close "$OUTAGE" --reason completed' in skill
+    assert "complete **Reconcile live work** below, then exit" in skill
+    assert "Do not replay historical workflow runs" in skill
+    assert "an open issue with no bot response to the latest human activity" in skill
+    assert "whose live head has no bot review" in skill
+    assert "failing default-branch CI with no bot fix in progress" in skill
 
 
 def test_installation_and_each_poll_enable_repository_watching() -> None:
@@ -36,11 +61,3 @@ def test_installation_and_each_poll_enable_repository_watching() -> None:
             "repos/$GITHUB_REPOSITORY/subscription" in content
         )
         assert "-F subscribed=true -F ignored=false" in content
-
-
-def test_review_runs_reconciles_current_state_without_historical_reruns() -> None:
-    skill = _read("plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md")
-
-    assert "Reconcile live work" in skill
-    assert "current-state scan" in skill
-    assert "gh run rerun" not in skill

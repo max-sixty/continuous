@@ -183,7 +183,7 @@ For each open issue, check whether recent commits or the current codebase state 
 
 - The bot opened the issue itself to report a transient condition (e.g., a "Nightly tests failed" report from a prior run) and the condition has clearly resolved — the fix PR is merged and the relevant CI on `main` is passing. Skip this case where closing the issue is itself a signal rather than a record of resolution:
   - a body containing "Do not close manually" — recurring trackers with their own lifecycle.
-  - the `tend-outage` label. Its rows name the triggers a failed run stranded, and the close belongs to `review-runs`' drain step, which reports each row re-run or confirmed no longer needed. "Nothing has failed since" answers a different question, and nightly's cron precedes `review-runs`' under the generated defaults — closing it here drops the rows before the only step that reads them.
+  - the `tend-outage` label. Its rows identify failed runs that `review-runs` diagnoses before checking the live repository for missed work. Nightly's cron precedes `review-runs` under the generated defaults, so closing the issue here can remove those rows before that check.
   - the `tend-rate-limit` label, where a maintainer's close is what lifts the bot past its own rate limit. Closing that one as the bot lifts nothing — the preflight counts only closes by a person — but it clears a decision still waiting on one.
 - The repo's guidance (e.g., `running-tend` skill) explicitly authorizes closing issues.
 

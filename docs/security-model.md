@@ -188,11 +188,11 @@ does start a run, on the merge ref and from the PR head's own workflow
 files, but that run's token is read-only whatever the file asks for: probed
 with `contents: write` declared, its `POST /repos/…/dispatches` still
 returns 403, where the same request from a same-repo run with the same
-permission succeeds. So a fork PR's reviews reach the bot only through the
-notifications poll, minutes later rather than seconds. That is the cost of
-the property the relay depends on: a fork run that could start a
-secret-bearing run in the base repo would be a fork run with write access
-to it.
+permission succeeds. So a fork PR's reviews reach the bot through the
+notifications poll, minutes later rather than seconds. The daily live scan is
+the slower backstop for a missed notification. That is the cost of the
+property the relay depends on: a fork run that could start a secret-bearing
+run in the base repo would be a fork run with write access to it.
 
 *Release secrets* (registry tokens, signing keys) use the same mechanism in
 adopter-owned environments whose policies list the default branch and/or

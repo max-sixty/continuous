@@ -184,7 +184,7 @@ for workflow in $(gh api --paginate repos/$REPO/actions/workflows --jq ".workflo
 done | tee /tmp/review-runs-census.jsonl
 ```
 
-If no runs found, report "no runs to review" and exit.
+If no runs are found, report "no runs to review", complete **Reconcile live work** below, then exit.
 
 Report the run census as the count this returns. `.total_count` counts the wider `FETCH_FROM` fetch, so it bounds the census from above rather than matching it — but a census that lands on a round page boundary (30, 100) is still the signature of a page that was never followed, so check that one against `.total_count` before trusting it.
 
@@ -210,13 +210,56 @@ After retrieving the timeout cap from the workflow file, flag any job whose dura
 
 The failed-run census and the `tend-outage` issue diagnose availability. Do not replay historical workflow runs to recover their event payloads: issue and PR recovery belongs to the unread notification queue, which applies the current workflow and current repository state.
 
-As a daily backstop for notification retention, edited activity, and repaired subscriptions, inspect the live repository for:
+Read every row from the current outage tracker. The issue body holds the first
+row and later rows are comments:
+
+```bash
+gh issue list --state open --label tend-outage --author @me --limit 100 \
+  --json number,title \
+  --jq '[.[] | select(.title == "Bot temporarily unavailable") | .number]
+    | sort | .[0] // empty' > /tmp/review-runs-outage-number
+OUTAGE=$(cat /tmp/review-runs-outage-number)
+if [ -n "$OUTAGE" ]; then
+  gh issue view "$OUTAGE" --json body,comments \
+    > /tmp/review-runs-outage-initial.json
+  jq -r '.body, .comments[].body' /tmp/review-runs-outage-initial.json
+fi
+```
+
+Use each row to identify what the failed run may have missed. Diagnose it, then
+check the current issue, PR, or default-branch CI through the live scan below.
+
+As a daily backstop for delayed notifications, retention, edited activity, and repaired subscriptions, inspect the live repository for:
 
 - an open issue with no bot response to the latest human activity;
-- an open PR whose live head has no bot review, or whose latest maintainer request has no response;
+- an open PR whose live head has no bot review, or whose latest comment, review, or inline review comment directed at the bot has no response; this includes replies to the bot's review on a fork PR;
 - failing default-branch CI with no bot fix in progress.
 
-Handle live work through the normal triage, review, or CI-fix guidance. Keep failed runs in the report as diagnostic evidence. Close the outage issue once its rows are diagnosed and the current-state scan has handled any work that still applies.
+Handle live work through the normal triage, review, or CI-fix guidance. Keep
+failed runs in the report as diagnostic evidence. After every outage row is
+diagnosed and the current-state scan has handled any work that still applies,
+read the same tracker again immediately before closing it. This catches rows
+appended while the scan was running:
+
+```bash
+OUTAGE=$(cat /tmp/review-runs-outage-number)
+if [ -n "$OUTAGE" ]; then
+  gh issue view "$OUTAGE" --json body,comments \
+    > /tmp/review-runs-outage-final.json
+  jq -r '.body, .comments[].body' /tmp/review-runs-outage-final.json
+fi
+```
+
+Diagnose any rows that were absent from the initial read and handle any live
+work they identify. Then close that exact tracker if it is still open:
+
+```bash
+OUTAGE=$(cat /tmp/review-runs-outage-number)
+if [ -n "$OUTAGE" ] \
+  && [ "$(gh issue view "$OUTAGE" --json state --jq .state)" = "OPEN" ]; then
+  gh issue close "$OUTAGE" --reason completed
+fi
+```
 
 ## Step 2: Token usage report
 

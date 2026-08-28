@@ -14,6 +14,9 @@ on:
 
 jobs:
   notifications:
+    concurrency:
+      group: tend-notifications
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment:
       name: tend
@@ -30,7 +33,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
         run: |
           # shellcheck shell=bash
-          # Establish the repository's durable notification queue and decide whether the
+          # Establish the repository's notification recovery queue and decide whether the
           # agent needs to boot. Inlined into the generated workflow: env in,
           # GITHUB_OUTPUT out.
           #

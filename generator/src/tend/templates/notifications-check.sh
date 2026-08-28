@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Establish the repository's durable notification queue and decide whether the
+# Establish the repository's notification recovery queue and decide whether the
 # agent needs to boot. Inlined into the generated workflow: env in,
 # GITHUB_OUTPUT out.
 #

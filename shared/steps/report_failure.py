@@ -12,16 +12,13 @@ available while the job is in_progress, so the nightly skill enriches these
 issues after the fact, when the run has completed and the APIs return stable
 data.
 
-A closed outage issue is left closed and a fresh one filed: closing it means
-the `review-runs` drain step read every row and re-ran what needed it, and
-reopening would fold the next incident into a stale record. That drain owns
-the close — the nightly skill's resolved-issue rule carves this label out,
-because nightly's cron precedes review-runs' and "nothing has failed since"
-says nothing about the stranded triggers the rows name. Where an adopter
-disables `review-runs`, nothing substitutes for it and the close falls to a
-maintainer against the same criterion — which is why the issue body states the
-criterion rather than naming the sweep as the only route. The rate-limit issue
-takes the opposite policy, for reasons in ``_issue.py``.
+A closed outage issue is left closed and a fresh one filed. The `review-runs`
+sweep closes it after diagnosing every row and checking the live repository for
+work the failed runs may have missed. Reopening would fold the next incident
+into a stale record. Nightly leaves this label alone because its cron precedes
+`review-runs`, and a clean recent run says nothing about missed work. Where an
+adopter disables `review-runs`, a maintainer applies the same close criterion.
+The rate-limit issue takes the opposite policy, for reasons in ``_issue.py``.
 
 Repeated appends are bounded per run, not per incident: a matrix workflow runs
 this once per leg and every leg shares one ``GITHUB_RUN_ID``, so the tracker
@@ -59,9 +56,9 @@ underlying cause is resolved.
 
 {row}
 
-This issue was created automatically. Close it once every row above is \
-drained — each stranded trigger re-run, or confirmed no longer needed. The \
-`tend-review-runs` sweep does that where it runs.
+This issue was created automatically. Close it after every row above is \
+diagnosed and the live repository has been checked for work the failed runs \
+may have missed. The `tend-review-runs` sweep does that where it runs.
 """
 
 
@@ -90,7 +87,7 @@ def main() -> int:
     # up with two open trackers, and the reconcile does not clean this one up
     # — it probes the ten numbers below the issue it just filed, and an
     # already-open tracker is normally much older. Two of them scatter later
-    # rows across both, so no tracker carries the complete set the drain sweep
+    # rows across both, so no tracker carries the complete set the review sweep
     # needs. Skipping costs this one row on a transient failure, and the next
     # failure records normally.
     try:

@@ -512,6 +512,10 @@ def test_init_notifications_has_precheck(
     data = yaml.safe_load(
         (_workflow_dir(tmp_path) / "tend-notifications.yaml").read_text()
     )
+    assert data["jobs"]["notifications"]["concurrency"] == {
+        "group": "tend-notifications",
+        "cancel-in-progress": False,
+    }
     steps = data["jobs"]["notifications"]["steps"]
 
     # First step is the pre-check

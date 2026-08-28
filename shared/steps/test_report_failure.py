@@ -121,11 +121,11 @@ def test_files_when_nothing_is_open(gh: FakeGh) -> None:
 def test_appends_to_the_open_tracker(gh: FakeGh) -> None:
     """An open tracker takes the row as a comment rather than a second issue.
 
-    Only an *open* one: a closed tracker means the drain sweep read every row
-    and re-ran what needed it, so the next incident gets a fresh issue rather
-    than being folded into a stale record. That is the deliberate difference
-    from the rate-limit issue, whose lookup is over every state, so the scope
-    is asserted on the call rather than left to the fixture.
+    Only an *open* one: a closed tracker means the sweep diagnosed every row
+    and checked the live repository, so the next incident gets a fresh issue
+    rather than being folded into a stale record. That is the deliberate
+    difference from the rate-limit issue, whose lookup is over every state, so
+    the scope is asserted on the call rather than left to the fixture.
     """
     _open_tracker(gh, 8)
 
@@ -148,7 +148,7 @@ def test_files_nothing_when_the_issue_list_cannot_be_read(
     A blip can answer under a 200 with an HTML error page, so `gh` exits zero
     and the parse fails; both readings have to skip rather than file.
 
-    Two open trackers is the state that breaks the drain sweep: later rows
+    Two open trackers is the state that breaks the review sweep: later rows
     scatter across both and neither carries the complete set. The reconcile's
     downward probe does not reach an older tracker, so the duplicate persists.
     Skipping costs this one row, and the next failure records normally.
