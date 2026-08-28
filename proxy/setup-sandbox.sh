@@ -25,7 +25,9 @@
 # api.anthropic.com), ACTION_PATH (this action's checkout), MITMPROXY_VERSION
 # (pinned mitmproxy version), TEND_UV_DIR (tend's own pinned uv, installed by
 # shared/steps/install-proxy-uv.sh). GITHUB_WORKSPACE / RUNNER_TEMP /
-# UV_CACHE_DIR come from Actions. Optional adopter levers (from
+# UV_CACHE_DIR come from Actions. TEND_RUNNER_TOOL_PATH carries the runner PATH
+# as data while this process resolves commands from fixed system directories.
+# Optional adopter levers (from
 # .config/tend.yaml): TEND_SANDBOX_PATH
 # (newline-separated dirs prepended to the sandbox PATH) and TEND_SANDBOX_ENV
 # (newline-separated NAME=VALUE pairs added to the agent env; reserved keys
@@ -37,7 +39,8 @@ set -euo pipefail
 # but never resolve a privileged setup utility through it while real credentials
 # are in this process. The hosted image supplies every command this script uses
 # from these system directories.
-RUNNER_TOOL_PATH="${PATH}"
+RUNNER_TOOL_PATH="${TEND_RUNNER_TOOL_PATH:-${PATH}}"
+unset TEND_RUNNER_TOOL_PATH
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 

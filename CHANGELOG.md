@@ -6,6 +6,12 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.20
+
+### Fixed
+
+- **Claude sandbox setup keeps tools installed by adopter setup actions.** The action now carries the runner's original `PATH` across its fixed-path privilege boundary as data, so tools added through `GITHUB_PATH` remain available to `sandbox_setup:` and the agent. The hosted sandbox test executes the action's production launcher, closing the test gap that allowed 0.1.19 to discard those paths. ([#1071](https://github.com/max-sixty/tend/pull/1071))
+
 ## 0.1.19
 
 ### Improved
