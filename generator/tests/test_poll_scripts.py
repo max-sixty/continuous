@@ -51,6 +51,9 @@ FAKE_GH = (
       cat "$f"
     fi
     ;;
+  "api repos/owner/repo/commits/"*)
+    [ "${COMMIT_EXISTS:-true}" = "true" ]
+    ;;
   "pr view")
     emit "$(cat "$HEAD_JSON")"
     ;;
@@ -136,11 +139,6 @@ def _resp(*nodes: dict, has_next: bool = False, end_cursor: str | None = None) -
 NULL_ROLLUP = json.dumps(
     {"data": {"repository": {"object": {"statusCheckRollup": None}}}}
 )
-
-# GitHub answers an OID that resolves to nothing with a *successful* response
-# carrying a null `object` — distinct from NULL_ROLLUP, where the commit
-# exists and merely has no rollup.
-NO_SUCH_COMMIT = json.dumps({"data": {"repository": {"object": None}}})
 
 
 @pytest.fixture
@@ -329,10 +327,8 @@ def test_error_status_context_is_red(env: dict[str, str]) -> None:
 
 
 def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
-    """A merge-ref commit returns a null rollup — byte-identical to settled
-    green if reduced naively. It must route to UNVERIFIED. An OID that names
-    no object is no longer this shape: it answers `object: null` and gets the
-    sentinel's verdict below, so NULL_ROLLUP stands for a real commit alone."""
+    """A real commit can have no rollup, which is byte-identical to settled
+    green if reduced naively. It must route to UNVERIFIED."""
     _serve(env, NULL_ROLLUP)
 
     result = _poll(env)
@@ -341,104 +337,16 @@ def test_null_rollup_never_reads_green(env: dict[str, str]) -> None:
     assert "UNVERIFIED, not green" in result.stdout
 
 
-def test_unresolvable_oid_is_terminal_not_a_transient_blip(
-    env: dict[str, str],
-) -> None:
-    """A well-formed 40-hex OID that names no object passes the entry guard, and
-    GitHub answers it with a *successful* response whose `object` is null — the
-    same empty rollup a transient failure produces. Read as a blip it burns the
-    whole nine-iteration budget and then trails a "branch advanced" note naming
-    the real head, which nobody pushed to. `object: null` says exactly one
-    thing, so it is a verdict on the second sighting, not a retry."""
-    Path(env["HEAD_JSON"]).write_text(json.dumps({"headRefOid": "c" * 40}))
-    _serve(env, NO_SUCH_COMMIT)
-
-    result = _poll(env)
-    out = result.stdout + result.stderr
-
-    assert result.returncode == 2, out
-    # The pre-fix path prints `no rollup returned for <sha> — UNVERIFIED, not
-    # green`, which matches a looser assert on either half; pin the verdict.
-    assert f"{HEAD_SHA} is not a commit in owner/repo" in out
-    assert "branch advanced" not in out, "head_note qualified an OID with no commit"
-    assert Path(env["GRAPHQL_CALLS"]).read_text().strip() == "2", (
-        "an unresolvable OID kept polling instead of returning a verdict"
-    )
-
-
-def test_one_absent_sighting_is_not_a_verdict(env: dict[str, str]) -> None:
-    """A commit pushed seconds earlier can read as absent through brief
-    replication lag; exiting on the first sighting would turn a genuine push
-    into a spurious UNVERIFIED."""
-    _serve(env, NO_SUCH_COMMIT, _resp(_check_run("tests")))
+def test_unresolvable_oid_is_rejected_before_polling(env: dict[str, str]) -> None:
+    env["COMMIT_EXISTS"] = "false"
 
     result = _poll(env)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "green" in result.stdout
-
-
-def test_a_blip_between_two_sightings_does_not_reset_the_count(
-    env: dict[str, str],
-) -> None:
-    """An empty rollup answers nothing about the OID, so it is not evidence
-    against an absence already seen. Resetting the count on one lets absences
-    alternating with blips never reach the verdict, dropping an unresolvable
-    OID back into the cap path — the nine-minute wait and the false "branch
-    advanced" note this verdict exists to remove."""
-    Path(env["HEAD_JSON"]).write_text(json.dumps({"headRefOid": "c" * 40}))
-    _serve(env, NO_SUCH_COMMIT, NULL_ROLLUP, NO_SUCH_COMMIT, NULL_ROLLUP)
-
-    result = _poll(env)
-    out = result.stdout + result.stderr
-
-    assert result.returncode == 2, out
-    assert f"{HEAD_SHA} is not a commit in owner/repo" in out
-    assert "branch advanced" not in out
-    assert Path(env["GRAPHQL_CALLS"]).read_text().strip() == "3", (
-        "an interleaved blip re-armed the count instead of being skipped"
-    )
-
-
-def test_a_rollup_already_read_outranks_a_later_absence(
-    env: dict[str, str],
-) -> None:
-    """A rollup this run reduced is proof the OID resolves, so a later `object:
-    null` is a blip however many times it repeats — the grace re-check already
-    treats it that way. Ungated, the count reaches the verdict and the script
-    states the commit is not in the repository having just reported its checks,
-    the same contradicted claim the "branch advanced" note made."""
-    _serve(env, _resp(_check_run("tests")), NO_SUCH_COMMIT)
-
-    result = _poll(env)
-    out = result.stdout + result.stderr
-
-    assert "is not a commit in owner/repo" not in out, (
-        "the verdict overruled a rollup this run had already read"
-    )
-    # A bare negative passes on any run that fails to produce the string at
-    # all; a retained $R routes this to the cap report, so pin that exit.
-    assert result.returncode == 3, out
-
-
-def test_the_sentinel_at_the_grace_recheck_never_reads_green(
-    env: dict[str, str],
-) -> None:
-    """The sentinel is not a rollup: reaching $R it makes both `-gt 0` tests
-    die with `integer expression expected`, so the red branch is skipped and
-    the script falls through to `echo green`. This pins the guard that keeps a
-    settled-then-absent sequence from reporting a red commit as green."""
-    _serve(
-        env,
-        _resp(_check_run("tests")),
-        NO_SUCH_COMMIT,
-        _resp(_check_run("tests", conclusion="FAILURE", run_id=707)),
-    )
-
-    result = _poll(env)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "tests https://github.com/o/r/actions/runs/707/job/1" in result.stdout
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f"{HEAD_SHA} is not a commit in owner/repo" in result.stdout
+    assert not Path(env["GRAPHQL_CALLS"]).exists()
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert calls.count(f"api repos/owner/repo/commits/{HEAD_SHA}") == 2
 
 
 def test_paginates_past_the_first_page(env: dict[str, str]) -> None:
