@@ -250,8 +250,8 @@ Events pass through three layers before the bot does work:
    group, never queues).
 2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
    whether the agent boots: mention's verify job checks engagement, review's
-   gate skips a live HEAD already stamped as examined, notifications' check
-   exits when the inbox is clear.
+   gate skips a live HEAD already stamped as examined, and notifications'
+   check repairs repository watching then captures a paginated cutoff snapshot.
 3. **Concurrency groups** — at most one running job per group.
 
 Concurrency groups:

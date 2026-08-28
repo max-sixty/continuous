@@ -16,7 +16,6 @@ jobs:
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
-          BOT_NAME: <<cfg.bot_name>>
         run: |
 <<check_script|indent(10, first=True)>>
 

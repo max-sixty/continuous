@@ -409,6 +409,11 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     eff = _effective_cfg(cfg, wf)
     cron = wf.cron or "*/15 * * * *"
     prompt = wf.prompt or eff.default_prompt("notifications")
+    prompt = (
+        f"{prompt}\n\n"
+        "Notification snapshot cutoff: "
+        "${{ steps.check.outputs.cutoff }}"
+    )
 
     skip_condition = (
         "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'"

@@ -206,47 +206,17 @@ gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
 
 After retrieving the timeout cap from the workflow file, flag any job whose duration exceeded 90% of it as a near-timeout. For the default 360-min cap, that threshold is 324 min.
 
-### Drain stranded triggers
+### Reconcile live work
 
-A run that fails files a row on a `tend-outage`-labelled **"Bot temporarily unavailable"** issue, naming the run and the trigger it stranded. Nothing re-runs those triggers — `tend-review` fires only on `pull_request_target`, so a PR whose one review attempt died stays unreviewed until someone pushes. Drain the open issue as part of this sweep.
+The failed-run census and the `tend-outage` issue diagnose availability. Do not replay historical workflow runs to recover their event payloads: issue and PR recovery belongs to the unread notification queue, which applies the current workflow and current repository state.
 
-```bash
-# Usually empty. Runs can fail before filing this issue; see the census below.
-OUTAGE=$(gh issue list --state open --label tend-outage --json number,title \
-  --jq '[.[] | select(.title == "Bot temporarily unavailable")][0].number // empty')
-gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body' \
-  | grep -oE 'runs/[0-9]+|\| #[0-9]+'
-```
+As a daily backstop for notification retention, edited activity, and repaired subscriptions, inspect the live repository for:
 
-**The census is the second drain input.** A run that dies before the failure handler can strand its trigger without filing an outage row or uploading a session log. Step 1 already has the needed conclusions:
+- an open issue with no bot response to the latest human activity;
+- an open PR whose live head has no bot review, or whose latest maintainer request has no response;
+- failing default-branch CI with no bot fix in progress.
 
-```bash
-# `skipped` is an `if:` gate declining to run, not a failure.
-jq -c 'select(.conclusion != "success" and .conclusion != "skipped")' \
-  /tmp/review-runs-census.jsonl
-```
-
-For each census failure absent from the outage issue, confirm the trigger's work is still missing. Treat a cancelled run as a designed eviction when another run answered the same thread. Report a stranded trigger as a finding; a census-only failure is not a row on the outage issue and does not hold its close. Do not re-run a census-only row automatically: it has no failure record showing which jobs are safe to replay.
-
-**Diagnose first.** The nightly enrichment comment names the cause when it can. When it doesn't, read the session log — quota exhaustion surfaces as a `<synthetic>` assistant message:
-
-```bash
-gh run download <run-id> --pattern '*session-logs*' --dir /tmp/outage
-jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/outage/*/*/*.jsonl
-# → You've hit your weekly limit · resets 12am (UTC)
-```
-
-A cluster of these is quota exhaustion, not a bug — don't open a fix PR. The reset in the message is an upper bound on the outage, not a schedule: a weekly limit can strand most of a day, and can also clear many hours early. Gate the drain on the clean-run check below, not on the stated reset.
-
-**Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. Re-running the bot's own failed workflow needs no maintainer approval.
-
-```bash
-gh pr view <n> --json state,headRefOid,reviews \
-  --jq '{state, headRefOid, reviewers: [.reviews[].author.login]}'
-gh run rerun <run-id> --failed
-```
-
-Close the issue once every row is drained (`gh issue close "$OUTAGE"`); one left open folds the next outage into a stale incident.
+Handle live work through the normal triage, review, or CI-fix guidance. Keep failed runs in the report as diagnostic evidence. Close the outage issue once its rows are diagnosed and the current-state scan has handled any work that still applies.
 
 ## Step 2: Token usage report
 

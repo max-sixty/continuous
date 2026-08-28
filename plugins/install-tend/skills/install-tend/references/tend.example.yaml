@@ -312,8 +312,8 @@ bot_name: my-project-bot
 
 # ### notifications
 #
-# Every 15 minutes. Polls GitHub notifications, responds to unhandled mentions,
-# marks handled threads as read.
+# Every 15 minutes. Keeps the bot watching the repository and drains unread
+# notifications as a recovery queue for issue and PR work.
 
 # ### review-runs
 #

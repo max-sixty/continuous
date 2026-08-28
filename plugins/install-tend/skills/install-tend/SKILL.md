@@ -912,6 +912,8 @@ else
   if [ -n "$INVITE_ID" ]; then
     GH_TOKEN=$BOT_GH_TOKEN gh api "user/repository_invitations/$INVITE_ID" -X PATCH
   fi
+  GH_TOKEN=$BOT_GH_TOKEN gh api "repos/$REPO/subscription" -X PUT \
+    -F subscribed=true -F ignored=false --jq '{subscribed, ignored}'
   gh api "repos/$REPO/collaborators" --jq '.[].login'
 fi
 ```
@@ -997,6 +999,7 @@ line picks the row that matches the chosen harness):
 - [ ] Harness auth (codex): `OPENAI_API_KEY` secret set
 - [ ] Bot token: `TEND_BOT_TOKEN` set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
 - [ ] Bot access: repo collaborator with write access, invitation accepted
+- [ ] Bot notifications: watching the repository
 - [ ] Bot bio: profile bio reflects the authorization stance
 - [ ] `uvx tend@latest check` passes
 - [ ] Committed (push requires explicit permission)

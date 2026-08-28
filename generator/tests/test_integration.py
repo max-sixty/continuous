@@ -517,7 +517,9 @@ def test_init_notifications_has_precheck(
     # First step is the pre-check
     check_step = steps[0]
     assert check_step["id"] == "check"
-    assert "gh api notifications" in check_step["run"]
+    assert "--paginate --slurp" in check_step["run"]
+    assert "subscription" in check_step["run"]
+    assert "notifications/threads/" not in check_step["run"]
 
     # All subsequent steps are gated on the check output
     for step in steps[1:]:
@@ -527,6 +529,9 @@ def test_init_notifications_has_precheck(
         assert "steps.check.outputs.count" in step["if"]
         # workflow_dispatch bypasses the pre-check
         assert "workflow_dispatch" in step["if"]
+
+    agent_step = steps[-1]
+    assert "steps.check.outputs.cutoff" in agent_step["with"]["prompt"]
 
 
 def test_notifications_precheck_tolerates_transient_non_json(
@@ -546,23 +551,22 @@ def test_notifications_precheck_tolerates_transient_non_json(
     )
     script = data["jobs"]["notifications"]["steps"][0]["run"]
 
-    # Fake `gh` mimics a transient GitHub blip: bare `gh api notifications`
-    # returns a 200 with an HTML body (exit 0, non-JSON output); the same call
-    # with `--jq` fails because gh runs jq internally and jq can't parse HTML.
+    # Fake `gh` accepts the idempotent repository-watch write, then mimics a
+    # transient notifications blip: the endpoint returns a 200 with an HTML
+    # body (exit 0, non-JSON output).
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
     gh = bindir / "gh"
     gh.write_text(
         "#!/usr/bin/env bash\n"
-        'for a in "$@"; do [ "$a" = "--jq" ] && exit 4; done\n'
+        'case "$2" in repos/*/subscription) echo true; exit 0;; esac\n'
         'echo "<html><body>error</body></html>"\n'
         "exit 0\n"
     )
     gh.chmod(0o755)
-    # No-op sleep so the retry loop's backoff doesn't slow the test.
-    sleep = bindir / "sleep"
-    sleep.write_text("#!/usr/bin/env bash\nexit 0\n")
-    sleep.chmod(0o755)
+    date = bindir / "date"
+    date.write_text("#!/usr/bin/env bash\necho 2026-01-02T11:50:00Z\n")
+    date.chmod(0o755)
 
     output_file = tmp_path / "gh_output"
     output_file.write_text("")
