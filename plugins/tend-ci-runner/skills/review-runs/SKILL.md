@@ -225,13 +225,14 @@ Fail the sweep if the lookup fails; that is different from finding no open
 tracker:
 
 ```bash
-if ! OUTAGE=$(gh issue list --state open --label tend-outage --author @me \
+if ! gh issue list --state open --label tend-outage --author @me \
   --limit 100 --json number,title \
   --jq '[.[] | select(.title == "Bot temporarily unavailable") | .number]
-    | sort | .[0] // empty'); then
+    | sort | .[0] // empty' > /tmp/review-runs-outage-number; then
   echo "Could not read the outage tracker" >&2
   exit 1
 fi
+OUTAGE=$(cat /tmp/review-runs-outage-number)
 if [ -n "$OUTAGE" ]; then
   gh issue view "$OUTAGE" --json body,comments --jq '.body, .comments[].body'
 fi
@@ -242,7 +243,8 @@ handle any applicable current work. If a tracker was found, close the exact
 issue number returned above:
 
 ```bash
-gh issue close <outage-number> --reason completed
+OUTAGE=$(cat /tmp/review-runs-outage-number)
+[ -n "$OUTAGE" ] && gh issue close "$OUTAGE" --reason completed
 ```
 
 ## Step 2: Token usage report

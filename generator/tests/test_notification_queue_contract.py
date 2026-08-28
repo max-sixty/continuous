@@ -43,9 +43,10 @@ def test_review_runs_pins_current_state_recovery() -> None:
 
     assert "--state open --label tend-outage --author @me" in skill
     assert "| sort | .[0] // empty" in skill
-    assert "if ! OUTAGE=$(gh issue list" in skill
+    assert "if ! gh issue list" in skill
+    assert "> /tmp/review-runs-outage-number; then" in skill
     assert "--json body,comments --jq '.body, .comments[].body'" in skill
-    assert "gh issue close <outage-number> --reason completed" in skill
+    assert '[ -n "$OUTAGE" ] && gh issue close "$OUTAGE" --reason completed' in skill
     assert "complete **Reconcile live work** below, then exit" in skill
     assert "Do not replay historical workflow runs" in skill
     assert "an open issue with no bot response to the latest human activity" in skill
@@ -53,12 +54,24 @@ def test_review_runs_pins_current_state_recovery() -> None:
     assert "failing default-branch CI with no bot fix in progress" in skill
 
 
+def test_outage_tracker_title_stays_in_sync() -> None:
+    title = "Bot temporarily unavailable"
+    reporter = _read("shared", "steps", "report_failure.py")
+    review_runs = _read(
+        "plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md"
+    )
+    ci_fix = _read("plugins", "tend-ci-runner", "skills", "ci-fix", "SKILL.md")
+
+    for content in (reporter, review_runs, ci_fix):
+        assert title in content
+
+
 def test_unreadable_notification_subjects_are_terminal() -> None:
     skill = _read("plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md")
 
     assert "whose `subject.url` is null" in skill
-    assert "a deleted issue or PR" in skill
-    assert "also has the outcome “no action”" in skill
+    assert "whose `subject.url` 404s" in skill
+    assert "A read that fails for any other reason" in skill
 
 
 def test_installation_and_each_poll_enable_repository_watching() -> None:

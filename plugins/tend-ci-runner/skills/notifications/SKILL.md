@@ -48,7 +48,7 @@ Process the snapshot oldest first. Read the live issue or PR and decide what it 
 - Otherwise use the normal live workflow: `/tend-ci-runner:triage` for an issue, `/tend-ci-runner:review` for an unreviewed PR head, or answer a comment or review thread that asks the bot for something.
 - A closed thread or a human conversation that needs nothing from the bot has the semantic outcome “no action”.
 - A non-conversational subject, such as a release or check suite, also has the outcome “no action”. Default-branch CI recovery belongs to the daily current-state scan.
-- A subject that cannot be read — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would pin the Step 4 cutoff permanently.
+- A subject with no readable target — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR, whose `subject.url` 404s — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would pin the Step 4 cutoff permanently. A read that fails for any other reason — a 5xx, a rate limit — leaves the item unresolved.
 
 Judge deduplication from current state, including bot reviews and bot-authored PRs that cross-reference an issue. The notification timestamp alone does not prove whether a response covered the activity.
 
