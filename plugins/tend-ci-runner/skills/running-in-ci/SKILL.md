@@ -188,6 +188,16 @@ gh pr list --state all --search "author:$BOT_LOGIN <issue-number>" \
 
 Compare by title keywords **and** the files the new PR would modify — two concurrent fixes for the same bug typically pick different branch names, so a branch-name match is not sufficient. If a sibling bot PR overlaps in scope — whether open, closed, or already merged — **do not create**: post a comment on the triggering thread linking the existing PR and exit.
 
+A fix may have landed directly on the default branch while you worked. Fetch it immediately before creating the PR:
+
+```bash
+DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
+git fetch origin "$DEFAULT_BRANCH"
+git log --oneline "HEAD..origin/$DEFAULT_BRANCH"
+```
+
+Inspect overlapping commits and reproduce the problem on the fetched default branch. If it is fixed, don't create the PR; comment on the triggering thread when it needs a response.
+
 ### Fetch the prior rejection before re-deriving a fix
 
 A change a maintainer already turned down leaves its verdict in two places the checks above don't fetch: the closed PR that carried it, and the comments on the issue tracking it. Search by the symbol or path the change would edit — a finding re-derived from the code has no issue number, and an attempt predating the tracking issue cites none either — then read the closed hits and the issue bodies, not just their titles.
