@@ -46,7 +46,11 @@ def test_review_runs_pins_current_state_recovery() -> None:
     assert "if ! gh issue list" in skill
     assert "> /tmp/review-runs-outage-number; then" in skill
     assert "--json body,comments --jq '.body, .comments[].body'" in skill
-    assert '[ -n "$OUTAGE" ] && gh issue close "$OUTAGE" --reason completed' in skill
+    close_block = (
+        "OUTAGE=$(cat /tmp/review-runs-outage-number)\n"
+        '[ -n "$OUTAGE" ] && gh issue close "$OUTAGE" --reason completed'
+    )
+    assert close_block in skill
     assert "complete **Reconcile live work** below, then exit" in skill
     assert "Do not replay historical workflow runs" in skill
     assert "an open issue with no bot response to the latest human activity" in skill
