@@ -126,12 +126,21 @@ runs:
     # and runs the script (reached via ../shared/steps, since this action is
     # one level deep).
     # A step receiving a real credential pins both its shell and child PATH;
-    # adopter setup may have prepended arbitrary commands to the job PATH.
+    # adopter setup may have prepended arbitrary commands to the job PATH. Every
+    # Python body is pinned to `/usr/bin/python3` and started isolated: `-E`
+    # ignores every `PYTHON*` variable (a `PYTHONPATH` shadowing `json`, a
+    # `PYTHONSAFEPATH`) and `-s` drops the user site dir, so a
+    # `usercustomize.py` or `.pth` under the runner's `~/.local` cannot run
+    # first. Not `-I`, which implies `-P`: that removes the script's own
+    # directory from `sys.path` and breaks `import _common`.
     - name: Security preflight
       id: security
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/security-preflight.sh"
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/security_preflight.py"
       env:
+        # `bash --noprofile --norc` still sources $BASH_ENV, and that wrapper
+        # shell runs before the pinned interpreter does.
+        BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
     # Also publishes `login`/`id` for the bot: it reads them off the token it
@@ -140,8 +149,9 @@ runs:
     - name: Rate limit preflight
       id: bot
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/rate_limit_preflight.py"
       env:
+        BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
     # Secrets via env:, not ${{ }} interpolation — interpolating them into the
@@ -150,6 +160,7 @@ runs:
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/validate-claude-auth.sh"
       env:
+        BASH_ENV: ""
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
 
@@ -168,6 +179,7 @@ runs:
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sensitive-config.sh"
       env:
+        BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
     # Compose the system prompt (shared/system-prompt.md + Claude directives +
@@ -217,6 +229,7 @@ runs:
       # the only one that receives both real credentials.
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
+        BASH_ENV: ""
         TEND_GH_TOKEN: ${{ inputs.github_token }}
         # The real Anthropic credential goes ONLY to the proxy (this runner-
         # owned step), never to the sandbox. The proxy injects it for
@@ -234,7 +247,7 @@ runs:
         # the agent env file. sandbox_setup (commands) runs in a later step.
         TEND_SANDBOX_PATH: ${{ inputs.sandbox_path }}
         TEND_SANDBOX_ENV: ${{ inputs.sandbox_env }}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
+      run: /usr/bin/env TEND_RUNNER_TOOL_PATH="$PATH" PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
 
     # Install the claude binary into the sandbox user's home. Nothing else —
     # a language toolchain here would shadow the adopter's on the sandbox PATH.
@@ -261,7 +274,7 @@ runs:
     # empty `sandbox_setup:` is exactly the config a missing tool hides in.
     - name: Run adopter sandbox setup
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/sandbox-setup.sh"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/sandbox_setup.py"
       env:
         TEND_SANDBOX_SETUP: ${{ inputs.sandbox_setup }}
 
@@ -269,8 +282,9 @@ runs:
     # completion and exits — no Ink UI, no TTY, no first-run onboarding — so
     # completion is detected from the process exit code plus the final
     # `result` event (an error result fails the step), not a Stop-hook
-    # sentinel. The wrapper keeps all argv/env quoting in bash, not nested
-    # YAML strings.
+    # sentinel. The step body is shared/steps/run_claude.py; keeping it out of
+    # this file is what lets the suite drive it (nothing lints or runs an inline
+    # `run:` block in a composite action).
     #   - settings.local.json sets `permissions.defaultMode: bypassPermissions`
     #     plus skipDangerousModePermissionPrompt. bypassPermissions lets the bot
     #     write Claude Code's protected paths (.devcontainer/, .github/, .husky/,
@@ -305,230 +319,8 @@ runs:
         TEND_SYSTEM_PROMPT: ${{ steps.prompt.outputs.value }}
         TEND_PROMPT: ${{ inputs.prompt }}
         TEND_TIMEOUT_SEC: ${{ inputs.timeout_seconds }}
-      run: |
-        set -u
-
-        # The stream-json output and stderr go to runner-owned files: the
-        # redirects are opened by this runner shell, and the sandbox process
-        # writes through the inherited fds regardless of file ownership. The
-        # wrapper lives in the sandbox-writable run dir ($TEND_RUN_DIR).
-        STREAM_JSON="$RUNNER_TEMP/tend-stream.json"
-        STDERR_LOG="$RUNNER_TEMP/tend-claude-stderr.log"
-        WRAPPER="$TEND_RUN_DIR/tend-run-claude.sh"
-
-        # Build the permissions allow list from the comma-separated
-        # `allowed_tools` input. With defaultMode=bypassPermissions the allow
-        # list is largely moot (every tool is permitted), but it's retained so
-        # the listed tools stay granted via the layered settings if an adopter
-        # overrides defaultMode to a stricter mode.
-        ALLOW_JSON=$(jq -nc --arg list "$TEND_ALLOWED_TOOLS" '$list | split(",") | map(gsub("^\\s+|\\s+$"; ""))')
-
-        # Build settings.local.json with jq, not a heredoc — jq escapes the
-        # (adopter-controlled) tool list so nothing in it is re-expanded by the
-        # shell. Written into the sandbox-owned workspace as the sandbox user;
-        # the `< file` redirect is opened by the runner shell, so tee needs no
-        # read access to the runner temp file. skipDangerousModePermissionPrompt
-        # pre-accepts the one-time bypass-mode "I accept the risks" disclaimer —
-        # the settings key the dialog's accept button writes, read from any
-        # settings layer. No Stop/StopFailure hooks — headless detects
-        # completion from the process exit plus the result-event verdict below.
-        # attribution: {commit: "", pr: ""} empties Claude Code's auto-added
-        # `Co-Authored-By: Claude` commit trailer and `Generated with Claude
-        # Code` PR footer, so bot commits and PRs are attributed solely to the
-        # tend bot. (`attribution` supersedes the deprecated `includeCoAuthoredBy`.)
-        jq -nc --argjson allow "$ALLOW_JSON" \
-          '{
-            permissions: {defaultMode: "bypassPermissions", allow: $allow},
-            skipDangerousModePermissionPrompt: true,
-            attribution: {commit: "", pr: ""}
-          }' > "$RUNNER_TEMP/tend-settings.json"
-        # The file below lands in the adopter's checkout untracked, next to the
-        # `.claude/skills/` they do track. setup-sandbox.sh's global gitignore
-        # for the sandbox user keeps a broad `git add -A` from committing
-        # `bypassPermissions` into the PR the session opens.
-        sudo -u "$SANDBOX" mkdir -p "$GITHUB_WORKSPACE/.claude"
-        sudo -u "$SANDBOX" tee "$GITHUB_WORKSPACE/.claude/settings.local.json" \
-          < "$RUNNER_TEMP/tend-settings.json" >/dev/null
-
-        # Wrapper script — keeps the argv quoting in bash, not YAML. The
-        # --permission-mode flag matches settings.local.json above; either
-        # alone would suffice but specifying both is explicit and survives
-        # an adopter who overrides settings.local.json.
-        cat > "$RUNNER_TEMP/tend-wrapper.sh" <<'WRAPEOF'
-        #!/usr/bin/env bash
-        exec claude -p \
-          --model "$TEND_MODEL" \
-          --permission-mode bypassPermissions \
-          --allowedTools "$TEND_ALLOWED_TOOLS" \
-          --append-system-prompt "$TEND_SYSTEM_PROMPT" \
-          --output-format stream-json --verbose \
-          "$TEND_PROMPT"
-        WRAPEOF
-        sudo -u "$SANDBOX" tee "$WRAPPER" < "$RUNNER_TEMP/tend-wrapper.sh" >/dev/null
-        sudo -u "$SANDBOX" chmod +x "$WRAPPER"
-
-        # Pass GITHUB_* through as a denylist rather than an explicit
-        # allowlist: most GITHUB_* vars are informational (GITHUB_ACTOR,
-        # GITHUB_API_URL, GITHUB_REF_NAME, GITHUB_WORKSPACE, …) and a
-        # denylist picks up future additions automatically. Skills depend on
-        # them for run-self-reference (branch names, gist headings, dedup of
-        # own check runs) and owner-correct URL construction. Exclude:
-        #   GITHUB_TOKEN — the agent env file carries a dummy; the real
-        #     PAT lives in the proxy. (The file's dummy must not be
-        #     overridden, so the denylist entry is load-bearing.)
-        #   GITHUB_{ENV,PATH,OUTPUT,STATE,STEP_SUMMARY} — paths the
-        #     runner re-reads after this step exits; the sandbox must not
-        #     be handed a channel into later steps' env / PATH / outputs /
-        #     job summary.
-        GHA_VARS=()
-        while IFS= read -r name; do
-          case "$name" in
-            GITHUB_TOKEN|GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY) continue ;;
-          esac
-          GHA_VARS+=("$name=${!name}")
-        done < <(compgen -e | grep '^GITHUB_')
-
-        # Launch the agent as the non-sudo sandbox user, backgrounded so the
-        # runner can supervise it. Its launch env is $AGENT_ENV_FILE (written by
-        # setup-sandbox.sh; shared with the plugin-install step so the two can't
-        # drift): proxy routing, CA trust for every client family, and DUMMY
-        # GitHub + Anthropic credentials in the production schemes — the proxy
-        # replaces them with the real secrets for their hosts. Non-allowlisted
-        # traffic tunnels through untouched. No real secret is in this env.
-        #
-        # The `sudo env VAR=...` form replaces the environment with only
-        # what's listed, so the GITHUB_* context vars are re-passed via the
-        # denylist above. They are public values, not secrets.
-        mapfile -t AGENT_ENV <"$AGENT_ENV_FILE"
-        sudo -u "$SANDBOX" env \
-          "${AGENT_ENV[@]}" \
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB="$CLAUDE_CODE_SUBPROCESS_ENV_SCRUB" \
-          BOT_NAME="$BOT_NAME" BOT_ID="$BOT_ID" \
-          TEND_MODEL="$TEND_MODEL" TEND_ALLOWED_TOOLS="$TEND_ALLOWED_TOOLS" \
-          TEND_SYSTEM_PROMPT="$TEND_SYSTEM_PROMPT" TEND_PROMPT="$TEND_PROMPT" \
-          CI="${CI:-true}" \
-          "${GHA_VARS[@]}" \
-          bash "$WRAPPER" >"$STREAM_JSON" 2>"$STDERR_LOG" &
-        CLAUDE_PID=$!
-        echo "Claude PID: $CLAUDE_PID (running as $SANDBOX, headless claude -p)"
-
-        # Supervisor poll loop: process exit or timeout, whichever comes first.
-        # The agent tree runs as the sandbox user, so liveness/termination
-        # signals from the runner cross the UID boundary and go through sudo.
-        start=$(date +%s)
-        status=running
-        while true; do
-          if ! sudo kill -0 "$CLAUDE_PID" 2>/dev/null; then
-            status=exited
-            break
-          fi
-          if [ $(($(date +%s) - start)) -ge "$TEND_TIMEOUT_SEC" ]; then
-            status=timeout
-            break
-          fi
-          sleep 2
-        done
-
-        # Clean termination — SIGTERM, wait up to 5s, then SIGKILL. Killing the
-        # `sudo` PID may leave the agent tree (claude→node) orphaned since
-        # SIGKILL can't be relayed, so also reap every process owned by the
-        # dedicated sandbox user.
-        if sudo kill -0 "$CLAUDE_PID" 2>/dev/null; then
-          sudo kill -TERM "$CLAUDE_PID" 2>/dev/null || true
-          for _ in 1 2 3 4 5; do
-            sleep 1
-            sudo kill -0 "$CLAUDE_PID" 2>/dev/null || break
-          done
-          sudo kill -KILL "$CLAUDE_PID" 2>/dev/null || true
-        fi
-        sudo pkill -KILL -u "$SANDBOX" 2>/dev/null || true
-
-        # Capture the real exit, but NOT via `|| true` — that would make
-        # CLAUDE_EXIT always 0 (the exit of `true`) and report a crashed run as
-        # success. The process is dead by now, so wait returns promptly.
-        CLAUDE_EXIT=0
-        wait "$CLAUDE_PID" 2>/dev/null || CLAUDE_EXIT=$?
-
-        elapsed=$(($(date +%s) - start))
-        echo "Supervisor: status=$status elapsed=${elapsed}s claude_exit=$CLAUDE_EXIT"
-        echo "status=$status" >> "$GITHUB_OUTPUT"
-        echo "elapsed_seconds=$elapsed" >> "$GITHUB_OUTPUT"
-        echo "stream_json=$STREAM_JSON" >> "$GITHUB_OUTPUT"
-
-        # Render a readable transcript (assistant text + tool calls) from the
-        # stream-json events, capped so a long session doesn't flood the summary.
-        if [ "${{ inputs.show_full_output }}" = "true" ] && [ -s "$STREAM_JSON" ]; then
-          {
-            echo "## Claude transcript"
-            echo
-            echo '```'
-            jq -r '
-              select(.type == "assistant") | .message.content[]? |
-              if .type == "text" then .text
-              elif .type == "tool_use" then "→ \(.name): \((.input | tostring)[0:200])"
-              else empty end
-            ' "$STREAM_JSON" 2>/dev/null | head -400 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-        fi
-
-        case "$status" in
-          exited)
-            if [ "$CLAUDE_EXIT" -ne 0 ]; then
-              # This is the most common failure path — a session-limit exit is
-              # non-zero and emits a <synthetic> assistant message ("You've hit
-              # your session limit · resets 8:30am (UTC)"). Surface that last
-              # assistant text so the annotation names the cause (session limit
-              # vs auth failure vs server error) instead of a generic "see the
-              # artifact". The nightly enrich-tend-outage-issues.sh pass then
-              # carries the annotation into the tend-outage issue for free, so a
-              # maintainer can triage without downloading logs and writing jq.
-              REASON=$(jq -r '
-                select(.type == "assistant") | .message.content[]?
-                | select(.type == "text") | .text
-              ' "$STREAM_JSON" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1)
-              if [ -n "$REASON" ]; then
-                echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT): $REASON — see the session-logs artifact"
-              else
-                echo "::error::claude -p exited non-zero (exit=$CLAUDE_EXIT) — see the session-logs artifact"
-              fi
-              tail -20 "$STDERR_LOG" 2>/dev/null || true
-              exit "$CLAUDE_EXIT"
-            fi
-            # A 0 exit alone does NOT mean the turn succeeded: claude -p can exit
-            # 0 while emitting an error `result` event (rate limit, max turns,
-            # auth failure, or a failed final model request — `is_error: true`
-            # can occur even on subtype "success"). Inspect the last result
-            # event; this is the headless equivalent of the interactive
-            # harness's StopFailure hook. A turn with no result event never
-            # completed and is treated as failure (matching interactive's
-            # exit-without-Stop-hook path), so the outage report fires and the
-            # triggering notification is not marked read.
-            VERDICT=$(jq -s -r '
-              map(select(.type == "result")) | last
-              | if . == null then "no-result"
-                elif (.is_error == true) or (.subtype != "success") then "error:\(.subtype // "unknown")"
-                else "ok" end
-            ' "$STREAM_JSON" 2>/dev/null || echo "no-result")
-            case "$VERDICT" in
-              ok) exit 0 ;;
-              no-result)
-                echo "::error::claude -p produced no result event — the turn did not complete"
-                tail -20 "$STDERR_LOG" 2>/dev/null || true
-                exit 1
-                ;;
-              *)
-                echo "::error::claude -p turn ended in failure (${VERDICT#error:}) — rate limit, auth, max turns, or server error"
-                tail -20 "$STDERR_LOG" 2>/dev/null || true
-                exit 1
-                ;;
-            esac
-            ;;
-          timeout)
-            echo "::error::Claude headless run exceeded ${TEND_TIMEOUT_SEC}s timeout"
-            exit 1
-            ;;
-        esac
+        SHOW_FULL_OUTPUT: ${{ inputs.show_full_output }}
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/run_claude.py"
 
     # The sandbox owned the workspace during the run. Hand it back to the runner
     # so actions/checkout's post-job credential cleanup — which runs as the
@@ -548,8 +340,9 @@ runs:
     - name: Mark event notification read
       if: success()
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/mark-notification-read.sh"
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/mark_notification_read.py"
       env:
+        BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
     - name: Append skill step summary
@@ -563,8 +356,10 @@ runs:
 
     # Account the run's token usage from the stream-json the headless run wrote
     # to stdout, falling back to the session JSONL when the run was cancelled
-    # before it emitted a `type: "result"` event. Both parsers live in
-    # compute-token-usage.sh so pytest can cover them.
+    # before it emitted a `type: "result"` event. The step body lives in
+    # shared/steps/token_usage.py so pytest can cover both parsers; it also
+    # consolidates the sandbox user's session JSONL and stderr log into
+    # $RUNNER_TEMP/tend-logs for the uploaded artifact.
     - name: Token usage
       if: always()
       id: tokens
@@ -572,53 +367,7 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         STREAM_JSON: ${{ steps.claude.outputs.stream_json }}
-      run: |
-        # Consolidate the agent's session JSONL (written under the sandbox home
-        # with restrictive perms) and the stderr log into a runner-owned dir for
-        # the uploaded artifact. Make just the session dir runner-readable (not
-        # the whole plugin tree). The stream-json is parsed in place below and
-        # copied into the dir only on tend's own repo.
-        sudo chmod a+x "${AGENT_HOME:-/nonexistent}" "${AGENT_HOME:-/nonexistent}/.claude" 2>/dev/null || true
-        sudo chmod -R a+rX "${AGENT_HOME:-/nonexistent}/.claude/projects" 2>/dev/null || true
-        LOGS_DIR="$RUNNER_TEMP/tend-logs"
-        mkdir -p "$LOGS_DIR"
-        cp -a "${AGENT_HOME}/.claude/projects/." "$LOGS_DIR/" 2>/dev/null || true
-        cp -a "$RUNNER_TEMP/tend-claude-stderr.log" "$LOGS_DIR/" 2>/dev/null || true
-
-        # Runs after the copy above, so the fallback can read the session JSONL.
-        USAGE=$(LOGS_DIR="$LOGS_DIR" \
-          bash "${{ github.action_path }}/../shared/steps/compute-token-usage.sh")
-
-        echo "$USAGE" > "$LOGS_DIR/token-usage.json"
-        echo "usage=$(jq -c . <<< "$USAGE")" >> "$GITHUB_OUTPUT"
-
-        # Preserve the raw stream-json (the only place `type:"result"` cost
-        # events live) alongside the session JSONL so token under-reporting
-        # (#302) can be diagnosed against an actual stream. Gated to tend's own
-        # repo so consumers don't pay for an upload that only serves a
-        # tend-internal diagnostic. Drop once #302 is resolved.
-        if [ "$GITHUB_REPOSITORY" = "max-sixty/tend" ] \
-           && [ -n "${STREAM_JSON:-}" ] && [ -f "$STREAM_JSON" ]; then
-          cp "$STREAM_JSON" "$LOGS_DIR/claude-stream.json" || true
-        fi
-
-        jq -r '
-          def usd: if . == null then "unknown" else tostring | if test("\\.") then split(".") | "\(.[0]).\((.[1] + "00")[:2])" else . + ".00" end | "$" + . end;
-          "## Token Usage",
-          "| Metric | Value |",
-          "|--------|-------|",
-          "| Input | \(.input_tokens) |",
-          "| Output | \(.output_tokens) |",
-          "| Cache creation | \(.cache_creation_input_tokens) |",
-          "| Cache read | \(.cache_read_input_tokens) |",
-          "| Cost | \(.cost_usd | usd) |",
-          "| Turns | \(.turns) |",
-          "",
-          if .partial then
-            "*Reconstructed from the session log: this run emitted no result event (most often a cancellation), so the token counts are its own but the cost is not recoverable.*"
-          else empty end,
-          "*Cost at API list prices — a large multiple of the effective rate on Claude Code subscriptions.*"
-        ' <<< "$USAGE" >> "$GITHUB_STEP_SUMMARY"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/token_usage.py" --harness claude
 
     # Gate on the job being red, not on the agent step specifically. A dozen
     # steps run before `claude` — the rate-limit preflight, auth validation,
@@ -636,14 +385,15 @@ runs:
     # titled "Bot temporarily unavailable" would collect a row per trigger —
     # but that argument doesn't single it out: `Validate auth configured` and
     # the adopter's `sandbox_setup:` fail the same way and stay in. Bounding
-    # that repeated append belongs in `report-failure.sh`, where it covers
+    # that repeated append belongs in `report_failure.py`, where it covers
     # every such step at once (#859); enumerating more step ids here would go
     # stale as steps move.
     - name: Report failure
       if: failure() && steps.security.outcome != 'failure'
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/report_failure.py"
       env:
+        BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
     - name: Compute artifact name

@@ -11,6 +11,15 @@ them, so they are pinned here.
 
 from __future__ import annotations
 
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
 from oauth_token import (
     ANSI_CSI,
     AUTHORIZE_URL,
@@ -18,7 +27,7 @@ from oauth_token import (
     TIMEOUT_SECONDS,
     TOKEN,
 )
-from oauth_token import complete_match, failure_message, first_url
+from oauth_token import complete_match, failure_message, first_url, stop_and_reap
 
 URL = (
     b"https://claude.com/cai/oauth/authorize?code=true&client_id=9d1"
@@ -114,3 +123,125 @@ def test_a_child_that_offered_no_url_is_not_reported_as_unapproved() -> None:
     assert "run that command directly" in message
     assert "unapproved" not in message
     assert str(TIMEOUT_SECONDS) not in message
+
+
+def test_stop_and_reap_finishes_a_child_that_ignores_termination() -> None:
+    child_code = """
+import signal
+import time
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print("ready", flush=True)
+time.sleep(2)
+"""
+    with subprocess.Popen(
+        [sys.executable, "-c", child_code],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as child:
+        assert child.stdout is not None
+        assert child.stdout.readline() == "ready\n"
+        stop_and_reap(child, terminate_timeout=0.01)
+        assert child.returncode is not None
+
+
+def test_stop_and_reap_finishes_the_process_group(tmp_path: Path) -> None:
+    grandchild_pid_file = tmp_path / "grandchild.pid"
+    grandchild_code = f"""
+import os
+import signal
+import time
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path({str(grandchild_pid_file)!r}).write_text(str(os.getpid()))
+time.sleep(5)
+"""
+    child_code = f"""
+import subprocess
+import sys
+
+subprocess.Popen([sys.executable, "-c", {grandchild_code!r}])
+"""
+    with subprocess.Popen(
+        [sys.executable, "-c", child_code], start_new_session=True
+    ) as child:
+        try:
+            deadline = time.monotonic() + 2
+            while not grandchild_pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert grandchild_pid_file.exists(), "grandchild did not start"
+            grandchild_pid = int(grandchild_pid_file.read_text())
+            child.wait(timeout=2)
+
+            stop_and_reap(child, terminate_timeout=0.01)
+
+            try:
+                os.kill(grandchild_pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise AssertionError("grandchild outlived its process-group owner")
+        finally:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                pass
+
+
+@pytest.mark.parametrize("interrupt", [signal.SIGINT, signal.SIGTERM])
+def test_interrupting_the_wrapper_does_not_orphan_its_child(
+    tmp_path: Path, interrupt: signal.Signals
+) -> None:
+    child_pid_file = tmp_path / "child.pid"
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        f"""#!{sys.executable}
+import os
+import signal
+import time
+from pathlib import Path
+
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+Path(os.environ["TEND_TEST_CHILD_PID_FILE"]).write_text(str(os.getpid()))
+time.sleep(5)
+"""
+    )
+    fake_claude.chmod(0o755)
+    wrapper = subprocess.Popen(
+        [sys.executable, Path(__file__).with_name("oauth_token.py")],
+        env=os.environ
+        | {
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "TEND_TEST_CHILD_PID_FILE": str(child_pid_file),
+        },
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    child_pid = None
+    try:
+        deadline = time.monotonic() + 2
+        while not child_pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert child_pid_file.exists(), "fake claude did not start"
+        child_pid = int(child_pid_file.read_text())
+
+        wrapper.send_signal(interrupt)
+        wrapper.wait(timeout=2)
+
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("oauth child outlived its interrupted wrapper")
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+            wrapper.wait()
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass

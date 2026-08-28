@@ -31,6 +31,7 @@ import os
 import pty
 import re
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -128,10 +129,57 @@ def failure_message(code_file, typed_at, announced):
     )
 
 
+def stop_and_reap(child, terminate_timeout=10):
+    """Stop a child's process group and reap its group leader."""
+    process_group = child.pid
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        child.wait()
+        return
+
+    deadline = time.monotonic() + terminate_timeout
+    while time.monotonic() < deadline:
+        child.poll()
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            break
+        except PermissionError:
+            pass
+        time.sleep(0.01)
+    else:
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except (PermissionError, ProcessLookupError):
+            pass
+        while True:
+            child.poll()
+            try:
+                os.killpg(process_group, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                pass
+            time.sleep(0.01)
+
+    if child.returncode is None:
+        child.wait()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--code-file", help="path to watch for a `code#state` string")
     args = parser.parse_args()
+
+    def stop_on_signal(signum, _frame):
+        for interrupt in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            signal.signal(interrupt, signal.SIG_IGN)
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGHUP, stop_on_signal)
+    signal.signal(signal.SIGINT, stop_on_signal)
+    signal.signal(signal.SIGTERM, stop_on_signal)
 
     # A code from an earlier run is dead — its PKCE challenge went with that
     # run — so a leftover file would be typed into this run's prompt before the
@@ -161,60 +209,59 @@ def main():
     token = None
     deadline = time.time() + TIMEOUT_SECONDS
 
-    while time.time() < deadline:
-        readable, _, _ = select.select([master], [], [], 1.0)
-        if readable:
-            try:
-                chunk = os.read(master, 65536)
-            except OSError:  # the child closed its end
-                chunk = b""
-            if not chunk:
-                break
-            buf += chunk
-
-        # Ink restyles mid-frame, so a CSI sequence can land inside either the
-        # URL or the token. Both are read from the stripped view.
-        visible = ANSI_CSI.sub(b"", buf)
-
-        if not announced:
-            url = first_url(visible)
-            if url:
-                print(f"Approve in the browser:\n{url.decode()}", file=sys.stderr)
-                announced = True
-
-        if typed_at is None and args.code_file and os.path.exists(args.code_file):
-            with open(args.code_file) as fh:
-                code = fh.read().strip()
-            if code:
-                os.write(master, code.encode())
-                typed_at = time.time()
-
-        # Enter is its own write, a beat behind the code: a code and a newline
-        # arriving together are buffered as one paste and the newline never
-        # lands as a keypress. Repeated in case the first arrives while the TUI
-        # is still settling the paste.
-        if (
-            typed_at is not None
-            and enters < 3
-            and time.time() - typed_at > 1.5 + 3 * enters
-        ):
-            os.write(master, b"\r")
-            enters += 1
-
-        match = complete_match(TOKEN, visible)
-        if match:
-            token = match.decode()
-            break
-
-        if child.poll() is not None and not readable:
-            break
-
-    child.terminate()
     try:
-        child.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        child.kill()
-    os.close(master)
+        while time.time() < deadline:
+            readable, _, _ = select.select([master], [], [], 1.0)
+            if readable:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:  # the child closed its end
+                    chunk = b""
+                if not chunk:
+                    break
+                buf += chunk
+
+            # Ink restyles mid-frame, so a CSI sequence can land inside either the
+            # URL or the token. Both are read from the stripped view.
+            visible = ANSI_CSI.sub(b"", buf)
+
+            if not announced:
+                url = first_url(visible)
+                if url:
+                    print(f"Approve in the browser:\n{url.decode()}", file=sys.stderr)
+                    announced = True
+
+            if typed_at is None and args.code_file and os.path.exists(args.code_file):
+                with open(args.code_file, encoding="utf-8") as fh:
+                    code = fh.read().strip()
+                if code:
+                    os.write(master, code.encode())
+                    typed_at = time.time()
+
+            # Enter is its own write, a beat behind the code: a code and a newline
+            # arriving together are buffered as one paste and the newline never
+            # lands as a keypress. Repeated in case the first arrives while the TUI
+            # is still settling the paste.
+            if (
+                typed_at is not None
+                and enters < 3
+                and time.time() - typed_at > 1.5 + 3 * enters
+            ):
+                os.write(master, b"\r")
+                enters += 1
+
+            match = complete_match(TOKEN, visible)
+            if match:
+                token = match.decode()
+                break
+
+            if child.poll() is not None and not readable:
+                break
+    finally:
+        try:
+            stop_and_reap(child)
+        finally:
+            os.close(master)
 
     if token is None:
         # Nothing more can arrive, so a match here cannot be a partial read —

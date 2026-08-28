@@ -75,5 +75,5 @@ def migrate_toml_to_yaml(toml_path: Path, yaml_path: Path) -> None:
     round-trip verification fails.
     """
     yaml_text = render_toml_as_yaml(toml_path, yaml_path)
-    yaml_path.write_text(yaml_text)
+    yaml_path.write_text(yaml_text, encoding="utf-8")
     toml_path.unlink()

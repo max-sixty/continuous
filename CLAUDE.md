@@ -30,10 +30,11 @@ pre-commit run --all-files         # lint: ruff, typos, actionlint, shellcheck, 
 ```
 
 The repo root is a uv workspace, and pytest run from it collects every Python
-test — generator/, proxy/, and the install-tend scripts — so one `pytest` is
-the whole Python run. `wt test` (defined in [`.config/wt.toml`](.config/wt.toml))
-adds worker/'s vitest suite and typecheck. Its arguments narrow pytest and
-nothing else, so a filtered run still pays for worker/; `uv run pytest -k render`
+test — generator/, proxy/, shared/steps/, and the install-tend scripts — so
+one `pytest` is the whole Python run. `wt test` (defined in
+[`.config/wt.toml`](.config/wt.toml)) adds worker/'s vitest suite and
+typecheck. Its arguments narrow pytest and nothing else, so a filtered run
+still pays for worker/; `uv run pytest -k render`
 is the Python half on its own.
 
 ## Architecture
@@ -100,7 +101,7 @@ tend/
 │   ├── action.yaml       # Codex harness composite action
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
 ├── shared/
-│   ├── steps/            # Shared composite-action step bodies (bash scripts)
+│   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
 │   └── system-prompt.md  # Harness-neutral system prompt base
 ├── proxy/                # Credential-injection proxy (setup-sandbox.sh, addon)
 ├── generator/            # Python package (uvx tend@latest), uv_build backend

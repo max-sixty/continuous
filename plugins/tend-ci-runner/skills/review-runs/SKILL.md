@@ -226,7 +226,7 @@ jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' /tmp/ou
 # → You've hit your weekly limit · resets 12am (UTC)
 ```
 
-A cluster of these is quota exhaustion, not a bug — don't open a fix PR, and read the reset off the message: a weekly limit can strand most of a day.
+A cluster of these is quota exhaustion, not a bug — don't open a fix PR. The reset in the message is an upper bound on the outage, not a schedule: a weekly limit can strand most of a day, and can also clear many hours early. Gate the drain on the clean-run check below, not on the stated reset.
 
 **Re-run only what won't recover.** Scheduled workflows (`nightly`, `notifications`, `weekly`, this one) recover on their next tick. For an event-triggered run, confirm the work is still missing — a later push often re-triggers it — and that a recent run completed cleanly, or the re-run just refills the issue. Re-running the bot's own failed workflow needs no maintainer approval.
 

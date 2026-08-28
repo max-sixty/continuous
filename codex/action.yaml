@@ -89,7 +89,7 @@ runs:
     - name: Security preflight
       id: security
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/security-preflight.sh"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/security_preflight.py"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
@@ -99,7 +99,7 @@ runs:
     - name: Rate limit preflight
       id: bot
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/rate-limit-preflight.sh"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/rate_limit_preflight.py"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
@@ -230,56 +230,21 @@ runs:
     # Each event includes a token_count field (input/output/cached). Sum
     # them. Cost is left at 0 — Codex CLI doesn't surface API list prices
     # and computing them ourselves would require maintaining a price table.
+    # Shares shared/steps/token_usage.py with the Claude harness, which is
+    # what keeps the record's shape and the summary table's shell the same
+    # across harnesses; the rows and the parsers differ per `--harness`.
     - name: Token usage
       if: always()
       id: tokens
       shell: bash
       env:
         MODEL: ${{ inputs.model }}
-      run: |
-        LOGS_DIR="$HOME/.codex/projects"
-        mkdir -p "$LOGS_DIR"
-
-        ROLLOUTS=$(find "$HOME/.codex/sessions" -name 'rollout-*.jsonl' 2>/dev/null | tr '\n' ' ')
-        if [ -n "$ROLLOUTS" ]; then
-          # Defensive jq — Codex's rollout schema isn't versioned; missing
-          # fields fall back to 0 rather than failing the workflow.
-          USAGE=$(jq -s -c --arg model "$MODEL" '
-            def n: . // 0;
-            {
-              input_tokens:       ([.[] | .token_count.input_tokens? | n] | add // 0),
-              output_tokens:      ([.[] | .token_count.output_tokens? | n] | add // 0),
-              cached_input_tokens:([.[] | .token_count.cached_input_tokens? | n] | add // 0),
-              turns:              ([.[] | select(.type? == "agent_message")] | length),
-              model:              $model,
-              cost_usd:           0
-            }
-          ' $ROLLOUTS 2>/dev/null || echo '{}')
-        fi
-        if [ -z "${USAGE:-}" ] || [ "$USAGE" = "{}" ]; then
-          USAGE='{"input_tokens":0,"output_tokens":0,"cached_input_tokens":0,"turns":0,"model":"'"$MODEL"'","cost_usd":0}'
-        fi
-
-        echo "$USAGE" > "$LOGS_DIR/token-usage.json"
-        echo "usage=$(jq -c . <<< "$USAGE")" >> "$GITHUB_OUTPUT"
-
-        jq -r '
-          "## Token Usage (Codex)",
-          "| Metric | Value |",
-          "|--------|-------|",
-          "| Input | \(.input_tokens) |",
-          "| Output | \(.output_tokens) |",
-          "| Cached input | \(.cached_input_tokens) |",
-          "| Turns | \(.turns) |",
-          "| Model | \(.model) |",
-          "",
-          "*Cost is not reported — Codex CLI does not surface API list prices.*"
-        ' <<< "$USAGE" >> "$GITHUB_STEP_SUMMARY"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/token_usage.py" --harness codex
 
     - name: Mark event notification read
       if: success()
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/mark-notification-read.sh"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/mark_notification_read.py"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
@@ -293,7 +258,7 @@ runs:
     - name: Report failure
       if: failure() && steps.security.outcome != 'failure'
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/report-failure.sh"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/report_failure.py"
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 

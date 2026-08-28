@@ -346,9 +346,9 @@ remain the load-bearing boundaries regardless of harness.
 **Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
 spike detection (today's volume vs 6-day baseline, scaled per repo) abort
 the run before Claude starts, catching runaway loops between workflows.
-The check runs as a shell step, so a prompt-injection attack inside the
-Claude session cannot skip it. Concrete limits live in
-`shared/steps/rate-limit-preflight.sh`.
+The check runs as its own step in the composite action, so a
+prompt-injection attack inside the Claude session cannot skip it. Concrete limits live in
+`shared/steps/rate_limit_preflight.py`.
 
 The spike limit is resumable by a maintainer, the burst limit is not. On a
 spike trip the run files or reopens a `tend-rate-limit` issue listing the
