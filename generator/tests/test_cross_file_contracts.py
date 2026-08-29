@@ -1,4 +1,8 @@
-"""Pin the notification queue's cross-file safety contract."""
+"""Pin the safety contracts a skill shares with a script or another skill.
+
+A rule split across two files drifts silently: nothing runs both halves
+together, so each reads correct on its own while the pair stops agreeing.
+"""
 
 from pathlib import Path
 
@@ -87,3 +91,49 @@ def test_installation_and_each_poll_enable_repository_watching() -> None:
             "repos/$GITHUB_REPOSITORY/subscription" in content
         )
         assert "-F subscribed=true -F ignored=false" in content
+
+
+def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None:
+    """A push mid-review re-targets the review rather than throwing it away.
+
+    Re-targeting requires the live head to build on the reviewed one, and every
+    review pins the commit it read: unpinned, GitHub anchors it at whatever is
+    live when the POST lands, so the review claims code the session never saw.
+
+    The sha reaches the POST through a file because it cannot reach it any
+    other way — the agent composes the body between reading the head and
+    posting, and shell state does not survive a tool call.
+    """
+    skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+
+    assert 'git merge-base --is-ancestor "$HEAD_SHA" "$CURRENT_HEAD"' in skill
+    assert "HEAD moved — leaving" not in skill
+
+    # Written where the head is read, and rewritten where it moves.
+    assert 'echo "$HEAD_SHA" > /tmp/reviewed-head' in skill
+    assert 'echo "$CURRENT_HEAD" > /tmp/reviewed-head' in skill
+    # Read back by both posting recipes, never from a bare shell variable.
+    assert '-f commit_id="$(cat /tmp/reviewed-head)"' in skill
+    assert '--arg sha "$(cat /tmp/reviewed-head)"' in skill
+
+    # The delta is scoped off base churn; a plain two-dot diff between the two
+    # heads would hand the session everything a base merge dragged in.
+    assert "git log -p --no-merges" in skill
+    assert '--not "$BASE_SHA"' in skill
+
+
+def test_weekly_approval_pins_the_commit_it_checked() -> None:
+    """Weekly approves dependency PRs, the population `nightly` rewrites on
+    purpose, so an unpinned approval lands on a commit nothing checked. It
+    carries the sha the same way review does, and for the same reason: the
+    body is composed with the Write tool in between."""
+    weekly = _read("plugins", "tend-ci-runner", "skills", "weekly", "SKILL.md")
+
+    assert 'echo "$HEAD_SHA" > /tmp/checked-head' in weekly
+    assert '-f commit_id="$(cat /tmp/checked-head)"' in weekly
+
+    # `gh pr review --approve` cannot pin a commit; both skills post through
+    # the reviews endpoint instead.
+    skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+    for content in (skill, weekly):
+        assert "gh pr review --approve" not in content
