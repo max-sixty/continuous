@@ -17,8 +17,10 @@
 # joins them. The download loop writes one JSON line per *job* — the
 # `token-usage.json` the "Token usage" step wrote, plus the run's row from
 # `gh run list` — and everything downstream reads that stream. So there are
-# three jq programs and no shell arithmetic: the loop's one-line stamp, the
-# report (jobs to runs to totals), and the summary.
+# three jq programs: the loop's one-line stamp, the report (jobs to runs to
+# totals), and the summary. The shell keeps one count of its own, the runs that
+# reach the report with nothing — the stream cannot carry it, because those are
+# exactly the runs that put no line in it.
 #
 # The summary's rollup tables sort by cost. A cached input token is priced far
 # below an output token, so ranking by token volume, which cache reads
