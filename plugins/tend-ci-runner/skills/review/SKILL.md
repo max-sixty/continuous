@@ -31,7 +31,6 @@ read -r HEAD_SHA PR_STATE < <(gh pr view <number> --json headRefOid,state \
 PR_AUTHOR=$(gh pr view <number> --json author --jq '.author.login')
 IS_DRAFT=$(gh pr view <number> --json isDraft --jq '.isDraft')
 EVENT_ACTION=$(jq -r '.action // ""' < "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)
-STARTED_DRAFT=$IS_DRAFT
 if [ "$EVENT_ACTION" = "ready_for_review" ]; then
   FORCE_FULL_REVIEW=true
 else
@@ -46,15 +45,12 @@ LAST_REVIEW_SHA=$(jq -r '.last_substantive.sha // empty' <<<"$STATE")
 FORCE_PUSHED=$(jq -r '.force_pushed_since' <<<"$STATE")
 ```
 
-Keep the first `STARTED_DRAFT` value for step 9. Step 9 can override
-`FORCE_FULL_REVIEW`; otherwise the triggering event sets it. Before any
-instruction below to finish an open PR, continue to step 9. When
-`FORCE_FULL_REVIEW` is true, bypass both the already-reviewed and trivial-
+When `FORCE_FULL_REVIEW` is true, bypass both the already-reviewed and trivial-
 increment shortcuts: becoming ready asks for a full non-draft review.
 
 If `FORCE_PUSHED` is `true`, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports. If that prior review was an `APPROVED` and the re-review lands on findings rather than an approval, dismiss it too — it is re-anchored onto the rewritten head, so posting a COMMENT alone leaves the PR reading as bot-approved. `jq -r '.last_substantive.state, .last_substantive.id' <<<"$STATE"` gives the state and the `$REVIEW_ID` for step 6's `reviews/$REVIEW_ID/dismissals` call.
 
-Otherwise, if `LAST_REVIEW_SHA == HEAD_SHA` and `FORCE_FULL_REVIEW` is false, this commit has already been reviewed — finish at step 9 without posting. An unanswered conversation question directed at the bot (check below) is the exception: proceed so the review can answer it.
+Otherwise, if `LAST_REVIEW_SHA == HEAD_SHA` and `FORCE_FULL_REVIEW` is false, this commit has already been reviewed — finish without posting. An unanswered conversation question directed at the bot (check below) is the exception: proceed so the review can answer it.
 
 If the bot reviewed a previous commit (`LAST_REVIEW_SHA` exists but differs from `HEAD_SHA`), judge what was pushed since. Read two signals, both leak-free against base-merges:
 
@@ -80,7 +76,7 @@ git log --no-merges --numstat --format='%h %s' "$LAST_REVIEW_SHA..$HEAD_SHA" --n
 
 The incremental scopes the *review*, not anything this run writes about the PR as a whole: if you also edit the PR description, scope its claims to the merge base per **Keeping PR Titles and Descriptions Current** in `/tend-ci-runner:running-in-ci`.
 
-If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial, skip the full review — go directly to step 7 to resolve any bot threads addressed by the new changes. After resolving threads: if the most recent bot review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE with an empty body so the PR isn't left in limbo. Otherwise do not submit a new review — the existing one stands. Do NOT proceed to steps 2–6; finish at step 9. Rough heuristic: changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow are typically trivial.
+If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial, skip the full review — go directly to step 7 to resolve any bot threads addressed by the new changes. After resolving threads: if the most recent bot review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE with an empty body so the PR isn't left in limbo. Otherwise do not submit a new review — the existing one stands. Do NOT proceed to steps 2–6; finish. Rough heuristic: changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow are typically trivial.
 
 **Commit and PR authorship do not affect review behavior.** Apply the same trivial-vs-substantive heuristic regardless of who pushed the new commits. When `tend-notifications` or `tend-ci-fix` pushes a fix to a human-authored PR, reviewing (and re-approving) the updated state is expected — the reviewer role is independent of commit authorship.
 
@@ -116,7 +112,7 @@ gh api graphql -F query=@/tmp/inline-prev.graphql -f owner="$OWNER" -f repo="$NA
         | {path, line, body}"
 ```
 
-**Apply the sibling-workflow dedup rule from `running-in-ci`** to both the review body and inline comments. If a prior bot comment in the conversation already covers a point — a previous review on this or an earlier commit, a `tend-mention` reply, a `tend-triage` post, anything from a tend workflow — omit it from this review and stick to diff-grounded findings. If that leaves no new diff-grounded finding on the incremental changes and the only outstanding concern is a still-unresolved thread from an earlier bot review, do not post a new review: that thread already blocks the PR, and restating "the prior thread still applies" on every push is noise. Resolve any bot threads the new commits addressed (step 7), then finish at step 9 without posting. A fresh review is warranted only when the incremental diff introduces a new finding, or resolves the last open one (then approve with an empty body). When concurrent runs race (a new push while the first run is still responding), both see the same unanswered question — check whether a bot reply exists after the question's timestamp before answering. Address remaining unanswered questions in the review body (not via `gh pr comment`).
+**Apply the sibling-workflow dedup rule from `running-in-ci`** to both the review body and inline comments. If a prior bot comment in the conversation already covers a point — a previous review on this or an earlier commit, a `tend-mention` reply, a `tend-triage` post, anything from a tend workflow — omit it from this review and stick to diff-grounded findings. If that leaves no new diff-grounded finding on the incremental changes and the only outstanding concern is a still-unresolved thread from an earlier bot review, do not post a new review: that thread already blocks the PR, and restating "the prior thread still applies" on every push is noise. Resolve any bot threads the new commits addressed (step 7), then finish without posting. A fresh review is warranted only when the incremental diff introduces a new finding, or resolves the last open one (then approve with an empty body). When concurrent runs race (a new push while the first run is still responding), both see the same unanswered question — check whether a bot reply exists after the question's timestamp before answering. Address remaining unanswered questions in the review body (not via `gh pr comment`).
 
 #### Draft mode
 
@@ -125,11 +121,11 @@ If `IS_DRAFT == "true"`, run a lighter review:
 - Skip step 2 (overlap with other PRs) — landing-readiness concern, premature for WIP.
 - Skip the duplication scan in step 4 — the author is still shaping the design.
 - Submit as **COMMENT only**, never APPROVE. GitHub blocks approving drafts, and the author hasn't asked for a verdict yet.
-- Open the review body with one line framing it: `Reviewing as a draft — flagging anything that looks worth a quick fix. Mark ready for a full review.`
+- Open the review body with this exact line: `Reviewing as a draft — flagging anything that looks worth a quick fix. Mark ready for a full review.`
 - Skip step 6 (CI monitoring) — drafts churn; CI failures are the author's to chase.
 - Skip step 8 (push fixes) — never push to a WIP branch.
 
-Steps 1, 3, 4 (without duplication scan), 5 (COMMENT path), 7, and 9 still apply. Stay silent if there's nothing actionable; don't post a "looks fine" comment.
+Steps 1, 3, 4 (without duplication scan), 5 (COMMENT path), and 7 still apply. Stay silent if there's nothing actionable; don't post a "looks fine" comment.
 
 ### 2. Check for overlapping PRs
 
@@ -237,7 +233,7 @@ read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json headRefOid,state \
 # A forced ready-for-review pass may replace Tend's earlier draft COMMENT, but
 # no other substantive review — including a full pass that raced this one.
 POST_STATE=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number>)
-ALREADY_POSTED=$(jq -r --argjson force "$FORCE_FULL_REVIEW" '
+ALREADY_POSTED=$(jq -r --argjson force "${FORCE_FULL_REVIEW:-false}" '
   if .at_head == null or ($force and .at_head.draft_mode)
   then "" else .at_head.at end' <<<"$POST_STATE")
 [ -n "$ALREADY_POSTED" ] && echo "Already reviewed — skipping" && exit 0
@@ -245,7 +241,7 @@ ALREADY_POSTED=$(jq -r --argjson force "$FORCE_FULL_REVIEW" '
 
 The state check matters because the maintainer may close (or another path may merge) the PR while a review is in flight — `pull_request_target` reviews routinely run for 5–10 minutes between fetching `HEAD_SHA` and posting the verdict, and HEAD doesn't move when the PR is closed. Approving a CLOSED or MERGED PR creates a confusing artifact (an approval timestamped after the close).
 
-When HEAD moved, do not post the assembled review against stale code. The `synchronize` run waits behind this session and reviews the live HEAD after it ends. The shell's `exit 0` ends only that command; continue to step 9 so a draft-to-ready transition is not lost with a replaced queued event. An already-posted verdict likewise continues to step 9.
+When HEAD moved, do not post the assembled review against stale code. The `synchronize` run waits behind this session and reviews the live HEAD after it ends. Finish without posting.
 
 **Before APPROVE specifically**, also peek the current check rollup on `HEAD_SHA`. If any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal.
 
@@ -286,12 +282,12 @@ PENDING=$(jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
   ```
 
   Every one `cancelled` — the red is superseded, so APPROVE and name the still-unverified checks in the body. `cancelled` is the only conclusion that earns an approval here: a real `failure`, an empty conclusion (the run is still going, so the job failed on its own merits), or an unresolvable URL (a third-party status context like `codecov/patch`, never an Actions run) all take the terminal-red branch below. Don't leave this to improvisation: the same stale red must not draw an APPROVE on one PR and a withheld approval on the next.
-- **`$FAILED` set and `$PENDING == 0`** — genuine terminal red. Skip the close-out and finish at step 9. But if **no prior substantive bot review** stands on this PR, don't exit fully silent or leave only a `+1` reaction — a clean external-dependency bump then carries zero review signal. Post a brief COMMENT recording the diff assessment and why approval is held (e.g. "Diff is a correct, mechanical dependency bump; holding APPROVE because `check-ok-to-merge` is red."). Any earlier substantive review (e.g. a COMMENT with inline suggestions) already stands as the active verdict — leave it. On a bot PR where you intend to push the fix yourself (step 8), post that COMMENT before pushing, while the rollup it describes is still the current one.
+- **`$FAILED` set and `$PENDING == 0`** — genuine terminal red. Skip the close-out and finish. But if **no prior substantive bot review** stands on this PR, don't exit fully silent or leave only a `+1` reaction — a clean external-dependency bump then carries zero review signal. Post a brief COMMENT recording the diff assessment and why approval is held (e.g. "Diff is a correct, mechanical dependency bump; holding APPROVE because `check-ok-to-merge` is red."). Any earlier substantive review (e.g. a COMMENT with inline suggestions) already stands as the active verdict — leave it. On a bot PR where you intend to push the fix yourself (step 8), post that COMMENT before pushing, while the rollup it describes is still the current one.
 - **`$FAILED` empty** — proceed with APPROVE.
 
 Step 6's "approve, foreground-poll CI, dismiss if a check fails" pattern only recovers while the session is still alive — the job timeout or a poll cap can leave a post-approve failure undismissed and the PR carrying a misleading APPROVED state. A synchronous pre-APPROVE peek catches the case where the failure is already in the rollup — including non-required checks like `codecov/patch` that an overlay treats as a merge gate. Reducing to the latest entry per name and workflow — and, when the cap expires first, checking each `FAILURE`'s run conclusion — is what keeps a superseded red from being mistaken for a real one.
 
-Post at most one review per pass. The step-9 forced non-draft pass is the one exception to one review per run: after this run posted a draft COMMENT, it may post one full non-draft verdict. Give a verdict (**approve** or **comment**, never "request changes") when this pass has something to say: a new diff-grounded finding, or an approval because the last open concern is now resolved. If the dedup rule above left nothing new and a prior unresolved bot thread still stands, post nothing; the earlier review remains the active verdict. Use `gh pr review` for reviews, not `gh pr comment`. Note: `--comment` requires a non-empty body — if there's nothing to say and no prior concern stands, use the approve-with-empty-body pattern.
+Post at most one review per run. Give a verdict (**approve** or **comment**, never "request changes") when this pass has something to say: a new diff-grounded finding, or an approval because the last open concern is now resolved. If the dedup rule above left nothing new and a prior unresolved bot thread still stands, post nothing; the earlier review remains the active verdict. Use `gh pr review` for reviews, not `gh pr comment`. Note: `--comment` requires a non-empty body — if there's nothing to say and no prior concern stands, use the approve-with-empty-body pattern.
 
 **Inline suggestions are mandatory for concrete fixes.** Whenever there's a concrete fix (typos, doc updates, naming, missing imports, minor refactors, test additions), post it as an inline suggestion on the exact line — never as a code block in the review body. Inline suggestions let the author apply with one click; code blocks force them to find the line and copy-paste manually.
 
@@ -372,7 +368,7 @@ Prevention: before writing any inline comment, verify the target line falls insi
 
 ### 6. Monitor CI
 
-If you **stayed silent** (no review posted, nothing to dismiss), skip to step 9 — there's no follow-up gated on the CI result. Don't background-poll: per `/tend-ci-runner:running-in-ci` under "End the turn only when work is shipped", the completion notification isn't reliably delivered to a CI session.
+If you **stayed silent** (no review posted, nothing to dismiss), finish — there's no follow-up gated on the CI result. Don't background-poll: per `/tend-ci-runner:running-in-ci` under "End the turn only when work is shipped", the completion notification isn't reliably delivered to a CI session.
 
 If you **approved**, the dismissal-on-failure is a gated follow-up. Foreground-poll using the recipe in `/tend-ci-runner:running-in-ci` under "CI Monitoring" (don't use `run_in_background`). If the PR head moves while polling, stop polling the stale commit; the queued review handles the new HEAD.
 
@@ -455,11 +451,11 @@ Outdated comments (null line) are best-effort — skip if the original context c
 
 ### 8. Push fixes
 
-Pushing to the branch under review fires `synchronize`, which queues a replacement run behind this session rather than cancelling it. Submit the review (step 5) and resolve threads (step 7) before pushing, so the review documents the code the fix responds to. Poll the pushed fix's CI to green per `running-in-ci`'s "a pushed fix is always gated" before ending the session; the queued run reviews the new HEAD.
+Pushing to the branch under review fires `synchronize`, which queues another run behind this session rather than cancelling it. Submit the review (step 5) and resolve threads (step 7) before pushing, so the review documents the code the fix responds to. Poll the pushed fix's CI to green per `running-in-ci`'s "a pushed fix is always gated" before ending the session; the queued run reviews the new HEAD.
 
 **Third-party bot PRs** (Dependabot, renovate, etc.): There is no author of any kind to act on feedback, so a review that only describes the fix leaves the PR red and pushes the work onto a maintainer — the opposite of the point. If you can articulate the fix, apply it: commit and push it to the PR branch. "Not a one-token change" and "more than one syntactically valid form exists" are **not** reasons to defer — pick the option most consistent with the surrounding code and the repo's existing conventions, push it, and note any alternative in the review. The only bar for deferring is that *no defensible default exists*: a genuine semantic ambiguity that needs maintainer intent, not merely a fix that took thought to derive. If the review already worked out the answer, that answer is pushable. Rebase onto the latest target branch first if the branch is behind.
 
-**PRs this bot authored**: submitting a review with a body or a fresh inline comment dispatches `tend-mention`, which boots as the author and is told to action the review. It boots whether or not you also push, so pushing the fix yourself only makes it boot to find the work already landed. Continue to step 9 and let the author session act — unless the repo doesn't run `tend-mention`, where no successor exists and the paragraph above applies.
+**PRs this bot authored**: submitting a review with a body or a fresh inline comment dispatches `tend-mention`, which boots as the author and is told to action the review. It boots whether or not you also push, so pushing the fix yourself only makes it boot to find the work already landed. Let the author session act — unless the repo doesn't run `tend-mention`, where no successor exists and the paragraph above applies.
 
 **Human PRs**: Post inline suggestions first. Additionally, offer to push a commit when the fixes are mechanical and correctness is obvious. Only push after the author accepts.
 
@@ -469,25 +465,3 @@ git add <files>
 git commit -m "fix: <description>"
 git push
 ```
-
-### 9. Preserve a ready-for-review transition
-
-Before ending a session whose first pre-flight found `STARTED_DRAFT == true`,
-re-fetch the live state:
-
-```bash
-read -r LIVE_HEAD LIVE_STATE LIVE_DRAFT < <(gh pr view <number> \
-  --json headRefOid,state,isDraft \
-  --jq '"\(.headRefOid) \(.state) \(.isDraft)"')
-```
-
-If the PR is still open and `LIVE_DRAFT == false`, it became ready while this
-session was running. Treat that as `FORCE_FULL_REVIEW=true` on `LIVE_HEAD` and
-restart at step 1 for one full non-draft pass, preserving that override instead
-of resetting it from the event payload. Do this regardless of the triggering
-event or how small the incremental diff is. This preserves the author's
-`ready_for_review` request when GitHub's one-deep concurrency queue replaces
-that pending event with a later `synchronize` event.
-
-Otherwise finish. Do not fold an ordinary moved HEAD into this session and do
-not publish a commit status; the queued review handles it.

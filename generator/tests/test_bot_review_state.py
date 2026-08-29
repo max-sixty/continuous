@@ -23,9 +23,14 @@ BOT_REVIEW_STATE = (
     / "scripts"
     / "bot-review-state.sh"
 )
+REVIEW_SKILL = BOT_REVIEW_STATE.parent.parent / "skills" / "review" / "SKILL.md"
 
 BOT = "tend-bot"
 HEAD = "head000"
+DRAFT_REVIEW_LINE = (
+    "Reviewing as a draft — flagging anything that looks worth a quick fix. "
+    "Mark ready for a full review."
+)
 OLD = "old0000"
 
 FAKE_GH = (
@@ -167,7 +172,7 @@ def test_at_head_identifies_a_tend_draft_review(env: dict[str, str]) -> None:
             _review(
                 1,
                 "2026-01-01T00:00:00Z",
-                body="Reviewing as a draft — flagging one concern.",
+                body=DRAFT_REVIEW_LINE,
             )
         ],
     )
@@ -396,3 +401,28 @@ def test_the_repo_is_named_explicitly_on_every_call(env: dict[str, str]) -> None
     assert lookups
     for call in lookups:
         assert "owner/repo" in call, call
+
+
+def test_review_skill_preserves_the_status_free_queue_contract() -> None:
+    """The skill deduplicates outward reviews while the workflow keeps events."""
+    skill = REVIEW_SKILL.read_text()
+
+    assert "repos/$REPO/statuses/$HEAD_SHA" not in skill
+    assert "tend-review/<number>" not in skill
+    assert "--json headRefOid,state" in skill
+    assert '[ "$PR_STATE" != "OPEN" ]' in skill
+    assert '[ "$CURRENT_HEAD" != "$HEAD_SHA" ]' in skill
+    assert "ALREADY_POSTED=" in skill
+    assert ".at_head.draft_mode" in skill
+    assert '--argjson force "${FORCE_FULL_REVIEW:-false}"' in skill
+    assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in skill
+    assert (
+        "If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial"
+        in skill
+    )
+    assert f"Open the review body with this exact line: `{DRAFT_REVIEW_LINE}`" in skill
+    assert "Post at most one review per run." in skill
+    assert "exception to one review per run" not in skill
+    assert "STARTED_DRAFT" not in skill
+    assert "LIVE_DRAFT" not in skill
+    assert "### 9." not in skill

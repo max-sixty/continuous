@@ -30,8 +30,6 @@ from tend.workflows import (
     generate_mention,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     cfg = tmp_path / ".config" / "tend.yaml"
@@ -678,8 +676,10 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert "clean" not in checkouts[0]["with"]
 
 
-def test_review_queues_pushes_without_an_examined_status(tmp_path: Path) -> None:
-    """A push waits for the current session, then gets a fresh review run."""
+def test_review_preserves_pending_events_without_an_examined_status(
+    tmp_path: Path,
+) -> None:
+    """Every event waits for the current session, including ready-for-review."""
     extra = "setup:\n  - run: npm ci\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
@@ -688,32 +688,10 @@ def test_review_queues_pushes_without_an_examined_status(tmp_path: Path) -> None
     job = data["jobs"]["review"]
 
     assert job["concurrency"]["cancel-in-progress"] is False
+    assert job["concurrency"]["queue"] == "max"
     assert all(step.get("id") != "gate" for step in job["steps"])
     assert "steps.gate" not in content
     assert "tend-review/" not in content
-
-    skill = (
-        REPO_ROOT / "plugins" / "tend-ci-runner" / "skills" / "review" / "SKILL.md"
-    ).read_text()
-    assert "repos/$REPO/statuses/$HEAD_SHA" not in skill
-    assert "tend-review/<number>" not in skill
-    assert "--json headRefOid,state" in skill
-    assert '[ "$PR_STATE" != "OPEN" ]' in skill
-    assert '[ "$CURRENT_HEAD" != "$HEAD_SHA" ]' in skill
-    assert "ALREADY_POSTED=" in skill
-    assert ".at_head.draft_mode" in skill
-    assert '--argjson force "$FORCE_FULL_REVIEW"' in skill
-    assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in skill
-    assert (
-        "If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial"
-        in skill
-    )
-    assert "### 9. Preserve a ready-for-review transition" in skill
-    assert "LIVE_DRAFT" in skill
-    assert "restart at step 1 for one full non-draft pass" in skill
-    assert "preserving that override" in skill
-    assert "5 (COMMENT path), 7, and 9 still apply" in skill
-    assert "The step-9 forced non-draft pass is the one exception" in skill
 
 
 def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
@@ -757,8 +735,10 @@ def test_eyes_come_off_when_the_session_ends(
     none of its steps execute — `always()` governs execution within a job that
     started. React in one job and unreact in another and every route where the
     second job never starts leaves the eyes on with no session behind them.
-    `cancel-in-progress: false` doesn't close that: it holds a *running* job
-    while GitHub still evicts a *pending* one to make room for a newer run.
+    For jobs with the default one-pending-run queue, `cancel-in-progress: false`
+    doesn't close that: it holds a *running* job while GitHub can still evict a
+    *pending* one. Review's `queue: max` prevents ordinary eviction, but keeping
+    both halves in one job preserves the same lifecycle invariant.
 
     Both halves also have to name the same reaction target; one that drifted
     would leave the eyes on every comment the bot ever answered."""

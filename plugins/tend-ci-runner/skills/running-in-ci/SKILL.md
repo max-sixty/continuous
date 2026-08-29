@@ -222,7 +222,7 @@ If pushing fails (fork PR with edits disabled), fall back to posting code snippe
 
 ### Batch the push — every push costs a reviewer round
 
-`tend-review` triggers on `synchronize` under a per-PR concurrency group without cancel-in-progress: a push while a review session runs queues a replacement run. The active session rechecks HEAD before posting and leaves moved code to the queued run. Nothing is killed, but each push can cost another session.
+`tend-review` triggers on `synchronize` under a per-PR concurrency group with `queue: max` and without cancel-in-progress: pending PR events within GitHub's queue limit wait while a review session runs. The active session rechecks HEAD before posting and leaves moved code to a queued run. Nothing within that limit is killed or replaced, but each push can cost another session.
 
 - **Commit everything before `gh pr create`.** Changelog entries, test pins, and formatting fixups belong in the initial push, not a follow-up thirty seconds later.
 - **Make the commits, then push once** — not a push after each commit. Amends and rebases count: a force-push fires `synchronize` too.

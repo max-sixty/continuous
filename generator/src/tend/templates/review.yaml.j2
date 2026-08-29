@@ -15,9 +15,10 @@ jobs:
   review:
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-      # A push queues a replacement run rather than interrupting a session
-      # during an outward action. The review rechecks the live HEAD before it
-      # posts and leaves a moved HEAD to the queued run.
+      # Preserve pending PR events within GitHub's queue limit: a push must not
+      # replace a ready-for-review run. Runs stay serial so outward actions
+      # cannot race.
+      queue: max
       cancel-in-progress: false
     runs-on: ubuntu-24.04
 <<environment()>>
