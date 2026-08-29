@@ -193,7 +193,7 @@ What counts as core is repo-specific; let the project's own guidance (CLAUDE.md,
 
 ### 6. Submit
 
-**Before submitting, say what the step 5 pass returned** — its confirmed findings, or "no findings". Say it in the session, not the review body: an empty-body APPROVE stays empty. If you can't say, the pass didn't run — go back to step 5 and run it. A review that reaches this point without it is not submittable.
+**Before submitting, say what the step 5 pass returned** — its confirmed findings, or "no findings". That statement is a compliance check: say it in the session, not the review body, so an empty-body APPROVE stays empty. The findings themselves still get folded into the review, per step 5. If you can't say, the pass didn't run — go back to step 5 and run it. A review that reaches this point without it is not submittable.
 
 **If there are no issues, approve with an empty body — silence means correct.**
 
