@@ -131,8 +131,12 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert '--merges "$HEAD_SHA..$CURRENT_HEAD"' in skill
     assert "base merge: %h %s" in skill
     # `--cc` is the only place a conflicted merge's resolution appears: the
-    # author commits it inside the merge, where neither log reaches it.
+    # author commits it inside the merge, where neither log reaches it. It is
+    # not a substitute for re-verifying, though — a resolution taking the base
+    # side prints no hunks, and a clean merge that only shifts lines prints
+    # nothing anywhere, so the override below has to be unconditional.
     assert "git show --cc" in skill
+    assert "even if the scoped log printed nothing" in skill
 
 
 def test_weekly_approval_pins_the_commit_it_checked() -> None:
