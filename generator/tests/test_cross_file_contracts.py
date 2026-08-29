@@ -139,7 +139,7 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert "even if the scoped log printed nothing" in skill
     # Suggestion blocks carry the same blind spot as the inline comments
     # above: a clean base merge shifts lines in files the scoped delta
-    # never touched, so re-composition is scoped to the merge, not to it.
+    # never touched, so re-composition follows the merge, not the delta.
     assert "and on every file after a base merge" in skill
 
 
