@@ -275,18 +275,11 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     else:
         prompt_expr = f"'{escaped}'"
 
-    skip_condition = "steps.gate.outputs.should_run == 'true'"
-    gate_script = (
-        importlib.resources.files("tend") / "templates" / "review-gate.sh"
-    ).read_text(encoding="utf-8")
-
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff, condition=skip_condition),
+        setup=_setup_yaml(eff),
         local_actions=_restore_local_actions_run(eff),
         prompt_expr=prompt_expr,
-        skip_condition=skip_condition,
-        gate_script=gate_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 

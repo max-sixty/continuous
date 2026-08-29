@@ -22,6 +22,14 @@ from ruamel.yaml import YAML
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_claude_transcript_summary_is_opt_in() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+
+    assert action["inputs"]["show_full_output"]["default"] == "false"
+
+
 def test_uv_build_range_admits_the_pinned_uv() -> None:
     # uv only *warns* when `build-system.requires` doesn't contain the uv
     # running the build, so a stale range survives every release and every

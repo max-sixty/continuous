@@ -198,7 +198,7 @@
    which under `pull_request_target` is the PR's base branch — what mention and
    review's first checkout both want. Callers needing a specific tree pass one:
    the configured default branch, or review's pr_ref dispatch. `if_condition`
-   gates the step (used by notifications' skip_condition).
+   gates the step for notifications' empty-inbox path.
 
    `allow_unsafe_pr_checkout` opts into checkout's fork-PR guard: v7 refuses to
    check out a fork's `refs/pull/N/{merge,head}` under `pull_request_target`
@@ -248,21 +248,13 @@
    `run_body` is empty for a `setup:` that names no local action, rendering this
    away.
 
-   `always()` runs the step past a *skip* as well as a failure, so a caller
-   whose earlier steps sit behind a gate has to thread that gate in through
-   `if_condition`: on a gate-skipped run nothing checked out, the restore finds
-   no repository, and the `||` emits a warning about cleanup that was never
-   going to happen. On a persistent workspace (self-hosted) it doesn't warn — it
-   succeeds against whatever the previous job left behind — so the condition is
-   what makes the step mean the same thing on both. Mention's handle job gates
-   at the job level — every step runs or the job doesn't — so it passes nothing.
    #}
-{% macro restore_local_actions(run_body, if_condition='') %}
+{% macro restore_local_actions(run_body) %}
 {% if run_body %}
 
 
       - name: Restore local setup actions for POST cleanup
-        if: always()<< " && (" ~ if_condition ~ ")" if if_condition else "" >>
+        if: always()
         run: |
 <<run_body|indent(10, first=True)>>
 {%- endif %}

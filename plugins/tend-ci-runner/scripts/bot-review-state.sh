@@ -32,9 +32,10 @@
 #                       commit the bot read was rewritten away, so its anchor
 #                       now names the current head and every incremental keyed
 #                       on it under-reports
-#   at_head             {id, state, at} — newest substantive bot review anchored
-#                       at head and submitted after the newest rewrite, else
-#                       null. Non-null means this head is genuinely reviewed.
+#   at_head             {id, state, at, draft_mode} — newest substantive bot
+#                       review anchored at head and submitted after the newest
+#                       rewrite, else null. `draft_mode` identifies Tend's
+#                       framed draft COMMENT so a later full pass may replace it.
 #   orphan_id           id of the newest body-bearing bot review anchored at
 #                       head post-rewrite, else null. A partially-failed review
 #                       POST persists the body and drops the inline comments;
@@ -91,7 +92,11 @@ gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
         at_head: ($subs
           | map(select(.commit_id == $head and ($norewrite or .submitted_at > $fp)))
           | last
-          | if . == null then null else {id, state, at: .submitted_at} end),
+          | if . == null then null else
+              {id, state, at: .submitted_at,
+               draft_mode: (.state == "COMMENTED"
+                            and ((.body // "") | startswith("Reviewing as a draft —")))}
+            end),
         orphan_id: ($subs
           | map(select(.commit_id == $head and (.body | length) > 0
                        and ($norewrite or .submitted_at > $fp)))

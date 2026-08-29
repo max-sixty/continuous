@@ -222,7 +222,7 @@ If pushing fails (fork PR with edits disabled), fall back to posting code snippe
 
 ### Batch the push — every push costs a reviewer round
 
-`tend-review` triggers on `synchronize` under a per-PR concurrency group without cancel-in-progress: a push while a review session runs queues a replacement run, and the running session folds the push into its review before ending (review skill, step 9). Nothing is killed, but each push still costs a round — a fold-in extends the live session, and an unabsorbed push boots a fresh one.
+`tend-review` triggers on `synchronize` under a per-PR concurrency group without cancel-in-progress: a push while a review session runs queues a replacement run. The active session rechecks HEAD before posting and leaves moved code to the queued run. Nothing is killed, but each push can cost another session.
 
 - **Commit everything before `gh pr create`.** Changelog entries, test pins, and formatting fixups belong in the initial push, not a follow-up thirty seconds later.
 - **Make the commits, then push once** — not a push after each commit. Amends and rebases count: a force-push fires `synchronize` too.
@@ -475,7 +475,7 @@ Review-response runs triggered by `pull_request_review` or `pull_request_review_
 
 A prior run's session log holds the investigation behind its posted comments: the files it read, the line ranges, the reasoning it weighed but never wrote down. Since the thread already shows the conclusions and reading a prior log costs real tokens, reach for one only when a follow-up depends on that un-posted reasoning: a question about why an earlier decision was made, or a revision to a prior bot conclusion that needs what it considered. For a first engagement or a self-contained request, skip it.
 
-Only issue/PR-triggered Claude runs are stamped, so scheduled, ci-fix (`workflow_run`), and Codex runs aren't recallable this way.
+Only issue/PR-triggered Claude runs name their artifacts by thread number, so scheduled, ci-fix (`workflow_run`), and Codex runs aren't recallable this way.
 
 Every run on a thread names its log the same, so the API's exact-match `name` filter returns the whole thread in one call. Newest first, within the 30-day retention window:
 

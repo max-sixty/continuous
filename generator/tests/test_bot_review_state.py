@@ -157,6 +157,36 @@ def test_a_review_with_content_anchors(
     assert _state(env)["at_head"]["id"] == 1, kind
 
 
+def test_at_head_identifies_a_tend_draft_review(env: dict[str, str]) -> None:
+    """A ready-for-review pass may replace its earlier draft COMMENT, while
+    ordinary duplicate runs still stop on every other substantive review."""
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-01T00:00:00Z",
+                body="Reviewing as a draft — flagging one concern.",
+            )
+        ],
+    )
+
+    assert _state(env)["at_head"]["draft_mode"] is True
+
+
+def test_at_head_does_not_call_an_ordinary_comment_draft_mode(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", body="One landing concern.")],
+    )
+
+    assert _state(env)["at_head"]["draft_mode"] is False
+
+
 def test_a_review_owning_a_fresh_inline_comment_anchors(env: dict[str, str]) -> None:
     """An empty-body review carrying real inline findings is indistinguishable
     from a reply container by body alone; the top-level inline comment is what

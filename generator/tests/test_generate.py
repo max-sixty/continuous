@@ -30,6 +30,8 @@ from tend.workflows import (
     generate_mention,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     cfg = tmp_path / ".config" / "tend.yaml"
@@ -105,20 +107,18 @@ def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
 
 
 @pytest.mark.parametrize(
-    ("name", "job", "switch", "gate"),
+    ("name", "job", "switch"),
     [
         (
             "review",
             "review",
             lambda s: s.get("uses", "").startswith("actions/checkout")
             and "ref" in s.get("with", {}),
-            "steps.gate.outputs.should_run",
         ),
         (
             "mention",
             "handle",
             lambda s: "gh pr checkout" in str(s.get("run", "")),
-            None,
         ),
     ],
 )
@@ -127,7 +127,6 @@ def test_local_setup_action_restored_for_post_cleanup(
     name: str,
     job: str,
     switch: object,
-    gate: str | None,
 ) -> None:
     """review and mention land the PR's tree over the workspace a local `setup:`
     composite was loaded from. To dispatch the POST steps of the actions nested
@@ -136,10 +135,8 @@ def test_local_setup_action_restored_for_post_cleanup(
     cleanup (actions/runner#2816). Put the loaded version back before the POST
     chain walks.
 
-    `always()` covers a skip as well as a failure, so where the caller gates its
-    earlier steps the restore carries that gate too: a gate-skipped run checked
-    nothing out, and an unconditional restore would warn about cleaning up a
-    composite that never loaded."""
+    `always()` covers a failed session so cleanup still sees the version the
+    runner loaded."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
@@ -151,12 +148,7 @@ def test_local_setup_action_restored_for_post_cleanup(
     assert condition.startswith("always()"), (
         f"{name}: the restore has to run even when the session fails"
     )
-    if gate is None:
-        assert condition == "always()", f"{name}: gates at the job level"
-    else:
-        assert gate in condition, (
-            f"{name}: the restore has to skip with the steps it restores for"
-        )
+    assert condition == "always()", f"{name}: restore has an extra gate"
     switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
@@ -686,36 +678,42 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert "clean" not in checkouts[0]["with"]
 
 
-def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
-    """A push mid-review queues a replacement run; the gate step decides
-    whether it boots an agent.
-
-    The running session folds the push in and stamps examined commits, so the
-    queued run's work is usually already done. That only holds if the gate is
-    the first step and everything after it — checkouts, setup, the agent — is
-    conditioned on its verdict; an ungated step would run (and bill) on every
-    replaced event.
-    """
+def test_review_queues_pushes_without_an_examined_status(tmp_path: Path) -> None:
+    """A push waits for the current session, then gets a fresh review run."""
     extra = "setup:\n  - run: npm ci\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    data = yaml.safe_load(workflows["tend-review.yaml"].content)
+    content = workflows["tend-review.yaml"].content
+    data = yaml.safe_load(content)
     job = data["jobs"]["review"]
 
     assert job["concurrency"]["cancel-in-progress"] is False
-    steps = job["steps"]
-    assert steps[0].get("id") == "gate"
-    assert "tend-review/$PR" in steps[0]["run"]
-    gate = "steps.gate.outputs.should_run == 'true'"
-    for step in steps[1:]:
-        # A step may narrow further, or widen to `always()` (the reaction comes
-        # off a failed run too), but the gate's verdict stays a conjunct of
-        # whatever it builds. Matched by shape rather than by substring, which
-        # a step disjoining its way past the gate would also satisfy.
-        condition = step.get("if", "")
-        assert condition in (gate, f"always() && ({gate})") or condition.startswith(
-            f"{gate} && "
-        ), f"ungated step after the gate: {step}"
+    assert all(step.get("id") != "gate" for step in job["steps"])
+    assert "steps.gate" not in content
+    assert "tend-review/" not in content
+
+    skill = (
+        REPO_ROOT / "plugins" / "tend-ci-runner" / "skills" / "review" / "SKILL.md"
+    ).read_text()
+    assert "repos/$REPO/statuses/$HEAD_SHA" not in skill
+    assert "tend-review/<number>" not in skill
+    assert "--json headRefOid,state" in skill
+    assert '[ "$PR_STATE" != "OPEN" ]' in skill
+    assert '[ "$CURRENT_HEAD" != "$HEAD_SHA" ]' in skill
+    assert "ALREADY_POSTED=" in skill
+    assert ".at_head.draft_mode" in skill
+    assert '--argjson force "$FORCE_FULL_REVIEW"' in skill
+    assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in skill
+    assert (
+        "If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial"
+        in skill
+    )
+    assert "### 9. Preserve a ready-for-review transition" in skill
+    assert "LIVE_DRAFT" in skill
+    assert "restart at step 1 for one full non-draft pass" in skill
+    assert "preserving that override" in skill
+    assert "5 (COMMENT path), 7, and 9 still apply" in skill
+    assert "The step-9 forced non-draft pass is the one exception" in skill
 
 
 def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
@@ -739,8 +737,8 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
     react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
     assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
-    # Nothing beyond the gate: a run that boots an agent says so.
-    assert react["if"] == "steps.gate.outputs.should_run == 'true'"
+    # Every admitted review run boots a session, so each one gets a reaction.
+    assert "if" not in react
 
 
 @pytest.mark.parametrize(
