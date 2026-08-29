@@ -58,12 +58,14 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    ```bash
    # `commit_id` pins the approval to the commit that was checked. Unpinned,
    # GitHub anchors it at whatever is live when the POST lands — an approval
-   # of code nothing checked, on a PR `nightly` rebases on purpose. Reading a
-   # file this PR's check did not write fails the POST rather than mispinning it.
+   # of code nothing checked, on a PR `nightly` rebases on purpose. Read the
+   # sha first and bail if it isn't there: inlined as `$(cat ...)` a missing
+   # file substitutes the empty string and the POST still runs, which is the
+   # unpinned approval this pins against.
+   CHECKED=$(cat /tmp/checked-head-<number>) || exit 0
    REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
    gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
-     -f event=APPROVE -f commit_id="$(cat /tmp/checked-head-<number>)" \
-     -F body=@/tmp/review-body.md
+     -f event=APPROVE -f commit_id="$CHECKED" -F body=@/tmp/review-body.md
    ```
 4. If CI is failing, comment with the failure summary and skip
 5. If a major version bump, comment noting it needs manual review and skip

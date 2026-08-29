@@ -197,8 +197,12 @@ Flag duplicates — reuse is almost always better than a parallel implementation
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+# Read the sha first and bail if it isn't there: inlined as `$(cat ...)` a
+# missing file substitutes the empty string and the POST still runs, which is
+# the unpinned review this pins against.
+REVIEWED=$(cat /tmp/reviewed-head) || exit 0
 gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
-  -f event=APPROVE -f commit_id="$(cat /tmp/reviewed-head)" -f body="" && echo "✓ approved"
+  -f event=APPROVE -f commit_id="$REVIEWED" -f body="" && echo "✓ approved"
 ```
 
 `/tmp/reviewed-head` holds the commit this session reviewed — written in step 1, rewritten by **Posting mechanics** if HEAD moved. Every path that posts a review reads it back; see **Pin every review to the commit you read**.
@@ -252,7 +256,7 @@ if [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
   # Base merges, which the scoped log above cannot show — it drops the merge
   # commit and every commit the merge brought in. An "Update branch" click
   # prints nothing there while re-scoping every file's hunks.
-  git log --oneline --merges "$HEAD_SHA..$CURRENT_HEAD"
+  git log --format='base merge: %h %s' --merges "$HEAD_SHA..$CURRENT_HEAD"
   # The workspace still holds the tree that was reviewed, so read any file you
   # need in full from git: `git show "$CURRENT_HEAD":<path>`.
   echo "$CURRENT_HEAD" > /tmp/reviewed-head
@@ -278,7 +282,8 @@ The state check matters because the maintainer may close (or another path may me
 - Findings the delta fixed drop out. If that empties the review and the delta itself reads clean, approve the new head: an empty-body approval is a verdict here, not the absence of one.
 - Finish without posting only when you can't judge the delta — it rewrites what you just reviewed, or it is a review's worth of new code in its own right. The queued run then reviews the new head in full.
 - Inline comments resolve against the commit the review pins, so re-verify each one against the current `gh pr diff`, which now returns the new head's. On a file the delta didn't touch, the line is unchanged and the comment stands. On one it did, move the comment to the line the code sits on now; where the line no longer falls inside a hunk, put the finding in the review body as a fenced quote with its path, as under **Recovering from inline comment 422 errors**.
-- **Read the two `git log` outputs as a pair.** The scoped one is the author's new code; the `--merges` one is base merges, and it is the only place they appear. A base merge re-scopes every file's hunks, so when the second output is non-empty, re-verify every comment even if the first printed nothing — the two together distinguish an empty delta from an "Update branch" click.
+- **Read the two `git log` outputs as a pair.** The scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click.
+- **A base merge needs `git show --cc <merge sha>`, not just re-anchoring.** Where the merge conflicted, the author's resolution is committed *inside* the merge, so both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. `--cc` prints exactly the resolution hunks (and on a clean auto-merge, almost nothing), so read it whenever a `base merge:` line appears. A finding the resolution already fixed must drop out — re-anchoring alone would post it at a head where it no longer holds.
 - Re-compose every `suggestion` block on a file the delta touched, reading the new content with `git show "$CURRENT_HEAD":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged reverts the author's newest edit on one click, and a multi-line one deletes every in-range line it doesn't reproduce.
 
 **Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what `bot-review-state.sh` reports as `LAST_REVIEW_SHA`: pinned to the head you re-targeted onto, the queued run's step 1 finds that head already reviewed and finishes without posting a second review of the same code.
@@ -356,7 +361,8 @@ cat > /tmp/review-payload.json << 'ENDJSON'
 ENDJSON
 
 BODY=$(cat /tmp/review-body.md)
-jq --arg body "$BODY" --arg sha "$(cat /tmp/reviewed-head)" \
+REVIEWED=$(cat /tmp/reviewed-head) || exit 0
+jq --arg body "$BODY" --arg sha "$REVIEWED" \
   '.body = $body | .commit_id = $sha' /tmp/review-payload.json > /tmp/review-final.json
 
 gh api "repos/$REPO/pulls/<number>/reviews" \

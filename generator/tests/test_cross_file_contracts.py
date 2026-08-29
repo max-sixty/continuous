@@ -112,14 +112,27 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     # Written where the head is read, and rewritten where it moves.
     assert 'echo "$HEAD_SHA" > /tmp/reviewed-head' in skill
     assert 'echo "$CURRENT_HEAD" > /tmp/reviewed-head' in skill
-    # Read back by both posting recipes, never from a bare shell variable.
-    assert '-f commit_id="$(cat /tmp/reviewed-head)"' in skill
-    assert '--arg sha "$(cat /tmp/reviewed-head)"' in skill
+    # Read back by both posting recipes, and read *before* the POST: inlined as
+    # `$(cat ...)` a missing file substitutes the empty string and the request
+    # still goes out, which is the unpinned review the pin exists to prevent.
+    assert skill.count("REVIEWED=$(cat /tmp/reviewed-head) || exit 0") == 2
+    assert '-f commit_id="$REVIEWED"' in skill
+    assert '--arg sha "$REVIEWED"' in skill
 
-    # The delta is scoped off base churn; a plain two-dot diff between the two
-    # heads would hand the session everything a base merge dragged in.
+    # Three commands read the delta, and dropping any one of them silently
+    # narrows what the session sees rather than failing.
+    #
+    # The scoped log is the author's own new code: a plain two-dot diff between
+    # the heads would hand the session everything a base merge dragged in.
     assert "git log -p --no-merges" in skill
     assert '--not "$BASE_SHA"' in skill
+    # The merges log is the only place a base merge appears, and it carries a
+    # label or it reads as one more commit in the scoped log's stream.
+    assert '--merges "$HEAD_SHA..$CURRENT_HEAD"' in skill
+    assert "base merge: %h %s" in skill
+    # `--cc` is the only place a conflicted merge's resolution appears: the
+    # author commits it inside the merge, where neither log reaches it.
+    assert "git show --cc" in skill
 
 
 def test_weekly_approval_pins_the_commit_it_checked() -> None:
@@ -134,7 +147,8 @@ def test_weekly_approval_pins_the_commit_it_checked() -> None:
     # branch must not leave a readable file behind.
     assert "rm -f /tmp/checked-head-<number>" in weekly
     assert 'echo "$HEAD_SHA" > /tmp/checked-head-<number>' in weekly
-    assert '-f commit_id="$(cat /tmp/checked-head-<number>)"' in weekly
+    assert "CHECKED=$(cat /tmp/checked-head-<number>) || exit 0" in weekly
+    assert '-f commit_id="$CHECKED"' in weekly
 
     # `gh pr review --approve` cannot pin a commit; both skills post through
     # the reviews endpoint instead.
