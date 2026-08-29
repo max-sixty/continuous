@@ -129,8 +129,12 @@ def test_weekly_approval_pins_the_commit_it_checked() -> None:
     body is composed with the Write tool in between."""
     weekly = _read("plugins", "tend-ci-runner", "skills", "weekly", "SKILL.md")
 
-    assert 'echo "$HEAD_SHA" > /tmp/checked-head' in weekly
-    assert '-f commit_id="$(cat /tmp/checked-head)"' in weekly
+    # Per-PR and cleared up front: step 2 loops over every dependency PR, so a
+    # shared name hands the next PR this one's sha, and the already-approved
+    # branch must not leave a readable file behind.
+    assert "rm -f /tmp/checked-head-<number>" in weekly
+    assert 'echo "$HEAD_SHA" > /tmp/checked-head-<number>' in weekly
+    assert '-f commit_id="$(cat /tmp/checked-head-<number>)"' in weekly
 
     # `gh pr review --approve` cannot pin a commit; both skills post through
     # the reviews endpoint instead.
