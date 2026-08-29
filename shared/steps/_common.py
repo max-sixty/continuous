@@ -102,12 +102,10 @@ def gh_paginated(path: str) -> list[Any]:
     return [item for page in pages for item in page]
 
 
-# What the triggering event is about, per event, as the path to it in the
-# payload. `repository_dispatch` is tend-mention relaying review events through
-# a secretless job that re-posts them, so the PR number arrives in the payload
-# rather than in a `pull_request` object — and as a form field, hence a string.
-# Events absent from a table have no such subject: `schedule` and
-# `workflow_dispatch` name no thread, and the thread events name no commit.
+# Where each event keeps the number of the issue or PR it is about.
+# `repository_dispatch` is tend-mention relaying review events through a
+# secretless job that re-posts them, so its PR number arrives in the dispatch
+# payload — and as a form field, hence a string.
 _SUBJECT_NUMBER_KEYS = {
     "pull_request_target": ("pull_request", "number"),
     "pull_request_review": ("pull_request", "number"),
@@ -116,6 +114,8 @@ _SUBJECT_NUMBER_KEYS = {
     "issue_comment": ("issue", "number"),
     "repository_dispatch": ("client_payload", "pr"),
 }
+# Where each event keeps its own commit. Only the pull-request events and
+# `workflow_run` carry one; see :func:`subject_sha` for what the rest report.
 _SUBJECT_SHA_KEYS = {
     "pull_request_target": ("pull_request", "head", "sha"),
     "pull_request_review": ("pull_request", "head", "sha"),
@@ -128,9 +128,10 @@ def event_payload() -> dict[str, Any]:
     """The triggering event's payload, or ``{}`` for anything unreadable.
 
     Every caller reads a fact *about* the run — the thread it came from, the
-    commit it is on — to annotate work it is doing anyway. A missing file or a
-    body that is not JSON costs that fact its ``None``; raising would cost the
-    incident record or the usage record it was going to annotate.
+    commit it is on — to annotate work it is doing anyway. So an unreadable
+    payload leaves that fact ``None``: a missing file, a body that is not JSON,
+    or no ``GITHUB_EVENT_PATH`` at all. Raising instead would lose the whole
+    record the fact was going to annotate.
     """
     try:
         payload = json.loads(
@@ -151,13 +152,23 @@ def dig(payload: Any, *keys: str) -> Any:
 
 
 def as_int(value: Any) -> int | None:
-    """``value`` as an ``int``, or ``None`` when it is absent or isn't one.
+    """``value`` as an ``int``, or ``None`` for anything that isn't a whole one.
 
-    The same number reaches these steps as a JSON int from one payload and as
-    a string from another (``repository_dispatch``'s form-encoded
-    ``client_payload``, every ``GITHUB_*`` variable), and a consumer that
-    groups records by it must not see the two as different keys.
+    The same number reaches these steps as a JSON int in one event's payload
+    and as a string in another's (``repository_dispatch``'s form-encoded
+    ``client_payload``), and every ``GITHUB_*`` variable is a string. A
+    consumer that groups records by such a number must not see the two forms
+    as different keys.
+
+    Bools and floats are refused rather than coerced. Anyone holding
+    ``contents: write`` can POST a ``repository_dispatch`` with any JSON type
+    in ``client_payload.pr``, and ``_issue.ref()`` renders what comes back
+    into a public issue comment: ``true`` coerced to ``1``, or ``3.9`` to
+    ``3``, is a plausible-looking reference to somebody else's PR, where
+    ``None`` is no reference at all.
     """
+    if isinstance(value, (bool, float)):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -176,18 +187,30 @@ def subject_number() -> int | None:
 
 
 def subject_sha() -> str | None:
-    """The commit the run is about: the event's subject, else ``GITHUB_SHA``.
+    """The commit the triggering event is about, when its subject is a commit.
 
-    ``GITHUB_SHA`` is the wrong commit for exactly the events that carry their
-    own: a ``pull_request_target`` run reports the base branch there while the
-    workflow checks out the PR head, and a ``workflow_run`` run reports the
-    commit it was dispatched *from*, not the failing run's. Everywhere else it
-    is the commit the job checked out and worked on, which is what a reader
-    grouping spend by commit wants; ``None`` only when it is unset too.
+    An event's subject is a thread or a commit, and this reports the commit
+    half: the payload's where the event names one, and ``GITHUB_SHA`` — the
+    ref the run was queued on — for the events that name neither a thread nor
+    a commit, ``schedule`` and ``workflow_dispatch``. An event that names a
+    thread gets ``None``, because ``GITHUB_SHA`` is the default branch's tip
+    there and the run is not about it: a mention on a PR ``gh pr checkout``s
+    the PR's head straight after. :func:`subject_number` has that subject.
+
+    ``GITHUB_SHA`` is likewise the wrong commit for the events that do carry
+    their own, which is why the payload wins: a ``pull_request_target`` run
+    reports the default branch's tip there rather than the PR head the
+    workflow checks out, and a ``workflow_run`` run reports neither the
+    failing run's commit nor its own.
     """
-    keys = _SUBJECT_SHA_KEYS.get(os.environ.get("GITHUB_EVENT_NAME", ""))
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    keys = _SUBJECT_SHA_KEYS.get(event)
     sha = dig(event_payload(), *keys) if keys else None
-    return sha if isinstance(sha, str) and sha else os.environ.get("GITHUB_SHA") or None
+    if isinstance(sha, str) and sha:
+        return sha
+    if event in _SUBJECT_NUMBER_KEYS:
+        return None
+    return os.environ.get("GITHUB_SHA") or None
 
 
 def utcnow() -> datetime.datetime:

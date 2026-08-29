@@ -4,16 +4,12 @@
 # Downloads session log artifacts from GitHub Actions, extracts each run's
 # token-usage.json (written by the "Token usage" step in each harness action),
 # and outputs a JSON report to stdout. A human-readable summary is printed to
-# stderr, grouped by workflow and by subject — the PR or issue the run was
-# about, else the commit.
+# stderr, grouped by workflow and by subject.
 #
-# Cost leads every table, and every table sorts by it. Tokens do not price
-# alike: cache reads are the great majority of the count and a small minority
-# of the bill, so a ranking by summed tokens ranks the cheapest work first.
-#
-# The subject columns come from the record itself, which carries repo,
-# workflow, run, event, PR/issue number and commit alongside the counts. Runs
-# whose artifact predates those fields report a "?" subject.
+# The two rollup tables — one row per workflow, one per subject — sort by cost.
+# A cached input token is priced far below an output token, so ranking by token
+# volume, which cache reads dominate, is not ranking by spend. The per-run
+# table below them stays newest-first.
 #
 # Usage: ./token-report.sh [HOURS] [PREFIX ...]
 #   HOURS: lookback period in hours (default: 168 = 7 days)
@@ -106,6 +102,11 @@ echo >&2 "Downloading artifacts for $RUN_COUNT runs..."
 ENTRIES="$WORKDIR/entries.jsonl"
 touch "$ENTRIES"
 
+# Runs that reach the totals with nothing. Counted rather than dropped
+# silently: a codex-harness repo would otherwise read a report of zero runs
+# with no line saying why, and the same silence covers a torn upload.
+SKIPPED=0
+
 mapfile -t ROWS < <(echo "$ALL_RUNS" | jq -c '.[]')
 for row in "${ROWS[@]}"; do
   RUN_ID=$(echo "$row" | jq -r '.databaseId')
@@ -118,11 +119,13 @@ for row in "${ROWS[@]}"; do
   if ! gh run download "$RUN_ID" "${repo_args[@]}" \
       --pattern 'claude-session-logs*' \
       --dir "$RUNDIR" 2>/dev/null; then
+    SKIPPED=$((SKIPPED + 1))
     continue
   fi
 
   mapfile -t USAGE_FILES < <(find "$RUNDIR" -name "token-usage.json" -type f)
   if [ ${#USAGE_FILES[@]} -eq 0 ]; then
+    SKIPPED=$((SKIPPED + 1))
     continue
   fi
 
@@ -136,26 +139,37 @@ for row in "${ROWS[@]}"; do
   # (or an event with no thread of its own) leaves, and `first` of nothing is
   # null. `run_id` and `workflow` are deliberately not read here — the run list
   # above is already their source, and one source per field beats a fallback.
-  USAGE=$(cat "${USAGE_FILES[@]}" | jq -s '
+  # Every sum takes `// 0` for the same reason the totals below do: `add` over
+  # no values is null, and a null reaching the report's arithmetic ends it.
+  # An artifact that holds no usable object is a torn upload, and a run that
+  # reports zero still reports its identity.
+  if ! USAGE=$(cat "${USAGE_FILES[@]}" | jq -s '
     def pick(f): map(f // empty) | first;
     {
-      input_tokens: (map(.input_tokens) | add),
-      output_tokens: (map(.output_tokens) | add),
-      cache_creation_input_tokens: (map(.cache_creation_input_tokens) | add),
-      cache_read_input_tokens: (map(.cache_read_input_tokens) | add),
-      turns: (map(.turns) | add),
-      cost_usd: (map(.cost_usd // 0) | add),
+      input_tokens: (map(.input_tokens) | add // 0),
+      output_tokens: (map(.output_tokens) | add // 0),
+      cache_creation_input_tokens: (map(.cache_creation_input_tokens) | add // 0),
+      cache_read_input_tokens: (map(.cache_read_input_tokens) | add // 0),
+      turns: (map(.turns) | add // 0),
+      cost_usd: (map(.cost_usd // 0) | add // 0),
       partial: (map(.partial // false) | any),
       repo: pick(.repo),
       event: pick(.event),
       number: pick(.number),
       head_sha: pick(.head_sha)
-    }')
+    }'); then
+    # An unparsable file would otherwise abort the whole run under `set -e`,
+    # losing every other run's data with it — the loop tolerates a failed
+    # download and a missing file already.
+    echo >&2 "WARNING: run $RUN_ID has an unreadable token-usage.json — its tokens are absent from the totals below."
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
 
   # `subject` is what the run was about as one cell: the PR or issue it worked
-  # on, else the commit, else `?` — an artifact written before the record
-  # carried any of this. Computed once, here, so every reader of the report
-  # groups by the same key.
+  # on, else the commit, else `?` for a record written before these fields
+  # existed or one whose event named neither. Computed once, here, so every
+  # reader of the report groups by the same key.
   jq -c --argjson usage "$USAGE" '
     . + $usage + {run_id: .databaseId, workflow: .name, created_at: .createdAt} |
     del(.databaseId, .name, .createdAt) |
@@ -179,8 +193,7 @@ jq -s '{
   }
 }' "$ENTRIES" | tee "$WORKDIR/report.json"
 
-# How many subjects the summary shows before the tail of one-run subjects; the
-# JSON on stdout carries every one of them.
+# How many of the costliest subjects the summary shows.
 TOP_SUBJECTS=20
 
 # Shared by the programs below. The prose header is rendered on its own
@@ -192,21 +205,20 @@ JQ_DEFS='
     elif . >= 1000 then "\(. / 100 | floor | . / 10)K"
     else "\(.)" end;
 
-  def usd: tostring | if test("\\.") then split(".") | "\(.[0]).\((.[1] + "00")[:2])" else . + ".00" end | "$" + .;
+  def usd: (. * 100 | round / 100) | tostring | if test("\\.") then split(".") | "\(.[0]).\((.[1] + "00")[:2])" else . + ".00" end | "$" + .;
 
   # A partial run contributes tokens but no cost, so every cost it lands in —
   # its own row, its group row, the total — is a floor, not the spend. Mark
   # those cells with a trailing `+` so a reconstructed run never reads as free.
   def floor_marker: if . then "+" else "" end;
 
-  # The subject is a join key (a full sha, so two commits are two subjects);
-  # the column only has room for a prefix.
+  # A full sha is the join key; the column has room for a prefix.
   def short: .[:12];
 
   # Applied to a group of runs; the caller adds the columns that name it.
   def rollup: {
     n: length,
-    cost: (map(.cost_usd) | add | . * 100 | round / 100),
+    cost: (map(.cost_usd) | add),
     partial: (map(.partial // false) | any),
     i: (map(.input_tokens) | add),
     o: (map(.output_tokens) | add),
@@ -217,9 +229,6 @@ JQ_DEFS='
   def by_cost: sort_by(.cost) | reverse;
 '
 
-# Cost leads, because that is the question being asked and because the token
-# count answers a different one: cache reads are the great majority of the
-# tokens and a minority of the bill.
 jq -r "$JQ_DEFS"'
   "",
   "\(.runs | length) runs since '"$SINCE"'",
@@ -229,12 +238,14 @@ jq -r "$JQ_DEFS"'
   ""
 ' "$WORKDIR/report.json" >&2
 
-# Every table sorts by cost, for the same reason. One `column -t` per table:
-# it aligns whatever it is given as a single grid and drops the blank lines
-# between, so a single pass would run the three tables together under one set
-# of column widths.
+# One `column -t` per table: it aligns whatever it is given as a single grid
+# and drops the blank lines between, so a single pass would run the tables
+# together under one set of column widths. `-s` pins the separator to the tab
+# `@tsv` writes; the default splits on any whitespace, so a workflow name with
+# a space in it would shift every column right.
 table() {
-  jq -r --argjson top "$TOP_SUBJECTS" "$JQ_DEFS$1" "$WORKDIR/report.json" | column -t >&2
+  jq -r --argjson top "$TOP_SUBJECTS" "$JQ_DEFS$1" "$WORKDIR/report.json" |
+    column -t -s "$(printf '\t')" >&2
   echo >&2 ""
 }
 
@@ -245,14 +256,33 @@ table '
 '
 
 # Repeat work on one subject is what this table exists to show: a PR reviewed
-# nine times, or two agents racing on one commit, is one row with a high RUNS
-# count.
+# over and over, or two agents racing on one commit, is one row with a high
+# RUNS count.
 table '
   (["SUBJECT", "RUNS", "COST", "WORKFLOWS", "CACHE-READ"] | @tsv),
   (.runs | group_by(.subject) | map({s: (.[0].subject | short), wf: (map(.workflow) | unique | join(","))} + rollup)
     | by_cost | .[:$top] | .[] |
     [.s, (.n | tostring), cost_cell, .wf, (.cr | fmt)] | @tsv)
 '
+
+# A run with no result event is booked at $0, because a floor is the only
+# honest number for it — so the cost sort buries it and the cut above drops it,
+# and a subject whose runs were all cancelled disappears from a report about
+# where the tokens went. Its tokens are real, so it gets a table of its own,
+# ranked by the one number it has. Uncapped, unlike the table above: these are
+# a small fraction of runs, and a fleet where they aren't is itself the finding.
+# Pricing them instead would mean carrying a price table, which is the thing
+# the record deliberately doesn't do.
+PARTIAL_RUNS=$(jq -r '.totals.partial_runs' "$WORKDIR/report.json")
+if [ "$PARTIAL_RUNS" -gt 0 ]; then
+  table '
+    (["COST-UNKNOWN", "RUNS", "CACHE-READ", "OUTPUT", "WORKFLOWS"] | @tsv),
+    (.runs | map(select(.partial)) | group_by(.subject)
+      | map({s: (.[0].subject | short), wf: (map(.workflow) | unique | join(","))} + rollup)
+      | sort_by(.cr) | reverse | .[] |
+      [.s, (.n | tostring), (.cr | fmt), (.o | fmt), .wf] | @tsv)
+  '
+fi
 
 table '
   (["RUN", "WORKFLOW", "SUBJECT", "COST", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ", "TIME"] | @tsv),
@@ -266,8 +296,10 @@ SUBJECT_COUNT=$(jq -r '[.runs[].subject] | unique | length' "$WORKDIR/report.jso
 if [ "$SUBJECT_COUNT" -gt "$TOP_SUBJECTS" ]; then
   echo >&2 "Subjects: showing the $TOP_SUBJECTS costliest of $SUBJECT_COUNT; the JSON on stdout has them all."
 fi
-PARTIAL_RUNS=$(jq -r '.totals.partial_runs' "$WORKDIR/report.json")
 if [ "$PARTIAL_RUNS" -gt 0 ]; then
-  echo >&2 "$PARTIAL_RUNS run(s) emitted no result event (typically cancelled): tokens counted, cost not recoverable. A '+' marks a cost that is a floor rather than the spend."
+  echo >&2 "COST-UNKNOWN lists the runs that emitted no result event, typically cancelled: their tokens are counted everywhere, their cost is not recoverable. A '+' marks a cost that is a floor rather than the spend."
+fi
+if [ "$SKIPPED" -gt 0 ]; then
+  echo >&2 "$SKIPPED run(s) uploaded no claude-session-logs artifact and are absent entirely: codex-harness runs, and runs that ended before the upload."
 fi
 echo >&2 "Cost at API list prices — a large multiple of the effective rate on Claude Code subscriptions."

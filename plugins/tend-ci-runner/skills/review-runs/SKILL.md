@@ -262,7 +262,7 @@ HOURS=$(( ( $(date -u +%s) - $(date -u -d "$SINCE" +%s) + 3599 ) / 3600 ))
 
 Pass the same extra prefixes Step 1 censuses (after `$HOURS`, which the script reads as its first positional arg), so the two steps agree on what the fleet is — the repo's `running-tend` skill is the source for both (e.g. `review-` for a `review-reviewers` workflow that uses the tend action but isn't named `tend-*`).
 
-Include the total cost and the per-workflow breakdown in the summary (Step 7). Rank by cost, which the report's tables already do — cache reads are most of the token count and a minority of the bill. Two shapes are worth Step 3: a run far above its workflow's usual cost, and a subject with several runs against it in the subject table, such as one PR reviewed repeatedly or two agents on one commit.
+Include the total cost and the per-workflow breakdown in the summary (Step 7). Escalate outliers to Step 3 — for example a run far above its workflow's usual cost, or a subject the subject table shows several runs against.
 
 ## Step 3: Download and analyze session logs
 

@@ -28,10 +28,9 @@ session-log artifact), the ``usage`` step output (compact JSON), and a
 interactive harness so downstream consumers (review-reviewers' evidence gist,
 token-report.sh, dashboards) don't branch on harness.
 
-Every record carries what the run was about as well as what it spent — repo,
-workflow, run, event, PR/issue number, commit — so spend can be grouped by
-subject without a second API call. See :func:`run_context`. The job summary
-stays counts-only: the run page it is rendered on already names the run.
+Every record also names the run it came from, so spend can be grouped by
+subject; see :func:`run_context`. The job summary stays counts-only, because
+the run page it is rendered on already names the run.
 
 Claude's accounting has three paths, tried in order:
 
@@ -143,17 +142,19 @@ def main() -> int:
 
 
 def run_context() -> dict[str, Any]:
-    """What the run was *about*, alongside what it spent.
+    """The run's identity, so a record says what the spend went to.
 
-    Without these a record answers "how much?" and nothing else, so every
-    question worth asking of a fleet's spend — cost per PR, repeat runs on one
-    branch, two agents racing on one commit — costs a join against
-    ``gh run list`` and the API behind it, one call per run. They are the
-    join's keys carried on the record instead.
+    Without it a record answers "how much?" and nothing else, and the reader
+    is left joining every artifact back to a run listing to find out what it
+    was working on. Two of these keys are not on that listing at all: the
+    PR/issue ``number``, and a ``head_sha`` read from the event rather than
+    from the ref the run was queued on. The rest are, and they are here so the
+    record stands on its own — read out of a gist or a downloaded artifact,
+    away from the run that wrote it.
 
-    Read from the Actions environment and the event payload, which are free
-    and always present in a job; each degrades to ``None`` on its own so a
-    surprising event shape costs one key rather than the record.
+    Read from the Actions environment, which is always set in a job, and from
+    the event payload, which may not be readable. Each key resolves on its
+    own, so a surprising event shape costs that key rather than the record.
     """
     env = os.environ
     return {

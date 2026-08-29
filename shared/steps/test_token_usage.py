@@ -9,6 +9,7 @@ subagent's transcript beside the session would add 7000.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -48,17 +49,19 @@ SUBAGENT_USAGE = {
 
 TRUNCATED = '{"type":"assistant","mess'
 
-# What `run_context` reads. A test that asserts an absent context has to strip
-# them, because pytest itself runs under Actions in CI.
-CONTEXT_VARS = (
-    "GITHUB_REPOSITORY",
-    "GITHUB_WORKFLOW",
-    "GITHUB_RUN_ID",
-    "GITHUB_RUN_ATTEMPT",
-    "GITHUB_EVENT_NAME",
-    "GITHUB_SHA",
-    "GITHUB_EVENT_PATH",
+# The keys `run_context` contributes to the record.
+CONTEXT_KEYS = (
+    "repo",
+    "workflow",
+    "run_id",
+    "run_attempt",
+    "event",
+    "number",
+    "head_sha",
 )
+# The runner's own channels, which a test needs even with the rest of the
+# Actions environment stripped.
+GITHUB_FILE_VARS = ("GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_STEP_SUMMARY")
 
 
 def _assistant(msg_id: str, usage: dict[str, int], *, final: bool) -> dict[str, object]:
@@ -343,8 +346,12 @@ def test_claude_main_publishes_the_record_three_ways(
     """
     agent_home = tmp_path / "agent-home"
     _session_jsonl(agent_home / ".claude" / "projects")
-    for name in CONTEXT_VARS:
-        monkeypatch.delenv(name, raising=False)
+    # Every `GITHUB_*` rather than a list of the ones `run_context` reads:
+    # pytest itself runs under Actions in CI, and a hand-kept list goes stale
+    # the moment a key is added, silently reading the ambient value instead.
+    for name in [name for name in os.environ if name.startswith("GITHUB_")]:
+        if name not in GITHUB_FILE_VARS:
+            monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AGENT_HOME", str(agent_home))
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner-temp"))
     monkeypatch.setenv("MODEL", "opus")
@@ -366,7 +373,8 @@ def test_claude_main_publishes_the_record_three_ways(
     # Nothing here runs under Actions, so every context key reads as absent.
     # An `if: always()` step publishes the record it has rather than failing
     # on a variable it cannot read.
-    assert record["repo"] is None and record["number"] is None
+    context = {key: record[key] for key in CONTEXT_KEYS}
+    assert context == dict.fromkeys(CONTEXT_KEYS)
     written = tmp_path / "runner-temp" / "tend-logs" / "token-usage.json"
     assert json.loads(written.read_text()) == record
     assert github_files.summary.read_text() == (

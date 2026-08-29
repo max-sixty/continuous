@@ -119,6 +119,12 @@ class Report:
         )
         return self
 
+    def add_raw(self, run_id: int, body: str) -> "Report":
+        """A run whose artifact holds *body* verbatim, valid JSON or not."""
+        self.add_run_without_artifact(run_id)
+        (self._usage_dir / f"{run_id}.json").write_text(body)
+        return self
+
     def add_run_without_artifact(self, run_id: int) -> "Report":
         self._runs.append(
             {
@@ -130,20 +136,31 @@ class Report:
         )
         return self
 
-    def run(self) -> tuple[dict[str, Any], list[list[str]]]:
-        """The JSON on stdout, and the stderr summary split into cells."""
+    def run(self, *prefixes: str) -> tuple[dict[str, Any], list[list[str]]]:
+        """The JSON on stdout, and the stderr summary split into cells.
+
+        The summary's blocks — the prose header, each table, the footnotes —
+        are separated by blank lines, and ``blocks`` keeps that structure so a
+        test can address one table without a footnote sentence running into it.
+        """
         workflows = sorted({run["name"] for run in self._runs})
         Path(self._env["WF_JSON"]).write_text(
             json.dumps([{"name": name} for name in workflows])
         )
         Path(self._env["RUNS_JSON"]).write_text(json.dumps(self._runs))
         result = subprocess.run(
-            [BASH, str(SCRIPT), "168"],
+            [BASH, str(SCRIPT), "168", *prefixes],
             env=self._env,
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0, result.stderr
+        self.stderr = result.stderr
+        self.blocks = [
+            cells
+            for block in result.stderr.split("\n\n")
+            if (cells := [line.split() for line in block.splitlines() if line.strip()])
+        ]
         rows = [line.split() for line in result.stderr.splitlines() if line.strip()]
         return json.loads(result.stdout), rows
 
@@ -153,15 +170,9 @@ def report(tmp_path: Path) -> Report:
     return Report(tmp_path)
 
 
-def _table(rows: list[list[str]], header: str) -> list[list[str]]:
-    """The rows under the table whose first heading is *header*."""
-    start = next(i for i, row in enumerate(rows) if row[0] == header) + 1
-    out = []
-    for row in rows[start:]:
-        if row[0] in {"WORKFLOW", "SUBJECT", "RUN"}:
-            break
-        out.append(row)
-    return out
+def _table(report: Report, header: str) -> list[list[str]]:
+    """The rows of the table whose first heading is *header*, without it."""
+    return next(block for block in report.blocks if block[0][0] == header)[1:]
 
 
 def test_the_record_carries_the_subject_so_no_join_is_needed(report: Report) -> None:
@@ -195,7 +206,7 @@ def test_repeat_runs_on_one_subject_collapse_into_one_row(report: Report) -> Non
     report.add(4, number=852, cost_usd=1.0)
     _, rows = report.run()
 
-    assert _table(rows, "SUBJECT") == [
+    assert _table(report, "SUBJECT") == [
         ["#851", "3", "$6.00", "tend-review", "30K"],
         ["#852", "1", "$1.00", "tend-review", "10K"],
     ]
@@ -212,11 +223,11 @@ def test_tables_are_ranked_by_cost_not_by_token_count(report: Report) -> None:
     report.add(2, workflow="tend-review", cost_usd=9.0, cache_read_input_tokens=1000)
     _, rows = report.run()
 
-    workflows = [row[0] for row in _table(rows, "WORKFLOW")]
+    workflows = [row[0] for row in _table(report, "WORKFLOW")]
     assert workflows == ["tend-review", "tend-nightly"], (
         "the costliest workflow leads; ranking by cache reads inverts this"
     )
-    assert _table(rows, "WORKFLOW")[0][2] == "$9.00", "cost is the second column"
+    assert _table(report, "WORKFLOW")[0][2] == "$9.00", "cost is the second column"
 
 
 def test_a_cost_unknown_run_reads_as_a_floor_not_as_free(report: Report) -> None:
@@ -233,7 +244,7 @@ def test_a_cost_unknown_run_reads_as_a_floor_not_as_free(report: Report) -> None
     total = next(row for row in rows if row[0] == "Total")
     assert total[2] == "$4.00+", "the headline cost is a floor while a run is unpriced"
     assert " ".join(total).endswith("(1 of 2 runs cost-unknown)")
-    assert _table(rows, "SUBJECT")[1] == ["#851", "1", "$0.00+", "tend-review", "10K"]
+    assert _table(report, "SUBJECT")[1] == ["#851", "1", "$0.00+", "tend-review", "10K"]
 
 
 def test_a_run_whose_record_predates_the_subject_fields(report: Report) -> None:
@@ -247,7 +258,7 @@ def test_a_run_whose_record_predates_the_subject_fields(report: Report) -> None:
 
     assert output["runs"][0]["subject"] == "?"
     assert output["totals"]["cost_usd"] == 1.0
-    assert _table(rows, "SUBJECT") == [["?", "1", "$1.00", "tend-review", "10K"]]
+    assert _table(report, "SUBJECT") == [["?", "1", "$1.00", "tend-review", "10K"]]
 
 
 def test_a_run_with_no_artifact_is_skipped(report: Report) -> None:
@@ -269,8 +280,114 @@ def test_the_subject_table_stops_at_the_top_and_says_so(report: Report) -> None:
         report.add(run_id, number=1000 + run_id, cost_usd=float(run_id))
     output, rows = report.run()
 
-    subjects = _table(rows, "SUBJECT")
+    subjects = _table(report, "SUBJECT")
     assert len(subjects) == 20
     assert subjects[0][0] == "#1025", "the costliest subject leads"
     assert len(output["runs"]) == 25
     assert any("costliest of 25" in " ".join(row) for row in rows)
+
+
+def test_one_torn_artifact_costs_its_own_run_and_no_other(report: Report) -> None:
+    """An upload cut mid-write must not take the other 200 runs with it.
+
+    `jq` exits non-zero on it inside a command substitution, and under
+    `set -euo pipefail` that ends the script before anything reaches stdout —
+    every other run's spend lost to one bad file. The loop already tolerates a
+    failed download and a missing file; this is the third way in.
+    """
+    report.add(1, cost_usd=3.0).add_raw(2, '{"input_tokens": 5,').add(3, number=852)
+    output, rows = report.run()
+
+    assert [run["run_id"] for run in output["runs"]] == [1, 3]
+    assert output["totals"]["cost_usd"] == 4.0
+    assert any("unreadable token-usage.json" in " ".join(row) for row in rows)
+
+
+def test_an_artifact_with_no_usable_object_reports_zero(report: Report) -> None:
+    """`add` over no values is null, and a null reaching the arithmetic ends it.
+
+    A whitespace-only file parses fine — `jq -s` gives `[]` — so the guard
+    above never fires, and `null * 100` in the cost rollup killed the SUBJECT
+    and RUN tables after stdout had already been written.
+    """
+    report.add_raw(1, "   \n").add(2, number=852, cost_usd=2.0)
+    output, rows = report.run()
+
+    torn = next(run for run in output["runs"] if run["run_id"] == 1)
+    assert torn["cost_usd"] == 0 and torn["cache_read_input_tokens"] == 0
+    assert [row[0] for row in _table(report, "RUN")] == ["1", "2"]
+    assert _table(report, "WORKFLOW")[0][2] == "$2.00"
+
+
+def test_cost_unknown_runs_get_their_own_ranked_table(report: Report) -> None:
+    """A cancelled run is booked at $0, so the cost sort buries it.
+
+    A subject whose runs were all cancelled would otherwise be cut from a
+    report about where the tokens went — here it holds most of the fleet's
+    cache reads and none of its priced cost.
+    """
+    for run_id in range(1, 22):
+        report.add(run_id, number=1000 + run_id, cost_usd=float(run_id))
+    for run_id in range(90, 99):
+        report.add(
+            run_id,
+            number=2222,
+            cost_usd=None,
+            partial=True,
+            cache_read_input_tokens=5_000_000,
+        )
+    _, rows = report.run()
+
+    assert "#2222" not in [row[0] for row in _table(report, "SUBJECT")], (
+        "a $0 floor cannot outrank priced work, which is why it needs its own table"
+    )
+    assert _table(report, "COST-UNKNOWN") == [
+        ["#2222", "9", "45M", "900", "tend-review"]
+    ]
+
+
+def test_a_matrix_runs_row_agrees_with_its_rollup_to_the_cent(report: Report) -> None:
+    """Per-job costs are exact to the cent; their float sum is not.
+
+    Truncating in the row and rounding in the rollup made one run's own row
+    read a cent below the workflow total it was the whole of.
+    """
+    report.add(1, cost_usd=5.13)
+    for cost in (8.57, 5.31, 8.12, 1.04):
+        (report._usage_dir / "1.json").write_text(
+            (report._usage_dir / "1.json").read_text().rstrip()
+            + "\n"
+            + json.dumps(_record(run_id=1, cost_usd=cost))
+        )
+    output, rows = report.run()
+
+    assert output["totals"]["cost_usd"] == 28.17
+    assert _table(report, "RUN")[0][3] == "$28.17"
+    assert _table(report, "WORKFLOW")[0][2] == "$28.17"
+
+
+def test_a_workflow_name_with_a_space_keeps_its_own_column(report: Report) -> None:
+    """`column -t` splits on whitespace unless told otherwise.
+
+    `EXTRA_PREFIXES` exists for hand-written workflows, whose names are not
+    held to the generator's `tend-` convention — and a shifted column reads as
+    a different metric rather than as a broken table.
+    """
+    report.add(1, workflow="review reviewers")
+    report.run("review")
+
+    lines = report.stderr.splitlines()
+    header = next(line for line in lines if line.startswith("WORKFLOW"))
+    row = lines[lines.index(header) + 1]
+    assert row[header.index("RUNS") :].split()[0] == "1", (
+        "the run count must sit under RUNS; splitting on whitespace instead of "
+        "the tab puts `reviewers` there and shifts every column right"
+    )
+
+
+def test_runs_with_no_artifact_are_counted_not_dropped(report: Report) -> None:
+    """A codex-harness repo would otherwise read a report of zero runs."""
+    report.add(1).add_run_without_artifact(2).add_run_without_artifact(3)
+    _, rows = report.run()
+
+    assert any("2 run(s) uploaded no" in " ".join(row) for row in rows)

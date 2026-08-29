@@ -72,10 +72,10 @@ outputs:
     description: >-
       JSON object with token usage parsed from the Codex rollout JSONL:
       input_tokens, output_tokens, cached_input_tokens, model, cost_usd.
-      cost_usd is 0 — Codex CLI doesn't surface API list prices. Alongside
-      those, what the run was about: repo, workflow, run_id, run_attempt,
-      event, number (the PR/issue, null when the trigger has no thread),
-      head_sha.
+      cost_usd is 0 — Codex CLI doesn't surface API list prices. The record
+      also names the run it came from: repo, workflow, run_id, run_attempt,
+      event, number (the PR or issue, null when the trigger has no thread),
+      and head_sha.
     value: ${{ steps.tokens.outputs.usage }}
   final_message:
     description: >-
