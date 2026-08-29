@@ -102,6 +102,94 @@ def gh_paginated(path: str) -> list[Any]:
     return [item for page in pages for item in page]
 
 
+# What the triggering event is about, per event, as the path to it in the
+# payload. `repository_dispatch` is tend-mention relaying review events through
+# a secretless job that re-posts them, so the PR number arrives in the payload
+# rather than in a `pull_request` object — and as a form field, hence a string.
+# Events absent from a table have no such subject: `schedule` and
+# `workflow_dispatch` name no thread, and the thread events name no commit.
+_SUBJECT_NUMBER_KEYS = {
+    "pull_request_target": ("pull_request", "number"),
+    "pull_request_review": ("pull_request", "number"),
+    "pull_request_review_comment": ("pull_request", "number"),
+    "issues": ("issue", "number"),
+    "issue_comment": ("issue", "number"),
+    "repository_dispatch": ("client_payload", "pr"),
+}
+_SUBJECT_SHA_KEYS = {
+    "pull_request_target": ("pull_request", "head", "sha"),
+    "pull_request_review": ("pull_request", "head", "sha"),
+    "pull_request_review_comment": ("pull_request", "head", "sha"),
+    "workflow_run": ("workflow_run", "head_sha"),
+}
+
+
+def event_payload() -> dict[str, Any]:
+    """The triggering event's payload, or ``{}`` for anything unreadable.
+
+    Every caller reads a fact *about* the run — the thread it came from, the
+    commit it is on — to annotate work it is doing anyway. A missing file or a
+    body that is not JSON costs that fact its ``None``; raising would cost the
+    incident record or the usage record it was going to annotate.
+    """
+    try:
+        payload = json.loads(
+            Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, KeyError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def dig(payload: Any, *keys: str) -> Any:
+    """``payload[k1][k2]…``, or ``None`` for any shape that lacks that path."""
+    for key in keys:
+        if not isinstance(payload, dict):
+            return None
+        payload = payload.get(key)
+    return payload
+
+
+def as_int(value: Any) -> int | None:
+    """``value`` as an ``int``, or ``None`` when it is absent or isn't one.
+
+    The same number reaches these steps as a JSON int from one payload and as
+    a string from another (``repository_dispatch``'s form-encoded
+    ``client_payload``, every ``GITHUB_*`` variable), and a consumer that
+    groups records by it must not see the two as different keys.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def subject_number() -> int | None:
+    """The issue or PR number the triggering event is about, if it has one.
+
+    ``None`` for an event with no thread of its own (``schedule``,
+    ``workflow_dispatch``, ``workflow_run``) and for a payload whose shape is
+    not the one its event promises.
+    """
+    keys = _SUBJECT_NUMBER_KEYS.get(os.environ.get("GITHUB_EVENT_NAME", ""))
+    return as_int(dig(event_payload(), *keys)) if keys else None
+
+
+def subject_sha() -> str | None:
+    """The commit the run is about: the event's subject, else ``GITHUB_SHA``.
+
+    ``GITHUB_SHA`` is the wrong commit for exactly the events that carry their
+    own: a ``pull_request_target`` run reports the base branch there while the
+    workflow checks out the PR head, and a ``workflow_run`` run reports the
+    commit it was dispatched *from*, not the failing run's. Everywhere else it
+    is the commit the job checked out and worked on, which is what a reader
+    grouping spend by commit wants; ``None`` only when it is unset too.
+    """
+    keys = _SUBJECT_SHA_KEYS.get(os.environ.get("GITHUB_EVENT_NAME", ""))
+    sha = dig(event_payload(), *keys) if keys else None
+    return sha if isinstance(sha, str) and sha else os.environ.get("GITHUB_SHA") or None
+
+
 def utcnow() -> datetime.datetime:
     """The one clock the steps read, always UTC.
 

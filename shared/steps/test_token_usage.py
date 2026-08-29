@@ -48,6 +48,18 @@ SUBAGENT_USAGE = {
 
 TRUNCATED = '{"type":"assistant","mess'
 
+# What `run_context` reads. A test that asserts an absent context has to strip
+# them, because pytest itself runs under Actions in CI.
+CONTEXT_VARS = (
+    "GITHUB_REPOSITORY",
+    "GITHUB_WORKFLOW",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_SHA",
+    "GITHUB_EVENT_PATH",
+)
+
 
 def _assistant(msg_id: str, usage: dict[str, int], *, final: bool) -> dict[str, object]:
     return {
@@ -331,6 +343,8 @@ def test_claude_main_publishes_the_record_three_ways(
     """
     agent_home = tmp_path / "agent-home"
     _session_jsonl(agent_home / ".claude" / "projects")
+    for name in CONTEXT_VARS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AGENT_HOME", str(agent_home))
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner-temp"))
     monkeypatch.setenv("MODEL", "opus")
@@ -349,6 +363,10 @@ def test_claude_main_publishes_the_record_three_ways(
     record = json.loads(github_files.outputs()["usage"])
     assert record["output_tokens"] == 4500
     assert record["partial"] is True
+    # Nothing here runs under Actions, so every context key reads as absent.
+    # An `if: always()` step publishes the record it has rather than failing
+    # on a variable it cannot read.
+    assert record["repo"] is None and record["number"] is None
     written = tmp_path / "runner-temp" / "tend-logs" / "token-usage.json"
     assert json.loads(written.read_text()) == record
     assert github_files.summary.read_text() == (
@@ -370,8 +388,23 @@ def test_claude_main_publishes_the_record_three_ways(
 def test_codex_main_publishes_the_record_three_ways(
     tmp_path: Path,
     github_files: GithubFiles,
+    actions_env: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Every published copy carries what the run was about, not just its spend.
+
+    The context keys ride on the record itself so a later question — cost per
+    PR, repeat runs on one commit — reads them off the artifact rather than
+    joining every run back to `gh run list`. `head_sha` is the PR's head, not
+    the `GITHUB_SHA` the run reports, which for a pull-request event is the
+    base branch.
+    """
+    actions_env.write_text(
+        json.dumps({"pull_request": {"number": 851, "head": {"sha": "head0"}}})
+    )
+    monkeypatch.setenv("GITHUB_WORKFLOW", "tend-review")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    monkeypatch.setenv("GITHUB_SHA", "base0")
     home = tmp_path / "home"
     _ndjson(
         home / ".codex" / "sessions" / "2026" / "08" / "25" / "rollout-a.jsonl",
@@ -388,6 +421,13 @@ def test_codex_main_publishes_the_record_three_ways(
 
     record = json.loads(github_files.outputs()["usage"])
     assert record == {
+        "repo": "owner/repo",
+        "workflow": "tend-review",
+        "run_id": 12345,
+        "run_attempt": 2,
+        "event": "pull_request_target",
+        "number": 851,
+        "head_sha": "head0",
         "input_tokens": 100,
         "output_tokens": 30,
         "cached_input_tokens": 0,
