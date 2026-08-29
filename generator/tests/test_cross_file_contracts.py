@@ -137,6 +137,10 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     # nothing anywhere, so the override below has to be unconditional.
     assert "git show --cc" in skill
     assert "even if the scoped log printed nothing" in skill
+    # Suggestion blocks carry the same blind spot as the inline comments
+    # above: a clean base merge shifts lines in files the scoped delta
+    # never touched, so re-composition is scoped to the merge, not to it.
+    assert "and on every file after a base merge" in skill
 
 
 def test_weekly_approval_pins_the_commit_it_checked() -> None:
