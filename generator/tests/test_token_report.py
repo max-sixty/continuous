@@ -287,36 +287,31 @@ def test_the_subject_table_stops_at_the_top_and_says_so(report: Report) -> None:
     assert any("costliest of 25" in " ".join(row) for row in rows)
 
 
-def test_one_torn_artifact_costs_its_own_run_and_no_other(report: Report) -> None:
-    """An upload cut mid-write must not take the other 200 runs with it.
+@pytest.mark.parametrize(
+    ("body", "why"),
+    [
+        ('{"input_tokens": 5,', "cut mid-write"),
+        ("   \n", "holding nothing but whitespace"),
+    ],
+)
+def test_one_unreadable_artifact_costs_its_own_run_and_no_other(
+    report: Report, body: str, why: str
+) -> None:
+    """An artifact cut mid-write must not take the other 200 runs with it.
 
-    `jq` exits non-zero on it inside a command substitution, and under
-    `set -euo pipefail` that ends the script before anything reaches stdout —
-    every other run's spend lost to one bad file. The loop already tolerates a
-    failed download and a missing file; this is the third way in.
+    `jq` exits non-zero on it, and under `set -euo pipefail` that ends the
+    script before anything reaches stdout — every other run's spend lost to one
+    bad file. A file holding no object at all takes the same path: `jq` exits
+    0 with no output, and reporting the run as a zero would say its spend was
+    nothing when the truth is that it is unknown.
     """
-    report.add(1, cost_usd=3.0).add_raw(2, '{"input_tokens": 5,').add(3, number=852)
+    report.add(1, cost_usd=3.0).add_raw(2, body).add(3, number=852)
     output, rows = report.run()
 
-    assert [run["run_id"] for run in output["runs"]] == [1, 3]
+    assert [run["run_id"] for run in output["runs"]] == [3, 1], f"lost a run to {why}"
     assert output["totals"]["cost_usd"] == 4.0
-    assert any("unreadable token-usage.json" in " ".join(row) for row in rows)
-
-
-def test_an_artifact_with_no_usable_object_reports_zero(report: Report) -> None:
-    """`add` over no values is null, and a null reaching the arithmetic ends it.
-
-    A whitespace-only file parses fine — `jq -s` gives `[]` — so the guard
-    above never fires, and `null * 100` in the cost rollup killed the SUBJECT
-    and RUN tables after stdout had already been written.
-    """
-    report.add_raw(1, "   \n").add(2, number=852, cost_usd=2.0)
-    output, rows = report.run()
-
-    torn = next(run for run in output["runs"] if run["run_id"] == 1)
-    assert torn["cost_usd"] == 0 and torn["cache_read_input_tokens"] == 0
-    assert [row[0] for row in _table(report, "RUN")] == ["1", "2"]
-    assert _table(report, "WORKFLOW")[0][2] == "$2.00"
+    assert output["totals"]["skipped_runs"] == 1
+    assert any("1 run(s) uploaded no readable" in " ".join(row) for row in rows)
 
 
 def test_cost_unknown_runs_get_their_own_ranked_table(report: Report) -> None:
@@ -367,7 +362,7 @@ def test_a_matrix_runs_row_agrees_with_its_rollup_to_the_cent(report: Report) ->
 
 
 def test_a_workflow_name_with_a_space_keeps_its_own_column(report: Report) -> None:
-    """`column -t` splits on whitespace unless told otherwise.
+    """The summary pads its own columns, so a cell may contain spaces.
 
     `EXTRA_PREFIXES` exists for hand-written workflows, whose names are not
     held to the generator's `tend-` convention — and a shifted column reads as
@@ -380,8 +375,8 @@ def test_a_workflow_name_with_a_space_keeps_its_own_column(report: Report) -> No
     header = next(line for line in lines if line.startswith("WORKFLOW"))
     row = lines[lines.index(header) + 1]
     assert row[header.index("RUNS") :].split()[0] == "1", (
-        "the run count must sit under RUNS; splitting on whitespace instead of "
-        "the tab puts `reviewers` there and shifts every column right"
+        "the run count must sit under RUNS; a summary that split rows on "
+        "whitespace would put `reviewers` there and shift every column right"
     )
 
 
@@ -391,3 +386,27 @@ def test_runs_with_no_artifact_are_counted_not_dropped(report: Report) -> None:
     _, rows = report.run()
 
     assert any("2 run(s) uploaded no" in " ".join(row) for row in rows)
+
+
+def test_a_repo_with_no_runs_reports_the_same_empty_shape(report: Report) -> None:
+    """The empty report comes out of the ordinary path, not a special case.
+
+    It used to be a JSON literal echoed from two early exits, which is one
+    place for the totals shape to drift out of sync with the code that builds
+    it — and it had already lost `skipped_runs`.
+    """
+    output, _ = report.run()
+
+    assert output == {
+        "runs": [],
+        "totals": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "turns": 0,
+            "cost_usd": 0,
+            "partial_runs": 0,
+            "skipped_runs": 0,
+        },
+    }
