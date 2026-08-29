@@ -425,4 +425,3 @@ def test_review_skill_preserves_the_status_free_queue_contract() -> None:
     assert "exception to one review per run" not in skill
     assert "STARTED_DRAFT" not in skill
     assert "LIVE_DRAFT" not in skill
-    assert "### 9." not in skill

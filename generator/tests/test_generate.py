@@ -689,6 +689,7 @@ def test_review_preserves_pending_events_without_an_examined_status(
 
     assert job["concurrency"]["cancel-in-progress"] is False
     assert job["concurrency"]["queue"] == "max"
+    assert "must set\n      # `queue: null`" in content
     assert all(step.get("id") != "gate" for step in job["steps"])
     assert "steps.gate" not in content
     assert "tend-review/" not in content
