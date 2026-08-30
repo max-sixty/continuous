@@ -680,18 +680,23 @@ as 1-year), two mint paths, routed by environment rather than asked:
   ```
 
   Read the task's output as it runs and hand the user the authorize URL
-  it prints. Approving it either returns to the CLI, which finishes the
-  run on its own, or lands on a page showing a `code#state` string. For
-  the second, have them paste that string back and write it to the
-  watched path while the task runs — the wrapper types it into the
-  prompt:
+  it prints. Approving it normally ends the run on its own — the CLI holds
+  a localhost listener that takes the redirect, so the approval is the
+  whole of the user's job. Only when the browser lands on a page showing a
+  `code#state` string is a paste needed; have them send that string back
+  and write it to the watched path while the task runs, and the wrapper
+  types it into the prompt:
 
   ```bash
   printf '%s' '<code#state>' > /tmp/tend-oauth-code
   ```
 
-  Each run generates a fresh PKCE challenge, so a code from an earlier
-  run is dead; a restart needs a fresh approval.
+  Each run generates a fresh PKCE challenge and each code is good once, so
+  a code from an earlier run — or one the localhost listener already
+  redeemed — is dead, and a restart needs a fresh approval. Keep reading
+  the task's output either way: the wrapper reports whatever
+  `claude setup-token` says and exits on it, so a rejected code names its
+  own cause within seconds instead of going quiet until the window ends.
 
   The window needs the user at the browser throughout it. The authorize
   URL logs the browser out on the way in
