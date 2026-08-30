@@ -26,7 +26,12 @@ FAKE_GH = (
     + r"""
 case "$*" in
   "api user"*)              emit '{"login":"'"$BOT_LOGIN"'"}' ;;
-  "pr view "*)              emit "$(cat "$PR_JSON")" ;;
+  "pr view "*"--json headRefOid,state,baseRefOid"*)
+                              emit "$(cat "$PR_JSON")" ;;
+  "pr view "*"--json headRefOid,state"*)
+                              emit "$(cat "$FINAL_PR_JSON")" ;;
+  "pr view "*"--json headRefOid"*)
+                              emit "$(cat "$BOT_HEAD_JSON")" ;;
   *"/pulls/"*"/comments"*)  emit "$(cat "$INLINE_JSON")" ;;
   *"/issues/"*"/timeline"*) emit "$(cat "$TIMELINE_JSON")" ;;
   *"/pulls/"*"/reviews"*)   emit "$(cat "$REVIEWS_JSON")" ;;
@@ -118,9 +123,19 @@ class Fixture:
 
     def set_head(self, sha: str, state: str = "OPEN") -> None:
         self.head = sha
+        view = {"headRefOid": sha, "state": state, "baseRefOid": self.base}
+        self.write("PR_JSON", view)
+        self.write("FINAL_PR_JSON", view)
+        self.write("BOT_HEAD_JSON", {"headRefOid": sha})
+
+    def set_final(self, sha: str | None = None, state: str = "OPEN") -> None:
         self.write(
-            "PR_JSON", {"headRefOid": sha, "state": state, "baseRefOid": self.base}
+            "FINAL_PR_JSON",
+            {"headRefOid": sha or self.head, "state": state, "baseRefOid": self.base},
         )
+
+    def set_resolver_head(self, sha: str) -> None:
+        self.write("BOT_HEAD_JSON", {"headRefOid": sha})
 
     def reviews(self, *reviews: dict) -> None:
         self.write("REVIEWS_JSON", list(reviews))
@@ -138,6 +153,8 @@ class Fixture:
             "BOT_LOGIN": BOT,
             "REVIEWED_HEAD_FILE": str(self.pin),
             "PR_JSON": str(self.tmp_path / "pr_json.json"),
+            "FINAL_PR_JSON": str(self.tmp_path / "final_pr_json.json"),
+            "BOT_HEAD_JSON": str(self.tmp_path / "bot_head_json.json"),
             "INLINE_JSON": str(self.tmp_path / "inline_json.json"),
             "TIMELINE_JSON": str(self.tmp_path / "timeline_json.json"),
             "REVIEWS_JSON": str(self.tmp_path / "reviews_json.json"),
@@ -145,9 +162,9 @@ class Fixture:
             **extra,
         }
 
-    def run(self, **extra: str) -> subprocess.CompletedProcess[str]:
+    def run(self, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [BASH, str(PREFLIGHT), PR],
+            [BASH, str(PREFLIGHT), PR, *args],
             cwd=self.work,
             env=self.env(**extra),
             capture_output=True,
@@ -155,8 +172,8 @@ class Fixture:
             check=False,
         )
 
-    def output(self, **extra: str) -> str:
-        result = self.run(**extra)
+    def output(self, *args: str, **extra: str) -> str:
+        result = self.run(*args, **extra)
         assert result.returncode == 0, result.stderr
         return result.stdout
 
@@ -224,6 +241,137 @@ def test_a_moved_head_is_retargeted_with_a_scoped_delta(pr: Fixture) -> None:
     assert "base-2" not in delta
     assert "base merge: " in delta
     assert "Merge main into pr" in delta
+
+
+def test_a_head_change_during_state_resolution_skips(pr: Fixture) -> None:
+    rewritten = pr.force_push()
+    pr.set_head(pr.reviewed)
+    pr.set_resolver_head(rewritten)
+
+    assert pr.output() == f"skip: HEAD moved to {rewritten} during the preflight\n"
+    assert pr.pinned() == pr.reviewed
+
+
+def test_a_close_during_preflight_skips(pr: Fixture) -> None:
+    pr.set_final(state="CLOSED")
+
+    assert pr.output() == "skip: PR is CLOSED\n"
+    assert pr.pinned() == pr.reviewed
+
+
+def test_a_head_change_during_final_read_skips(pr: Fixture) -> None:
+    rewritten = pr.force_push()
+    pr.set_head(pr.reviewed)
+    pr.set_final(rewritten)
+
+    assert pr.output() == f"skip: HEAD moved to {rewritten} during the preflight\n"
+    assert pr.pinned() == pr.reviewed
+
+
+def test_a_wrapped_outward_action_runs_only_on_a_stable_head(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    marker = tmp_path / "posted"
+
+    result = pr.run("--", BASH, "-c", 'echo posted > "$1"', "_", str(marker))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"post: {pr.reviewed} is still the head you reviewed\n"
+    assert marker.read_text() == "posted\n"
+
+
+def test_a_wrapped_outward_action_does_not_retarget(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    marker = tmp_path / "posted"
+    moved = pr.push_over_base_merge()
+
+    result = pr.run("--", BASH, "-c", 'echo posted > "$1"', "_", str(marker))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"skip: HEAD moved to {moved} before the outward action\n"
+    assert not marker.exists()
+    assert pr.pinned() == pr.reviewed
+
+
+def test_a_wrapped_outward_action_propagates_failure(pr: Fixture) -> None:
+    result = pr.run("--", BASH, "-c", "exit 23")
+
+    assert result.returncode == 23
+
+
+def test_edit_review_allows_only_the_existing_orphan(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    marker = tmp_path / "edited"
+    pr.reviews(_review(pr.reviewed, "body persisted before inline comments failed"))
+
+    assert pr.output().startswith("skip:")
+    result = pr.run(
+        "--edit-review",
+        "1",
+        "--",
+        BASH,
+        "-c",
+        'echo edited > "$1"',
+        "_",
+        str(marker),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert marker.read_text() == "edited\n"
+
+
+@pytest.mark.parametrize("existing_review", [False, True])
+def test_edit_review_rejects_missing_or_different_orphan(
+    pr: Fixture, tmp_path: Path, existing_review: bool
+) -> None:
+    marker = tmp_path / "edited"
+    if existing_review:
+        pr.reviews(_review(pr.reviewed, "different orphan"))
+
+    result = pr.run(
+        "--edit-review",
+        "999",
+        "--",
+        BASH,
+        "-c",
+        'echo edited > "$1"',
+        "_",
+        str(marker),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        f"skip: {pr.reviewed} cannot edit requested orphan review 999\n"
+    )
+    assert not marker.exists()
+
+
+def test_ready_for_review_does_not_override_edit_review_identity(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    marker = tmp_path / "edited"
+    event = _event(tmp_path / "event.json", "ready_for_review")
+    pr.reviews(_review(pr.reviewed, DRAFT_REVIEW_LINE))
+
+    result = pr.run(
+        "--edit-review",
+        "999",
+        "--",
+        BASH,
+        "-c",
+        'echo edited > "$1"',
+        "_",
+        str(marker),
+        GITHUB_EVENT_PATH=event,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        f"skip: {pr.reviewed} cannot edit requested orphan review 999\n"
+    )
+    assert not marker.exists()
 
 
 def test_a_large_delta_is_preserved_for_chunked_reads(pr: Fixture) -> None:

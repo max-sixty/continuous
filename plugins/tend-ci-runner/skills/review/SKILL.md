@@ -203,8 +203,9 @@ REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 # missing file substitutes the empty string and the POST still runs, which is
 # the unpinned review this pins against.
 REVIEWED=$(cat /tmp/reviewed-head) || exit 0
-gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
-  -f event=APPROVE -f commit_id="$REVIEWED" -f body="" && echo "✓ approved"
+${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
+  gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
+    -f event=APPROVE -f commit_id="$REVIEWED" -f body="" && echo "✓ approved"
 ```
 
 `/tmp/reviewed-head` holds the commit this session reviewed — written in step 1, rewritten by **Posting mechanics** if HEAD moved. Every path that posts a review reads it back; see **Pin every review to the commit you read**.
@@ -234,15 +235,17 @@ gh api "repos/$REPO/issues/<number>/reactions" -f content="+1"
 
 #### Posting mechanics
 
-Before posting, run the preflight. It checks the PR is open, re-targets onto a newer descendant head, and stops duplicate reviews:
+Before composing the final payload, run the preflight without a command. It checks the PR is open, re-targets onto a newer descendant head, and stops duplicate reviews:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number>
 ```
 
-On `skip`, post nothing and finish. On `post`, anchor the review at `/tmp/reviewed-head`; the preflight updates the file when HEAD moves. A re-targeted post also prints `delta: <path>`. Read that entire file in chunks as needed before posting; it is the push that landed mid-review.
+On `skip`, post nothing and finish. A re-targeted result also prints `delta: <path>` and updates `/tmp/reviewed-head`. Read that entire file in chunks, update the review, then run the preflight again. Do not post from the re-targeting pass.
 
 A non-zero exit means nothing was decided. Fix the error and re-run the preflight.
+
+Every review POST below passes its `gh api` command to the preflight after `--`. In that mode the preflight does not re-target: it runs the command only when two live snapshots and `bot-review-state.sh` agree that the pinned head is open and unreviewed. This keeps the final check beside the outward action.
 
 **A push mid-review re-targets the review.** Everything read so far still holds for the code it was read against, and the delta is the only new information — however many pushes it spans. Read it, then post against the new head:
 
@@ -334,9 +337,10 @@ REVIEWED=$(cat /tmp/reviewed-head) || exit 0
 jq --arg body "$BODY" --arg sha "$REVIEWED" \
   '.body = $body | .commit_id = $sha' /tmp/review-payload.json > /tmp/review-final.json
 
-gh api "repos/$REPO/pulls/<number>/reviews" \
-  --method POST \
-  --input /tmp/review-final.json
+${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
+  gh api "repos/$REPO/pulls/<number>/reviews" \
+    --method POST \
+    --input /tmp/review-final.json
 `````
 
 **Do not** use `-f 'comments[0][path]=...'` flag syntax — `gh api` converts array indices to object keys, which GitHub rejects.
@@ -375,12 +379,20 @@ Then, in either case, **move the failed inline comments into the review body** a
 
 - **If `ORPHAN_ID` is non-empty (case a)**: edit the existing review instead of creating a duplicate.
   ```bash
-  gh api "repos/$REPO/pulls/<number>/reviews/$ORPHAN_ID" \
-    -X PUT -F body=@/tmp/updated-review-body.md
+  ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> \
+    --edit-review "$ORPHAN_ID" -- \
+    gh api "repos/$REPO/pulls/<number>/reviews/$ORPHAN_ID" \
+      -X PUT -F body=@/tmp/updated-review-body.md
   ```
   If the edit itself fails, **do not post another review** — the body-only review is sufficient.
 
 - **If `ORPHAN_ID` is empty (case b)**: retry the `POST` with `comments` omitted (body-only), since no duplicate is possible.
+  ```bash
+  jq 'del(.comments)' /tmp/review-final.json > /tmp/review-body-only.json
+  ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
+    gh api "repos/$REPO/pulls/<number>/reviews" \
+      --method POST --input /tmp/review-body-only.json
+  ```
 
 Prevention: before writing any inline comment, verify the target line falls inside one of the PR's diff hunks. For fixes outside the diff, use the "push a fix commit" path instead of an inline suggestion (see above).
 

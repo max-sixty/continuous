@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Check the live PR before posting a review.
 #
-# Usage: review-preflight.sh <pr-number>
+# Usage: review-preflight.sh <pr-number> [--edit-review <id>] [-- command ...]
 #
 # Prints `post: <reason>` when the review may proceed or `skip: <reason>` when
 # it must stop. A re-targeted post also prints `delta: <path>`; that file holds
 # the commits pushed since the review began, excluding base-branch churn. A
-# non-zero exit means no decision was made.
+# non-zero exit means no decision was made. With a command, the preflight runs
+# it only against an unchanged, open head; this is the final posting boundary.
 #
 # env: GITHUB_REPOSITORY (optional; defaults to the checkout's remote)
 #      GITHUB_EVENT_PATH (optional; ready_for_review replaces a draft review)
@@ -15,6 +16,32 @@
 set -euo pipefail
 
 PR="$1"
+shift
+EDIT_REVIEW_ID=""
+if [ "${1:-}" = "--edit-review" ]; then
+  if [ "$#" -lt 2 ]; then
+    echo "review-preflight: --edit-review needs a numeric review id" >&2
+    exit 1
+  fi
+  EDIT_REVIEW_ID="${2:-}"
+  shift 2
+  if [[ ! "$EDIT_REVIEW_ID" =~ ^[0-9]+$ ]]; then
+    echo "review-preflight: --edit-review needs a numeric review id" >&2
+    exit 1
+  fi
+fi
+COMMAND=()
+if [ "${1:-}" = "--" ]; then
+  shift
+  COMMAND=("$@")
+  if [ "${#COMMAND[@]}" -eq 0 ]; then
+    echo "review-preflight: -- needs a command" >&2
+    exit 1
+  fi
+elif [ "$#" -ne 0 ]; then
+  echo "review-preflight: unexpected arguments: $*" >&2
+  exit 1
+fi
 REPO="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq '.nameWithOwner')}"
 PIN_FILE="${REVIEWED_HEAD_FILE:-/tmp/reviewed-head}"
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -44,9 +71,10 @@ if [[ ! "$REVIEWED" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 PR_VIEW=$(gh pr view "$PR" --repo "$REPO" \
-  --json headRefOid,state --jq '"\(.headRefOid) \(.state)"')
-read -r CURRENT_HEAD PR_STATE <<<"$PR_VIEW"
-if [ -z "$CURRENT_HEAD" ] || [ -z "$PR_STATE" ]; then
+  --json headRefOid,state,baseRefOid \
+  --jq '"\(.headRefOid) \(.state) \(.baseRefOid)"')
+read -r CURRENT_HEAD PR_STATE BASE_SHA <<<"$PR_VIEW"
+if [ -z "$CURRENT_HEAD" ] || [ -z "$PR_STATE" ] || [ -z "$BASE_SHA" ]; then
   echo "review-preflight: could not read PR #$PR" >&2
   exit 1
 fi
@@ -57,7 +85,9 @@ fi
 
 RETARGETED=false
 if [ "$CURRENT_HEAD" != "$REVIEWED" ]; then
-  BASE_SHA=$(gh pr view "$PR" --repo "$REPO" --json baseRefOid --jq '.baseRefOid')
+  if [ "${#COMMAND[@]}" -ne 0 ]; then
+    skip "HEAD moved to $CURRENT_HEAD before the outward action"
+  fi
   git fetch --no-tags --quiet origin "refs/pull/$PR/head" || true
   git fetch --no-tags --quiet origin "$BASE_SHA" || true
 
@@ -91,17 +121,45 @@ if [ -r "${GITHUB_EVENT_PATH:-}" ] \
   FORCE=true
 fi
 
-ALREADY=$(GITHUB_REPOSITORY="$REPO" "$HERE/bot-review-state.sh" "$PR" \
-  | jq -r --argjson force "$FORCE" '
-      if .at_head == null or ($force and .at_head.draft_mode) then ""
-      else "\(.at_head.state) review \(.at_head.id)" end')
+REVIEW_STATE=$(GITHUB_REPOSITORY="$REPO" "$HERE/bot-review-state.sh" "$PR")
+STATE_HEAD=$(jq -r '.head_sha // empty' <<<"$REVIEW_STATE")
+if [ "$STATE_HEAD" != "$REVIEWED" ]; then
+  skip "HEAD moved to ${STATE_HEAD:-an unreadable value} during the preflight"
+fi
+
+ALREADY=$(jq -r --argjson force "$FORCE" --arg edit "$EDIT_REVIEW_ID" '
+      if $edit != "" then
+        if .at_head != null
+           and (.at_head.id | tostring) == $edit
+           and (.orphan_id | tostring) == $edit
+        then ""
+        else "cannot edit requested orphan review \($edit)" end
+      elif .at_head == null or ($force and .at_head.draft_mode) then ""
+      else "already carries a \(.at_head.state) review \(.at_head.id)" end' <<<"$REVIEW_STATE")
 
 if [ -n "$ALREADY" ]; then
-  skip "$REVIEWED already carries a $ALREADY"
+  skip "$REVIEWED $ALREADY"
+fi
+
+FINAL_VIEW=$(gh pr view "$PR" --repo "$REPO" \
+  --json headRefOid,state --jq '"\(.headRefOid) \(.state)"')
+read -r FINAL_HEAD FINAL_STATE <<<"$FINAL_VIEW"
+if [ -z "$FINAL_HEAD" ] || [ -z "$FINAL_STATE" ]; then
+  echo "review-preflight: could not re-read PR #$PR" >&2
+  exit 1
+fi
+if [ "$FINAL_STATE" != "OPEN" ]; then
+  skip "PR is $FINAL_STATE"
+fi
+if [ "$FINAL_HEAD" != "$REVIEWED" ]; then
+  skip "HEAD moved to $FINAL_HEAD during the preflight"
 fi
 
 if [ "$RETARGETED" = true ]; then
   post "re-targeted onto $REVIEWED — read the delta before posting"
 else
   post "$REVIEWED is still the head you reviewed"
+  if [ "${#COMMAND[@]}" -ne 0 ]; then
+    "${COMMAND[@]}"
+  fi
 fi

@@ -117,6 +117,8 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert skill.count("REVIEWED=$(cat /tmp/reviewed-head) || exit 0") == 2
     assert '-f commit_id="$REVIEWED"' in skill
     assert '--arg sha "$REVIEWED"' in skill
+    assert skill.count("review-preflight.sh <number> --") == 3
+    assert '--edit-review "$ORPHAN_ID" --' in skill
 
     # Both logs reach the session in one stream, so the skill names both halves.
     assert "**Read both halves of the delta file as a pair.**" in skill
