@@ -62,11 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Covers data/consumers.json, which the weekly sweep refreshes.
-        # `test_review_reviewers_matrix_covers_consumers` fails when a
-        # consumer is missing here, because nothing else notices: that repo is
-        # simply never analyzed, and the run still reports success. An entry
-        # the JSON lacks is fine — its leg fails loudly if tend really is gone.
+        # Must cover data/consumers.json; test_cross_file_contracts.py enforces it.
         repo:
           - PRQL/prql
           - diffplug/dormouse

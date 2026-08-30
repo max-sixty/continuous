@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 BOT_REVIEW_STATE = (
@@ -80,7 +81,11 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 def _state(env: dict[str, str]) -> dict:
     result = subprocess.run(
-        [BASH, str(BOT_REVIEW_STATE), "7"], env=env, capture_output=True, text=True
+        [BASH, str(BOT_REVIEW_STATE), "7"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)

@@ -73,8 +73,8 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot
           model: opus
-          prompt: >-
-            ${{ format('/tend-ci-runner:review {0}', github.event.pull_request.number) }}
+          prompt: |
+            /tend-ci-runner:review ${{ github.event.pull_request.number }}
 
       - name: Remove the eyes reaction
         if: always()

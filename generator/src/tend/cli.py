@@ -31,6 +31,7 @@ def _detect_default_branch_local() -> str:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode == 0:
             # Returns "origin/main" or "origin/master" — strip the remote prefix

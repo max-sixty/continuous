@@ -51,7 +51,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot
           model: opus
-          prompt: |
+          prompt: |2
             /tend-ci-runner:triage ${{ github.event.issue.number }}
 
       - name: Remove the eyes reaction

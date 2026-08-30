@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -187,6 +188,7 @@ def _pin(script: Path, repo: Path, event: Path) -> subprocess.CompletedProcess[s
         },
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
@@ -392,6 +394,7 @@ def _run_check(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
@@ -506,7 +509,7 @@ def test_sensitive_paths_are_documented_where_adopters_read_them() -> None:
     the surface for the only audience that reads the README.
     """
     script = RESTORE_SENSITIVE_CONFIG.read_text()
-    sensitive = re.search(r"^SENSITIVE=\((.*?)\)$", script, re.M)
+    sensitive = re.search(r"^SENSITIVE=\((.*?)\)$", script, re.MULTILINE)
     assert sensitive, "SENSITIVE array not found — did the script's shape change?"
     paths = sensitive.group(1).split()
     assert paths, "SENSITIVE is empty"
@@ -514,7 +517,9 @@ def test_sensitive_paths_are_documented_where_adopters_read_them() -> None:
     # Scope to the paragraph making the claim; a stray mention elsewhere in the
     # file (README's own repo layout, say) must not satisfy it.
     readme = REPO_ROOT / "README.md"
-    claim = re.search(r"\*\*Config pinning\*\*.*?(?=\n\n)", readme.read_text(), re.S)
+    claim = re.search(
+        r"\*\*Config pinning\*\*.*?(?=\n\n)", readme.read_text(), re.DOTALL
+    )
     assert claim, "README's config-pinning paragraph not found"
 
     threat_model = (REPO_ROOT / "docs" / "security-model.md").read_text()

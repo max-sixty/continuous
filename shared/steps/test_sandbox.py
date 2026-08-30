@@ -16,9 +16,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-import pytest
-
 import _sandbox
+import pytest
 import run_claude
 import sandbox_setup
 

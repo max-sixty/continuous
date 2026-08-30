@@ -6,6 +6,22 @@ import shutil
 from importlib.metadata import version
 from pathlib import Path
 
+from tests._yaml import safe_load
+
+
+def agent_prompt(content: str) -> str:
+    """The `prompt:` input a generated workflow hands the harness action.
+
+    Parsed out of the YAML rather than matched in the text, so a test asserting
+    what the agent receives cannot pass on a file GitHub would reject.
+    """
+    jobs = safe_load(content)["jobs"]
+    steps = [step for job in jobs.values() for step in job.get("steps", [])]
+    prompts = [s["with"]["prompt"] for s in steps if "prompt" in s.get("with", {})]
+    assert len(prompts) == 1, f"expected one agent step, found {len(prompts)}"
+    return prompts[0]
+
+
 # Interpreter for the repo's shell scripts. A bare `bash` would resolve through
 # the PATH each test sets for its fake binaries, reaching macOS's /bin/bash 3.2
 # — which lacks builtins the runner's bash 5 has (`mapfile`).
