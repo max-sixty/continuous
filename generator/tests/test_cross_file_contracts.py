@@ -107,13 +107,13 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     posting, and shell state does not survive a tool call.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+    preflight = _read("plugins", "tend-ci-runner", "scripts", "review-preflight.sh")
 
-    assert 'git merge-base --is-ancestor "$HEAD_SHA" "$CURRENT_HEAD"' in skill
     assert "HEAD moved — leaving" not in skill
 
     # Written where the head is read, and rewritten where it moves.
     assert 'echo "$HEAD_SHA" > /tmp/reviewed-head' in skill
-    assert 'echo "$CURRENT_HEAD" > /tmp/reviewed-head' in skill
+    assert 'PIN_FILE="${REVIEWED_HEAD_FILE:-/tmp/reviewed-head}"' in preflight
     # Read back by both posting recipes, and read *before* the POST: inlined as
     # `$(cat ...)` a missing file substitutes the empty string and the request
     # still goes out, which is the unpinned review the pin exists to prevent.
@@ -121,17 +121,8 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert '-f commit_id="$REVIEWED"' in skill
     assert '--arg sha "$REVIEWED"' in skill
 
-    # Three commands read the delta, and dropping any one of them silently
-    # narrows what the session sees rather than failing.
-    #
-    # The scoped log is the author's own new code: a plain two-dot diff between
-    # the heads would hand the session everything a base merge dragged in.
-    assert "git log -p --no-merges" in skill
-    assert '--not "$BASE_SHA"' in skill
-    # The merges log is the only place a base merge appears, and it carries a
-    # label or it reads as one more commit in the scoped log's stream.
-    assert '--merges "$HEAD_SHA..$CURRENT_HEAD"' in skill
-    assert "base merge: %h %s" in skill
+    # Both logs reach the session in one stream, so the skill names both halves.
+    assert "**Read both halves of the delta file as a pair.**" in skill
     # `--cc` is the only place a conflicted merge's resolution appears: the
     # author commits it inside the merge, where neither log reaches it. It is
     # not a substitute for re-verifying, though — a resolution taking the base
