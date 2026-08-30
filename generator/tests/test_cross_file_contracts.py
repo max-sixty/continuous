@@ -127,6 +127,7 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     # nothing anywhere, so the override below has to be unconditional.
     assert "git show --cc" in skill
     assert "even if the scoped log printed nothing" in skill
+    assert "Re-compose every `suggestion` block after re-targeting" in skill
 
 
 def test_weekly_approval_pins_the_commit_it_checked() -> None:

@@ -97,7 +97,7 @@ def _write(env: dict[str, str], key: str, value: object) -> None:
 
 def _review(
     rid: int,
-    at: str,
+    at: str | None,
     *,
     author: str = BOT,
     body: str = "",
@@ -137,6 +137,20 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["fresh_approval_sha"] == ""
     assert state["stale_approval_id"] == ""
     assert state["force_pushed_since"] is False
+
+
+def test_an_unsubmitted_review_anchors_nothing(env: dict[str, str]) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, None, body="draft findings", state="PENDING")],
+    )
+
+    state = _state(env)
+
+    assert state["last_substantive"] is None
+    assert state["at_head"] is None
+    assert state["orphan_id"] is None
 
 
 def test_a_reply_container_does_not_read_as_a_review(env: dict[str, str]) -> None:
