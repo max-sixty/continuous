@@ -23,8 +23,10 @@ from oauth_token import (
     ANSI_CSI,
     AUTHORIZE_URL,
     MAX_TOKEN_LENGTH,
+    PASTE_PROMPT,
     TIMEOUT_SECONDS,
     TOKEN,
+    TUI_ERROR,
     complete_match,
     failure_message,
     first_url,
@@ -109,7 +111,34 @@ def test_unapproved_run_is_not_blamed_on_the_flag_it_was_given() -> None:
 
 
 def test_a_refused_code_reads_differently_from_no_code_at_all() -> None:
-    assert "rejected it" in failure_message("/tmp/tend-oauth-code", 1.0, True)
+    message = failure_message("/tmp/tend-oauth-code", 1.0, True)
+    assert "no token came back" in message
+    assert "went unapproved" not in message
+
+
+def test_the_tuis_own_error_outranks_every_inference() -> None:
+    # The wrapper used to guess at why a code failed; the CLI says so outright,
+    # and the guess it replaced ("the authorize page rejected it") sent the
+    # caller to re-approve a URL when the real cause was a code already spent.
+    message = failure_message("/tmp/tend-oauth-code", 1.0, True, "status code 400")
+    assert "status code 400" in message
+
+
+def test_tui_error_matches_the_line_as_ink_renders_it() -> None:
+    # Ink lays adjacent text nodes out with cursor moves, so stripping CSI
+    # closes the gaps: a pattern written against the pretty version misses.
+    assert TUI_ERROR.search(b"OAuth error: Request failed with status code 400")
+    assert TUI_ERROR.search(b"OAutherror:Request failed with status code 400")
+
+
+def test_tui_error_captures_only_its_own_line() -> None:
+    match = TUI_ERROR.search(b"OAuth error: status code 400\r\nPress Enter to retry.")
+    assert match.group(1).strip() == b"status code 400"
+
+
+def test_paste_prompt_matches_the_stripped_render() -> None:
+    assert PASTE_PROMPT.search(b"Pastecodehereifprompted>")
+    assert PASTE_PROMPT.search(b"Paste code here if prompted >")
 
 
 def test_a_run_with_nowhere_to_receive_a_code_is_told_to_pass_one() -> None:
@@ -247,3 +276,98 @@ time.sleep(5)
                 os.kill(child_pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+
+TUI_URL = (
+    "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1"
+    "&code_challenge=AAA&code_challenge_method=S256&state=BBB"
+)
+FAKE_TOKEN = "sk-ant-oat01-" + "A" * 95
+
+
+def run_wrapper(
+    tmp_path: Path, script: str, *args: str
+) -> subprocess.CompletedProcess[str]:
+    """The wrapper against a fake `claude` that renders a scripted TUI."""
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(f"#!{sys.executable}\n{script}")
+    fake_claude.chmod(0o755)
+    return subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("oauth_token.py")), *args],
+        env=os.environ | {"PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_a_rejected_code_fails_now_rather_than_at_the_deadline(
+    tmp_path: Path,
+) -> None:
+    # The failure this guard exists for. `claude setup-token` reports a rejected
+    # code and then waits at "Press Enter to retry", emitting nothing further —
+    # so a wrapper watching only for a token sits out the rest of its window,
+    # and the caller cannot tell that from an approval still pending. It has to
+    # end at the error, carrying the CLI's own words.
+    # The fake writes the code itself, after the prompt is up: the wrapper
+    # unlinks any code file it finds at startup, since a code that predates the
+    # run belongs to an earlier challenge and is already dead.
+    code_file = tmp_path / "code"
+    result = run_wrapper(
+        tmp_path,
+        f"""
+import pathlib, sys, time
+print({TUI_URL!r}, flush=True)
+print("Paste code here if prompted >", flush=True)
+pathlib.Path({str(code_file)!r}).write_text("SPENTcode#BBB")
+sys.stdin.readline()
+print("OAuth error: Request failed with status code 400", flush=True)
+print("Press Enter to retry.", flush=True)
+time.sleep(60)
+""",
+        "--code-file",
+        str(code_file),
+    )
+    assert result.returncode != 0
+    assert "status code 400" in result.stderr
+    assert result.stdout == ""
+
+
+def test_a_code_is_typed_even_when_the_prompt_never_renders(tmp_path: Path) -> None:
+    # The paste path must not depend on matching the TUI's prompt wording, which
+    # is free to change under us: the fallback would go quiet exactly when the
+    # localhost callback has already failed.
+    code_file = tmp_path / "code"
+    result = run_wrapper(
+        tmp_path,
+        f"""
+import pathlib, sys
+print({TUI_URL!r}, flush=True)
+pathlib.Path({str(code_file)!r}).write_text("GOODcode#BBB")
+line = sys.stdin.readline()
+assert "GOODcode#BBB" in line, line
+print("Your OAuth token (valid for 1 year):" + {FAKE_TOKEN!r}, flush=True)
+print("Store this token securely.", flush=True)
+""",
+        "--code-file",
+        str(code_file),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == FAKE_TOKEN
+
+
+def test_the_localhost_callback_path_needs_no_code_at_all(tmp_path: Path) -> None:
+    # The common run: the CLI takes the redirect on its own listener and prints
+    # the token with nothing typed. Nothing may block that on a paste.
+    result = run_wrapper(
+        tmp_path,
+        f"""
+print({TUI_URL!r}, flush=True)
+print("Paste code here if prompted >", flush=True)
+print("Your OAuth token (valid for 1 year):" + {FAKE_TOKEN!r}, flush=True)
+print("Store this token securely.", flush=True)
+""",
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == FAKE_TOKEN
