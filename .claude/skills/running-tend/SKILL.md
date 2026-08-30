@@ -150,8 +150,10 @@ mapfile -t REPOS < <(
 )
 
 # 3. Keep a repo while it still has generated tend workflows, and resolve
-#    bot_name from its .config/tend.yaml. These are the authoritative checks:
-#    an uninstall drops out here, never by going missing from a search.
+#    bot_name from its .config/tend.yaml. An uninstall drops out here rather
+#    than by going missing from a search — but so does a repo whose `gh api`
+#    call hit a 403 or a 5xx, and nothing re-adds a repo the code index can't
+#    see. Never land a removal without re-checking that repo by hand.
 mkdir -p data
 {
   for repo in "${REPOS[@]}"; do
