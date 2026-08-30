@@ -28,6 +28,10 @@ Before reading the diff, run cheap checks to avoid redundant work. Shell state d
 read -r HEAD_SHA PR_STATE < <(gh pr view <number> --json headRefOid,state \
   --jq '"\(.headRefOid) \(.state)"')
 [ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
+# The commit this session reviewed, on disk because every posting recipe pins
+# it and none of them runs in this Bash call. Posting mechanics rewrites it if
+# HEAD moves mid-review.
+echo "$HEAD_SHA" > /tmp/reviewed-head
 PR_AUTHOR=$(gh pr view <number> --json author --jq '.author.login')
 IS_DRAFT=$(gh pr view <number> --json isDraft --jq '.isDraft')
 EVENT_ACTION=$(jq -r '.action // ""' < "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)
@@ -76,7 +80,7 @@ git log --no-merges --numstat --format='%h %s' "$LAST_REVIEW_SHA..$HEAD_SHA" --n
 
 The incremental scopes the *review*, not anything this run writes about the PR as a whole: if you also edit the PR description, scope its claims to the merge base per **Keeping PR Titles and Descriptions Current** in `/tend-ci-runner:running-in-ci`.
 
-If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial, skip the full review — go directly to step 8 to resolve any bot threads addressed by the new changes. After resolving threads: if the most recent bot review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE with an empty body so the PR isn't left in limbo. Otherwise do not submit a new review — the existing one stands. Do NOT proceed to steps 2–7; finish. Rough heuristic: changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow are typically trivial.
+If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial, skip the full review — go directly to step 8 to resolve any bot threads addressed by the new changes. After resolving threads: if the most recent bot review was a COMMENT that flagged issues, and those issues are now addressed, submit an APPROVE with an empty body so the PR isn't left in limbo — the recipe under step 6, which pins the commit read here. Otherwise do not submit a new review — the existing one stands. Do NOT proceed to steps 2–7; finish. Rough heuristic: changes under ~20 added+deleted lines that don't introduce new functions, types, or control flow are typically trivial.
 
 **Commit and PR authorship do not affect review behavior.** Apply the same trivial-vs-substantive heuristic regardless of who pushed the new commits. When `tend-notifications` or `tend-ci-fix` pushes a fix to a human-authored PR, reviewing (and re-approving) the updated state is expected — the reviewer role is independent of commit authorship.
 
@@ -198,8 +202,16 @@ What counts as core is repo-specific; let the project's own guidance (CLAUDE.md,
 **If there are no issues, approve with an empty body — silence means correct.**
 
 ```bash
-gh pr review <number> --approve -b "" && echo "✓ approved"
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+# Read the sha first and bail if it isn't there: inlined as `$(cat ...)` a
+# missing file substitutes the empty string and the POST still runs, which is
+# the unpinned review this pins against.
+REVIEWED=$(cat /tmp/reviewed-head) || exit 0
+gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
+  -f event=APPROVE -f commit_id="$REVIEWED" -f body="" && echo "✓ approved"
 ```
+
+`/tmp/reviewed-head` holds the commit this session reviewed — written in step 1, rewritten by **Posting mechanics** if HEAD moved. Every path that posts a review reads it back; see **Pin every review to the commit you read**.
 
 If there are actionable findings, submit as a review with inline suggestions for concrete fixes. Every comment must give the author something to act on:
 
@@ -216,7 +228,7 @@ Don't explain what the code does — the author wrote it. Don't nitpick formatti
 
 **Attribute a withheld approval to whatever actually decided it.** Cite repo guidance as the reason only when you can name the file and heading that guidance lives in; a reader who goes looking for "this repo's review policy" and finds nothing written starts doubting the rest of the review too. When the call is your own judgment, say so plainly — "I'd want a human on this one, it changes what `--force` will delete" rather than "per this repo's review policy this is a hold-for-human surface". Judgment is a sufficient reason on its own; borrowed authority that doesn't exist is not.
 
-**Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Still perform the full review (steps 2-3) — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt `gh pr review --approve` — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 7. Always post CI failure analysis as a COMMENT, even on self-authored PRs.
+**Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Still perform the full review (steps 2-3) — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt an APPROVE — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 7. Always post CI failure analysis as a COMMENT, even on self-authored PRs.
 
 **Not confident enough to approve** (unfamiliar module, subtle logic): Add a `+1` reaction instead — no review needed unless there are specific observations.
 
@@ -226,13 +238,35 @@ gh api "repos/$REPO/issues/<number>/reactions" -f content="+1"
 
 #### Posting mechanics
 
-Before posting, verify HEAD hasn't moved, the PR is still open, and no review was already posted for this commit:
+Before posting, check the PR is still open, re-target the review if HEAD moved, and check no review was already posted for this commit:
 
 ```bash
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json headRefOid,state \
   --jq '"\(.headRefOid) \(.state)"')
-[ "$CURRENT_HEAD" != "$HEAD_SHA" ] && echo "HEAD moved — leaving $CURRENT_HEAD to the queued review" && exit 0
 [ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
+
+HEAD_SHA=$(cat /tmp/reviewed-head)
+if [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
+  # Re-targeting needs the live head to build on the reviewed one; a rewrite
+  # (or a head that won't fetch) leaves nothing to re-target onto.
+  BASE_SHA=$(gh pr view <number> --json baseRefOid --jq '.baseRefOid')
+  git fetch --no-tags --quiet origin "refs/pull/<number>/head" || true
+  git fetch --no-tags --quiet origin "$BASE_SHA" || true
+  git merge-base --is-ancestor "$HEAD_SHA" "$CURRENT_HEAD" 2>/dev/null \
+    || { echo "cannot re-target onto $CURRENT_HEAD — leaving it to the queued review"; exit 0; }
+  # The author's own new code, scoped off base churn as in step 1:
+  # `--not "$BASE_SHA"` drops everything a base merge dragged in, which a plain
+  # `git diff` between the two heads would present as the author's.
+  git log -p --no-merges --format='%h %s' "$HEAD_SHA..$CURRENT_HEAD" --not "$BASE_SHA"
+  # Base merges, which the scoped log above cannot show — it drops the merge
+  # commit and every commit the merge brought in. An "Update branch" click
+  # prints nothing there while re-scoping every file's hunks.
+  git log --format='base merge: %h %s' --merges "$HEAD_SHA..$CURRENT_HEAD"
+  # The workspace still holds the tree that was reviewed, so read any file you
+  # need in full from git: `git show "$CURRENT_HEAD":<path>`.
+  echo "$CURRENT_HEAD" > /tmp/reviewed-head
+fi
 
 # `at_head` is non-null only for a review that genuinely anchors this commit: a
 # synthetic reply container and a review re-anchored by a rewrite are excluded.
@@ -247,9 +281,22 @@ ALREADY_POSTED=$(jq -r --argjson force "${FORCE_FULL_REVIEW:-false}" '
 
 The state check matters because the maintainer may close (or another path may merge) the PR while a review is in flight — `pull_request_target` reviews routinely run for 5–10 minutes between fetching `HEAD_SHA` and posting the verdict, and HEAD doesn't move when the PR is closed. Approving a CLOSED or MERGED PR creates a confusing artifact (an approval timestamped after the close).
 
-When HEAD moved, do not post the assembled review against stale code. The `synchronize` run waits behind this session and reviews the live HEAD after it ends. Finish without posting.
+**A push mid-review re-targets the review.** Everything read so far still holds for the code it was read against, and the delta is the only new information — however many pushes it spans. Read it, then post against the new head:
 
-**Before APPROVE specifically**, also peek the current check rollup on `HEAD_SHA`. If any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal.
+- Review the delta to the standard step 4 sets — it is new code, and the review you post covers it. A skim is not enough.
+- Findings the delta left alone stand. Post them.
+- Findings the delta fixed drop out. If that empties the review and the delta itself reads clean, approve the new head: an empty-body approval is a verdict here, not the absence of one.
+- Finish without posting only when you can't judge the delta — it rewrites what you just reviewed, or it is a review's worth of new code in its own right. The queued run then reviews the new head in full.
+- Inline comments resolve against the commit the review pins, so re-verify each one against the current `gh pr diff`, which now returns the new head's. On a file the delta didn't touch, the line is unchanged and the comment stands. On one it did, move the comment to the line the code sits on now; where the line no longer falls inside a hunk, put the finding in the review body as a fenced quote with its path, as under **Recovering from inline comment 422 errors**.
+- **Read the two `git log` outputs as a pair.** The scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click. When a `base merge:` line appears, re-verify every inline comment against the new `gh pr diff` even if the scoped log printed nothing — the merge re-scopes hunks in files the scoped delta cannot show, so the "file the delta didn't touch" shortcut above does not hold.
+- **Also read `git show --cc <merge sha>` on a base merge**, for what the merge itself changed. Where it conflicted, the author's resolution is committed *inside* the merge, and both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. A finding the resolution already fixed must drop out. `--cc` prints only hunks differing from every parent, so a resolution that took the base side prints nothing at all — it tells you what a merge changed, never that a merge changed nothing, which is why re-verification above is unconditional.
+- Re-compose every `suggestion` block on a file the delta touched, reading the new content with `git show "$CURRENT_HEAD":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged reverts the author's newest edit on one click, and a multi-line one deletes every in-range line it doesn't reproduce.
+
+**Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what `bot-review-state.sh` reports as `LAST_REVIEW_SHA`: pinned to the head you re-targeted onto, the queued run's step 1 finds that head already reviewed and finishes without posting a second review of the same code.
+
+**Before APPROVE specifically**, re-read live HEAD and require it to still equal `/tmp/reviewed-head`. The rollup below is the live head's, so once they differ it is not the pinned commit's rollup and the red-check gate is reading the wrong commit; post findings if you have them, otherwise finish and leave the approval to the queued run. Then peek that rollup: if any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal.
+
+An approval you post at a re-targeted head is yours to stand behind: the queued run reads that head as reviewed and finishes, so no successor session dismisses the approval if a check goes red. Step 7's poll is the whole net — run it to terminal before ending the session.
 
 Reduce the rollup to the **latest entry per check name and workflow** before reading it. When a concurrency-cancelled run is replaced, GitHub keeps *both* check runs on the commit, so an un-deduped scan reports the superseded `FAILURE` alongside the replacement's `SUCCESS` — and keeps reporting it forever. Key on `workflowName` as well as the name: two workflows can register the same check name, and collapsing those into one entry would hide a genuine red behind an unrelated green.
 
@@ -293,7 +340,7 @@ PENDING=$(jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
 
 Step 7's "approve, foreground-poll CI, dismiss if a check fails" pattern only recovers while the session is still alive — the job timeout or a poll cap can leave a post-approve failure undismissed and the PR carrying a misleading APPROVED state. A synchronous pre-APPROVE peek catches the case where the failure is already in the rollup — including non-required checks like `codecov/patch` that an overlay treats as a merge gate. Reducing to the latest entry per name and workflow — and, when the cap expires first, checking each `FAILURE`'s run conclusion — is what keeps a superseded red from being mistaken for a real one.
 
-Post at most one review per run. Give a verdict (**approve** or **comment**, never "request changes") when this pass has something to say: a new diff-grounded finding, or an approval because the last open concern is now resolved. If the dedup rule above left nothing new and a prior unresolved bot thread still stands, post nothing; the earlier review remains the active verdict. Use `gh pr review` for reviews, not `gh pr comment`. Note: `--comment` requires a non-empty body — if there's nothing to say and no prior concern stands, use the approve-with-empty-body pattern.
+Post at most one review per run. Give a verdict (**approve** or **comment**, never "request changes") when this pass has something to say: a new diff-grounded finding, or an approval because the last open concern is now resolved. If the dedup rule above left nothing new and a prior unresolved bot thread still stands, post nothing; the earlier review remains the active verdict. Post reviews through the reviews endpoint, not `gh pr comment`. Note: a COMMENT review requires a non-empty body — if there's nothing to say and no prior concern stands, use the approve-with-empty-body pattern.
 
 **Inline suggestions are mandatory for concrete fixes.** Whenever there's a concrete fix (typos, doc updates, naming, missing imports, minor refactors, test additions), post it as an inline suggestion on the exact line — never as a code block in the review body. Inline suggestions let the author apply with one click; code blocks force them to find the line and copy-paste manually.
 
@@ -320,7 +367,9 @@ cat > /tmp/review-payload.json << 'ENDJSON'
 ENDJSON
 
 BODY=$(cat /tmp/review-body.md)
-jq --arg body "$BODY" '.body = $body' /tmp/review-payload.json > /tmp/review-final.json
+REVIEWED=$(cat /tmp/reviewed-head) || exit 0
+jq --arg body "$BODY" --arg sha "$REVIEWED" \
+  '.body = $body | .commit_id = $sha' /tmp/review-payload.json > /tmp/review-final.json
 
 gh api "repos/$REPO/pulls/<number>/reviews" \
   --method POST \

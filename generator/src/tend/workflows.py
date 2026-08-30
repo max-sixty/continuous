@@ -88,7 +88,28 @@ HEADER = f"""\
 # detail of that guarantee, and `tend check` creates and verifies it.
 TEND_ENVIRONMENT = "tend"
 
+
 # Available to every template without being passed to render().
+def _indent_block(text: str, width: int) -> str:
+    """Indent a multi-line prompt into a YAML block scalar at *width*.
+
+    Jinja's `indent` can't do this without emitting a whitespace-only line:
+    `blank=True` pads every blank line, and `first=True` pads a blank first
+    line even without it. An adopter's `trailing-whitespace` hook rewrites
+    such a line, so the file they commit could never match what `init`
+    emits — the next regeneration puts the padding back, and the PR the
+    nightly opens for it fails its own lint job.
+
+    Trailing blank lines go too, whether or not they carry spaces: they reach
+    the end-of-file hook instead of the trailing-whitespace one, and a `|`
+    block scalar clips them regardless, so they are churn either way.
+    """
+    pad = " " * width
+    return "\n".join(f"{pad}{line}".rstrip() for line in text.rstrip().splitlines())
+
+
+_JINJA.filters["indent_block"] = _indent_block
+
 _JINJA.globals["header"] = HEADER
 _JINJA.globals["tend_version"] = _TEND_VERSION
 _JINJA.globals["tend_environment"] = TEND_ENVIRONMENT

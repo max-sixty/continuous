@@ -12,6 +12,7 @@ themselves beside their modules in shared/steps/test_*.py.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -496,3 +497,27 @@ def test_notifications_check_tolerates_an_html_200(
 
     assert result.returncode == 0, result.stderr
     assert _output(notifications_env, "count") == "0"
+
+
+def test_sensitive_paths_are_documented_where_adopters_read_them() -> None:
+    """The pinned root paths are a security claim, so the docs have to name all
+    of them. The list drifted once already: `.husky` sat in the script and in
+    the threat model while the README enumerated four of the five, understating
+    the surface for the only audience that reads the README.
+    """
+    script = RESTORE_SENSITIVE_CONFIG.read_text()
+    sensitive = re.search(r"^SENSITIVE=\((.*?)\)$", script, re.M)
+    assert sensitive, "SENSITIVE array not found — did the script's shape change?"
+    paths = sensitive.group(1).split()
+    assert paths, "SENSITIVE is empty"
+
+    # Scope to the paragraph making the claim; a stray mention elsewhere in the
+    # file (README's own repo layout, say) must not satisfy it.
+    readme = REPO_ROOT / "README.md"
+    claim = re.search(r"\*\*Config pinning\*\*.*?(?=\n\n)", readme.read_text(), re.S)
+    assert claim, "README's config-pinning paragraph not found"
+
+    threat_model = (REPO_ROOT / "docs" / "security-model.md").read_text()
+    for path in paths:
+        assert f"`{path}`" in claim.group(0), f"{path} missing from README"
+        assert f"`{path}`" in threat_model, f"{path} missing from security-model.md"

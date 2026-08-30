@@ -16,13 +16,21 @@ Reads (env):
                       the agent's stderr log was written
   HOME              - codex: parent of ``.codex/sessions`` and
                       ``.codex/projects``
-  GITHUB_REPOSITORY - claude: gates the raw stream-json copy to tend's own repo
+  GITHUB_REPOSITORY - the record's ``repo``; on claude it also gates the raw
+                      stream-json copy to tend's own repo
+  GITHUB_WORKFLOW, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_EVENT_NAME,
+  GITHUB_SHA, GITHUB_EVENT_PATH
+                    - the rest of :func:`run_context`
 
 Writes ``token-usage.json`` into the consolidated log dir (uploaded as the
 session-log artifact), the ``usage`` step output (compact JSON), and a
 ``## Token Usage`` table in the job summary. The record's shape mirrors the
 interactive harness so downstream consumers (review-reviewers' evidence gist,
 token-report.sh, dashboards) don't branch on harness.
+
+Every record also names the run it came from, so spend can be grouped by
+subject; see :func:`run_context`. The job summary stays counts-only, because
+the run page it is rendered on already names the run.
 
 Claude's accounting has three paths, tried in order:
 
@@ -125,11 +133,39 @@ def main() -> int:
     else:
         usage, logs_dir = codex_step(model)
 
-    payload = json.dumps(usage, separators=(",", ":"))
+    record = {**run_context(), **usage}
+    payload = json.dumps(record, separators=(",", ":"))
     (logs_dir / "token-usage.json").write_text(payload + "\n", encoding="utf-8")
     _common.set_output("usage", payload)
     _common.append_summary(render_summary(usage, harness=harness))
     return 0
+
+
+def run_context() -> dict[str, Any]:
+    """The run's identity, so a record says what the spend went to.
+
+    Without it a record answers "how much?" and nothing else, and the reader
+    is left joining every artifact back to a run listing to find out what it
+    was working on. Two of these keys are not on that listing at all: the
+    PR/issue ``number``, and a ``head_sha`` read from the event rather than
+    from the ref the run was queued on. The rest are, and they are here so the
+    record stands on its own — read out of a gist or a downloaded artifact,
+    away from the run that wrote it.
+
+    Read from the Actions environment, which is always set in a job, and from
+    the event payload, which may not be readable. Each key resolves on its
+    own, so a surprising event shape costs that key rather than the record.
+    """
+    env = os.environ
+    return {
+        "repo": env.get("GITHUB_REPOSITORY") or None,
+        "workflow": env.get("GITHUB_WORKFLOW") or None,
+        "run_id": _common.as_int(env.get("GITHUB_RUN_ID")),
+        "run_attempt": _common.as_int(env.get("GITHUB_RUN_ATTEMPT")),
+        "event": env.get("GITHUB_EVENT_NAME") or None,
+        "number": _common.subject_number(),
+        "head_sha": _common.subject_sha(),
+    }
 
 
 def claude_step(model: str) -> tuple[dict[str, Any], Path]:

@@ -6,6 +6,36 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.22
+
+### Fixed
+
+- **Generated workflows no longer carry whitespace an adopter's pre-commit rewrites.** A multi-line `prompt:` padded its blank lines out to the block scalar's indent, so a repo running the `trailing-whitespace` or `end-of-file-fixer` hooks could never commit a file matching `init` output — and the nightly regeneration opened a PR over that difference which failed its own lint job. `tend-notifications` was the first workflow to reach it. ([#1090](https://github.com/max-sixty/tend/pull/1090))
+
+## 0.1.21
+
+### Improved
+
+- **A review survives a push that lands while it runs.** The session re-targets its findings onto the new head and posts there, instead of discarding the review and leaving the queued run to redo it. Every posted review now pins `commit_id` to the commit it read, so the anchor names code the session actually saw and the queued run recognises that head as reviewed. ([#1082](https://github.com/max-sixty/tend/pull/1082))
+- **Review runs are less visible, and Claude transcripts are now opt-in everywhere.** A review no longer adds a PR-scoped commit status, so it stays out of a reviewed commit's check list. Rendering the transcript into the job summary became opt-in for *every* Claude workflow, not just review — `show_full_output` on the action now defaults to `false`. Raw session artifacts remain for deliberate diagnosis. The same change removed `tend-review`'s pre-boot pre-check, which read that commit status: `setup:` steps now run on every review event, and a redundant queued run boots the agent to exit early rather than skipping. ([#1078](https://github.com/max-sixty/tend/pull/1078))
+- **Spend groups by subject without a hand-rolled join.** `token-usage.json` records `repo`, `workflow`, `run_id`, `run_attempt`, `event`, the PR or issue number, and `head_sha` beside the counts. `token-report.sh` leads with cost and adds a per-subject table. ([#1081](https://github.com/max-sixty/tend/pull/1081))
+- **Notification work missed while the bot was unsubscribed is recoverable.** Installation and every poll enable repository watching, and the poll captures every unread page before its cutoff rather than the first. ([#1074](https://github.com/max-sixty/tend/pull/1074))
+- **`review-runs` reads the run census as a second input** when draining stranded triggers. ([#1073](https://github.com/max-sixty/tend/pull/1073))
+
+### Fixed
+
+- **A malformed `watched_workflows` or `branches` fails at `init`, not at runtime.** Both are validated as lists of strings, so a scalar or a nested list produces a clear error instead of a broken workflow. ([#1076](https://github.com/max-sixty/tend/pull/1076))
+- **`poll-pr-checks.sh` no longer waits on itself.** A pending `tend-review` can't gate its own poll, and an unresolvable commit fails fast instead of polling a SHA that does not exist. ([#1053](https://github.com/max-sixty/tend/pull/1053), [#1055](https://github.com/max-sixty/tend/pull/1055))
+- **`ci-fix` checks the default branch for an already-landed fix** before opening a PR. ([#1070](https://github.com/max-sixty/tend/pull/1070))
+
+### Documentation
+
+- **The README names `.husky` among the config paths restored from the base branch.** It held git hooks — a code-execution path on a fork PR — and the action had always pinned it; only the README's list was short. A test now asserts the script's `SENSITIVE` array, the README, and `docs/security-model.md` agree. ([#1077](https://github.com/max-sixty/tend/pull/1077))
+
+### Internal
+
+- Event-payload readers move to `shared/steps/_common.py`, so the outage-issue row and the usage record resolve a trigger the same way. ([#1081](https://github.com/max-sixty/tend/pull/1081))
+
 ## 0.1.20
 
 ### Fixed

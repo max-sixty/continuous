@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -107,3 +108,99 @@ def test_run_turns_an_unhandled_gh_failure_into_one_error(
         _common.run(main)
     assert caught.value.code == 1
     assert capsys.readouterr().out == "::error::gh api repos/x failed (exit 4)\n"
+
+
+def test_subject_number_is_an_int_whatever_the_payload_calls_it(
+    monkeypatch: pytest.MonkeyPatch, actions_env: Path
+) -> None:
+    """A relayed review's PR number arrives as a form string, not a JSON int.
+
+    Records are grouped by this key, and `"99"` and `99` are different keys.
+    """
+    assert _common.subject_number() == 851
+    actions_env.write_text(json.dumps({"client_payload": {"pr": "99"}}))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "repository_dispatch")
+    assert _common.subject_number() == 99
+
+
+@pytest.mark.parametrize(
+    ("event", "payload", "expected"),
+    [
+        # No thread of its own, a payload that isn't the shape its event
+        # promises, and a number that isn't one.
+        ("schedule", {}, None),
+        ("issues", {"issue": None}, None),
+        ("repository_dispatch", {"client_payload": {"pr": ""}}, None),
+        # A dispatch is a POST anyone with `contents: write` can shape, and
+        # `_issue.ref()` renders the result into a public issue comment. A
+        # coerced `1` or `3` is a plausible reference to somebody else's PR.
+        ("repository_dispatch", {"client_payload": {"pr": True}}, None),
+        ("repository_dispatch", {"client_payload": {"pr": 3.9}}, None),
+    ],
+)
+def test_subject_number_is_none_when_the_event_names_no_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    actions_env: Path,
+    event: str,
+    payload: dict,
+    expected: int | None,
+) -> None:
+    actions_env.write_text(json.dumps(payload))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    assert _common.subject_number() is expected
+
+
+@pytest.mark.parametrize(
+    ("event", "payload", "expected"),
+    [
+        # The events that carry their own commit, for which GITHUB_SHA is the
+        # default branch's tip rather than the PR head the workflow checks out
+        # or the run the ci-fix job was dispatched to fix.
+        ("pull_request_target", {"pull_request": {"head": {"sha": "head0"}}}, "head0"),
+        ("workflow_run", {"workflow_run": {"head_sha": "failed0"}}, "failed0"),
+        # An event whose subject is a thread reports no commit. GITHUB_SHA is
+        # the default branch's tip, and a mention on a PR `gh pr checkout`s the
+        # PR head straight after, so recording it would name a commit the run
+        # never touched — and disagree with the review record for the same
+        # revision.
+        ("issues", {"issue": {"number": 7}}, None),
+        ("issue_comment", {"issue": {"number": 7}}, None),
+        ("repository_dispatch", {"client_payload": {"pr": 99}}, None),
+        # A pull-request payload that doesn't carry the head takes the same
+        # `None` rather than falling back to the base commit.
+        ("pull_request_target", {"pull_request": {}}, None),
+        # Nothing names a thread here, so GITHUB_SHA is the run's own ref.
+        ("schedule", {}, "checkout0"),
+        ("workflow_run", {"workflow_run": {"head_sha": ""}}, "checkout0"),
+    ],
+)
+def test_subject_sha_reports_only_a_commit_the_event_is_about(
+    monkeypatch: pytest.MonkeyPatch,
+    actions_env: Path,
+    event: str,
+    payload: dict,
+    expected: str | None,
+) -> None:
+    actions_env.write_text(json.dumps(payload))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    monkeypatch.setenv("GITHUB_SHA", "checkout0")
+    assert _common.subject_sha() == expected
+
+
+def test_event_payload_survives_a_file_it_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, actions_env: Path
+) -> None:
+    """The payload annotates work already under way; it may not cost it.
+
+    A GitHub blip can leave an HTML error page where the JSON should be, and
+    a step body reading this outside Actions has no GITHUB_EVENT_PATH at all.
+    """
+    actions_env.write_text("<html>not an event payload</html>")
+    assert _common.event_payload() == {}
+
+    actions_env.unlink()
+    assert _common.event_payload() == {}
+
+    monkeypatch.delenv("GITHUB_EVENT_PATH")
+    assert _common.event_payload() == {}
+    assert _common.subject_number() is None
