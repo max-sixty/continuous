@@ -3,7 +3,6 @@ from __future__ import annotations
 import subprocess
 
 import pytest
-
 import security_preflight
 from _fakes import FakeGh
 

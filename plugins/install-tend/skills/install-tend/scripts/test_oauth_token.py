@@ -19,15 +19,17 @@ import time
 from pathlib import Path
 
 import pytest
-
 from oauth_token import (
     ANSI_CSI,
     AUTHORIZE_URL,
     MAX_TOKEN_LENGTH,
     TIMEOUT_SECONDS,
     TOKEN,
+    complete_match,
+    failure_message,
+    first_url,
+    stop_and_reap,
 )
-from oauth_token import complete_match, failure_message, first_url, stop_and_reap
 
 URL = (
     b"https://claude.com/cai/oauth/authorize?code=true&client_id=9d1"

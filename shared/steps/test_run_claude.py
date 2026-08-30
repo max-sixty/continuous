@@ -21,9 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 import _sandbox
+import pytest
 import run_claude
 from _fakes import GithubFiles
 

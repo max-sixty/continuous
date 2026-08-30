@@ -7,9 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 import _common
+import pytest
 import rate_limit_preflight as preflight
 from _fakes import FakeGh, GithubFiles
 

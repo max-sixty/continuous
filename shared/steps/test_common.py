@@ -4,9 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 import _common
+import pytest
 from _fakes import FakeGh, GithubFiles
 
 

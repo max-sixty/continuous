@@ -107,7 +107,7 @@ def _lines(argv: list[str]) -> list[str]:
     filename on either PATH need not be UTF-8, and a strict decode would raise
     out of a report that is best-effort by design.
     """
-    result = subprocess.run(argv, stdout=subprocess.PIPE)
+    result = subprocess.run(argv, stdout=subprocess.PIPE, check=False)
     if result.returncode != 0:
         return []
     return result.stdout.decode("utf-8", errors="replace").splitlines()
@@ -199,7 +199,7 @@ def main() -> int:
         argv = setup_argv(
             commands, sandbox=sandbox, agent_env_file=env["AGENT_ENV_FILE"]
         )
-        code = subprocess.run(argv).returncode
+        code = subprocess.run(argv, check=False).returncode
         if code != 0:
             return code
         _common.log(STEP, f"ran adopter sandbox_setup commands as {sandbox}")

@@ -8,12 +8,9 @@ import re
 from pathlib import Path
 from textwrap import dedent
 
-import pytest
-from tests import ACTION_VERSION, agent_prompt
-from tests import _yaml as yaml
 import click
+import pytest
 from click.testing import CliRunner
-
 from tend.cli import main
 from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
@@ -23,12 +20,15 @@ from tend.config import (
     Config,
 )
 from tend.workflows import (
-    _deep_merge,
     GENERATORS,
+    _deep_merge,
     generate_all,
     generate_install_test,
     generate_mention,
 )
+
+from tests import ACTION_VERSION, agent_prompt
+from tests import _yaml as yaml
 
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
@@ -110,8 +110,10 @@ def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
         (
             "review",
             "review",
-            lambda s: s.get("uses", "").startswith("actions/checkout")
-            and "ref" in s.get("with", {}),
+            lambda s: (
+                s.get("uses", "").startswith("actions/checkout")
+                and "ref" in s.get("with", {})
+            ),
         ),
         (
             "mention",
@@ -1407,7 +1409,7 @@ def test_no_extras_output_unchanged(tmp_path: Path) -> None:
     """Without extras, generate_all() output matches direct generator output."""
     cfg = Config.load(_minimal_config(tmp_path))
     via_all = {wf.filename: wf.content for wf in generate_all(cfg)}
-    for name, gen_fn in GENERATORS.items():
+    for gen_fn in GENERATORS.values():
         try:
             wf = gen_fn(cfg)
         except click.ClickException:

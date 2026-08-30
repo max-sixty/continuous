@@ -6,12 +6,12 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
-from tests import _yaml as yaml
-from tests import agent_prompt as _agent_prompt
 from click import ClickException
-
 from tend.config import BOT_TOKEN_SECRET, Config
 from tend.workflows import generate_all
+
+from tests import _yaml as yaml
+from tests import agent_prompt as _agent_prompt
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:

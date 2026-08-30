@@ -21,8 +21,14 @@ install = "cd site && npm install --prefer-offline --no-audit --no-fund"
 
 # Tether owns the whole Astro process group until the worktree is removed.
 # Output lands in `.git/wt/logs/` (find via `wt config state logs`).
+#
+# `ASTRO_DEV_BACKGROUND` keeps the server in the foreground. Astro 7 detects an
+# agent environment (a bare `CLAUDECODE` is enough) and otherwise re-spawns
+# itself detached, which would leave `npm run dev` exiting immediately, the real
+# server outside the tether's process group, and its output in
+# `site/.astro/dev.log` instead. The gate tests presence, not value.
 [[post-start]]
-server = "wt step tether -C site -- npm run dev -- --port {{ branch | hash_port }}"
+server = "wt step tether -C site -- env ASTRO_DEV_BACKGROUND=0 npm run dev -- --port {{ branch | hash_port }}"
 
 # Surface the URL in `wt list` — the column dims when nothing is listening.
 [list]
