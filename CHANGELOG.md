@@ -22,6 +22,10 @@ https://github.com/max-sixty/tend/compare for their history.
 - **`poll-pr-checks.sh` no longer waits on itself.** A pending `tend-review` can't gate its own poll, and an unresolvable commit fails fast instead of polling a SHA that does not exist. ([#1053](https://github.com/max-sixty/tend/pull/1053), [#1055](https://github.com/max-sixty/tend/pull/1055))
 - **`ci-fix` checks the default branch for an already-landed fix** before opening a PR. ([#1070](https://github.com/max-sixty/tend/pull/1070))
 
+### Documentation
+
+- **The README names `.husky` among the config paths restored from the base branch.** It held git hooks — a code-execution path on a fork PR — and the action had always pinned it; only the README's list was short. A test now asserts the script's `SENSITIVE` array, the README, and `docs/security-model.md` agree. ([#1077](https://github.com/max-sixty/tend/pull/1077))
+
 ### Internal
 
 - Event-payload readers move to `shared/steps/_common.py`, so the outage-issue row and the usage record resolve a trigger the same way. ([#1081](https://github.com/max-sixty/tend/pull/1081))
