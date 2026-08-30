@@ -124,7 +124,11 @@ class CredentialInjector:
             # Not an allowlisted host — never attach a credential. Leave the
             # request exactly as the agent sent it.
             return
-        logging.info("injected credential for %s %s", flow.request.method, host)
+        # mitmproxy's documented addon pattern logs through the root logger, which
+        # its own handler captures; a named logger would change where this lands.
+        logging.info(  # noqa: LOG015
+            "injected credential for %s %s", flow.request.method, host
+        )
 
     def responseheaders(self, flow: http.HTTPFlow) -> None:
         # Stream every intercepted response straight through — intentionally

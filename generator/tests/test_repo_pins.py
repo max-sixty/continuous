@@ -124,6 +124,7 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
             input=GHA_EXPR.sub("${_GHA_EXPR}", body),
             capture_output=True,
             text=True,
+            check=False,
         )
         if result.returncode != 0:
             findings.append(f"--- {action} :: {name}\n{result.stdout}")

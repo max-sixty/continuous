@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -186,6 +187,7 @@ def _poll(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
@@ -467,6 +469,7 @@ def test_abbreviated_sha_is_rejected_at_entry(env: dict[str, str]) -> None:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
     out = result.stdout + result.stderr
 
@@ -489,6 +492,7 @@ def test_uppercase_sha_is_rejected_at_entry(env: dict[str, str]) -> None:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
     out = result.stdout + result.stderr
 
@@ -510,6 +514,7 @@ def test_omitted_sha_is_rejected_not_reported_red(env: dict[str, str]) -> None:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
     out = result.stdout + result.stderr
 
@@ -544,6 +549,7 @@ def _rerun(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
 
 

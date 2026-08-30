@@ -276,8 +276,7 @@ def count_approvals(
         labelled = event.get("event") == "labeled"
         if labelled and (event.get("label") or {}).get("name") == label:
             at = event.get("created_at") or ""
-            if at > since:
-                since = at
+            since = max(since, at)
     return sum(1 for event in events if _is_approval(event, bot_id=bot_id, since=since))
 
 

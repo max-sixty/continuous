@@ -5,10 +5,9 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
 import _common
 import _issue
+import pytest
 from _fakes import FakeGh
 
 RUN_LINK = "[workflow run](https://github.com/owner/repo/actions/runs/12345)"

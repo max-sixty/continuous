@@ -9,7 +9,7 @@ repos:
   # only meant that each new Python directory arrived unlinted and stayed that
   # way until someone noticed.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.11
+    rev: v0.16.5
     hooks:
       - id: ruff-check
         args: ["--fix"]

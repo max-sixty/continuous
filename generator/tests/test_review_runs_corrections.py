@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 SCRIPT = (
@@ -80,7 +81,7 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True
+        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
     )
 
 
