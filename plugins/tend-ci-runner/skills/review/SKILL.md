@@ -234,18 +234,15 @@ gh api "repos/$REPO/issues/<number>/reactions" -f content="+1"
 
 #### Posting mechanics
 
-Before posting, run the preflight. It checks the PR is still open, re-targets the review onto the live head if HEAD moved, and stops a second review of a commit that already carries one:
+Before posting, run the preflight. It checks the PR is open, re-targets onto a newer descendant head, and stops duplicate reviews:
 
 ```bash
-PREFLIGHT=$(${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number>) || exit 1
-jq -r '"\(.verdict): \(.reason)", .delta' <<<"$PREFLIGHT"
+${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number>
 ```
 
-On `skip`, post nothing and finish; the reason says which check stopped you. On `post`, the commit to anchor at is in `/tmp/reviewed-head` — the preflight rewrote it if HEAD moved, and every posting recipe reads it back. A non-empty `delta` is the push that landed mid-review, and the only record of it; read it per the bullets below.
+On `skip`, post nothing and finish. On `post`, anchor the review at `/tmp/reviewed-head`; the preflight updates the file when HEAD moves. A re-targeted post also prints `delta: <path>`. Read that entire file in chunks as needed before posting; it is the push that landed mid-review.
 
-A non-zero exit is neither: nothing was decided and the error says why. Fix it and re-run — posting on a preflight that never answered is posting unpinned. Don't drop the `|| exit 1`; piped into `jq` a failure prints nothing and reads exactly like a clean run.
-
-The state check matters because the maintainer may close (or another path may merge) the PR while a review is in flight — `pull_request_target` reviews routinely run for 5–10 minutes between reading the head and posting the verdict, and HEAD doesn't move when the PR is closed. Approving a CLOSED or MERGED PR creates a confusing artifact (an approval timestamped after the close).
+A non-zero exit means nothing was decided. Fix the error and re-run the preflight.
 
 **A push mid-review re-targets the review.** Everything read so far still holds for the code it was read against, and the delta is the only new information — however many pushes it spans. Read it, then post against the new head:
 
@@ -254,7 +251,7 @@ The state check matters because the maintainer may close (or another path may me
 - Findings the delta fixed drop out. If that empties the review and the delta itself reads clean, approve the new head: an empty-body approval is a verdict here, not the absence of one.
 - Finish without posting only when you can't judge the delta — it rewrites what you just reviewed, or it is a review's worth of new code in its own right. The queued run then reviews the new head in full.
 - Inline comments resolve against the commit the review pins, so re-verify each one against the current `gh pr diff`, which now returns the new head's. On a file the delta didn't touch, the line is unchanged and the comment stands. On one it did, move the comment to the line the code sits on now; where the line no longer falls inside a hunk, put the finding in the review body as a fenced quote with its path, as under **Recovering from inline comment 422 errors**.
-- **Read both halves of `delta` as a pair.** It is two logs in sequence: the scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click. When a `base merge:` line appears, re-verify every inline comment against the new `gh pr diff` even if the scoped log printed nothing — the merge re-scopes hunks in files the scoped delta cannot show, so the "file the delta didn't touch" shortcut above does not hold.
+- **Read both halves of the delta file as a pair.** It contains two logs in sequence: the scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click. When a `base merge:` line appears, re-verify every inline comment against the new `gh pr diff` even if the scoped log printed nothing — the merge re-scopes hunks in files the scoped delta cannot show, so the "file the delta didn't touch" shortcut above does not hold.
 - **Also read `git show --cc <merge sha>` on a base merge**, for what the merge itself changed. Where it conflicted, the author's resolution is committed *inside* the merge, and both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. A finding the resolution already fixed must drop out. `--cc` prints only hunks differing from every parent, so a resolution that took the base side prints nothing at all — it tells you what a merge changed, never that a merge changed nothing, which is why re-verification above is unconditional.
 - Re-compose every `suggestion` block on a file the delta touched, reading the new content with `git show "$(cat /tmp/reviewed-head)":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged reverts the author's newest edit on one click, and a multi-line one deletes every in-range line it doesn't reproduce.
 
