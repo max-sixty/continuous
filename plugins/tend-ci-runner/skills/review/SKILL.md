@@ -186,7 +186,7 @@ Flag duplicates — reuse is almost always better than a parallel implementation
 
 ### 5. Second pass
 
-Run a `/tend-ci-runner:code-review` pass over the PR's merged tree. Every review that reaches this step runs one — trivial diffs included; step 4's depth-scaling sets how deep the pass goes, never whether it happens. It's a structured second pass — correctness and cleanup angles, then a verify pass — that returns findings rather than posting anything, and it supplements step 4's manual checks rather than replacing them. Kick it off when step 4 starts if you want it running alongside them; either way it completes before step 6.
+Run a `/tend-ci-runner:code-review` pass over the PR's merged tree. Every review that reaches this step runs one — trivial diffs included; step 4's depth-scaling sets how deep the pass goes, never whether it happens. It's a structured second pass — correctness and cleanup angles, then a verify pass — that returns findings rather than posting anything, and it supplements step 4's manual checks rather than replacing them.
 
 Scale its depth to how core the change is:
 
@@ -230,7 +230,7 @@ Don't explain what the code does — the author wrote it. Don't nitpick formatti
 
 **Attribute a withheld approval to whatever actually decided it.** Cite repo guidance as the reason only when you can name the file and heading that guidance lives in; a reader who goes looking for "this repo's review policy" and finds nothing written starts doubting the rest of the review too. When the call is your own judgment, say so plainly — "I'd want a human on this one, it changes what `--force` will delete" rather than "per this repo's review policy this is a hold-for-human surface". Judgment is a sufficient reason on its own; borrowed authority that doesn't exist is not.
 
-**Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Still perform the full review (steps 2-3) — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt an APPROVE — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 7. Always post CI failure analysis as a COMMENT, even on self-authored PRs.
+**Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Complete steps 2–5 — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt an APPROVE — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 7. Always post CI failure analysis as a COMMENT, even on self-authored PRs.
 
 **Not confident enough to approve** (unfamiliar module, subtle logic): Add a `+1` reaction instead — no review needed unless there are specific observations.
 
