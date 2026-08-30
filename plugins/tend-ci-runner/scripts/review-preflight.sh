@@ -10,6 +10,7 @@
 #
 # env: GITHUB_REPOSITORY (optional; defaults to the checkout's remote)
 #      GITHUB_EVENT_PATH (optional; ready_for_review replaces a draft review)
+#      REVIEWED_HEAD_FILE (test-only override of /tmp/reviewed-head)
 
 set -euo pipefail
 
@@ -60,7 +61,7 @@ if [ "$CURRENT_HEAD" != "$REVIEWED" ]; then
   git fetch --no-tags --quiet origin "refs/pull/$PR/head" || true
   git fetch --no-tags --quiet origin "$BASE_SHA" || true
 
-  if git merge-base --is-ancestor "$REVIEWED" "$CURRENT_HEAD" 2>/dev/null; then
+  if git merge-base --is-ancestor "$REVIEWED" "$CURRENT_HEAD"; then
     :
   else
     STATUS=$?
