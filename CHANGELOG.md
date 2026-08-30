@@ -6,6 +6,26 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.21
+
+**Improved**
+
+- A review session whose PR gains a commit mid-run re-targets its findings onto the new head and posts there, instead of discarding the review and leaving the queued run to redo it. Every posted review now pins `commit_id` to the commit it read, so the anchor names code the session actually saw and the queued run recognises that head as reviewed. ([#1082](https://github.com/max-sixty/tend/pull/1082))
+- Review runs no longer add a PR-scoped commit status or render their transcript in the job summary, so they stay out of a reviewed commit's check list. Raw session artifacts remain for deliberate diagnosis. ([#1078](https://github.com/max-sixty/tend/pull/1078))
+- `token-usage.json` records `repo`, `workflow`, `run_id`, `run_attempt`, `event`, the PR or issue number, and `head_sha` beside the counts, so spend groups by subject without a hand-rolled join against the runs API. `token-report.sh` leads with cost and adds a per-subject table. ([#1081](https://github.com/max-sixty/tend/pull/1081))
+- Installation and every notification poll enable repository watching, and the poll captures every unread page before its cutoff rather than the first, so work missed while the bot was unsubscribed is recoverable. ([#1074](https://github.com/max-sixty/tend/pull/1074))
+- `review-runs` reads the run census as a second input when draining stranded triggers. ([#1073](https://github.com/max-sixty/tend/pull/1073))
+
+**Fixed**
+
+- `watched_workflows` and `branches` are validated as lists of strings, so a scalar or a nested list fails at `init` with a clear error instead of rendering a broken workflow. ([#1076](https://github.com/max-sixty/tend/pull/1076))
+- `poll-pr-checks.sh` no longer lets a pending `tend-review` gate its own poll, and fails fast when a commit cannot be resolved instead of polling a SHA that does not exist. ([#1053](https://github.com/max-sixty/tend/pull/1053), [#1055](https://github.com/max-sixty/tend/pull/1055))
+- `ci-fix` checks the default branch for an already-landed fix before opening a PR. ([#1070](https://github.com/max-sixty/tend/pull/1070))
+
+**Internal**
+
+- Event-payload readers move to `shared/steps/_common.py`, so the outage-issue row and the usage record resolve a trigger the same way. ([#1081](https://github.com/max-sixty/tend/pull/1081))
+
 ## 0.1.20
 
 ### Fixed
