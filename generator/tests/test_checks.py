@@ -10,25 +10,24 @@ from urllib.parse import quote
 
 import pytest
 from click.testing import CliRunner
-
 from tend.checks import (
-    admitted_refs,
-    check_credential_environments,
-    check_environment,
-    check_environment_deployments,
-    fix_environment,
     ROLE_ID_ADMIN,
     ROLE_ID_MAINTAIN,
     ROLE_ID_WRITE,
     CheckResult,
     _has_restrict_updates_ruleset,
     _restrict_updates_ruleset,
+    admitted_refs,
     check_bot_permission,
     check_branch_protection,
+    check_credential_environments,
+    check_environment,
+    check_environment_deployments,
     check_repo_secret_allowlist,
     check_secrets,
     detect_canonical_owner,
     detect_repo,
+    fix_environment,
     run_all_checks,
 )
 from tend.cli import main
@@ -1488,9 +1487,7 @@ def _url(args: tuple[str, ...]) -> str:
 
     A `graphql` call carries no path, so it answers with its subcommand.
     """
-    return next(
-        (a for a in args if a.startswith("repos/") or a.startswith("orgs/")), args[1]
-    )
+    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
 
 
 def _env_gh(env_body: str | None, policies: str = "main"):

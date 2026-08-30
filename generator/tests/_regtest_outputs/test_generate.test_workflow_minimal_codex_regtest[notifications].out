@@ -88,7 +88,7 @@ jobs:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           bot_name: test-bot
           model: gpt-5.5
-          prompt: |
+          prompt: |2
             $notifications
 
             Notification snapshot cutoff: ${{ steps.check.outputs.cutoff }}

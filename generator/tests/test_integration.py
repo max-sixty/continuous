@@ -15,12 +15,12 @@ from unittest.mock import patch
 
 import click.testing
 import pytest
-from tests import ACTION_VERSION, BASH, tool_path
-from tests import _yaml as yaml
 from click.testing import CliRunner
-
 from tend.checks import CheckResult
 from tend.cli import main
+
+from tests import ACTION_VERSION, BASH, tool_path
+from tests import _yaml as yaml
 
 
 def _write_config(tmp_path: Path, content: str) -> None:
@@ -310,7 +310,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
         return _make_completed(
             json.dumps({"data": {"repository": {"object": {"entries": []}}}})
         )
-    url = next(a for a in args if a.startswith("repos/") or a.startswith("orgs/"))
+    url = next(a for a in args if a.startswith(("repos/", "orgs/")))
     # Only the ref-gated environment exists, holding the operational secrets.
     if url.endswith("/environments"):
         return _make_completed("tend\n")
@@ -580,10 +580,7 @@ def test_notifications_precheck_tolerates_transient_non_json(
         "GITHUB_REPOSITORY": "owner/repo",
     }
     result = subprocess.run(
-        [BASH, "-e", "-c", script],
-        env=env,
-        capture_output=True,
-        text=True,
+        [BASH, "-e", "-c", script], env=env, capture_output=True, text=True, check=False
     )
 
     assert result.returncode == 0, (

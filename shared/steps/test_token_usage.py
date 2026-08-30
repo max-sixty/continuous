@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 import token_usage
 from _fakes import GithubFiles
 

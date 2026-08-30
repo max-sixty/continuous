@@ -5,24 +5,30 @@ Prints the token to stdout and everything else to stderr, so stdout pipes
 straight into a consumer without the rest of the run coming with it.
 
 `claude setup-token` renders its TUI with Ink, which draws only when stdout
-is a TTY, so the child needs a pty. It then completes one of two ways: the
-browser redirects to the CLI's own localhost callback, or it lands on a page
-showing a `code#state` string and the TUI waits at a paste prompt. Both paths
-have to stay open, which is why this drives the pty itself rather than through
-script(1) — script(1) reads terminal attributes from its own stdin and aborts
-with "tcgetattr: Operation not supported on socket" when that is anything but a
-tty or /dev/null, and a /dev/null stdin leaves the paste prompt unanswerable.
+is a TTY, so the child needs a pty. It then completes one of two ways. Normally
+the CLI's own localhost listener takes the redirect and the run finishes with
+no input at all — approving in the browser is the whole of the user's job.
+Failing that, the browser lands on a page showing a `code#state` string and the
+TUI waits at its paste prompt. Both paths have to stay open, which is why this
+drives the pty itself rather than through script(1) — script(1) reads terminal
+attributes from its own stdin and aborts with "tcgetattr: Operation not
+supported on socket" when that is anything but a tty or /dev/null, and a
+/dev/null stdin leaves the paste prompt unanswerable.
 
 The authorize URL goes to stderr as soon as the TUI offers it, so a caller
-running this in the background can hand it to the user. Nothing else from the
-TUI is echoed: its output carries the token.
+running this in the background can hand it to the user. So does the TUI's own
+error line, which is the difference between a run that is waiting for a person
+and one that has already failed — indistinguishable from outside otherwise,
+since a rejected code leaves the TUI sitting at "Press Enter to retry" for the
+rest of the window. Nothing else from the TUI is echoed: its output carries the
+token.
 
 Usage:
     oauth_token.py [--code-file PATH]
 
 `--code-file` names a path to watch. Write the `code#state` string there and it
 is typed into the TUI, for the runs where the browser shows a code instead of
-returning to the CLI.
+returning to the CLI. Most runs never need it.
 """
 
 import argparse
@@ -56,6 +62,15 @@ AUTHORIZE_URL = re.compile(
 # bytes, and `complete_match` would then see a following byte and call the
 # truncation final. Length is checked after extraction so it fails loudly.
 TOKEN = re.compile(rb"sk-ant-oat01-[A-Za-z0-9_-]{80,}")
+# The TUI's own failure line. `claude setup-token` reports a rejected code and
+# then waits at "Press Enter to retry", which produces no further output — so
+# without this the run is silent to its deadline and reads as an approval the
+# user never gave. Ink lays adjacent text nodes out with cursor moves rather
+# than spaces, and stripping CSI closes those gaps, so the gaps here are
+# optional — but horizontal only: `\s*` after the colon would step over the
+# line break and report the following line ("Press Enter to retry.") as the
+# detail whenever the CLI's own message is empty.
+TUI_ERROR = re.compile(rb"OAuth[^\S\r\n]*error:[^\S\r\n]*([^\r\n]*)")
 
 
 def complete_match(pattern, buf):
@@ -90,23 +105,35 @@ def take_controlling_tty():
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
 
-def failure_message(code_file, typed_at, announced):
+def failure_message(code_file, typed_at, announced, tui_error=None):
     """Why no token came back, in terms of what this run actually saw.
 
-    A caller that already passed `--code-file` is told to pass it, and reads
-    that as the diagnosis, so the causes it can act on are named apart. The
-    loop ends three ways — the deadline, a pty the child closed, and a child
-    already exited — so a message may not assume the window passed either. A
-    run that never announced a URL ended inside `claude setup-token`, whose own
-    output this wrapper swallows, and is the one case where the fix is to go
-    look at that command rather than at the browser.
+    The TUI's own error line beats every inference below it, so it comes
+    first. A caller that already passed `--code-file` is told to pass it, and
+    reads that as the diagnosis, so the causes it can act on are named apart.
+    The loop ends three ways — the deadline, a pty the child closed, and a
+    child already exited — so a message may not assume the window passed
+    either. A run that never announced a URL ended inside `claude setup-token`,
+    whose own output this wrapper swallows, and is the one case where the fix
+    is to go look at that command rather than at the browser.
     """
+    # `is not None`, not truthiness: the CLI prints the label with nothing after
+    # it when it has no detail to give, and an empty capture is still an error
+    # seen — falling through from here would report that no error was reported.
+    if tui_error is not None:
+        detail = f": {tui_error}" if tui_error else ", with no detail on the line"
+        return (
+            f"Error: `claude setup-token` reported an OAuth error{detail}\n"
+            "A code belongs to the run whose challenge issued it, is good once, "
+            "and dies with that run — so a code from an earlier run, or one the "
+            "CLI's own localhost callback already redeemed, fails here. Rerun "
+            "and approve the fresh URL."
+        )
     if typed_at is not None:
         return (
             f"Error: the code from {code_file} was typed into the prompt and no "
-            "token came back, so the authorize page rejected it. A code belongs "
-            "to the run whose challenge issued it and dies with that run; "
-            "approve the URL this run printed."
+            "token came back, and the TUI reported no error either. Rerun and "
+            "approve the fresh URL."
         )
     if not announced:
         return (
@@ -196,11 +223,26 @@ def main():
             stdout=slave,
             stderr=slave,
             close_fds=True,
-            preexec_fn=take_controlling_tty,
+            # The hazard is threads; this is a single-threaded CLI helper, and the
+            # child needs the pty as its controlling terminal to run interactively.
+            preexec_fn=take_controlling_tty,  # noqa: PLW1509
         )
     except FileNotFoundError:
         sys.exit("Error: claude CLI not found. Install Claude Code first.")
     os.close(slave)
+
+    # Goes out with the URL rather than waiting on the paste prompt to render:
+    # timing it against TUI wording would tie it to text free to change, and the
+    # user wants it at the moment they get the link anyway.
+    hint = (
+        "The CLI takes the redirect on its own localhost callback, so approving "
+        "is usually the whole job. If the browser shows a `code#state` string "
+        + (
+            f"instead, write that to {args.code_file}."
+            if args.code_file
+            else "instead, this run has no --code-file to read it from."
+        )
+    )
 
     buf = bytearray()
     announced = False
@@ -228,7 +270,10 @@ def main():
             if not announced:
                 url = first_url(visible)
                 if url:
-                    print(f"Approve in the browser:\n{url.decode()}", file=sys.stderr)
+                    print(
+                        f"Approve in the browser:\n{url.decode()}\n{hint}",
+                        file=sys.stderr,
+                    )
                     announced = True
 
             if typed_at is None and args.code_file and os.path.exists(args.code_file):
@@ -255,6 +300,15 @@ def main():
                 token = match.decode()
                 break
 
+            # After the token check, so a token already on screen wins over an
+            # error earlier in the same buffer. Nothing reads the pty between
+            # here and the final scan below, so the detail reported is whatever
+            # had arrived by this read and may be cut at a chunk boundary —
+            # naming the error at all is what turns a silent window into a
+            # failure, and a clipped message still does that.
+            if TUI_ERROR.search(visible):
+                break
+
             if child.poll() is not None and not readable:
                 break
     finally:
@@ -263,15 +317,21 @@ def main():
         finally:
             os.close(master)
 
+    final_visible = ANSI_CSI.sub(b"", buf)
     if token is None:
         # Nothing more can arrive, so a match here cannot be a partial read —
         # which is the case where the token is the last thing the TUI writes.
-        final = TOKEN.search(ANSI_CSI.sub(b"", buf))
+        final = TOKEN.search(final_visible)
         if final:
             token = final.group(0).decode()
 
     if not token:
-        sys.exit(failure_message(args.code_file, typed_at, announced))
+        # Read unconditionally rather than off a flag the loop set: the loop
+        # also ends on a closed pty and on an exited child, either of which can
+        # carry the error line in the same read that ends it.
+        error = TUI_ERROR.search(final_visible)
+        detail = error.group(1).decode("utf-8", "replace").strip() if error else None
+        sys.exit(failure_message(args.code_file, typed_at, announced, detail))
     if len(token) > MAX_TOKEN_LENGTH:
         sys.exit(f"Error: extracted token has implausible length ({len(token)} chars)")
     print(token)

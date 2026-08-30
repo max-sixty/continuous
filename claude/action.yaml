@@ -54,7 +54,7 @@ inputs:
     default: "false"
     description: Include the rendered Claude transcript in the workflow step summary.
   claude_version:
-    default: "2.1.241"
+    default: "2.1.251"
     description: >-
       Version of the `claude` binary to install via
       `https://claude.ai/install.sh`, pinned to a specific
@@ -77,7 +77,7 @@ inputs:
       Pinned `mitmproxy` version for the credential-injection proxy. Pinned
       so the uv download cache key is stable; bump to upgrade.
   uv_version:
-    default: "0.12.5"
+    default: "0.12.7"
     description: >-
       Pinned `uv` version used to run the credential-injection proxy. Installed
       into a tend-owned dir off $PATH, so it neither shadows nor is shadowed by

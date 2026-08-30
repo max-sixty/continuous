@@ -240,7 +240,13 @@ bot_name: my-project-bot
 # `watched_workflows`). Every workflow accepts these options:
 #
 # - `enabled` (bool)  — disable with `enabled: false`
-# - `prompt` (string) — override the default skill invocation
+# - `prompt` (string) — override the default skill invocation. May span lines.
+#   Three workflows substitute one placeholder into it: `{pr_number}` (review),
+#   `{issue_number}` (triage), `{run_id}` (ci-fix). Everything else is passed to
+#   the agent verbatim, braces and quotes included — but `${{ ... }}` is a
+#   GitHub Actions expression and is evaluated, so don't write one as prose.
+#   `mention` composes its prompt from the triggering event and takes no
+#   override; setting one there is an error.
 #
 # Scheduled workflows also accept `cron` to override their default schedule.
 # GitHub runs `schedule` triggers on a best-effort basis and drops ticks under

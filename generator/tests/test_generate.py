@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import importlib.resources
+import json
 import re
 from pathlib import Path
 from textwrap import dedent
 
-import pytest
-from tests import ACTION_VERSION
-from tests import _yaml as yaml
 import click
+import pytest
 from click.testing import CliRunner
-
 from tend.cli import main
 from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
@@ -22,13 +20,15 @@ from tend.config import (
     Config,
 )
 from tend.workflows import (
-    _deep_merge,
     GENERATORS,
-    GeneratedWorkflow,
+    _deep_merge,
     generate_all,
     generate_install_test,
     generate_mention,
 )
+
+from tests import ACTION_VERSION, agent_prompt
+from tests import _yaml as yaml
 
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
@@ -110,8 +110,10 @@ def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
         (
             "review",
             "review",
-            lambda s: s.get("uses", "").startswith("actions/checkout")
-            and "ref" in s.get("with", {}),
+            lambda s: (
+                s.get("uses", "").startswith("actions/checkout")
+                and "ref" in s.get("with", {})
+            ),
         ),
         (
             "mention",
@@ -525,52 +527,145 @@ def test_custom_prompt(tmp_path: Path) -> None:
     assert "Custom triage:" in triage.content
 
 
-def _review_prompt(review: GeneratedWorkflow) -> str:
-    """The `prompt:` input the review job hands the harness action."""
-    steps = yaml.safe_load(review.content)["jobs"]["review"]["steps"]
-    step = next(
-        s for s in steps if s.get("uses", "").startswith("max-sixty/tend/claude@")
-    )
-    return step["with"]["prompt"]
+# Every workflow that takes a configurable `prompt:`, and the GitHub Actions
+# expression its placeholder resolves to. `mention` is the one omission: it
+# composes its prompt from the triggering event, and `Config.load` refuses an
+# override rather than accepting a key that renders nowhere.
+_PROMPT_WORKFLOWS = {
+    "review": ("{pr_number}", "${{ github.event.pull_request.number }}"),
+    "triage": ("{issue_number}", "${{ github.event.issue.number }}"),
+    "ci-fix": ("{run_id}", "${{ github.event.workflow_run.id }}"),
+    "nightly": ("", ""),
+    "weekly": ("", ""),
+    "review-runs": ("", ""),
+    "notifications": ("", ""),
+}
 
 
-def test_review_prompt_without_placeholder_keeps_literal_braces(
-    tmp_path: Path,
+def test_prompt_workflow_matrix_covers_every_generator() -> None:
+    """Pin the matrix below to the registry, so a new prompt-bearing workflow
+    cannot join `GENERATORS` and skip it — and so `mention`'s exclusion stays a
+    decision on the record rather than an omission."""
+    assert set(_PROMPT_WORKFLOWS) == set(GENERATORS) - {"mention"}
+
+
+def test_mention_rejects_a_prompt_override(tmp_path: Path) -> None:
+    """`mention` renders no adopter prompt, so accepting the key would drop it
+    silently — the config's own docs promise otherwise."""
+    extra = 'workflows:\n  mention:\n    prompt: "do something else"\n'
+    with pytest.raises(click.ClickException, match="mention composes its prompt"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
+def test_non_string_prompt_is_rejected(tmp_path: Path) -> None:
+    """Every other config field is type-checked; a bare `AttributeError`
+    traceback out of the renderer is not a usable error message."""
+    extra = "workflows:\n  triage:\n    prompt: 42\n"
+    with pytest.raises(click.ClickException, match="prompt must be a string"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
+@pytest.mark.parametrize(
+    "workflow,placeholder,expression",
+    [(name, *pair) for name, pair in sorted(_PROMPT_WORKFLOWS.items())],
+)
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_multi_line_prompt_generates_parseable_yaml(
+    tmp_path: Path, workflow: str, placeholder: str, expression: str, harness: str
 ) -> None:
-    """A review prompt with braces but no `{pr_number}` reaches the agent verbatim.
+    """A prompt spanning lines is a documented knob, and `init` never parses what
+    it writes — so nothing but this catches a prompt shape that can only hold
+    one line. Three shapes could not: review's was a `format('...')` expression,
+    where a newline ended the GitHub Actions string literal; ci-fix's was a
+    block scalar the template indented by hand, which only indented the first
+    line; and the shared block-scalar macro itself let YAML infer the block's
+    indent from the first line, so an indented first line made every later line
+    look like the end of the scalar. Each wrote a file GitHub rejects from a
+    config that is valid YAML in the adopter's hands, and the adopter found out
+    from GitHub.
 
-    The review prompt is the only one emitted inside a GHA expression. With the
-    placeholder it goes through `format()`, which needs every other brace
-    doubled; without it, it is a bare string literal that GHA never collapses,
-    so doubling there would ship `{{...}}` to the agent.
+    The braces double as a check that nothing escapes them any more: they are
+    the adopter's text, and only the workflow's own placeholder is substituted,
+    to the one expression that names this workflow's event.
     """
-    extra = dedent("""\
-        workflows:
-          review:
-            prompt: "Review this PR. Skip files matching {generated}."
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    prompt = _review_prompt(workflows["tend-review.yaml"])
-    assert "{generated}" in prompt
+    body = f"  Do the thing for {placeholder}.\n\nSkip files matching {{generated}}.\n"
+    # ci-fix is the one workflow that needs a key of its own to render at all,
+    # so it is always configured and gains the prompt when it is the subject.
+    extra = (
+        f'harness: {harness}\nworkflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+    )
+    if workflow != "ci-fix":
+        extra += f"  {workflow}:\n"
+    extra += f"    prompt: {json.dumps(body)}\n"
+    content = {
+        wf.filename: wf.content
+        for wf in generate_all(Config.load(_minimal_config(tmp_path, extra)))
+    }[f"tend-{workflow}.yaml"]
+    prompt = agent_prompt(content)
+    assert prompt.startswith("  "), "the adopter's own leading indent was eaten"
+    assert "Skip files matching {generated}." in prompt
     assert "{{generated}}" not in prompt
     assert "format(" not in prompt
+    if placeholder:
+        assert placeholder not in prompt, f"{placeholder} was not substituted"
+        assert expression in prompt, f"{placeholder} resolved to the wrong event"
+    else:
+        assert "${{ github.event." not in prompt
 
 
-def test_review_prompt_with_placeholder_escapes_other_braces(tmp_path: Path) -> None:
-    """With `{pr_number}` present the prompt goes through `format()`, so the
-    placeholder becomes `{0}` and every other brace is doubled for it."""
-    extra = dedent("""\
-        workflows:
-          review:
-            prompt: "Review PR {pr_number}. Skip files matching {generated}."
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    prompt = _review_prompt(workflows["tend-review.yaml"])
-    assert "format(" in prompt
-    assert "{0}" in prompt
-    assert "{{generated}}" in prompt
+@pytest.mark.parametrize("lever", ["sandbox_path", "sandbox_setup"])
+def test_sandbox_levers_survive_an_indented_first_line(
+    tmp_path: Path, lever: str
+) -> None:
+    """The `sandbox_*` inputs are adopter-supplied lists rendered into the same
+    block scalar as the prompt, and had the same bug: an entry whose first line
+    is indented made every later entry look like the end of the scalar. Only
+    `sandbox_env` is exempt, and only because it refuses a newline outright.
+    """
+    extra = f'{lever}:\n  - "  indented entry"\n  - second entry\n'
+    workflows = generate_all(Config.load(_minimal_config(tmp_path, extra)))
+    for wf in workflows:
+        step = next(
+            s
+            for job in yaml.safe_load(wf.content)["jobs"].values()
+            for s in job["steps"]
+            if lever in s.get("with", {})
+        )
+        assert step["with"][lever] == "  indented entry\nsecond entry\n"
+
+
+def test_multi_line_prompt_survives_the_override_round_trip(tmp_path: Path) -> None:
+    """A workflow carrying `workflow_extra`/`jobs` overrides is re-serialised by
+    ruamel rather than emitted by the template, so the block scalar is written a
+    second time by different code. The regtest for that path uses the one-line
+    default prompt, which cannot show an indent bug.
+    """
+    body = "  Review it.\n\nBe brief.\n"
+    extra = (
+        "workflows:\n  review:\n"
+        f"    prompt: {json.dumps(body)}\n"
+        "    jobs:\n      review:\n        timeout-minutes: 240\n"
+    )
+    workflows = {
+        wf.filename: wf.content
+        for wf in generate_all(Config.load(_minimal_config(tmp_path, extra)))
+    }
+    assert "timeout-minutes: 240" in workflows["tend-review.yaml"], "overrides skipped"
+    assert agent_prompt(workflows["tend-review.yaml"]) == body
+
+
+@pytest.mark.parametrize("blank", ["", '""', '"   \\n  \\n"'])
+def test_blank_prompt_is_rejected(tmp_path: Path, blank: str) -> None:
+    """The three blank shapes don't fail alike, which is why the config refuses
+    all three rather than leaving it to what happens next. A whitespace-only
+    value is truthy, so it beats the default and leaves the agent step with no
+    instructions — the Claude action fails on the empty input, the Codex action
+    runs `codex exec` with it. `""` and a bare `prompt:` are falsy and reach the
+    default instead, silently ignoring what the adopter wrote.
+    """
+    extra = f"workflows:\n  triage:\n    prompt: {blank}\n"
+    with pytest.raises(click.ClickException, match="prompt is blank"):
+        Config.load(_minimal_config(tmp_path, extra))
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
@@ -1314,7 +1409,7 @@ def test_no_extras_output_unchanged(tmp_path: Path) -> None:
     """Without extras, generate_all() output matches direct generator output."""
     cfg = Config.load(_minimal_config(tmp_path))
     via_all = {wf.filename: wf.content for wf in generate_all(cfg)}
-    for name, gen_fn in GENERATORS.items():
+    for gen_fn in GENERATORS.values():
         try:
             wf = gen_fn(cfg)
         except click.ClickException:
