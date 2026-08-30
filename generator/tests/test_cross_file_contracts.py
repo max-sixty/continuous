@@ -95,6 +95,8 @@ def test_installation_and_each_poll_enable_repository_watching() -> None:
 def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None:
     """A push mid-review re-targets the review rather than throwing it away.
 
+    The mechanics live in `review-preflight.sh`; the skill keeps the pin file
+    contract on either side of it and the instructions for reading the delta.
     Re-targeting requires the live head to build on the reviewed one, and every
     review pins the commit it read: unpinned, GitHub anchors it at whatever is
     live when the POST lands, so the review claims code the session never saw.
@@ -104,13 +106,15 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     posting, and shell state does not survive a tool call.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+    preflight = _read("plugins", "tend-ci-runner", "scripts", "review-preflight.sh")
 
-    assert 'git merge-base --is-ancestor "$HEAD_SHA" "$CURRENT_HEAD"' in skill
+    assert 'git merge-base --is-ancestor "$REVIEWED" "$CURRENT_HEAD"' in preflight
     assert "HEAD moved — leaving" not in skill
 
     # Written where the head is read, and rewritten where it moves.
     assert 'echo "$HEAD_SHA" > /tmp/reviewed-head' in skill
-    assert 'echo "$CURRENT_HEAD" > /tmp/reviewed-head' in skill
+    assert 'echo "$CURRENT_HEAD" > "$PIN_FILE"' in preflight
+    assert 'PIN_FILE="${REVIEWED_HEAD_FILE:-/tmp/reviewed-head}"' in preflight
     # Read back by both posting recipes, and read *before* the POST: inlined as
     # `$(cat ...)` a missing file substitutes the empty string and the request
     # still goes out, which is the unpinned review the pin exists to prevent.
@@ -123,12 +127,15 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     #
     # The scoped log is the author's own new code: a plain two-dot diff between
     # the heads would hand the session everything a base merge dragged in.
-    assert "git log -p --no-merges" in skill
-    assert '--not "$BASE_SHA"' in skill
+    assert "git log -p --no-merges" in preflight
+    assert '--not "$BASE_SHA"' in preflight
     # The merges log is the only place a base merge appears, and it carries a
     # label or it reads as one more commit in the scoped log's stream.
-    assert '--merges "$HEAD_SHA..$CURRENT_HEAD"' in skill
-    assert "base merge: %h %s" in skill
+    assert '--merges "$REVIEWED..$CURRENT_HEAD"' in preflight
+    assert "base merge: %h %s" in preflight
+    # Both logs reach the session through one field, so the skill has to say
+    # they are two — an unlabelled `base merge:` line reads as one more commit.
+    assert "**Read both halves of `delta` as a pair.**" in skill
     # `--cc` is the only place a conflicted merge's resolution appears: the
     # author commits it inside the merge, where neither log reaches it. It is
     # not a substitute for re-verifying, though — a resolution taking the base

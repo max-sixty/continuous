@@ -409,17 +409,32 @@ def test_the_repo_is_named_explicitly_on_every_call(env: dict[str, str]) -> None
 
 
 def test_review_skill_preserves_the_status_free_queue_contract() -> None:
-    """The skill deduplicates outward reviews while the workflow keeps events."""
+    """The skill deduplicates outward reviews while the workflow keeps events.
+
+    Step 1's checks stay in the skill; the pre-post copies of them are
+    `review-preflight.sh`, which this pins alongside so the pair cannot drift
+    into disagreeing about what already counts as reviewed.
+    """
     skill = REVIEW_SKILL.read_text()
+    preflight = BOT_REVIEW_STATE.parent / "review-preflight.sh"
+    preflight_src = preflight.read_text()
 
     assert "repos/$REPO/statuses/$HEAD_SHA" not in skill
     assert "tend-review/<number>" not in skill
     assert "--json headRefOid,state" in skill
     assert '[ "$PR_STATE" != "OPEN" ]' in skill
-    assert '[ "$CURRENT_HEAD" != "$HEAD_SHA" ]' in skill
-    assert "ALREADY_POSTED=" in skill
-    assert ".at_head.draft_mode" in skill
-    assert '--argjson force "${FORCE_FULL_REVIEW:-false}"' in skill
+    assert "scripts/review-preflight.sh <number>" in skill
+
+    assert '[ "$PR_STATE" != "OPEN" ]' in preflight_src
+    assert '[ "$CURRENT_HEAD" != "$REVIEWED" ]' in preflight_src
+    assert ".at_head.draft_mode" in preflight_src
+    assert '--argjson force "$FORCE"' in preflight_src
+    # Derived from the event rather than read from the environment: the value
+    # step 1 exported is gone by the time a review is posted, so an inherited
+    # `FORCE_FULL_REVIEW` would always read false and a ready-for-review pass
+    # would stop on the draft COMMENT it exists to replace.
+    assert "${FORCE_FULL_REVIEW" not in preflight_src
+    assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in preflight_src
     assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in skill
     assert (
         "If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial"

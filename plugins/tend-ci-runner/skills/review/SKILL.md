@@ -234,48 +234,18 @@ gh api "repos/$REPO/issues/<number>/reactions" -f content="+1"
 
 #### Posting mechanics
 
-Before posting, check the PR is still open, re-target the review if HEAD moved, and check no review was already posted for this commit:
+Before posting, run the preflight. It checks the PR is still open, re-targets the review onto the live head if HEAD moved, and stops a second review of a commit that already carries one:
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-read -r CURRENT_HEAD PR_STATE < <(gh pr view <number> --json headRefOid,state \
-  --jq '"\(.headRefOid) \(.state)"')
-[ "$PR_STATE" != "OPEN" ] && echo "PR is $PR_STATE — skipping" && exit 0
-
-HEAD_SHA=$(cat /tmp/reviewed-head)
-if [ "$CURRENT_HEAD" != "$HEAD_SHA" ]; then
-  # Re-targeting needs the live head to build on the reviewed one; a rewrite
-  # (or a head that won't fetch) leaves nothing to re-target onto.
-  BASE_SHA=$(gh pr view <number> --json baseRefOid --jq '.baseRefOid')
-  git fetch --no-tags --quiet origin "refs/pull/<number>/head" || true
-  git fetch --no-tags --quiet origin "$BASE_SHA" || true
-  git merge-base --is-ancestor "$HEAD_SHA" "$CURRENT_HEAD" 2>/dev/null \
-    || { echo "cannot re-target onto $CURRENT_HEAD — leaving it to the queued review"; exit 0; }
-  # The author's own new code, scoped off base churn as in step 1:
-  # `--not "$BASE_SHA"` drops everything a base merge dragged in, which a plain
-  # `git diff` between the two heads would present as the author's.
-  git log -p --no-merges --format='%h %s' "$HEAD_SHA..$CURRENT_HEAD" --not "$BASE_SHA"
-  # Base merges, which the scoped log above cannot show — it drops the merge
-  # commit and every commit the merge brought in. An "Update branch" click
-  # prints nothing there while re-scoping every file's hunks.
-  git log --format='base merge: %h %s' --merges "$HEAD_SHA..$CURRENT_HEAD"
-  # The workspace still holds the tree that was reviewed, so read any file you
-  # need in full from git: `git show "$CURRENT_HEAD":<path>`.
-  echo "$CURRENT_HEAD" > /tmp/reviewed-head
-fi
-
-# `at_head` is non-null only for a review that genuinely anchors this commit: a
-# synthetic reply container and a review re-anchored by a rewrite are excluded.
-# A forced ready-for-review pass may replace Tend's earlier draft COMMENT, but
-# no other substantive review — including a full pass that raced this one.
-POST_STATE=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number>)
-ALREADY_POSTED=$(jq -r --argjson force "${FORCE_FULL_REVIEW:-false}" '
-  if .at_head == null or ($force and .at_head.draft_mode)
-  then "" else .at_head.at end' <<<"$POST_STATE")
-[ -n "$ALREADY_POSTED" ] && echo "Already reviewed — skipping" && exit 0
+PREFLIGHT=$(${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number>) || exit 1
+jq -r '"\(.verdict): \(.reason)", .delta' <<<"$PREFLIGHT"
 ```
 
-The state check matters because the maintainer may close (or another path may merge) the PR while a review is in flight — `pull_request_target` reviews routinely run for 5–10 minutes between fetching `HEAD_SHA` and posting the verdict, and HEAD doesn't move when the PR is closed. Approving a CLOSED or MERGED PR creates a confusing artifact (an approval timestamped after the close).
+On `skip`, post nothing and finish; the reason says which check stopped you. On `post`, the commit to anchor at is in `/tmp/reviewed-head` — the preflight rewrote it if HEAD moved, and every posting recipe reads it back. A non-empty `delta` is the push that landed mid-review, and the only record of it; read it per the bullets below.
+
+A non-zero exit is neither: nothing was decided and the error says why. Fix it and re-run — posting on a preflight that never answered is posting unpinned. Don't drop the `|| exit 1`; piped into `jq` a failure prints nothing and reads exactly like a clean run.
+
+The state check matters because the maintainer may close (or another path may merge) the PR while a review is in flight — `pull_request_target` reviews routinely run for 5–10 minutes between reading the head and posting the verdict, and HEAD doesn't move when the PR is closed. Approving a CLOSED or MERGED PR creates a confusing artifact (an approval timestamped after the close).
 
 **A push mid-review re-targets the review.** Everything read so far still holds for the code it was read against, and the delta is the only new information — however many pushes it spans. Read it, then post against the new head:
 
@@ -284,9 +254,9 @@ The state check matters because the maintainer may close (or another path may me
 - Findings the delta fixed drop out. If that empties the review and the delta itself reads clean, approve the new head: an empty-body approval is a verdict here, not the absence of one.
 - Finish without posting only when you can't judge the delta — it rewrites what you just reviewed, or it is a review's worth of new code in its own right. The queued run then reviews the new head in full.
 - Inline comments resolve against the commit the review pins, so re-verify each one against the current `gh pr diff`, which now returns the new head's. On a file the delta didn't touch, the line is unchanged and the comment stands. On one it did, move the comment to the line the code sits on now; where the line no longer falls inside a hunk, put the finding in the review body as a fenced quote with its path, as under **Recovering from inline comment 422 errors**.
-- **Read the two `git log` outputs as a pair.** The scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click. When a `base merge:` line appears, re-verify every inline comment against the new `gh pr diff` even if the scoped log printed nothing — the merge re-scopes hunks in files the scoped delta cannot show, so the "file the delta didn't touch" shortcut above does not hold.
+- **Read both halves of `delta` as a pair.** It is two logs in sequence: the scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click. When a `base merge:` line appears, re-verify every inline comment against the new `gh pr diff` even if the scoped log printed nothing — the merge re-scopes hunks in files the scoped delta cannot show, so the "file the delta didn't touch" shortcut above does not hold.
 - **Also read `git show --cc <merge sha>` on a base merge**, for what the merge itself changed. Where it conflicted, the author's resolution is committed *inside* the merge, and both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. A finding the resolution already fixed must drop out. `--cc` prints only hunks differing from every parent, so a resolution that took the base side prints nothing at all — it tells you what a merge changed, never that a merge changed nothing, which is why re-verification above is unconditional.
-- Re-compose every `suggestion` block on a file the delta touched, reading the new content with `git show "$CURRENT_HEAD":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged reverts the author's newest edit on one click, and a multi-line one deletes every in-range line it doesn't reproduce.
+- Re-compose every `suggestion` block on a file the delta touched, reading the new content with `git show "$(cat /tmp/reviewed-head)":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged reverts the author's newest edit on one click, and a multi-line one deletes every in-range line it doesn't reproduce.
 
 **Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what `bot-review-state.sh` reports as `LAST_REVIEW_SHA`: pinned to the head you re-targeted onto, the queued run's step 1 finds that head already reviewed and finishes without posting a second review of the same code.
 
