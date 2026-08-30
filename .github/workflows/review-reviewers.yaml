@@ -62,10 +62,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Mirrors data/consumers.json, which the weekly sweep refreshes.
-        # `test_review_reviewers_matrix_mirrors_consumers` fails when the two
-        # drift, because nothing else notices: a repo missing here is simply
-        # never analyzed, and the run still reports success.
+        # Covers data/consumers.json, which the weekly sweep refreshes.
+        # `test_review_reviewers_matrix_covers_consumers` fails when a
+        # consumer is missing here, because nothing else notices: that repo is
+        # simply never analyzed, and the run still reports success. An entry
+        # the JSON lacks is fine — its leg fails loudly if tend really is gone.
         repo:
           - PRQL/prql
           - diffplug/dormouse

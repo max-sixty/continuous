@@ -164,14 +164,21 @@ def test_weekly_approval_pins_the_commit_it_checked() -> None:
         assert "gh pr review --approve" not in content
 
 
-def test_review_reviewers_matrix_mirrors_consumers() -> None:
+def test_review_reviewers_matrix_covers_consumers() -> None:
     """`review-reviewers` fans out over a hand-written matrix while
     `data/consumers.json` is refreshed weekly by the `running-tend` sweep. A
     repo that lands in the JSON and not in the matrix is simply never
     analyzed, and the run still reports success — so the omission reads as a
-    clean fleet sweep rather than a partial one."""
+    clean fleet sweep rather than a partial one.
+
+    Containment, not equality: the JSON is rebuilt wholesale from a
+    best-effort `gh search code`, so a search that misses a repo would make
+    equality demand deleting its matrix leg. An extra leg costs one analysis
+    of a repo that may have uninstalled tend, and fails loudly when it has.
+    """
     workflow = yaml.safe_load(_read(".github", "workflows", "review-reviewers.yaml"))
     matrix = workflow["jobs"]["review-reviewers"]["strategy"]["matrix"]["repo"]
     consumers = [entry["repo"] for entry in json.loads(_read("data", "consumers.json"))]
 
-    assert sorted(matrix) == sorted(consumers)
+    unanalyzed = sorted(set(consumers) - set(matrix))
+    assert not unanalyzed, f"in consumers.json, absent from the matrix: {unanalyzed}"

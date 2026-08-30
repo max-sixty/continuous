@@ -159,9 +159,10 @@ is empty — `git diff --quiet` returns 0 for untracked paths, so the
 first-run case would no-op. Code search is 10 req/min — one call covers
 the whole list.
 
-A changed list also changes `review-reviewers.yaml`'s matrix, which mirrors
-it; put both in the one PR, or
-`test_review_reviewers_matrix_mirrors_consumers` fails it.
+A repo new to the list needs a `review-reviewers.yaml` matrix entry too; put
+both in the one PR, or `test_review_reviewers_matrix_covers_consumers` fails
+it. A repo the search dropped needs no matrix deletion — the test only requires
+the matrix to cover the JSON.
 
 ## Weekly: bump pinned versions
 
