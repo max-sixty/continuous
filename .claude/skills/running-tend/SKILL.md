@@ -159,6 +159,10 @@ is empty — `git diff --quiet` returns 0 for untracked paths, so the
 first-run case would no-op. Code search is 10 req/min — one call covers
 the whole list.
 
+A changed list also changes `review-reviewers.yaml`'s matrix, which mirrors
+it; put both in the one PR, or
+`test_review_reviewers_matrix_mirrors_consumers` fails it.
+
 ## Weekly: bump pinned versions
 
 Every dependency pin in the repo is in scope — no bot watches this repo, so a

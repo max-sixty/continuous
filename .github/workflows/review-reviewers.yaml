@@ -62,10 +62,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Mirrors data/consumers.json. Keep in sync when a repo adopts tend.
+        # Mirrors data/consumers.json, which the weekly sweep refreshes.
+        # `test_review_reviewers_matrix_mirrors_consumers` fails when the two
+        # drift, because nothing else notices: a repo missing here is simply
+        # never analyzed, and the run still reports success.
         repo:
           - PRQL/prql
+          - diffplug/dormouse
+          - jakobtfaber/Faber2026
           - max-sixty/cargo-affected
+          - max-sixty/leaf
           - max-sixty/tend
           - max-sixty/worktrunk
           - numbagg/numbagg
