@@ -517,6 +517,8 @@ class Config:
                         f"Set `workflows.{name}.model:` to a valid {wf_harness} model."
                     )
                 wf_prompt = wf_raw.get("prompt", "")
+                if wf_prompt is None:  # `prompt:` with nothing after it
+                    wf_prompt = ""
                 if not isinstance(wf_prompt, str):
                     raise click.ClickException(
                         f"workflows.{name}.prompt must be a string, "
@@ -534,12 +536,14 @@ class Config:
                         "standing guidance in the repo's `running-tend` skill "
                         "overlay instead."
                     )
-                # A blank prompt is truthy enough to beat the default and
-                # empty enough to leave the agent step with no instructions.
-                # The harnesses disagree about that: the Claude action fails
-                # on an empty `TEND_PROMPT`, while the Codex action hands it
-                # to `codex exec` and boots an agent with nothing to do. It is
-                # a typo either way, so refuse it here and let neither decide.
+                # A whitespace-only prompt is truthy, so it beats the default
+                # and leaves the agent step with no instructions — which the
+                # Claude action fails on by name and the Codex action hands to
+                # `codex exec` and runs. `""` and a bare `prompt:` are falsy and
+                # fall through to the default instead, which is quieter but no
+                # more what the adopter wrote. All three are typos; refuse them
+                # here, where the key's presence still tells them apart from an
+                # absent one.
                 if "prompt" in wf_raw and not wf_prompt.strip():
                     raise click.ClickException(
                         f"workflows.{name}.prompt is blank. Drop the key to "
