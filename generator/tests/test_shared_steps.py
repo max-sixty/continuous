@@ -496,3 +496,349 @@ def test_notifications_check_tolerates_an_html_200(
 
     assert result.returncode == 0, result.stderr
     assert _output(notifications_env, "count") == "0"
+
+
+# ---------------------------------------------------------------------------
+# review-gate.sh — the tend-review pre-boot check
+# ---------------------------------------------------------------------------
+
+REVIEW_GATE = REPO_ROOT / "generator" / "src" / "tend" / "templates" / "review-gate.sh"
+
+HEAD_SHA = "a" * 40
+OLD_SHA = "b" * 40
+
+# `gh` stand-in for the review gate. Each fixture file holds one endpoint's
+# body; the reviews and timeline calls paginate, so the fake puts the whole
+# fixture on one page and lets the script's own `--jq` run over it — the filter
+# is the behaviour under test.
+FAKE_GH_REVIEW = (
+    GH_PREAMBLE
+    + r"""
+# Fixtures hold one JSON document per line, the way `gh api --paginate`
+# concatenates pages. Without the flag `gh` returns page one and stops, so
+# serve only the first line — otherwise a script that dropped `--paginate`
+# would still see every page here and the pagination tests would pass on it.
+pages() {
+  case " $* " in
+    *" --paginate "*) cat "$1" ;;
+    *) head -n1 "$1" ;;
+  esac
+}
+
+case "$*" in
+  *"/reviews"*)
+    [ -z "${FAIL_REVIEWS:-}" ] || exit 1
+    emit "$(pages "$REVIEWS_JSON" "$@")"
+    ;;
+  *"/timeline"*)
+    [ -z "${FAIL_TIMELINE:-}" ] || exit 1
+    emit "$(pages "$TIMELINE_JSON" "$@")"
+    ;;
+  *"/pulls/"*)
+    [ -z "${FAIL_PR:-}" ] || exit 1
+    # A 200 carrying something other than JSON, verbatim.
+    if [ -n "${RAW_BODY:-}" ]; then cat "$RAW_BODY"; exit 0; fi
+    emit "$(cat "$PR_JSON")"
+    ;;
+  *) exit 1 ;;
+esac
+"""
+)
+
+
+def _bot_review(
+    *,
+    state: str = "COMMENTED",
+    body: str = "findings",
+    commit_id: str = HEAD_SHA,
+    submitted_at: str | None = "2026-01-02T12:00:00Z",
+    login: str = "test-bot",
+) -> dict:
+    """One review as `GET /pulls/{n}/reviews` returns it."""
+    return {
+        "id": 1,
+        "user": {"login": login},
+        "state": state,
+        "body": body,
+        "commit_id": commit_id,
+        "submitted_at": submitted_at,
+    }
+
+
+def _force_push(created_at: str) -> dict:
+    return {"event": "head_ref_force_pushed", "created_at": created_at}
+
+
+@pytest.fixture
+def gate_env(tmp_path: Path) -> dict[str, str]:
+    """Fake gh on PATH, an open PR at HEAD_SHA, no reviews, no force-pushes."""
+    bindir = fake_bin(tmp_path, gh=FAKE_GH_REVIEW)
+    env = {
+        "PATH": tool_path(bindir),
+        "GH_CALLS": str(tmp_path / "gh-calls.log"),
+        "GITHUB_OUTPUT": str(tmp_path / "output.txt"),
+        "GITHUB_REPOSITORY": "owner/repo",
+        "PR": "7",
+        "EVENT_ACTION": "synchronize",
+        "BOT_NAME": "test-bot",
+    }
+    fixtures: dict[str, object] = {
+        "PR_JSON": {"state": "open", "head": {"sha": HEAD_SHA}},
+        "REVIEWS_JSON": [],
+        "TIMELINE_JSON": [],
+    }
+    for key, value in fixtures.items():
+        path = tmp_path / f"{key.lower()}.json"
+        path.write_text(json.dumps(value))
+        env[key] = str(path)
+    return env
+
+
+def _run_gate(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
+    return subprocess.run(
+        [BASH, "-e", str(REVIEW_GATE)], env=env, capture_output=True, text=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "reviews", "should_run"),
+    [
+        # What the gate exists for: the session that was running when this push
+        # landed folded it in and posted its review at the live head.
+        ("body at head", [_bot_review()], "false"),
+        # An approval's body is empty by convention, so the state is what
+        # separates it from the reply container below.
+        ("empty-bodied approval", [_bot_review(state="APPROVED", body="")], "false"),
+        # The recovery path: a session killed by a timeout or a cancellation
+        # anchors nothing, and this run does the review it never posted.
+        ("nothing posted", [], "true"),
+        ("review of an earlier commit", [_bot_review(commit_id=OLD_SHA)], "true"),
+        # GitHub wraps an inline reply in a synthetic zero-body COMMENTED
+        # review anchored at the then-current head. It reviewed nothing.
+        ("reply container", [_bot_review(body="")], "true"),
+        ("another author's review", [_bot_review(login="human")], "true"),
+        # The endpoint returns the caller's own unsubmitted review, and the bot
+        # is the caller. `jq -r` renders its null `submitted_at` as the string
+        # "null", which sorts above every real timestamp — so without the
+        # explicit guard a draft nobody can see would read as the newest
+        # anchor and suppress the run.
+        (
+            "unsubmitted pending review",
+            [_bot_review(state="PENDING", submitted_at=None)],
+            "true",
+        ),
+    ],
+)
+def test_review_gate_boots_unless_the_bot_reviewed_this_head(
+    gate_env: dict[str, str], label: str, reviews: list[dict], should_run: str
+) -> None:
+    _write_json(gate_env, "REVIEWS_JSON", reviews)
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == should_run, label
+
+
+def test_review_gate_reviews_a_head_an_anchor_was_rewritten_onto(
+    gate_env: dict[str, str],
+) -> None:
+    """A force-push re-points earlier reviews' `commit_id` at the new head, so a
+    review of code that no longer exists reports this head. Reading the anchor
+    alone would skip the only run that reviews the rewritten commit."""
+    _write_json(gate_env, "REVIEWS_JSON", [_bot_review()])
+    _write_json(gate_env, "TIMELINE_JSON", [_force_push("2026-01-02T13:00:00Z")])
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "true"
+
+
+def test_review_gate_skips_a_head_reviewed_after_the_rewrite(
+    gate_env: dict[str, str],
+) -> None:
+    """The discount is by time, not by a force-push having ever happened: a PR
+    force-pushed and then reviewed is covered like any other. Both force-push
+    events are read, not just the first — an anchor is stale when a rewrite
+    postdates it."""
+    _write_json(gate_env, "REVIEWS_JSON", [_bot_review()])
+    _write_json(
+        gate_env,
+        "TIMELINE_JSON",
+        [_force_push("2026-01-02T09:00:00Z"), _force_push("2026-01-02T11:00:00Z")],
+    )
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "false"
+
+
+@pytest.mark.parametrize("action", ["opened", "ready_for_review", "labeled"])
+def test_review_gate_admits_every_other_event_without_asking(
+    gate_env: dict[str, str], action: str
+) -> None:
+    """`opened` has no prior run, and `ready_for_review` sets the session's
+    `FORCE_FULL_REVIEW`, which bypasses the already-reviewed check so a draft's
+    COMMENT-only pass is redone in full. An action the gate doesn't name falls
+    through to a run — the fail-open direction, so widening `types:` in an
+    override can't silently start skipping. All decided before any API call."""
+    gate_env["EVENT_ACTION"] = action
+    _write_json(gate_env, "REVIEWS_JSON", [_bot_review()])
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "true"
+    assert not Path(gate_env["GH_CALLS"]).exists()
+
+
+def test_review_gate_skips_a_reopen_of_an_already_reviewed_head(
+    gate_env: dict[str, str],
+) -> None:
+    """Reopening changes no code. The session's step 1 stops on an
+    already-reviewed head — only `ready_for_review` sets `FORCE_FULL_REVIEW` —
+    so admitting `reopened` boots an agent that posts nothing."""
+    gate_env["EVENT_ACTION"] = "reopened"
+    _write_json(gate_env, "REVIEWS_JSON", [_bot_review()])
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "false"
+
+
+def test_review_gate_skips_a_pr_that_is_no_longer_open(
+    gate_env: dict[str, str],
+) -> None:
+    """A push to a merged or closed PR's branch still fires `synchronize`, and a
+    review posted after the close is an artifact nobody asked for. `closed`
+    covers merged too — `GET /pulls/{n}` reports a merged PR as closed, with
+    the merge in a separate field."""
+    _write_json(gate_env, "PR_JSON", {"state": "closed", "head": {"sha": HEAD_SHA}})
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "false"
+
+
+@pytest.mark.parametrize(
+    "failure", ["FAIL_PR", "FAIL_REVIEWS", "FAIL_TIMELINE", "RAW_BODY"]
+)
+def test_review_gate_fails_open(
+    gate_env: dict[str, str], tmp_path: Path, failure: str
+) -> None:
+    """A redundant agent run beats a silently skipped review, and the step is
+    `bash -e`, so an untolerated `gh` or `jq` failure would fail the job red.
+    `RAW_BODY` is the blip that answers 200 with an HTML error page: `gh` exits
+    zero and the body isn't JSON."""
+    _write_json(gate_env, "REVIEWS_JSON", [_bot_review()])
+    if failure == "RAW_BODY":
+        body = tmp_path / "body.html"
+        body.write_text("<html>unicorn</html>")
+        gate_env[failure] = str(body)
+    else:
+        gate_env[failure] = "1"
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "true"
+
+
+def test_review_gate_fails_open_on_a_pr_payload_missing_its_head(
+    gate_env: dict[str, str],
+) -> None:
+    """Well-formed JSON that isn't a PR object. Every read of it goes through
+    the same guard, so a shape the script can't use fails open like any other
+    bad body. `head` is a string here rather than absent: indexing it raises a
+    jq *type* error, which `jq -r` alone exits non-zero on, so read outside the
+    guard it would fail the step red — the one direction the guard rules out."""
+    _write_json(gate_env, "PR_JSON", {"state": "open", "head": "not-an-object"})
+    _write_json(gate_env, "REVIEWS_JSON", [_bot_review()])
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "true"
+
+
+def test_review_gate_reads_every_page_of_reviews(gate_env: dict[str, str]) -> None:
+    """The reviews list is paginated, and a review that anchors the head can sit
+    on any page — GitHub orders them oldest-first, so on a long-lived PR the
+    newest is the one that spills. Fetch every page: without `--paginate` the
+    gate sees page one, finds no anchor, and re-reviews a reviewed head."""
+    Path(gate_env["REVIEWS_JSON"]).write_text(
+        json.dumps([_bot_review(commit_id=OLD_SHA)])
+        + "\n"
+        + json.dumps([_bot_review()])
+    )
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "false"
+
+
+def test_review_gate_discounts_by_the_newest_anchor_not_the_oldest(
+    gate_env: dict[str, str],
+) -> None:
+    """`--jq` runs per page, so both lists are reduced in the shell. The anchor
+    side has to take the *newest* review: a PR reviewed, force-pushed, and
+    reviewed again carries an anchor on each side of the rewrite, and reducing
+    to the older one reads the head as unreviewed and re-reviews it."""
+    _write_json(
+        gate_env,
+        "REVIEWS_JSON",
+        [
+            _bot_review(submitted_at="2026-01-02T09:00:00Z"),
+            _bot_review(submitted_at="2026-01-02T13:00:00Z"),
+        ],
+    )
+    _write_json(gate_env, "TIMELINE_JSON", [_force_push("2026-01-02T12:00:00Z")])
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "false"
+
+
+def test_review_gate_reviews_again_when_the_rewrite_ties_the_anchor(
+    gate_env: dict[str, str],
+) -> None:
+    """Timestamps are second-resolution, so a rewrite in the same second as the
+    review it may have invalidated is genuinely ambiguous. Strictly newer, so
+    the tie resolves into a run rather than a skipped review."""
+    _write_json(
+        gate_env,
+        "REVIEWS_JSON",
+        [_bot_review(submitted_at="2026-01-02T12:00:00Z")],
+    )
+    _write_json(gate_env, "TIMELINE_JSON", [_force_push("2026-01-02T12:00:00Z")])
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "true"
+
+
+def test_review_gate_reads_every_page_of_the_timeline(
+    gate_env: dict[str, str],
+) -> None:
+    """Same per-page hazard on the other fetch, and it fails the dangerous way:
+    a rewrite recorded past page one would go unseen and the stale anchor would
+    skip the run that reviews the rewritten head."""
+    _write_json(gate_env, "REVIEWS_JSON", [_bot_review()])
+    Path(gate_env["TIMELINE_JSON"]).write_text(
+        json.dumps([_force_push("2026-01-02T09:00:00Z")])
+        + "\n"
+        + json.dumps([_force_push("2026-01-02T13:00:00Z")])
+    )
+
+    result = _run_gate(gate_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(gate_env, "should_run") == "true"

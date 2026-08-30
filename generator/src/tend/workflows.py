@@ -141,9 +141,16 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     Returns empty string when no steps, or newline-prefixed block when present,
     so templates can write `<<setup>>` without extra blank lines.
 
-    When *condition* is set, steps without an explicit `if:` receive one so
-    they only run when the pre-check found work. Steps that already specify
-    `if:` are left alone (with a warning) — their condition wins.
+    When *condition* is set, every step is gated on it, a step's own `if:`
+    becoming a further conjunct rather than a replacement. The guard is not the
+    adopter's to opt out of: on a run the pre-check declined, nothing was
+    checked out, so a `uses: ./…` step that survived the guard resolves against
+    an empty workspace and fails the job with `Can't find 'action.yml'`.
+
+    Both sides are parenthesized. GitHub Actions binds `&&` tighter than `||`,
+    and notifications' guard is itself a disjunction — unbracketed, the adopter's
+    condition would attach to that guard's second branch alone and do nothing on
+    the first.
     """
     if not cfg.setup:
         return ""
@@ -151,15 +158,8 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     for step in cfg.setup:
         fields = dict(step.fields)
         if condition:
-            if "if" in fields:
-                click.echo(
-                    "Warning: setup step has an explicit `if:`; the "
-                    "workflow's pre-check guard will not be added. "
-                    "The step runs based on your condition alone.",
-                    err=True,
-                )
-            else:
-                fields["if"] = condition
+            own = fields.get("if")
+            fields["if"] = f"({condition}) && ({own})" if own else condition
         ordered = {k: fields[k] for k in _STEP_FIELD_ORDER if k in fields}
         for k, v in fields.items():
             ordered.setdefault(k, v)
@@ -275,11 +275,18 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     else:
         prompt_expr = f"'{escaped}'"
 
+    skip_condition = "steps.gate.outputs.should_run == 'true'"
+    gate_script = (
+        importlib.resources.files("tend") / "templates" / "review-gate.sh"
+    ).read_text(encoding="utf-8")
+
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=skip_condition),
         local_actions=_restore_local_actions_run(eff),
         prompt_expr=prompt_expr,
+        skip_condition=skip_condition,
+        gate_script=gate_script.rstrip("\n"),
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 

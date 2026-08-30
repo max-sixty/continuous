@@ -249,16 +249,24 @@ Events pass through three layers before the bot does work:
    A false condition skips the job entirely (never enters the concurrency
    group, never queues).
 2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
-   whether the agent boots: mention's verify job checks engagement, and
+   whether the agent boots: mention's verify job checks engagement,
    notifications' check repairs repository watching then captures a paginated
-   cutoff snapshot.
+   cutoff snapshot, and review's gate skips a `synchronize` or `reopened`
+   whose head the bot has already posted a review at (or whose PR has closed).
 3. **Concurrency groups** — at most one running job per group.
+
+The numbers are a filtering order, not an execution order. Layer 2 lives
+*inside* the job that carries the `concurrency:` block, so layer 3 holds the
+run first and the pre-check evaluates only once the group releases it. For
+review that inversion is the whole mechanism: the gate is worth having
+precisely because, by the time it runs, the session it queued behind has
+finished and published the review it reads.
 
 Concurrency groups:
 
 | Workflow | Group key | Cancel-in-progress |
 |---|---|---|
-| review | `workflow-PR#` | **no** — killing a session discards a review it can still deliver; `queue: max` holds pending PR events within GitHub's queue limit while it folds the push in and posts |
+| review | `workflow-PR#` | **no** — `queue: max` preserves pending PR events within GitHub's queue limit while the active session folds a mid-review push into what it posts; the queued run's gate then skips the head that review anchors |
 | mention/relay | none | stateless — secretless job that re-posts review events as a `repository_dispatch` |
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |

@@ -21,6 +21,12 @@
 #   that no longer exists reports the current head, and `.commit_id` alone
 #   cannot tell an ordinary push from a rewrite. Anything submitted before the
 #   newest `head_ref_force_pushed` is discounted.
+
+#   Unsubmitted reviews. The endpoint also returns the caller's *own* PENDING
+#   reviews, and the caller here is the bot. Their `submitted_at` is null, which
+#   compares below every timestamp in jq — so the force-push discount lets them
+#   through whenever no force-push has happened. A review nobody has submitted
+#   anchors nothing, so drop them up front rather than at each use.
 #
 # Output (one object, all fields always present; absent values are null or ""):
 #   head_sha            the PR's current head
@@ -76,7 +82,7 @@ gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
   | jq -s --argjson sub "$SUBSTANTIVE" --arg bot "$BOT" --arg head "$HEAD_SHA" \
       --arg fp "$LAST_FORCE_PUSH_AT" '
     add
-    | [.[] | select(.user.login == $bot)] as $mine
+    | [.[] | select(.user.login == $bot and .submitted_at != null)] as $mine
     | ($mine | map(select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED"))) as $subs
     | ($subs | last) as $lastsub
     | ($mine | map(select(.state == "APPROVED")) | last) as $lastapp

@@ -28,6 +28,7 @@ from tend.workflows import (
     generate_all,
     generate_install_test,
     generate_mention,
+    generate_review,
 )
 
 
@@ -105,18 +106,20 @@ def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
 
 
 @pytest.mark.parametrize(
-    ("name", "job", "switch"),
+    ("name", "job", "switch", "gate"),
     [
         (
             "review",
             "review",
             lambda s: s.get("uses", "").startswith("actions/checkout")
             and "ref" in s.get("with", {}),
+            "steps.gate.outputs.should_run",
         ),
         (
             "mention",
             "handle",
             lambda s: "gh pr checkout" in str(s.get("run", "")),
+            None,
         ),
     ],
 )
@@ -125,6 +128,7 @@ def test_local_setup_action_restored_for_post_cleanup(
     name: str,
     job: str,
     switch: object,
+    gate: str | None,
 ) -> None:
     """review and mention land the PR's tree over the workspace a local `setup:`
     composite was loaded from. To dispatch the POST steps of the actions nested
@@ -133,8 +137,10 @@ def test_local_setup_action_restored_for_post_cleanup(
     cleanup (actions/runner#2816). Put the loaded version back before the POST
     chain walks.
 
-    `always()` covers a failed session so cleanup still sees the version the
-    runner loaded."""
+    `always()` covers a skip as well as a failure, so where the caller gates its
+    earlier steps the restore carries that gate too: a gate-skipped run checked
+    nothing out, and an unconditional restore would warn about cleaning up a
+    composite that never loaded."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
@@ -146,7 +152,14 @@ def test_local_setup_action_restored_for_post_cleanup(
     assert condition.startswith("always()"), (
         f"{name}: the restore has to run even when the session fails"
     )
-    assert condition == "always()", f"{name}: restore has an extra gate"
+    if gate is None:
+        assert condition == "always()", f"{name}: gates at the job level"
+    else:
+        # Matched by shape, not by substring: a step that disjoined its way
+        # past the gate would still contain it.
+        assert condition == f"always() && ({gate} == 'true')", (
+            f"{name}: the restore has to skip with the steps it restores for"
+        )
     switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
@@ -325,13 +338,27 @@ def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
     assert build["env"] == {"RUSTFLAGS": "-D warnings"}
 
 
-def test_setup_step_user_if_preserved_in_notifications(
+@pytest.mark.parametrize(
+    ("filename", "job", "guard"),
+    [
+        (
+            "tend-notifications.yaml",
+            "notifications",
+            "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'",
+        ),
+        ("tend-review.yaml", "review", "steps.gate.outputs.should_run == 'true'"),
+    ],
+)
+def test_setup_step_user_if_narrows_the_pre_check_guard(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+    filename: str,
+    job: str,
+    guard: str,
 ) -> None:
-    """User-supplied `if:` on a setup step is passed through; tend does not
-    add its own notifications guard on top. A warning is emitted so the user
-    knows they've opted out of the pre-check gating."""
+    """A user-supplied `if:` narrows the workflow's pre-check guard; it does not
+    replace it. Replacing it is unsafe in a way the adopter can't see: on a run
+    the pre-check declined nothing is checked out, so a surviving
+    `uses: ./…` step resolves against an empty workspace and fails the job."""
     extra = dedent("""\
         setup:
           - run: ./flaky.sh
@@ -339,17 +366,13 @@ def test_setup_step_user_if_preserved_in_notifications(
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    captured = capsys.readouterr()
-    assert "explicit `if:`" in captured.err
 
-    notifications = workflows["tend-notifications.yaml"]
-    data = yaml.safe_load(notifications.content)
-    step = next(
-        s
-        for s in data["jobs"]["notifications"]["steps"]
-        if s.get("run") == "./flaky.sh"
-    )
-    assert step["if"] == "runner.os == 'Linux'"
+    data = yaml.safe_load(workflows[filename].content)
+    step = next(s for s in data["jobs"][job]["steps"] if s.get("run") == "./flaky.sh")
+    # Both sides bracketed: `&&` binds tighter than `||`, and notifications'
+    # guard is a disjunction — `A || B && (own)` would apply the adopter's
+    # condition to B alone.
+    assert step["if"] == f"({guard}) && (runner.os == 'Linux')"
 
 
 def test_setup_step_rejects_unknown_field(tmp_path: Path) -> None:
@@ -676,11 +699,28 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert "clean" not in checkouts[0]["with"]
 
 
-def test_review_preserves_pending_events_without_an_examined_status(
-    tmp_path: Path,
-) -> None:
-    """Every event waits for the current session, including ready-for-review."""
-    extra = "setup:\n  - run: npm ci\n"
+def test_review_queues_pushes_behind_a_gate(tmp_path: Path) -> None:
+    """A push mid-review queues a replacement run; the gate step decides
+    whether it boots an agent.
+
+    The running session folds the push in and posts its review at the live head,
+    so the queued run's work is usually already done. That only holds if the
+    gate is the first step and everything after it — checkouts, setup, the agent
+    — is conditioned on its verdict; an ungated step would run (and bill) on
+    every replaced event. Every event still waits for the current session:
+    `queue: max` is what keeps a push from replacing a pending
+    ready-for-review.
+
+    The second setup step carries its own `if:`, the one shape that could slip
+    past the guard: an ungated `uses: ./…` below a gated checkout would resolve
+    against an empty workspace on every skipped run.
+    """
+    extra = (
+        "setup:\n"
+        "  - run: npm ci\n"
+        "  - run: ./optional.sh\n"
+        "    if: \"runner.os == 'Linux'\"\n"
+    )
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     content = workflows["tend-review.yaml"].content
@@ -690,9 +730,44 @@ def test_review_preserves_pending_events_without_an_examined_status(
     assert job["concurrency"]["cancel-in-progress"] is False
     assert job["concurrency"]["queue"] == "max"
     assert "must set\n      # `queue: null`" in content
-    assert all(step.get("id") != "gate" for step in job["steps"])
-    assert "steps.gate" not in content
+    steps = job["steps"]
+    assert steps[0].get("id") == "gate"
+    # Unconditional: the step that decides cannot itself be skipped, and a
+    # skipped step's outputs are empty, which reads as "don't run".
+    assert "if" not in steps[0]
+    # The gate reads published review state. It must not go back to a commit
+    # status — writing one put a visible check row on every reviewed commit,
+    # and reading one is how the removed gate consumed it.
+    assert "/reviews?per_page=100" in steps[0]["run"]
     assert "tend-review/" not in content
+    assert "/statuses/" not in content
+    assert "/status?" not in content
+    # A crashing gate must paint the job red, not leave every later step
+    # skipped on an empty output — a review that silently never happened.
+    assert "continue-on-error" not in steps[0]
+
+    gate = "steps.gate.outputs.should_run == 'true'"
+    # The two steps that undo what the run did: they have to survive a failed
+    # session, so `always()` is right there and wrong everywhere else.
+    cleanup = {
+        "Restore local setup actions for POST cleanup",
+        "Remove the eyes reaction",
+    }
+    for step in steps[1:]:
+        condition = str(step.get("if", ""))
+        if step.get("name") in cleanup:
+            assert condition == f"always() && ({gate})", f"cleanup step: {step}"
+            continue
+        # Any status function in an `if` drops GHA's implicit `success() &&`,
+        # so a working step carrying one would run on the workspace a failed
+        # checkout left behind. Matched by shape, not by substring: a step
+        # disjoining its way past the gate would still contain it.
+        assert not any(
+            fn in condition for fn in ("always()", "failure()", "cancelled()")
+        ), f"working step opts out of success(): {step}"
+        assert condition == gate or condition.startswith(f"({gate}) && "), (
+            f"ungated step after the gate: {step}"
+        )
 
 
 def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
@@ -716,8 +791,8 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
     react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
     assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
-    # Every admitted review run boots a session, so each one gets a reaction.
-    assert "if" not in react
+    # Nothing beyond the gate: a run that boots an agent says so.
+    assert react["if"] == "steps.gate.outputs.should_run == 'true'"
 
 
 @pytest.mark.parametrize(
@@ -864,6 +939,39 @@ def test_mention_review_comment_listens_only_for_edits(tmp_path: Path) -> None:
     assert data["on"]["pull_request_review_comment"] == {"types": ["edited"]}, (
         "pull_request_review_comment must subscribe to ['edited'] only — see "
         "the trigger comment in the mention template for the dedup rationale"
+    )
+
+
+def test_review_gate_wires_every_variable_it_reads(tmp_path: Path) -> None:
+    """The gate's decisions are exercised by running it (test_shared_steps); what
+    generation owns is the wiring. The script is inlined verbatim, so a name the
+    workflow forgets is simply empty at runtime — a missing BOT_NAME matches no
+    review author, and every push then boots an agent on a green job."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    data = yaml.safe_load(generate_review(cfg).content)
+    gate_step = next(
+        s for s in data["jobs"]["review"]["steps"] if s.get("id") == "gate"
+    )
+
+    assert gate_step["env"] == {
+        "GITHUB_TOKEN": f"${{{{ secrets.{BOT_TOKEN_SECRET} }}}}",
+        "PR": "${{ github.event.pull_request.number }}",
+        # `synchronize` is the only action the gate can skip; the rest ask for
+        # a pass whatever the head already carries.
+        "EVENT_ACTION": "${{ github.event.action }}",
+        # Whose reviews count as an anchor. The configured identity, so the
+        # gate needs no API call to learn who it is.
+        "BOT_NAME": "test-bot",
+    }
+
+    source = (
+        importlib.resources.files("tend") / "templates" / "review-gate.sh"
+    ).read_text()
+    read = set(re.findall(r"\$\{?([A-Z][A-Z0-9_]*)\}?", source))
+    assigned = set(re.findall(r"\b([A-Z][A-Z0-9_]*)=", source))
+    supplied = set(gate_step["env"]) | {"GITHUB_OUTPUT", "GITHUB_REPOSITORY"}
+    assert read - assigned <= supplied, (
+        f"the gate reads {sorted(read - assigned - supplied)}, which nothing sets"
     )
 
 

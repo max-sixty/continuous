@@ -94,11 +94,14 @@ def test_installation_and_each_poll_enable_repository_watching() -> None:
 
 
 def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None:
-    """A push mid-review re-targets the review rather than throwing it away.
+    """A push mid-review re-targets the review rather than throwing it away —
+    which is also what makes the pre-boot gate's skip safe, since a head the
+    session abandoned would carry no anchor for the gate to read.
 
     Re-targeting requires the live head to build on the reviewed one, and every
     review pins the commit it read: unpinned, GitHub anchors it at whatever is
-    live when the POST lands, so the review claims code the session never saw.
+    live when the POST lands, so the review claims code the session never saw —
+    and the gate would then suppress the run that would have reviewed it.
 
     The sha reaches the POST through a file because it cannot reach it any
     other way — the agent composes the body between reading the head and
@@ -159,3 +162,31 @@ def test_weekly_approval_pins_the_commit_it_checked() -> None:
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
     for content in (skill, weekly):
         assert "gh pr review --approve" not in content
+
+
+def test_review_gate_skips_no_head_the_session_would_have_reviewed() -> None:
+    """The pre-boot gate and the session read the same two signals, so the
+    gate's skip set stays inside `bot-review-state.sh`'s `at_head`: a
+    substantive bot review anchored at the head, discounted when a rewrite
+    postdates it.
+
+    The gate counts a body or an approval; `at_head` also counts a review
+    owning a top-level inline comment, which it can afford a second endpoint
+    for. That asymmetry is the safe one — the gate boots a run the session then
+    finds nothing to do in. Widening the gate's filter past `at_head`'s is the
+    unsafe direction: it would skip a head no review anchors.
+
+    Both drop the unsubmitted review the endpoint hands its own author, and
+    both need an explicit guard to do it: the force-push discount can't stand in
+    for one, because it is skipped entirely when the PR has never been
+    force-pushed. Left in, a review nobody submitted would anchor a head — which
+    on the gate's side means skipping a review that never happened.
+    """
+    gate = _read("generator", "src", "tend", "templates", "review-gate.sh")
+    state = _read("plugins", "tend-ci-runner", "scripts", "bot-review-state.sh")
+
+    assert '(.body | length) > 0 or .state == \\"APPROVED\\"' in gate
+    assert '(.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED"' in state
+    for content in (gate, state):
+        assert ".submitted_at != null" in content
+        assert '.event == "head_ref_force_pushed"' in content

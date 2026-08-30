@@ -134,6 +134,29 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["force_pushed_since"] is False
 
 
+def test_an_unsubmitted_review_anchors_nothing(env: dict[str, str]) -> None:
+    """`GET /pulls/N/reviews` also returns the caller's own PENDING reviews, and
+    the caller is the bot. Their `submitted_at` is null, which jq orders below
+    every timestamp — so the force-push discount drops them only on a PR that
+    has been force-pushed, and lets them through on every PR that hasn't.
+
+    Counted, a review nobody submitted would report this head as reviewed, and
+    the pre-boot gate would skip the run that was going to review it."""
+    _write(
+        env, "REVIEWS_JSON", [_review(1, None, body="draft findings", state="PENDING")]
+    )
+    state = _state(env)
+
+    assert state["last_substantive"] is None
+    assert state["at_head"] is None
+    assert state["orphan_id"] is None
+
+    # And still dropped once a rewrite exists, where the null used to be what
+    # excluded it — the guard is now what does, on both paths.
+    _rewrite_at(env, "2026-01-01T00:00:00Z")
+    assert _state(env)["at_head"] is None
+
+
 def test_a_reply_container_does_not_read_as_a_review(env: dict[str, str]) -> None:
     """Replying to a review thread makes GitHub wrap the reply in a zero-body
     COMMENTED review anchored at the then-current head. Counted, it would tell
