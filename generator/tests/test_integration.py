@@ -309,6 +309,27 @@ def test_init_dry_run_writes_no_actionlint_config(
     assert not _actionlint_path(tmp_path).exists()
 
 
+def test_init_leaves_unmergeable_actionlint_config_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config shape the generator can't merge into is the adopter's to fix:
+    warn and leave it byte-for-byte, rather than rewrite their linter config
+    into something they didn't ask for."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    original = "paths:\n  - .github/workflows/release.yaml\n"
+    existing.write_text(original)
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init()
+
+    assert result.exit_code == 0
+    assert existing.read_text() == original
+    assert "leaving it unchanged" in result.output
+    assert ACTIONLINT_QUEUE_IGNORE in result.output  # the by-hand snippet
+
+
 # ---------------------------------------------------------------------------
 # Custom config path
 # ---------------------------------------------------------------------------
