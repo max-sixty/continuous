@@ -159,3 +159,39 @@ def test_weekly_approval_pins_the_commit_it_checked() -> None:
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
     for content in (skill, weekly):
         assert "gh pr review --approve" not in content
+
+
+def test_review_approval_gates_on_author_stated_readiness() -> None:
+    """A PR whose author says it must not merge withholds the verdict the same
+    way the draft flag does, and the draft flag is the only signal the skill
+    used to read. Every approving path — step 5's no-issues approve, the
+    trivial-incremental "your findings are now addressed" approve, and the
+    dedup rule's "resolves the last open one" approve — has to reach the gate,
+    so each carries a pointer to it.
+    """
+    skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+
+    # Stated once, under step 5, where every approving path is sent for the
+    # POST recipe.
+    assert "**Unless the author withheld merge readiness.**" in skill
+    # The bot's own findings closing out is what fired the wrong approval:
+    # the two conditions are independent and only the author clears the second.
+    assert "independent conditions" in skill
+
+    # The incremental paths approve without reading step 5's prose, so the
+    # pointer rides on each sentence that prescribes the approval: the
+    # trivial-skip one and the dedup rule's, which fire from the same trigger.
+    assert "so the PR isn't left in limbo — and the author-readiness gate" in skill
+    assert (
+        "resolves the last open one (then approve with an empty body — the "
+        "author-readiness gate" in skill
+    )
+
+    # Naming the blocker on every push would be the noise the thread-keyed
+    # dedup rules suppress for findings but cannot reach for a body-only
+    # COMMENT, so the gate carries its own once-only clause.
+    assert "name it once" in skill
+
+    # A blocker can also arrive mid-session, after the review began, so the
+    # pre-APPROVE peek re-checks it alongside the red-check gate.
+    assert "Re-check the author-readiness gate" in skill
