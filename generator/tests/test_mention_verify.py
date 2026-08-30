@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 MENTION_VERIFY = (
@@ -133,7 +134,11 @@ def env(tmp_path: Path) -> dict[str, str]:
 def _run(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
     return subprocess.run(
-        [BASH, "-e", str(MENTION_VERIFY)], env=env, capture_output=True, text=True
+        [BASH, "-e", str(MENTION_VERIFY)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 

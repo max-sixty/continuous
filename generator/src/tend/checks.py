@@ -40,7 +40,6 @@ from tend.config import (
 )
 from tend.workflows import TEND_ENVIRONMENT
 
-
 # GitHub's base repository role IDs, as they appear in a ruleset's
 # `bypass_actors`. The IDs are not ordered by privilege — maintain (2) sits
 # below write (4) — so the plausible guess for "maintain" is in fact the bot's
@@ -105,6 +104,7 @@ def _gh(
             text=True,
             timeout=30,
             input=input,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return None

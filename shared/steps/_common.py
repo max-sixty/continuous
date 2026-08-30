@@ -221,7 +221,7 @@ def utcnow() -> datetime.datetime:
     baseline range — is UTC, and a local-time reading would silently shift a
     day boundary the limits are scoped to.
     """
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def read_ndjson(path: Path) -> Iterator[dict[str, Any]]:

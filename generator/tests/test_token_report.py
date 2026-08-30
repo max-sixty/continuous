@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -102,9 +103,7 @@ class Report:
             "USAGE_DIR": str(self._usage_dir),
         }
 
-    def add(
-        self, run_id: int, *, workflow: str = "tend-review", **over: Any
-    ) -> "Report":
+    def add(self, run_id: int, *, workflow: str = "tend-review", **over: Any) -> Report:
         """A completed run and the artifact it uploaded."""
         self._runs.append(
             {
@@ -119,13 +118,13 @@ class Report:
         )
         return self
 
-    def add_raw(self, run_id: int, body: str) -> "Report":
+    def add_raw(self, run_id: int, body: str) -> Report:
         """A run whose artifact holds *body* verbatim, valid JSON or not."""
         self.add_run_without_artifact(run_id)
         (self._usage_dir / f"{run_id}.json").write_text(body)
         return self
 
-    def add_run_without_artifact(self, run_id: int) -> "Report":
+    def add_run_without_artifact(self, run_id: int) -> Report:
         self._runs.append(
             {
                 "databaseId": run_id,
@@ -153,6 +152,7 @@ class Report:
             env=self._env,
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, result.stderr
         self.stderr = result.stderr
@@ -204,7 +204,7 @@ def test_repeat_runs_on_one_subject_collapse_into_one_row(report: Report) -> Non
     for run_id in (1, 2, 3):
         report.add(run_id, cost_usd=2.0)
     report.add(4, number=852, cost_usd=1.0)
-    _, rows = report.run()
+    _, _rows = report.run()
 
     assert _table(report, "SUBJECT") == [
         ["#851", "3", "$6.00", "tend-review", "30K"],
@@ -221,7 +221,7 @@ def test_tables_are_ranked_by_cost_not_by_token_count(report: Report) -> None:
     """
     report.add(1, workflow="tend-nightly", cost_usd=0.5, cache_read_input_tokens=999999)
     report.add(2, workflow="tend-review", cost_usd=9.0, cache_read_input_tokens=1000)
-    _, rows = report.run()
+    _, _rows = report.run()
 
     workflows = [row[0] for row in _table(report, "WORKFLOW")]
     assert workflows == ["tend-review", "tend-nightly"], (
@@ -254,7 +254,7 @@ def test_a_run_whose_record_predates_the_subject_fields(report: Report) -> None:
     of the totals.
     """
     report.add(1, number=None, head_sha=None, repo=None, event=None)
-    output, rows = report.run()
+    output, _rows = report.run()
 
     assert output["runs"][0]["subject"] == "?"
     assert output["totals"]["cost_usd"] == 1.0
@@ -331,7 +331,7 @@ def test_cost_unknown_runs_get_their_own_ranked_table(report: Report) -> None:
             partial=True,
             cache_read_input_tokens=5_000_000,
         )
-    _, rows = report.run()
+    _, _rows = report.run()
 
     assert "#2222" not in [row[0] for row in _table(report, "SUBJECT")], (
         "a $0 floor cannot outrank priced work, which is why it needs its own table"
@@ -354,7 +354,7 @@ def test_a_matrix_runs_row_agrees_with_its_rollup_to_the_cent(report: Report) ->
             + "\n"
             + json.dumps(_record(run_id=1, cost_usd=cost))
         )
-    output, rows = report.run()
+    output, _rows = report.run()
 
     assert output["totals"]["cost_usd"] == 28.17
     assert _table(report, "RUN")[0][3] == "$28.17"

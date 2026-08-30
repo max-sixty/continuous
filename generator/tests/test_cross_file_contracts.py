@@ -6,7 +6,6 @@ together, so each reads correct on its own while the pair stops agreeing.
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

@@ -196,7 +196,9 @@ def main():
             stdout=slave,
             stderr=slave,
             close_fds=True,
-            preexec_fn=take_controlling_tty,
+            # The hazard is threads; this is a single-threaded CLI helper, and the
+            # child needs the pty as its controlling terminal to run interactively.
+            preexec_fn=take_controlling_tty,  # noqa: PLW1509
         )
     except FileNotFoundError:
         sys.exit("Error: claude CLI not found. Install Claude Code first.")

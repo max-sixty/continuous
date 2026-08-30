@@ -8,7 +8,6 @@ from textwrap import dedent
 import pytest
 from click import ClickException
 from click.testing import CliRunner
-
 from tend.cli import main
 from tend.config import Config
 from tend.migrate import migrate_toml_to_yaml

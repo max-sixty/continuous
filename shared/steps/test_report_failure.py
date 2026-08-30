@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 import report_failure
 from _fakes import FakeGh
 
