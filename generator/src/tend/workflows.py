@@ -241,28 +241,6 @@ class GeneratedWorkflow:
 # ---------------------------------------------------------------------------
 
 
-def _escape_braces(prompt: str, placeholder: str) -> tuple[str, bool]:
-    """Escape literal braces in a prompt, preserving only {placeholder}.
-
-    Returns (escaped_prompt, needs_format). In the escaped prompt, {placeholder}
-    is replaced with {0} for use with GitHub Actions format(), and all other
-    braces are doubled to prevent format() from interpreting them.
-
-    A prompt with no {placeholder} is returned untouched. Doubling is only
-    correct on the way into `format()`, which collapses each pair back to one
-    brace; without the placeholder the caller emits a bare string literal
-    instead, and GitHub Actions does not collapse braces there — the pairs
-    would reach the agent verbatim.
-    """
-    sentinel = "\x00PLACEHOLDER\x00"
-    text = prompt.replace(f"{{{placeholder}}}", sentinel)
-    if sentinel not in text:
-        return prompt, False
-    # Double all remaining braces so format() treats them as literals
-    text = text.replace("{", "{{").replace("}", "}}")
-    return text.replace(sentinel, "{0}"), True
-
-
 def _effective_cfg(cfg: Config, wf: WorkflowConfig) -> Config:
     """Return cfg, or a shallow clone with workflow overrides applied.
 
@@ -288,19 +266,15 @@ _REVIEW_TMPL = _JINJA.get_template("review.yaml.j2")
 def generate_review(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("review", WorkflowConfig())
     eff = _effective_cfg(cfg, wf)
-    raw_prompt = wf.prompt or eff.default_prompt("review", "{pr_number}")
-    format_body, needs_format = _escape_braces(raw_prompt, "pr_number")
-    escaped = format_body.replace("'", "''")
-    if needs_format:
-        prompt_expr = f"format('{escaped}', github.event.pull_request.number)"
-    else:
-        prompt_expr = f"'{escaped}'"
+    prompt = (wf.prompt or eff.default_prompt("review", "{pr_number}")).replace(
+        "{pr_number}", "${{ github.event.pull_request.number }}"
+    )
 
     content = _REVIEW_TMPL.render(
         cfg=eff,
         setup=_setup_yaml(eff),
         local_actions=_restore_local_actions_run(eff),
-        prompt_expr=prompt_expr,
+        prompt=prompt,
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 

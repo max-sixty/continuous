@@ -11,6 +11,7 @@ from tend.config import BOT_TOKEN_SECRET, Config
 from tend.workflows import generate_all
 
 from tests import _yaml as yaml
+from tests import agent_prompt as _agent_prompt
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -275,95 +276,39 @@ def test_bot_name_with_hyphens_valid(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Custom prompt with {0} pattern
+# 7. Custom prompt punctuation: braces and quotes
 # ---------------------------------------------------------------------------
 
 
-def test_prompt_with_zero_placeholder(tmp_path: Path) -> None:
-    """A prompt containing {0} — escaped so it doesn't collide with format()."""
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name: my-bot
-        workflows:
-          review:
-            prompt: "Fix {0} in {pr_number}"
-    """),
-    )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    review = workflows["tend-review.yaml"]
-    # User's {0} is escaped to {{0}}, while {pr_number} becomes {0}
-    assert "format(" in review.content
-    assert "Fix {{0}} in {0}" in review.content
+@pytest.mark.parametrize("workflow", ["review", "triage"])
+def test_prompt_punctuation_reaches_the_agent_verbatim(
+    tmp_path: Path, workflow: str
+) -> None:
+    """Braces and quotes in a prompt are the adopter's own text, not syntax.
 
-
-def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
-    """Prompt with {1}, {2} and no {pr_number} — emitted verbatim, not escaped.
-
-    Escaping guards `format()`, which collapses each doubled pair back to one
-    brace. With no {pr_number} there is nothing to interpolate, so the prompt
-    is emitted as a bare GHA string literal instead — nothing collapses the
-    pairs there, and doubling would ship `{{1}}` to the agent.
+    Every prompt is a YAML block scalar, so the only substitution is the
+    workflow's own `{...}` placeholder. `{0}`, `{1}` and a stray apostrophe once
+    had to be escaped for review, whose prompt was a GitHub Actions
+    `format('...')` expression — and escaping was correct only when the
+    placeholder was present, so the same prompt shipped different text depending
+    on an unrelated part of itself.
     """
+    placeholder = "pr_number" if workflow == "review" else "issue_number"
     path = _write_config(
         tmp_path,
-        dedent("""\
+        dedent(f"""\
         bot_name: my-bot
         workflows:
-          review:
-            prompt: "Fix issue {1} and {2}"
+          {workflow}:
+            prompt: "Don't touch {{0}} or {{1}}; fix {{{placeholder}}}"
     """),
     )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    review = workflows["tend-review.yaml"]
-    assert "format(" not in review.content
-    assert "'Fix issue {1} and {2}'" in review.content
-
-
-# ---------------------------------------------------------------------------
-# 8. Custom prompt with single quotes
-# ---------------------------------------------------------------------------
-
-
-def test_prompt_with_single_quotes(tmp_path: Path) -> None:
-    """Prompt containing single quotes -- the review workflow uses
-    format('...') which needs '' escaping in GitHub Actions."""
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name: my-bot
-        workflows:
-          review:
-            prompt: "Don't break this"
-    """),
-    )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    review = workflows["tend-review.yaml"]
-    # The _escape() function doubles single quotes for GHA expressions
-    assert "Don''t" in review.content
-
-
-def test_prompt_with_single_quotes_triage(tmp_path: Path) -> None:
-    """Triage workflow does NOT use _escape() -- single quotes could break."""
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name: my-bot
-        workflows:
-          triage:
-            prompt: "Don't break {issue_number}"
-    """),
-    )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    triage = workflows["tend-triage.yaml"]
-    # Triage uses YAML block scalar (prompt: |) so single quotes should be fine
-    assert "Don't break" in triage.content
-    data = yaml.safe_load(triage.content)
-    assert isinstance(data, dict)
+    workflows = {wf.filename: wf for wf in generate_all(Config.load(path))}
+    content = workflows[f"tend-{workflow}.yaml"].content
+    assert isinstance(yaml.safe_load(content), dict)
+    prompt = _agent_prompt(content)
+    assert "format(" not in prompt
+    assert prompt.startswith("Don't touch {0} or {1}; fix ${{ github.event.")
 
 
 # ---------------------------------------------------------------------------

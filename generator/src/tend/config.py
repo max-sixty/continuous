@@ -386,9 +386,11 @@ class Config:
                     f"sandbox_env value for '{name}' must be a scalar "
                     "(string, number, or boolean)"
                 )
-            # A newline would drop an un-indented continuation line into the
-            # rendered `|` block scalar, terminating it and producing a
-            # workflow GitHub Actions later refuses to load — fail at `init`.
+            # The action splits this input one NAME=VALUE pair per line, so a
+            # value carrying a newline would be read as a pair and a malformed
+            # line rather than one value — fail at `init` instead. (The block
+            # scalar itself is safe: `block_input` indents a continuation line
+            # like any other.)
             if "\n" in coerced:
                 raise click.ClickException(
                     f"sandbox_env value for '{name}' must be a single line"
@@ -514,9 +516,42 @@ class Config:
                         f"allowlist and likely won't apply to {wf_harness}. "
                         f"Set `workflows.{name}.model:` to a valid {wf_harness} model."
                     )
+                wf_prompt = wf_raw.get("prompt", "")
+                if wf_prompt is None:  # `prompt:` with nothing after it
+                    wf_prompt = ""
+                if not isinstance(wf_prompt, str):
+                    raise click.ClickException(
+                        f"workflows.{name}.prompt must be a string, "
+                        f"got {type(wf_prompt).__name__}"
+                    )
+                # `mention` builds its prompt from the triggering event —
+                # which of five comment shapes fired, the queue delay, the
+                # ids to read back — so there is no text an override could
+                # replace without breaking the dispatch. Refuse it rather
+                # than accept a key that renders nowhere.
+                if wf_prompt and name == "mention":
+                    raise click.ClickException(
+                        "workflows.mention.prompt is not supported: mention "
+                        "composes its prompt from the triggering event. Put "
+                        "standing guidance in the repo's `running-tend` skill "
+                        "overlay instead."
+                    )
+                # A whitespace-only prompt is truthy, so it beats the default
+                # and leaves the agent step with no instructions — which the
+                # Claude action fails on by name and the Codex action hands to
+                # `codex exec` and runs. `""` and a bare `prompt:` are falsy and
+                # fall through to the default instead, which is quieter but no
+                # more what the adopter wrote. All three are typos; refuse them
+                # here, where the key's presence still tells them apart from an
+                # absent one.
+                if "prompt" in wf_raw and not wf_prompt.strip():
+                    raise click.ClickException(
+                        f"workflows.{name}.prompt is blank. Drop the key to "
+                        f"use the default prompt."
+                    )
                 workflows[name] = WorkflowConfig(
                     enabled=wf_raw.get("enabled", True),
-                    prompt=wf_raw.get("prompt", ""),
+                    prompt=wf_prompt,
                     cron=wf_raw.get("cron", ""),
                     watched_workflows=watched,
                     branches=branches,

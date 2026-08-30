@@ -425,13 +425,13 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot
           model: opus
-          sandbox_path: |
+          sandbox_path: |2
             ~/.cargo/bin
             /opt/tools/bin
-          sandbox_env: |
+          sandbox_env: |2
             RUST_BACKTRACE=1
             CARGO_TERM_COLOR=always
-          sandbox_setup: |
+          sandbox_setup: |2
             rustup component add clippy
             cargo fetch --locked
           prompt: >-
