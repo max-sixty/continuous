@@ -15,13 +15,13 @@ repos:
         args: ["--fix"]
       - id: ruff-format
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.12.5
+    rev: 0.12.7
     hooks:
       # One lockfile at the workspace root covers the generator member too.
       - id: uv-lock
         files: ^(generator/)?(pyproject\.toml|uv\.lock)$
   - repo: https://github.com/adhtruong/mirrors-typos
-    rev: v1.49.0
+    rev: v1.50.0
     hooks:
       - id: typos
   - repo: https://github.com/rhysd/actionlint
