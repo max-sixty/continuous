@@ -15,7 +15,7 @@ from importlib.metadata import version
 import click
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from jinja2.runtime import Macro
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML, YAMLError
 
 from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
@@ -605,8 +605,9 @@ ACTIONLINT_QUEUE_IGNORE = 'unexpected key "queue" for "concurrency" section'
 
 # Scoped to the generated filenames — the same `tend-*.yaml` contract the
 # stale-file cleanup uses — so the same schema error in a hand-written
-# workflow still fails.
-ACTIONLINT_TEND_GLOB = ".github/workflows/tend-*.yaml"
+# workflow still fails. Matched against the path actionlint was handed, so a
+# directory prefix would miss `./…` (find/xargs) and `../…` (subdir cwd).
+ACTIONLINT_TEND_GLOB = "**/tend-*.yaml"
 
 
 def actionlint_config(
@@ -621,6 +622,21 @@ def actionlint_config(
     generator does not understand is left for its owner rather than
     overwritten.
     """
+
+    def _bail(what: str) -> None:
+        click.echo(
+            f"Warning: .github/{filename} has {what} — "
+            f"leaving it unchanged. Add this ignore by hand or the generated "
+            f"workflows will fail actionlint:\n"
+            f"  paths:\n"
+            # Quoted because a bare `**` opens a YAML alias — an adopter
+            # pasting an unquoted key gets a scanner error, not a config.
+            f"    '{ACTIONLINT_TEND_GLOB}':\n"
+            f"      ignore:\n"
+            f"        - '{ACTIONLINT_QUEUE_IGNORE}'",
+            err=True,
+        )
+
     if existing is None or not existing.strip():
         data = _YAML_BLOCK.load(
             "# `concurrency.queue` is valid GitHub Actions syntax that\n"
@@ -630,22 +646,18 @@ def actionlint_config(
             "paths:\n"
         )
     else:
-        data = _YAML_BLOCK.load(existing)
-
-    def _bail(what: str) -> None:
-        click.echo(
-            f"Warning: .github/{filename} has an unexpected {what} — "
-            f"leaving it unchanged. Add this ignore by hand or the generated "
-            f"workflows will fail actionlint:\n"
-            f"  paths:\n"
-            f"    {ACTIONLINT_TEND_GLOB}:\n"
-            f"      ignore:\n"
-            f"        - '{ACTIONLINT_QUEUE_IGNORE}'",
-            err=True,
-        )
+        # A file that does not parse is the likeliest form of "a config the
+        # generator does not understand" — conflict markers mid-rebase, a tab
+        # indent. Warn like the shape mismatches below rather than raising out
+        # of `init`, which would leave the workflow files half-regenerated.
+        try:
+            data = _YAML_BLOCK.load(existing)
+        except YAMLError:
+            _bail("YAML the generator cannot parse")
+            return None
 
     if not isinstance(data, dict):
-        _bail("top level")
+        _bail("an unexpected top level")
         return None
 
     paths = data.get("paths")
@@ -653,7 +665,7 @@ def actionlint_config(
         paths = {}
         data["paths"] = paths
     if not isinstance(paths, dict):
-        _bail("`paths` value")
+        _bail("an unexpected `paths` value")
         return None
 
     entry = paths.get(ACTIONLINT_TEND_GLOB)
@@ -661,7 +673,7 @@ def actionlint_config(
         entry = {}
         paths[ACTIONLINT_TEND_GLOB] = entry
     if not isinstance(entry, dict):
-        _bail(f"`paths` entry for {ACTIONLINT_TEND_GLOB}")
+        _bail(f"an unexpected `paths` entry for {ACTIONLINT_TEND_GLOB}")
         return None
 
     ignores = entry.get("ignore")
@@ -669,7 +681,7 @@ def actionlint_config(
         ignores = []
         entry["ignore"] = ignores
     if not isinstance(ignores, list):
-        _bail(f"`ignore` value for {ACTIONLINT_TEND_GLOB}")
+        _bail(f"an unexpected `ignore` value for {ACTIONLINT_TEND_GLOB}")
         return None
 
     if ACTIONLINT_QUEUE_IGNORE in ignores:

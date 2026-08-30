@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from itertools import takewhile
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
@@ -21,7 +22,7 @@ from click.testing import CliRunner
 
 from tend.checks import CheckResult
 from tend.cli import main
-from tend.workflows import ACTIONLINT_QUEUE_IGNORE
+from tend.workflows import ACTIONLINT_QUEUE_IGNORE, ACTIONLINT_TEND_GLOB
 
 
 def _write_config(tmp_path: Path, content: str) -> None:
@@ -222,9 +223,7 @@ def test_init_writes_actionlint_queue_ignore(
     assert _run_init().exit_code == 0
 
     data = yaml.safe_load(_actionlint_path(tmp_path).read_text())
-    assert data["paths"][".github/workflows/tend-*.yaml"]["ignore"] == [
-        ACTIONLINT_QUEUE_IGNORE
-    ]
+    assert data["paths"]["**/tend-*.yaml"]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
 
 
 def test_init_merges_actionlint_ignore_into_existing_config(
@@ -255,9 +254,7 @@ def test_init_merges_actionlint_ignore_into_existing_config(
     assert data["paths"][".github/workflows/release.yaml"]["ignore"] == [
         "some adopter pattern"
     ]
-    assert data["paths"][".github/workflows/tend-*.yaml"]["ignore"] == [
-        ACTIONLINT_QUEUE_IGNORE
-    ]
+    assert data["paths"]["**/tend-*.yaml"]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
 
 
 def test_init_leaves_actionlint_config_alone_once_ignored(
@@ -291,9 +288,7 @@ def test_init_updates_existing_actionlint_yml_in_place(
     assert not _actionlint_path(tmp_path).exists()
     data = yaml.safe_load(yml.read_text())
     assert data["self-hosted-runner"]["labels"] == ["my-runner"]
-    assert data["paths"][".github/workflows/tend-*.yaml"]["ignore"] == [
-        ACTIONLINT_QUEUE_IGNORE
-    ]
+    assert data["paths"]["**/tend-*.yaml"]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
 
 
 def test_init_dry_run_writes_no_actionlint_config(
@@ -328,6 +323,37 @@ def test_init_leaves_unmergeable_actionlint_config_untouched(
     assert existing.read_text() == original
     assert "leaving it unchanged" in result.output
     assert ACTIONLINT_QUEUE_IGNORE in result.output  # the by-hand snippet
+
+    # The snippet is meant to be pasted, so it has to parse: the glob opens
+    # with `**`, which YAML reads as an alias unless the key is quoted.
+    lines = result.output[result.output.index("  paths:") :].splitlines()
+    snippet = "\n".join(takewhile(lambda ln: ln.startswith("  "), lines))
+    assert yaml.safe_load(dedent(snippet))["paths"][ACTIONLINT_TEND_GLOB] == {
+        "ignore": [ACTIONLINT_QUEUE_IGNORE]
+    }
+
+
+def test_init_leaves_unparsable_actionlint_config_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that doesn't parse — conflict markers mid-rebase, a tab indent —
+    is the likeliest form of "a config the generator doesn't understand", so it
+    warns like the shape mismatches rather than raising a traceback out of
+    `init` with the workflow files already half-written."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    original = "paths:\n  - a\n  b: c\n"
+    existing.write_text(original)
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init()
+
+    assert result.exit_code == 0
+    assert existing.read_text() == original
+    assert "leaving it unchanged" in result.output
+    # The whole run finishes: the workflow files land and the summary prints.
+    assert (_workflow_dir(tmp_path) / "tend-review.yaml").exists()
 
 
 # ---------------------------------------------------------------------------
