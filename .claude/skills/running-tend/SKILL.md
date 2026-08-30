@@ -134,16 +134,30 @@ because the workflow files are public.
 #    hits on `max-sixty/tend` itself crowd out tend's own workflow files
 #    past the 100-result cap, dropping tend from its own consumers.json.
 #    The `.github/workflows/tend-` path filter below bounds precision.
-mapfile -t REPOS < <(
+mapfile -t DISCOVERED < <(
   gh search code 'max-sixty/tend' --extension yaml --limit 100 --json repository,path \
     | jq -r '.[] | select(.path | startswith(".github/workflows/tend-")) | .repository.nameWithOwner' \
     | sort -u
 )
 
-# 2. Resolve bot_name from each repo's .config/tend.yaml.
+# 2. Union with the repos already listed. Code search recall is partial — a
+#    repo carrying a full set of tend-*.yaml files can return zero hits — so
+#    rebuilding from the search alone deletes live consumers from the file the
+#    website renders. The search finds *new* consumers; step 3 decides who stays.
+mapfile -t REPOS < <(
+  { printf '%s\n' "${DISCOVERED[@]}"
+    jq -r '.[].repo' data/consumers.json 2>/dev/null; } | sort -u
+)
+
+# 3. Keep a repo while it still has generated tend workflows, and resolve
+#    bot_name from its .config/tend.yaml. These are the authoritative checks:
+#    an uninstall drops out here, never by going missing from a search.
 mkdir -p data
 {
   for repo in "${REPOS[@]}"; do
+    workflows=$(gh api "repos/$repo/contents/.github/workflows" \
+      --jq '[.[] | select(.name | startswith("tend-"))] | length' 2>/dev/null) || workflows=0
+    [ "${workflows:-0}" -gt 0 ] || continue
     bot=$(gh api "repos/$repo/contents/.config/tend.yaml" --jq '.content' 2>/dev/null \
       | base64 -d 2>/dev/null \
       | yq '.bot_name // ""' 2>/dev/null)
