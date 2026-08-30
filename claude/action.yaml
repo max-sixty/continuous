@@ -77,7 +77,7 @@ inputs:
       Pinned `mitmproxy` version for the credential-injection proxy. Pinned
       so the uv download cache key is stable; bump to upgrade.
   uv_version:
-    default: "0.12.5"
+    default: "0.12.7"
     description: >-
       Pinned `uv` version used to run the credential-injection proxy. Installed
       into a tend-owned dir off $PATH, so it neither shadows nor is shadowed by
