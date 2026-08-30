@@ -4,8 +4,8 @@
 #
 # Usage: bot-review-state.sh <pr-number>
 #
-# Two GitHub behaviours make `.commit_id` alone unreadable, and every caller
-# that reads a review anchor has to account for both:
+# Three GitHub behaviours make `.commit_id` alone unreadable, and every caller
+# that reads a review anchor has to account for all of them:
 #
 #   Reply containers. Replying to a review thread (POST
 #   /pulls/{n}/comments/{id}/replies) makes GitHub wrap the reply in a synthetic
@@ -21,7 +21,7 @@
 #   that no longer exists reports the current head, and `.commit_id` alone
 #   cannot tell an ordinary push from a rewrite. Anything submitted before the
 #   newest `head_ref_force_pushed` is discounted.
-
+#
 #   Unsubmitted reviews. The endpoint also returns the caller's *own* PENDING
 #   reviews, and the caller here is the bot. Their `submitted_at` is null, which
 #   compares below every timestamp in jq — so the force-push discount lets them

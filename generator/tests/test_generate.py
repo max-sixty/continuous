@@ -956,8 +956,8 @@ def test_review_gate_wires_every_variable_it_reads(tmp_path: Path) -> None:
     assert gate_step["env"] == {
         "GITHUB_TOKEN": f"${{{{ secrets.{BOT_TOKEN_SECRET} }}}}",
         "PR": "${{ github.event.pull_request.number }}",
-        # `synchronize` is the only action the gate can skip; the rest ask for
-        # a pass whatever the head already carries.
+        # `synchronize` and `reopened` are the actions the gate can skip; the
+        # rest ask for a pass whatever the head already carries.
         "EVENT_ACTION": "${{ github.event.action }}",
         # Whose reviews count as an anchor. The configured identity, so the
         # gate needs no API call to learn who it is.

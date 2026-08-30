@@ -10,13 +10,19 @@ completely — old formats should fail with a clear error, not silently parse.
 
 Simplicity outranks efficiency. Complexity earns its place by preventing
 wrong outward actions — what the bot posts, approves, merges, or closes —
-never by saving compute. Wasted compute (a no-op session, a duplicated
-survey, a slow CI job, a run lost to a blip that a later tick retries)
-costs cents; the gate, retry wrapper, or scheduling arithmetic that would
-have prevented it has to be understood and maintained forever. Fix waste
-only when the fix is a simple knob — a cadence value, a deleted step, a
-one-line condition — and otherwise leave it. Prefer deleting a mechanism
-over refining it.
+never by saving compute. Wasted compute (a duplicated survey, a slow CI job,
+a run lost to a blip that a later tick retries) costs cents; the retry
+wrapper or scheduling arithmetic that would have prevented it has to be
+understood and maintained forever. Fix waste only when the fix is a simple
+knob — a cadence value, a deleted step, a one-line condition — and otherwise
+leave it. Prefer deleting a mechanism over refining it.
+
+The one exception is a no-op *agent session*, which costs dollars rather
+than cents, and which a trivial pre-check can skip whole. See
+"Agent-driven vs deterministic steps" below for the bar such a gate has to
+clear — one cheap check against a frequent no-op, and no more. That bar is
+what keeps this an exception rather than a licence: a gate for a rare event
+shape is the machinery this section rules out, whatever it saves.
 
 ## Commands
 
