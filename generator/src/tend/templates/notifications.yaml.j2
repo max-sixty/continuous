@@ -23,4 +23,4 @@ jobs:
 <<check_script|indent(10, first=True)>>
 
 <<checkout(cfg, ref=cfg.default_branch, if_condition=skip_condition)>>
-<<setup>><<agent_step(cfg, block_prompt(prompt), if_condition=skip_condition)>>
+<<setup>><<agent_step(cfg, block_input('prompt', prompt), if_condition=skip_condition)>>

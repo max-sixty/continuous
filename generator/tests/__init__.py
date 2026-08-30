@@ -17,8 +17,9 @@ def agent_prompt(content: str) -> str:
     """
     jobs = safe_load(content)["jobs"]
     steps = [step for job in jobs.values() for step in job.get("steps", [])]
-    step = next(s for s in steps if "prompt" in s.get("with", {}))
-    return step["with"]["prompt"]
+    prompts = [s["with"]["prompt"] for s in steps if "prompt" in s.get("with", {})]
+    assert len(prompts) == 1, f"expected one agent step, found {len(prompts)}"
+    return prompts[0]
 
 
 # Interpreter for the repo's shell scripts. A bare `bash` would resolve through

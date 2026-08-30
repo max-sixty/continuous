@@ -386,9 +386,11 @@ class Config:
                     f"sandbox_env value for '{name}' must be a scalar "
                     "(string, number, or boolean)"
                 )
-            # A newline would drop an un-indented continuation line into the
-            # rendered `|` block scalar, terminating it and producing a
-            # workflow GitHub Actions later refuses to load — fail at `init`.
+            # The action splits this input one NAME=VALUE pair per line, so a
+            # value carrying a newline would be read as a pair and a malformed
+            # line rather than one value — fail at `init` instead. (The block
+            # scalar itself is safe: `block_input` indents a continuation line
+            # like any other.)
             if "\n" in coerced:
                 raise click.ClickException(
                     f"sandbox_env value for '{name}' must be a single line"
@@ -514,9 +516,27 @@ class Config:
                         f"allowlist and likely won't apply to {wf_harness}. "
                         f"Set `workflows.{name}.model:` to a valid {wf_harness} model."
                     )
+                # `mention` builds its prompt from the triggering event —
+                # which of five comment shapes fired, the queue delay, the
+                # ids to read back — so there is no text an override could
+                # replace without breaking the dispatch. Refuse it rather
+                # than accept a key that renders nowhere.
+                wf_prompt = wf_raw.get("prompt", "")
+                if wf_prompt and name == "mention":
+                    raise click.ClickException(
+                        "workflows.mention.prompt is not supported: mention "
+                        "composes its prompt from the triggering event. Put "
+                        "standing guidance in the repo's `running-tend` skill "
+                        "overlay instead."
+                    )
+                if not isinstance(wf_prompt, str):
+                    raise click.ClickException(
+                        f"workflows.{name}.prompt must be a string, "
+                        f"got {type(wf_prompt).__name__}"
+                    )
                 workflows[name] = WorkflowConfig(
                     enabled=wf_raw.get("enabled", True),
-                    prompt=wf_raw.get("prompt", ""),
+                    prompt=wf_prompt,
                     cron=wf_raw.get("cron", ""),
                     watched_workflows=watched,
                     branches=branches,

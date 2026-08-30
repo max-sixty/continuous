@@ -52,6 +52,6 @@ jobs:
           fi
 <<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True, clean=not has_setup)>>
 
-<<agent_step(cfg, block_prompt(prompt))>><<restore_local_actions(local_actions)>>
+<<agent_step(cfg, block_input('prompt', prompt))>><<restore_local_actions(local_actions)>>
 
 <<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition='always()')>>

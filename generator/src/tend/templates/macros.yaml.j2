@@ -38,22 +38,13 @@
           model: <<cfg.model>>
 {% if cfg.harness == 'claude' %}
 {% if cfg.sandbox_path %}
-          sandbox_path: |
-{% for dir in cfg.sandbox_path %}
-            <<dir>>
-{% endfor %}
+          <<block_input('sandbox_path', cfg.sandbox_path|join('\n'))>>
 {% endif %}
 {% if cfg.sandbox_env %}
-          sandbox_env: |
-{% for name, value in cfg.sandbox_env.items() %}
-            <<name>>=<<value>>
-{% endfor %}
+          <<block_input('sandbox_env', cfg.sandbox_env.items()|map('join', '=')|join('\n'))>>
 {% endif %}
 {% if cfg.sandbox_setup %}
-          sandbox_setup: |
-{% for cmd in cfg.sandbox_setup %}
-            <<cmd|indent(12)>>
-{% endfor %}
+          <<block_input('sandbox_setup', cfg.sandbox_setup|join('\n'))>>
 {% endif %}
 {% endif %}
           <<prompt_body>>
@@ -260,23 +251,25 @@
 {%- endif %}
 {%- endmacro %}
 
-{# YAML block scalar prompt at column 10, with the supplied text indented at
-   column 12. Every workflow carrying a configurable `prompt:` renders through
-   here, so a multi-line prompt is indented the one way rather than each
-   template hardcoding a column. A caller with extra context to append (ci-fix's
-   run coordinates) composes the text first and passes the whole thing.
-
-   `${{ ... }}` in the text reaches the generated file verbatim, and GitHub
-   Actions evaluates it when it sets the input — that is how the per-event
-   placeholders (`{pr_number}`, `{issue_number}`, `{run_id}`) are substituted.
+{# A multi-line action input, as a YAML block scalar at column 10 with the text
+   indented at column 12. Every input whose value is adopter-supplied and may
+   span lines renders through here — `prompt`, and the three `sandbox_*` levers
+   — so the indentation is written once rather than per call site. A caller with
+   extra context to append (ci-fix's run coordinates) composes the text first
+   and passes the whole thing.
 
    `|2` is an explicit indentation indicator: two columns further in than the
    `with:` mapping this renders into, which is where `indent_block` puts the
    text. Without it YAML infers the block's indent from its first line, and a
-   prompt whose first line is itself indented makes every following line look
+   value whose first line is itself indented makes every following line look
    like the end of the scalar — a file GitHub rejects, from a config that is
-   valid YAML in the adopter's own hands. #}
-{% macro block_prompt(prompt) -%}
-prompt: |2
-<<prompt|indent_block(12)>>
+   valid YAML in the adopter's own hands.
+
+   `${{ ... }}` in the text reaches the generated file verbatim, and GitHub
+   Actions evaluates it when it sets the input — that is how a prompt's
+   per-event placeholder (`{pr_number}`, `{issue_number}`, `{run_id}`) is
+   substituted. #}
+{% macro block_input(name, text) -%}
+<<name>>: |2
+<<text|indent_block(12)>>
 {%- endmacro %}

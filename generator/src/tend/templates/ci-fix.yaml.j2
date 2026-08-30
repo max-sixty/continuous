@@ -1,5 +1,5 @@
 {#- The failing run's coordinates, appended to whatever prompt is configured.
-    `block_prompt` indents the whole thing, so the prompt may span lines. #}
+    `block_input` indents the whole thing, so the prompt may span lines. #}
 {%- set full_prompt %}<<prompt>>
 - Run URL: ${{ github.event.workflow_run.html_url }}
 - Commit: ${{ github.event.workflow_run.head_sha }}
@@ -22,4 +22,4 @@ jobs:
     steps:
 <<checkout(cfg, ref=cfg.default_branch)>>
 <<setup>>
-<<agent_step(cfg, block_prompt(full_prompt))>>
+<<agent_step(cfg, block_input('prompt', full_prompt))>>
