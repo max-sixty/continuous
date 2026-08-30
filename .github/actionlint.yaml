@@ -3,6 +3,6 @@
 # generated workflows lint clean; the glob keeps a real schema
 # error in your own workflows failing.
 paths:
-  '**/tend-*.yaml':
+  '**/.github/workflows/tend-*.yaml':
     ignore:
       - unexpected key "queue" for "concurrency" section

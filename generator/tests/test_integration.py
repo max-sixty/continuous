@@ -223,7 +223,33 @@ def test_init_writes_actionlint_queue_ignore(
     assert _run_init().exit_code == 0
 
     data = yaml.safe_load(_actionlint_path(tmp_path).read_text())
-    assert data["paths"]["**/tend-*.yaml"]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
+    assert data["paths"]["**/.github/workflows/tend-*.yaml"]["ignore"] == [
+        ACTIONLINT_QUEUE_IGNORE
+    ]
+
+
+def test_init_skips_actionlint_config_without_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        dedent("""\
+            bot_name: test-bot
+            workflows:
+              review:
+                enabled: false
+            """),
+    )
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    original = "self-hosted-runner:\n  labels: [my-runner]\n"
+    existing.write_text(original)
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    assert existing.read_text() == original
+    assert (_workflow_dir(tmp_path) / "tend-mention.yaml").exists()
 
 
 def test_init_merges_actionlint_ignore_into_existing_config(
@@ -254,7 +280,25 @@ def test_init_merges_actionlint_ignore_into_existing_config(
     assert data["paths"][".github/workflows/release.yaml"]["ignore"] == [
         "some adopter pattern"
     ]
-    assert data["paths"]["**/tend-*.yaml"]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
+    assert data["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
+
+
+def test_init_preserves_comments_only_actionlint_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text("# adopter note\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    updated = existing.read_text()
+    assert updated.startswith("# adopter note\n")
+    assert yaml.safe_load(updated)["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [
+        ACTIONLINT_QUEUE_IGNORE
+    ]
 
 
 def test_init_leaves_actionlint_config_alone_once_ignored(
@@ -288,7 +332,7 @@ def test_init_updates_existing_actionlint_yml_in_place(
     assert not _actionlint_path(tmp_path).exists()
     data = yaml.safe_load(yml.read_text())
     assert data["self-hosted-runner"]["labels"] == ["my-runner"]
-    assert data["paths"]["**/tend-*.yaml"]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
+    assert data["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
 
 
 def test_init_dry_run_writes_no_actionlint_config(

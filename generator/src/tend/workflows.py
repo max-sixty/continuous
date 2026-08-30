@@ -577,11 +577,10 @@ GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
 # >= v1.7.5.
 ACTIONLINT_QUEUE_IGNORE = 'unexpected key "queue" for "concurrency" section'
 
-# Scoped to the generated filenames — the same `tend-*.yaml` contract the
-# stale-file cleanup uses — so the same schema error in a hand-written
-# workflow still fails. Matched against the path actionlint was handed, so a
-# directory prefix would miss `./…` (find/xargs) and `../…` (subdir cwd).
-ACTIONLINT_TEND_GLOB = "**/tend-*.yaml"
+# Scoped to tend's generated workflow directory and filenames, so the same
+# schema error elsewhere still fails. The leading `**/` lets actionlint match
+# paths handed to it from the repository root or a subdirectory.
+ACTIONLINT_TEND_GLOB = "**/.github/workflows/tend-*.yaml"
 
 
 def actionlint_config(
@@ -629,6 +628,15 @@ def actionlint_config(
         except YAMLError:
             _bail("YAML the generator cannot parse")
             return None
+        if data is None:
+            # A comments-only document has no YAML value. Parse it again with
+            # the mapping anchor appended so ruamel keeps the comments when it
+            # writes the new config entry.
+            try:
+                data = _YAML_BLOCK.load(f"{existing.rstrip()}\npaths:\n")
+            except YAMLError:
+                _bail("an unexpected top level")
+                return None
 
     if not isinstance(data, dict):
         _bail("an unexpected top level")

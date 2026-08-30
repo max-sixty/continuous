@@ -106,11 +106,10 @@ for the configured harness, pinned to the released generator version
 (`max-sixty/tend/claude@X.Y.Z` for Claude, `max-sixty/tend/codex@X.Y.Z` for Codex).
 The nightly regen restamps a newer tag when a new tend version ships.
 
-`init` also merges one ignore into `.github/actionlint.yaml`: the review
-workflow's `concurrency.queue` is valid GitHub syntax that actionlint's schema
-rejects, so without it the generated workflows fail your lint. It is scoped to
-`tend-*.yaml` and merged into whatever the file already holds — unlike the
-workflow files, that one stays yours.
+When review is enabled, `init` also merges one ignore into
+`.github/actionlint.yaml`: the workflow's `concurrency.queue` is valid GitHub
+syntax that actionlint's schema rejects. The ignore applies only to generated
+workflows and preserves the rest of the adopter-owned config.
 
 Both actions run the same security and rate-limit preflight checks and
 resolve bot identity. They differ in how the agent runs:
