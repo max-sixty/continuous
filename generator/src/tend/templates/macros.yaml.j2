@@ -266,5 +266,5 @@
    shapes that they inline. #}
 {% macro block_prompt(prompt) -%}
 prompt: |
-<<prompt|indent(12, first=True, blank=True)>>
+<<prompt|indent(12, first=True)>>
 {%- endmacro %}
