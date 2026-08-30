@@ -176,19 +176,41 @@ def test_no_restore_step_without_a_local_setup_action(tmp_path: Path) -> None:
             assert _restore_step_index(job.get("steps", [])) is None, wf.filename
 
 
+@pytest.mark.parametrize("harness", ["claude", "codex"])
 @pytest.mark.parametrize(
     "extra", ["", "setup:\n  - uses: ./.github/actions/tend-setup\n"]
 )
 def test_generated_workflows_survive_the_whitespace_hooks(
-    tmp_path: Path, extra: str
+    tmp_path: Path, extra: str, harness: str
 ) -> None:
     """Whitespace an adopter's pre-commit rewrites is pure churn in the regen
-    diff: the file it commits can never match what `init` emits. Both hooks the
+    diff: the file it commits can never match what `init` emits, and the PR the
+    nightly opens over that difference fails its own lint job. Both hooks the
     repo runs are covered — end-of-file-fixer on the last line, and
-    trailing-whitespace on every line, which a Jinja `indent(blank=True)` trips
-    by padding the blank line inside a multi-line prompt."""
+    trailing-whitespace on every line.
+
+    A prompt is the only adopter-supplied text that lands in a block scalar, so
+    the nightly's carries the blank lines that a Jinja `indent()` pads: interior
+    ones under `blank=True`, and a leading one even without it.
+    """
+    extra += (
+        f"harness: {harness}\n"
+        "workflows:\n"
+        "  ci-fix:\n"
+        '    watched_workflows: ["ci"]\n'
+        "  nightly:\n"
+        '    prompt: "\\n\\nsweep the repo\\n\\nthen stop\\n\\n"\n'
+    )
     cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in generate_all(cfg):
+    workflows = generate_all(cfg, with_install_test=True)
+    # ci-fix and install-test are both opt-in, and neither renders without the
+    # config above; assert they are present so the coverage can't silently lapse.
+    assert {wf.filename for wf in workflows} >= {
+        "tend-ci-fix.yaml",
+        "tend-install-test.yaml",
+        "tend-nightly.yaml",
+    }
+    for wf in workflows:
         assert wf.content.endswith("\n"), f"{wf.filename}: no trailing newline"
         assert not wf.content.endswith("\n\n"), f"{wf.filename}: trailing blank line"
         for n, line in enumerate(wf.content.splitlines(), 1):
