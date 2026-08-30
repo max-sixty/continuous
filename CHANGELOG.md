@@ -6,6 +6,12 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.22
+
+### Fixed
+
+- **Generated workflows no longer carry whitespace an adopter's pre-commit rewrites.** A multi-line `prompt:` padded its blank lines out to the block scalar's indent, so a repo running the `trailing-whitespace` or `end-of-file-fixer` hooks could never commit a file matching `init` output — and the nightly regeneration opened a PR over that difference which failed its own lint job. `tend-notifications` was the first workflow to reach it. ([#1090](https://github.com/max-sixty/tend/pull/1090))
+
 ## 0.1.21
 
 ### Improved
