@@ -24,6 +24,9 @@ from tend.workflows import ACTIONLINT_QUEUE_IGNORE, ACTIONLINT_TEND_GLOB
 from tests import ACTION_VERSION, BASH, tool_path
 from tests import _yaml as yaml
 
+from tests import ACTION_VERSION, BASH, tool_path
+from tests import _yaml as yaml
+
 
 def _write_config(tmp_path: Path, content: str) -> None:
     cfg = tmp_path / ".config" / "tend.yaml"
