@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import importlib.resources
+import json
 import re
 from pathlib import Path
 from textwrap import dedent
 
 import pytest
-from tests import ACTION_VERSION
+from tests import ACTION_VERSION, agent_prompt
 from tests import _yaml as yaml
 import click
 from click.testing import CliRunner
@@ -24,7 +25,6 @@ from tend.config import (
 from tend.workflows import (
     _deep_merge,
     GENERATORS,
-    GeneratedWorkflow,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -525,52 +525,55 @@ def test_custom_prompt(tmp_path: Path) -> None:
     assert "Custom triage:" in triage.content
 
 
-def _review_prompt(review: GeneratedWorkflow) -> str:
-    """The `prompt:` input the review job hands the harness action."""
-    steps = yaml.safe_load(review.content)["jobs"]["review"]["steps"]
-    step = next(
-        s for s in steps if s.get("uses", "").startswith("max-sixty/tend/claude@")
-    )
-    return step["with"]["prompt"]
+# Every workflow that takes a configurable `prompt:` — the placeholder it
+# substitutes, and the job the agent step sits in.
+_PROMPT_WORKFLOWS = {
+    "review": "{pr_number}",
+    "triage": "{issue_number}",
+    "ci-fix": "{run_id}",
+    "nightly": "",
+    "weekly": "",
+    "review-runs": "",
+    "notifications": "",
+}
 
 
-def test_review_prompt_without_placeholder_keeps_literal_braces(
-    tmp_path: Path,
+@pytest.mark.parametrize("workflow,placeholder", sorted(_PROMPT_WORKFLOWS.items()))
+def test_multi_line_prompt_generates_parseable_yaml(
+    tmp_path: Path, workflow: str, placeholder: str
 ) -> None:
-    """A review prompt with braces but no `{pr_number}` reaches the agent verbatim.
+    """A prompt spanning lines is a documented knob, and `init` never parses what
+    it writes — so nothing but this catches a prompt shape that can only hold
+    one line. Three shapes could not: review's was a `format('...')` expression,
+    where a newline ended the GitHub Actions string literal; ci-fix's was a
+    block scalar the template indented by hand, which only indented the first
+    line; and `block_prompt` itself let YAML infer the block's indent from the
+    first line, so an indented first line made every later line look like the
+    end of the scalar. Each wrote a file GitHub rejects from a config that is
+    valid YAML in the adopter's hands, and the adopter found out from GitHub.
 
-    The review prompt is the only one emitted inside a GHA expression. With the
-    placeholder it goes through `format()`, which needs every other brace
-    doubled; without it, it is a bare string literal that GHA never collapses,
-    so doubling there would ship `{{...}}` to the agent.
+    The braces double as a check that nothing escapes them any more: they are
+    the adopter's text, and only the workflow's own placeholder is substituted.
     """
-    extra = dedent("""\
-        workflows:
-          review:
-            prompt: "Review this PR. Skip files matching {generated}."
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    prompt = _review_prompt(workflows["tend-review.yaml"])
-    assert "{generated}" in prompt
+    body = f"  Do the thing for {placeholder}.\n\nSkip files matching {{generated}}.\n"
+    # ci-fix is the one workflow that needs a key of its own to render at all,
+    # so it is always configured and gains the prompt when it is the subject.
+    extra = 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+    if workflow != "ci-fix":
+        extra += f"  {workflow}:\n"
+    extra += f"    prompt: {json.dumps(body)}\n"
+    content = {
+        wf.filename: wf.content
+        for wf in generate_all(Config.load(_minimal_config(tmp_path, extra)))
+    }[f"tend-{workflow}.yaml"]
+    prompt = agent_prompt(content)
+    assert prompt.startswith("  "), "the adopter's own leading indent was eaten"
+    assert "Skip files matching {generated}." in prompt
     assert "{{generated}}" not in prompt
     assert "format(" not in prompt
-
-
-def test_review_prompt_with_placeholder_escapes_other_braces(tmp_path: Path) -> None:
-    """With `{pr_number}` present the prompt goes through `format()`, so the
-    placeholder becomes `{0}` and every other brace is doubled for it."""
-    extra = dedent("""\
-        workflows:
-          review:
-            prompt: "Review PR {pr_number}. Skip files matching {generated}."
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    prompt = _review_prompt(workflows["tend-review.yaml"])
-    assert "format(" in prompt
-    assert "{0}" in prompt
-    assert "{{generated}}" in prompt
+    if placeholder:
+        assert placeholder not in prompt, f"{placeholder} was not substituted"
+        assert "${{ github.event." in prompt
 
 
 def test_watched_workflows(tmp_path: Path) -> None:

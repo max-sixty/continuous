@@ -261,10 +261,22 @@
 {%- endmacro %}
 
 {# YAML block scalar prompt at column 10, with the supplied text indented at
-   column 12. Used by workflows whose prompt is just the bare invocation
-   (triage, scheduled, notifications); review and ci-fix have richer prompt
-   shapes that they inline. #}
+   column 12. Every workflow carrying a configurable `prompt:` renders through
+   here, so a multi-line prompt is indented the one way rather than each
+   template hardcoding a column. A caller with extra context to append (ci-fix's
+   run coordinates) composes the text first and passes the whole thing.
+
+   `${{ ... }}` in the text reaches the generated file verbatim, and GitHub
+   Actions evaluates it when it sets the input — that is how the per-event
+   placeholders (`{pr_number}`, `{issue_number}`, `{run_id}`) are substituted.
+
+   `|2` is an explicit indentation indicator: two columns further in than the
+   `with:` mapping this renders into, which is where `indent_block` puts the
+   text. Without it YAML infers the block's indent from its first line, and a
+   prompt whose first line is itself indented makes every following line look
+   like the end of the scalar — a file GitHub rejects, from a config that is
+   valid YAML in the adopter's own hands. #}
 {% macro block_prompt(prompt) -%}
-prompt: |
+prompt: |2
 <<prompt|indent_block(12)>>
 {%- endmacro %}

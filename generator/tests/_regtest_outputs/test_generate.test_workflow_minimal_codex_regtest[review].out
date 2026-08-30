@@ -71,8 +71,8 @@ jobs:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           bot_name: test-bot
           model: gpt-5.5
-          prompt: >-
-            ${{ format('$review {0}', github.event.pull_request.number) }}
+          prompt: |2
+            $review ${{ github.event.pull_request.number }}
 
       - name: Remove the eyes reaction
         if: always()
