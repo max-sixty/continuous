@@ -17,10 +17,8 @@ Inputs (env, from Actions): ``GITHUB_SERVER_URL``, ``GITHUB_REPOSITORY``,
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-from pathlib import Path
 from typing import Any
 
 import _common
@@ -31,42 +29,6 @@ PROBE_WINDOW = 10
 
 _ROW_HEADER = "| When | Run | Trigger |\n|------|-----|---------|"
 
-# The trigger's number, per event, as `(outer key, inner key)` in the event
-# payload. `repository_dispatch` is tend-mention relaying review events through
-# a secretless job that re-posts them, so the PR number arrives in the payload
-# rather than in a `pull_request` object.
-_NUMBER_KEYS = {
-    "pull_request_target": ("pull_request", "number"),
-    "pull_request_review": ("pull_request", "number"),
-    "pull_request_review_comment": ("pull_request", "number"),
-    "issues": ("issue", "number"),
-    "issue_comment": ("issue", "number"),
-    "repository_dispatch": ("client_payload", "pr"),
-}
-
-
-def _event_payload() -> dict[str, Any]:
-    """The triggering event's payload, or ``{}`` for anything unreadable.
-
-    Every caller is on a path the run has already failed or been refused on,
-    and the payload fills one cell of one row. A missing file or a body that
-    is not JSON costs that cell its ``N/A``; raising would cost the whole
-    record of the incident, which is the thing the row exists to leave behind.
-    """
-    try:
-        payload = json.loads(
-            Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def _dig(payload: dict[str, Any], outer: str, inner: str) -> Any:
-    """``payload[outer][inner]``, or ``None`` for any shape that lacks it."""
-    section = payload.get(outer)
-    return section.get(inner) if isinstance(section, dict) else None
-
 
 def ref() -> str:
     """A one-line reference to the triggering context, for the Trigger column.
@@ -76,17 +38,14 @@ def ref() -> str:
     with no thread of their own (``schedule``, ``workflow_dispatch``); the
     caller renders that as ``N/A``.
     """
-    payload = _event_payload()
-    event_name = os.environ["GITHUB_EVENT_NAME"]
-    if event_name == "workflow_run":
+    if os.environ["GITHUB_EVENT_NAME"] == "workflow_run":
         # Link the run being fixed — without its id there is no way back to
         # the failure the ci-fix job was dispatched to handle.
-        run_id = _dig(payload, "workflow_run", "id")
+        run_id = _common.dig(_common.event_payload(), "workflow_run", "id")
         if not run_id:
             return "CI fix for workflow run"
         return f"CI fix for [run {run_id}]({_run_url(run_id)})"
-    keys = _NUMBER_KEYS.get(event_name)
-    number = _dig(payload, *keys) if keys else None
+    number = _common.subject_number()
     return f"#{number}" if number else ""
 
 

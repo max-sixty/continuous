@@ -9,6 +9,7 @@ subagent's transcript beside the session would add 7000.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -47,6 +48,20 @@ SUBAGENT_USAGE = {
 }
 
 TRUNCATED = '{"type":"assistant","mess'
+
+# The keys `run_context` contributes to the record.
+CONTEXT_KEYS = (
+    "repo",
+    "workflow",
+    "run_id",
+    "run_attempt",
+    "event",
+    "number",
+    "head_sha",
+)
+# The runner's own channels, which a test needs even with the rest of the
+# Actions environment stripped.
+GITHUB_FILE_VARS = ("GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_STEP_SUMMARY")
 
 
 def _assistant(msg_id: str, usage: dict[str, int], *, final: bool) -> dict[str, object]:
@@ -331,6 +346,12 @@ def test_claude_main_publishes_the_record_three_ways(
     """
     agent_home = tmp_path / "agent-home"
     _session_jsonl(agent_home / ".claude" / "projects")
+    # Every `GITHUB_*` rather than a list of the ones `run_context` reads:
+    # pytest itself runs under Actions in CI, and a hand-kept list goes stale
+    # the moment a key is added, silently reading the ambient value instead.
+    for name in [name for name in os.environ if name.startswith("GITHUB_")]:
+        if name not in GITHUB_FILE_VARS:
+            monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AGENT_HOME", str(agent_home))
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner-temp"))
     monkeypatch.setenv("MODEL", "opus")
@@ -349,6 +370,11 @@ def test_claude_main_publishes_the_record_three_ways(
     record = json.loads(github_files.outputs()["usage"])
     assert record["output_tokens"] == 4500
     assert record["partial"] is True
+    # Nothing here runs under Actions, so every context key reads as absent.
+    # An `if: always()` step publishes the record it has rather than failing
+    # on a variable it cannot read.
+    context = {key: record[key] for key in CONTEXT_KEYS}
+    assert context == dict.fromkeys(CONTEXT_KEYS)
     written = tmp_path / "runner-temp" / "tend-logs" / "token-usage.json"
     assert json.loads(written.read_text()) == record
     assert github_files.summary.read_text() == (
@@ -370,8 +396,23 @@ def test_claude_main_publishes_the_record_three_ways(
 def test_codex_main_publishes_the_record_three_ways(
     tmp_path: Path,
     github_files: GithubFiles,
+    actions_env: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Every published copy carries what the run was about, not just its spend.
+
+    The context keys ride on the record itself so a later question — cost per
+    PR, repeat runs on one commit — reads them off the artifact rather than
+    joining every run back to `gh run list`. `head_sha` is the PR's head, not
+    the `GITHUB_SHA` the run reports, which for a pull-request event is the
+    base branch.
+    """
+    actions_env.write_text(
+        json.dumps({"pull_request": {"number": 851, "head": {"sha": "head0"}}})
+    )
+    monkeypatch.setenv("GITHUB_WORKFLOW", "tend-review")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    monkeypatch.setenv("GITHUB_SHA", "base0")
     home = tmp_path / "home"
     _ndjson(
         home / ".codex" / "sessions" / "2026" / "08" / "25" / "rollout-a.jsonl",
@@ -388,6 +429,13 @@ def test_codex_main_publishes_the_record_three_ways(
 
     record = json.loads(github_files.outputs()["usage"])
     assert record == {
+        "repo": "owner/repo",
+        "workflow": "tend-review",
+        "run_id": 12345,
+        "run_attempt": 2,
+        "event": "pull_request_target",
+        "number": 851,
+        "head_sha": "head0",
         "input_tokens": 100,
         "output_tokens": 30,
         "cached_input_tokens": 0,

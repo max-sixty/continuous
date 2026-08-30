@@ -258,7 +258,7 @@ Concurrency groups:
 
 | Workflow | Group key | Cancel-in-progress |
 |---|---|---|
-| review | `workflow-PR#` | **no** — `queue: max` preserves pending PR events within GitHub's queue limit while the active session completes its outward actions |
+| review | `workflow-PR#` | **no** — killing a session discards a review it can still deliver; `queue: max` holds pending PR events within GitHub's queue limit while it folds the push in and posts |
 | mention/relay | none | stateless — secretless job that re-posts review events as a `repository_dispatch` |
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |

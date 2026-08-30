@@ -115,7 +115,9 @@ outputs:
       model, cost_usd, partial. `partial` is true when the run emitted no
       result event (typically a cancellation) and the counts were
       reconstructed from the session log; `cost_usd` is null in that case,
-      since only the result event carries it.
+      since only the result event carries it. The record also names the run
+      it came from: repo, workflow, run_id, run_attempt, event, number (the
+      PR or issue, null when the trigger has no thread), and head_sha.
     value: ${{ steps.tokens.outputs.usage }}
 
 runs:
