@@ -191,7 +191,8 @@ def test_generated_workflows_survive_the_whitespace_hooks(
 
     A prompt is the only adopter-supplied text that lands in a block scalar, so
     the nightly's carries the blank lines that a Jinja `indent()` pads: interior
-    ones under `blank=True`, and a leading one even without it.
+    ones under `blank=True`, and a leading one even without it. Its last line is
+    whitespace-only, which reaches the end-of-file hook rather than this one.
     """
     extra += (
         f"harness: {harness}\n"
@@ -199,7 +200,7 @@ def test_generated_workflows_survive_the_whitespace_hooks(
         "  ci-fix:\n"
         '    watched_workflows: ["ci"]\n'
         "  nightly:\n"
-        '    prompt: "\\n\\nsweep the repo\\n\\nthen stop\\n\\n"\n'
+        '    prompt: "\\n\\nsweep the repo\\n\\nthen stop\\n\\n   \\n"\n'
     )
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = generate_all(cfg, with_install_test=True)
