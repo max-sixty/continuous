@@ -204,7 +204,7 @@ def test_repeat_runs_on_one_subject_collapse_into_one_row(report: Report) -> Non
     for run_id in (1, 2, 3):
         report.add(run_id, cost_usd=2.0)
     report.add(4, number=852, cost_usd=1.0)
-    _, _rows = report.run()
+    report.run()
 
     assert _table(report, "SUBJECT") == [
         ["#851", "3", "$6.00", "tend-review", "30K"],
@@ -221,7 +221,7 @@ def test_tables_are_ranked_by_cost_not_by_token_count(report: Report) -> None:
     """
     report.add(1, workflow="tend-nightly", cost_usd=0.5, cache_read_input_tokens=999999)
     report.add(2, workflow="tend-review", cost_usd=9.0, cache_read_input_tokens=1000)
-    _, _rows = report.run()
+    report.run()
 
     workflows = [row[0] for row in _table(report, "WORKFLOW")]
     assert workflows == ["tend-review", "tend-nightly"], (
@@ -254,7 +254,7 @@ def test_a_run_whose_record_predates_the_subject_fields(report: Report) -> None:
     of the totals.
     """
     report.add(1, number=None, head_sha=None, repo=None, event=None)
-    output, _rows = report.run()
+    output, _ = report.run()
 
     assert output["runs"][0]["subject"] == "?"
     assert output["totals"]["cost_usd"] == 1.0
@@ -331,7 +331,7 @@ def test_cost_unknown_runs_get_their_own_ranked_table(report: Report) -> None:
             partial=True,
             cache_read_input_tokens=5_000_000,
         )
-    _, _rows = report.run()
+    report.run()
 
     assert "#2222" not in [row[0] for row in _table(report, "SUBJECT")], (
         "a $0 floor cannot outrank priced work, which is why it needs its own table"
@@ -354,7 +354,7 @@ def test_a_matrix_runs_row_agrees_with_its_rollup_to_the_cent(report: Report) ->
             + "\n"
             + json.dumps(_record(run_id=1, cost_usd=cost))
         )
-    output, _rows = report.run()
+    output, _ = report.run()
 
     assert output["totals"]["cost_usd"] == 28.17
     assert _table(report, "RUN")[0][3] == "$28.17"
