@@ -654,18 +654,16 @@ def test_multi_line_prompt_survives_the_override_round_trip(tmp_path: Path) -> N
     assert agent_prompt(workflows["tend-review.yaml"]) == body
 
 
-def test_whitespace_only_prompt_yields_an_empty_block(tmp_path: Path) -> None:
-    """`indent_block` strips a whitespace-only prompt to nothing, leaving a block
-    scalar with no body — the most exotic YAML the generator emits. It parses to
-    the empty string, which the action will reject as a missing input; what
-    matters here is that the file itself stays loadable.
+@pytest.mark.parametrize("blank", ['""', '"   \\n  \\n"'])
+def test_blank_prompt_is_rejected(tmp_path: Path, blank: str) -> None:
+    """A blank prompt beats the default (it is truthy) and then strips to
+    nothing, so the agent step carries no instructions. The Claude action fails
+    on the empty input and the Codex action runs `codex exec` with it, so the
+    config is the one place that can refuse it once for both.
     """
-    extra = 'workflows:\n  triage:\n    prompt: "   \\n  \\n"\n'
-    workflows = {
-        wf.filename: wf.content
-        for wf in generate_all(Config.load(_minimal_config(tmp_path, extra)))
-    }
-    assert agent_prompt(workflows["tend-triage.yaml"]) == ""
+    extra = f"workflows:\n  triage:\n    prompt: {blank}\n"
+    with pytest.raises(click.ClickException, match="prompt is blank"):
+        Config.load(_minimal_config(tmp_path, extra))
 
 
 def test_watched_workflows(tmp_path: Path) -> None:

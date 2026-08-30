@@ -516,12 +516,17 @@ class Config:
                         f"allowlist and likely won't apply to {wf_harness}. "
                         f"Set `workflows.{name}.model:` to a valid {wf_harness} model."
                     )
+                wf_prompt = wf_raw.get("prompt", "")
+                if not isinstance(wf_prompt, str):
+                    raise click.ClickException(
+                        f"workflows.{name}.prompt must be a string, "
+                        f"got {type(wf_prompt).__name__}"
+                    )
                 # `mention` builds its prompt from the triggering event —
                 # which of five comment shapes fired, the queue delay, the
                 # ids to read back — so there is no text an override could
                 # replace without breaking the dispatch. Refuse it rather
                 # than accept a key that renders nowhere.
-                wf_prompt = wf_raw.get("prompt", "")
                 if wf_prompt and name == "mention":
                     raise click.ClickException(
                         "workflows.mention.prompt is not supported: mention "
@@ -529,10 +534,16 @@ class Config:
                         "standing guidance in the repo's `running-tend` skill "
                         "overlay instead."
                     )
-                if not isinstance(wf_prompt, str):
+                # A blank prompt is truthy enough to beat the default and
+                # empty enough to leave the agent step with no instructions.
+                # The harnesses disagree about that: the Claude action fails
+                # on an empty `TEND_PROMPT`, while the Codex action hands it
+                # to `codex exec` and boots an agent with nothing to do. It is
+                # a typo either way, so refuse it here and let neither decide.
+                if "prompt" in wf_raw and not wf_prompt.strip():
                     raise click.ClickException(
-                        f"workflows.{name}.prompt must be a string, "
-                        f"got {type(wf_prompt).__name__}"
+                        f"workflows.{name}.prompt is blank. Drop the key to "
+                        f"use the default prompt."
                     )
                 workflows[name] = WorkflowConfig(
                     enabled=wf_raw.get("enabled", True),
