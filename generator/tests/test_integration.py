@@ -21,6 +21,7 @@ from click.testing import CliRunner
 
 from tend.checks import CheckResult
 from tend.cli import main
+from tend.workflows import ACTIONLINT_QUEUE_IGNORE
 
 
 def _write_config(tmp_path: Path, content: str) -> None:
@@ -198,6 +199,114 @@ def test_init_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     }
 
     assert first_run == second_run
+
+
+# ---------------------------------------------------------------------------
+# actionlint config
+# ---------------------------------------------------------------------------
+
+
+def _actionlint_path(tmp_path: Path) -> Path:
+    return tmp_path / ".github" / "actionlint.yaml"
+
+
+def test_init_writes_actionlint_queue_ignore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`concurrency.queue` is valid GitHub syntax actionlint's schema rejects,
+    so init ships the ignore that keeps an adopter's lint green — scoped to the
+    generated files so a real schema error elsewhere still fails."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    data = yaml.safe_load(_actionlint_path(tmp_path).read_text())
+    assert data["paths"][".github/workflows/tend-*.yaml"]["ignore"] == [
+        ACTIONLINT_QUEUE_IGNORE
+    ]
+
+
+def test_init_merges_actionlint_ignore_into_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An adopter's own actionlint config survives — the ignore is merged in,
+    not written over the top of it."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text(
+        dedent("""\
+            self-hosted-runner:
+              labels:
+                - my-runner
+            paths:
+              .github/workflows/release.yaml:
+                ignore:
+                  - 'some adopter pattern'
+            """)
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    data = yaml.safe_load(existing.read_text())
+    assert data["self-hosted-runner"]["labels"] == ["my-runner"]
+    assert data["paths"][".github/workflows/release.yaml"]["ignore"] == [
+        "some adopter pattern"
+    ]
+    assert data["paths"][".github/workflows/tend-*.yaml"]["ignore"] == [
+        ACTIONLINT_QUEUE_IGNORE
+    ]
+
+
+def test_init_leaves_actionlint_config_alone_once_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The nightly regen must not churn a file it already updated."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    monkeypatch.chdir(tmp_path)
+
+    _run_init()
+    first = _actionlint_path(tmp_path).read_text()
+    _run_init()
+
+    assert _actionlint_path(tmp_path).read_text() == first
+
+
+def test_init_updates_existing_actionlint_yml_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """actionlint reads `.yaml` in preference to `.yml`, so writing a new
+    `.yaml` beside an adopter's `.yml` would silently disable their config.
+    Update the file they have."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    yml = tmp_path / ".github" / "actionlint.yml"
+    yml.parent.mkdir(parents=True, exist_ok=True)
+    yml.write_text("self-hosted-runner:\n  labels:\n    - my-runner\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    assert not _actionlint_path(tmp_path).exists()
+    data = yaml.safe_load(yml.read_text())
+    assert data["self-hosted-runner"]["labels"] == ["my-runner"]
+    assert data["paths"][".github/workflows/tend-*.yaml"]["ignore"] == [
+        ACTIONLINT_QUEUE_IGNORE
+    ]
+
+
+def test_init_dry_run_writes_no_actionlint_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--dry-run writes nothing."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init(["--dry-run"])
+
+    assert result.exit_code == 0
+    assert not _actionlint_path(tmp_path).exists()
 
 
 # ---------------------------------------------------------------------------

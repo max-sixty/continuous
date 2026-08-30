@@ -589,6 +589,98 @@ GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# actionlint config
+# ---------------------------------------------------------------------------
+
+# `concurrency.queue` is valid GitHub Actions syntax that actionlint's schema
+# does not accept, so tend-review.yaml fails every actionlint run an adopter
+# makes — including the required checks on the nightly regen PR, which then
+# cannot merge. Suppressing it at the linter's invocation only covers that one
+# caller (pre-commit's hook args miss MegaLinter's own actionlint, and both
+# miss a direct CLI call); `.github/actionlint.yaml` is read by the binary
+# itself, so it holds however actionlint is run. `paths` needs actionlint
+# >= v1.7.5.
+ACTIONLINT_QUEUE_IGNORE = 'unexpected key "queue" for "concurrency" section'
+
+# Scoped to the generated filenames — the same `tend-*.yaml` contract the
+# stale-file cleanup uses — so the same schema error in a hand-written
+# workflow still fails.
+ACTIONLINT_TEND_GLOB = ".github/workflows/tend-*.yaml"
+
+
+def actionlint_config(
+    existing: str | None, filename: str = "actionlint.yaml"
+) -> str | None:
+    """Return updated actionlint config content, or None to leave the file be.
+
+    Unlike the workflow files, this one is the adopter's: the ignore is merged
+    into whatever is already there and nothing else is touched. Returns None
+    when the ignore is already present, so the nightly regen produces no diff,
+    and when the file holds a shape this cannot merge into — a config the
+    generator does not understand is left for its owner rather than
+    overwritten.
+    """
+    if existing is None or not existing.strip():
+        data = _YAML_BLOCK.load(
+            "# `concurrency.queue` is valid GitHub Actions syntax that\n"
+            "# actionlint's schema rejects. tend writes this ignore so the\n"
+            "# generated workflows lint clean; the glob keeps a real schema\n"
+            "# error in your own workflows failing.\n"
+            "paths:\n"
+        )
+    else:
+        data = _YAML_BLOCK.load(existing)
+
+    def _bail(what: str) -> None:
+        click.echo(
+            f"Warning: .github/{filename} has an unexpected {what} — "
+            f"leaving it unchanged. Add this ignore by hand or the generated "
+            f"workflows will fail actionlint:\n"
+            f"  paths:\n"
+            f"    {ACTIONLINT_TEND_GLOB}:\n"
+            f"      ignore:\n"
+            f"        - '{ACTIONLINT_QUEUE_IGNORE}'",
+            err=True,
+        )
+
+    if not isinstance(data, dict):
+        _bail("top level")
+        return None
+
+    paths = data.get("paths")
+    if paths is None:
+        paths = {}
+        data["paths"] = paths
+    if not isinstance(paths, dict):
+        _bail("`paths` value")
+        return None
+
+    entry = paths.get(ACTIONLINT_TEND_GLOB)
+    if entry is None:
+        entry = {}
+        paths[ACTIONLINT_TEND_GLOB] = entry
+    if not isinstance(entry, dict):
+        _bail(f"`paths` entry for {ACTIONLINT_TEND_GLOB}")
+        return None
+
+    ignores = entry.get("ignore")
+    if ignores is None:
+        ignores = []
+        entry["ignore"] = ignores
+    if not isinstance(ignores, list):
+        _bail(f"`ignore` value for {ACTIONLINT_TEND_GLOB}")
+        return None
+
+    if ACTIONLINT_QUEUE_IGNORE in ignores:
+        return None
+    ignores.append(ACTIONLINT_QUEUE_IGNORE)
+
+    buf = io.StringIO()
+    _YAML_BLOCK.dump(data, buf)
+    return buf.getvalue()
+
+
 def generate_all(
     cfg: Config, *, with_install_test: bool = False
 ) -> list[GeneratedWorkflow]:

@@ -20,7 +20,7 @@ from tend.checks import (
 )
 from tend.config import Config
 from tend.migrate import migrate_toml_to_yaml, render_toml_as_yaml
-from tend.workflows import generate_all
+from tend.workflows import actionlint_config, generate_all
 
 
 def _detect_default_branch_local() -> str:
@@ -40,6 +40,34 @@ def _detect_default_branch_local() -> str:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return "main"
+
+
+def _update_actionlint_config(dry_run: bool) -> None:
+    """Ensure `.github/actionlint.yaml` ignores the `concurrency.queue` schema
+    false positive, so an adopter's workflow lint stays green on regen.
+
+    actionlint reads `.yaml` in preference to `.yml`, so a new `.yaml` written
+    beside an adopter's `.yml` would silently disable their whole config —
+    update the file they already have.
+    """
+    github_dir = Path(".github")
+    for name in ("actionlint.yaml", "actionlint.yml"):
+        path = github_dir / name
+        if path.exists():
+            break
+    else:
+        path = github_dir / "actionlint.yaml"
+
+    existing = path.read_text(encoding="utf-8") if path.exists() else None
+    updated = actionlint_config(existing, path.name)
+    if updated is None:
+        return
+    if dry_run:
+        click.echo(f"  would update {path} (actionlint `concurrency.queue` ignore)")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+    click.echo(f"  wrote {path}")
 
 
 def _print_check_results(results: list[CheckResult]) -> None:
@@ -140,6 +168,9 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 
         path.write_text(wf.content, encoding="utf-8")
         click.echo(f"  wrote {path}")
+
+    if workflows:
+        _update_actionlint_config(dry_run)
 
     # Remove stale tend-*.yaml files the generator didn't produce this run.
     # Catches: install-test cleanup on regen, disabled workflows leaving

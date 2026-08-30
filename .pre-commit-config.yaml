@@ -27,12 +27,10 @@ repos:
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
+      # The concurrency.queue false positive is suppressed in
+      # .github/actionlint.yaml, which `tend init` writes and every actionlint
+      # caller reads — hook args would cover this one invocation only.
       - id: actionlint
-        # GitHub accepts concurrency.queue, but this pin does not yet know it.
-        # Ignore only that schema false positive.
-        args:
-          - -ignore
-          - 'unexpected key "queue" for "concurrency" section'
   # Step bodies in standalone scripts (shared/steps/, proxy/,
   # generator/src/tend/templates/, .config/codex-cloud/) are invisible to
   # actionlint's built-in shellcheck, so run shellcheck directly at the same
