@@ -65,15 +65,12 @@ TOKEN = re.compile(rb"sk-ant-oat01-[A-Za-z0-9_-]{80,}")
 # The TUI's own failure line. `claude setup-token` reports a rejected code and
 # then waits at "Press Enter to retry", which produces no further output — so
 # without this the run is silent to its deadline and reads as an approval the
-# user never gave.
-TUI_ERROR = re.compile(rb"OAuth\s*error:\s*([^\r\n]*)")
-# Drives the progress line and nothing else. Gating the paste on it would tie
-# the fallback path to TUI wording that is free to change, and buy nothing: the
-# prompt renders alongside the authorize URL, so a code can't arrive first.
-# Ink lays adjacent text nodes out with cursor moves rather than spaces, so
-# stripping CSI closes the gaps between words: both patterns above read against
-# the stripped view and have to tolerate their absence.
-PASTE_PROMPT = re.compile(rb"Paste\s*code\s*here")
+# user never gave. Ink lays adjacent text nodes out with cursor moves rather
+# than spaces, and stripping CSI closes those gaps, so the gaps here are
+# optional — but horizontal only: `\s*` after the colon would step over the
+# line break and report the following line ("Press Enter to retry.") as the
+# detail whenever the CLI's own message is empty.
+TUI_ERROR = re.compile(rb"OAuth[^\S\r\n]*error:[^\S\r\n]*([^\r\n]*)")
 
 
 def complete_match(pattern, buf):
@@ -120,9 +117,13 @@ def failure_message(code_file, typed_at, announced, tui_error=None):
     whose own output this wrapper swallows, and is the one case where the fix
     is to go look at that command rather than at the browser.
     """
-    if tui_error:
+    # `is not None`, not truthiness: the CLI prints the label with nothing after
+    # it when it has no detail to give, and an empty capture is still an error
+    # seen — falling through from here would report that no error was reported.
+    if tui_error is not None:
+        detail = f": {tui_error}" if tui_error else ", with no detail on the line"
         return (
-            f"Error: `claude setup-token` reported: {tui_error}\n"
+            f"Error: `claude setup-token` reported an OAuth error{detail}\n"
             "A code belongs to the run whose challenge issued it, is good once, "
             "and dies with that run — so a code from an earlier run, or one the "
             "CLI's own localhost callback already redeemed, fails here. Rerun "
@@ -230,9 +231,21 @@ def main():
         sys.exit("Error: claude CLI not found. Install Claude Code first.")
     os.close(slave)
 
+    # Goes out with the URL rather than waiting on the paste prompt to render:
+    # timing it against TUI wording would tie it to text free to change, and the
+    # user wants it at the moment they get the link anyway.
+    hint = (
+        "The CLI takes the redirect on its own localhost callback, so approving "
+        "is usually the whole job. If the browser shows a `code#state` string "
+        + (
+            f"instead, write that to {args.code_file}."
+            if args.code_file
+            else "instead, this run has no --code-file to read it from."
+        )
+    )
+
     buf = bytearray()
     announced = False
-    prompted = False
     typed_at = None
     enters = 0
     token = None
@@ -257,24 +270,11 @@ def main():
             if not announced:
                 url = first_url(visible)
                 if url:
-                    print(f"Approve in the browser:\n{url.decode()}", file=sys.stderr)
+                    print(
+                        f"Approve in the browser:\n{url.decode()}\n{hint}",
+                        file=sys.stderr,
+                    )
                     announced = True
-
-            if not prompted and PASTE_PROMPT.search(visible):
-                prompted = True
-                fallback = (
-                    f"If it shows a `code#state` string instead, write that to "
-                    f"{args.code_file}."
-                    if args.code_file
-                    else "If it shows a `code#state` string instead, this run has "
-                    "no --code-file to read it from."
-                )
-                print(
-                    "Waiting for the approval. The CLI takes the redirect on its "
-                    "own localhost callback, so approving in the browser is "
-                    f"usually the whole job. {fallback}",
-                    file=sys.stderr,
-                )
 
             if typed_at is None and args.code_file and os.path.exists(args.code_file):
                 with open(args.code_file, encoding="utf-8") as fh:
@@ -301,8 +301,11 @@ def main():
                 break
 
             # After the token check, so a token already on screen wins over an
-            # error earlier in the same buffer. The message itself is read off
-            # the final buffer below, where the line has finished arriving.
+            # error earlier in the same buffer. Nothing reads the pty between
+            # here and the final scan below, so the detail reported is whatever
+            # had arrived by this read and may be cut at a chunk boundary —
+            # naming the error at all is what turns a silent window into a
+            # failure, and a clipped message still does that.
             if TUI_ERROR.search(visible):
                 break
 

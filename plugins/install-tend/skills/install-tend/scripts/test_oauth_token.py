@@ -23,7 +23,6 @@ from oauth_token import (
     ANSI_CSI,
     AUTHORIZE_URL,
     MAX_TOKEN_LENGTH,
-    PASTE_PROMPT,
     TIMEOUT_SECONDS,
     TOKEN,
     TUI_ERROR,
@@ -136,9 +135,21 @@ def test_tui_error_captures_only_its_own_line() -> None:
     assert match.group(1).strip() == b"status code 400"
 
 
-def test_paste_prompt_matches_the_stripped_render() -> None:
-    assert PASTE_PROMPT.search(b"Pastecodehereifprompted>")
-    assert PASTE_PROMPT.search(b"Paste code here if prompted >")
+def test_a_detail_free_error_does_not_borrow_the_next_line() -> None:
+    # The CLI prints the label with nothing after it when it has no detail. A
+    # gap pattern that steps over the line break reports the TUI's *next* line
+    # as the cause, which sends the reader after "Press Enter to retry."
+    match = TUI_ERROR.search(b"OAuth error:\r\nPress Enter to retry.")
+    assert match.group(1) == b""
+
+
+def test_a_detail_free_error_is_still_reported_as_an_error() -> None:
+    # An empty capture is falsy, so a truthiness check here falls through to a
+    # message saying the TUI reported no error — about a run that ended because
+    # it did. The empty string and "no error seen" have to stay distinct.
+    message = failure_message("/tmp/tend-oauth-code", 1.0, True, "")
+    assert "reported an OAuth error" in message
+    assert "no error" not in message
 
 
 def test_a_run_with_nowhere_to_receive_a_code_is_told_to_pass_one() -> None:
