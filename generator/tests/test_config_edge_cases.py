@@ -653,6 +653,22 @@ def test_setup_steps_entry_both_keys(tmp_path: Path) -> None:
         Config.load(path)
 
 
+@pytest.mark.parametrize("value", ["false", "true", "0", "[]", "null", "''", "'   '"])
+def test_setup_step_if_requires_non_empty_string(tmp_path: Path, value: str) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f"""\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: {value}
+    """),
+    )
+
+    with pytest.raises(ClickException, match="`if` must be a non-empty string"):
+        Config.load(path)
+
+
 def test_workflow_disabled_boolean_shorthand_not_generated(tmp_path: Path) -> None:
     """Boolean shorthand `review: false` should prevent generation."""
     path = _write_config(

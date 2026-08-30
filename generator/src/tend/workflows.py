@@ -162,9 +162,9 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     Returns empty string when no steps, or newline-prefixed block when present,
     so templates can write `<<setup>>` without extra blank lines.
 
-    When *condition* is set, steps without an explicit `if:` receive one so
-    they only run when the pre-check found work. Steps that already specify
-    `if:` are left alone (with a warning) — their condition wins.
+    When *condition* is set, every step is gated on it. A step's own `if:`
+    narrows that guard instead of replacing it. Both expressions are
+    parenthesized because a workflow guard may contain `||`.
     """
     if not cfg.setup:
         return ""
@@ -172,15 +172,8 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     for step in cfg.setup:
         fields = dict(step.fields)
         if condition:
-            if "if" in fields:
-                click.echo(
-                    "Warning: setup step has an explicit `if:`; the "
-                    "workflow's pre-check guard will not be added. "
-                    "The step runs based on your condition alone.",
-                    err=True,
-                )
-            else:
-                fields["if"] = condition
+            own = fields.get("if")
+            fields["if"] = f"({condition}) && ({own})" if own else condition
         ordered = {k: fields[k] for k in _STEP_FIELD_ORDER if k in fields}
         for k, v in fields.items():
             ordered.setdefault(k, v)
