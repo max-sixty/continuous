@@ -573,6 +573,35 @@ def test_ci_fix_custom_branches(tmp_path: Path) -> None:
     assert 'branches: ["main", "release"]' in ci_fix.content
 
 
+def test_ci_fix_serializes_per_branch_and_watched_workflow(tmp_path: Path) -> None:
+    """One session per red branch, not per red commit.
+
+    A branch stays red across the pushes that follow, each failing on its own
+    commit, so a commit-keyed group would let every one of them boot its own
+    agent against the same breakage. The watched workflow is keyed in as well
+    so a red `publish-site` is not starved by a stream of red `ci`.
+    """
+    extra = dedent("""\
+        workflows:
+          ci-fix:
+            watched_workflows: ["ci", "publish-site"]
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    job = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)["jobs"]["fix-ci"]
+
+    assert job["concurrency"]["group"] == (
+        "${{ github.workflow }}-${{ github.event.workflow_run.name }}"
+        "-${{ github.event.workflow_run.head_branch }}"
+    )
+    # Cancelling mid-session strands outward actions already taken — a pushed
+    # branch, a half-written PR.
+    assert job["concurrency"]["cancel-in-progress"] is False
+    # Job-level, not workflow-level: the `if` filters the green runs that make
+    # up most workflow_run events, and a skipped job never enters the group.
+    assert "concurrency" not in yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
+
+
 def test_cli_init_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _minimal_config(tmp_path)
     monkeypatch.chdir(tmp_path)

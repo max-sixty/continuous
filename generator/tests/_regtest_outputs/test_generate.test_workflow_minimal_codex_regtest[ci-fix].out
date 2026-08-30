@@ -16,6 +16,15 @@ on:
 jobs:
   fix-ci:
     if: github.event.workflow_run.conclusion == 'failure'
+    concurrency:
+      # A red branch fails every push that follows, each on its own commit, so
+      # one session per branch ? not per commit ? is what collapses the burst.
+      # The watched workflow is in the key too: a red `publish-site` must not
+      # starve behind a stream of red `ci`. Never cancel ? a running session
+      # may already have pushed a branch or opened a PR. Default queue depth
+      # is right: the newest failure replaces the pending one.
+      group: ${{ github.workflow }}-${{ github.event.workflow_run.name }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment:
       name: tend
