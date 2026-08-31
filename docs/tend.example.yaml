@@ -112,8 +112,9 @@ bot_name: my-project-bot
 # `tend-notifications` decides up front whether the agent needs to boot and
 # injects an `if:` guard on every setup step so a run with no unread
 # notifications or possible PR conflicts does no setup either. A user-supplied
-# `if:` is passed through unchanged (with a
-# generation-time warning) — your condition wins.
+# `if:` narrows that guard; it cannot run setup after the pre-check declined the
+# job. Write it as a plain expression or one whole `${{ ... }}`; mixing the two
+# is rejected at `init`.
 #
 # Each form below shows the config and the YAML it produces inside the
 # `steps:` block. The guard is shown on the first example; it's added the same

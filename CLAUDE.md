@@ -70,7 +70,9 @@ Four pieces:
    the adopter's `.github/workflows/` from `.config/tend.yaml`. Picks the
    right action ref and secret names per `harness`. Generation is
    idempotent — running `init` again overwrites all files from the
-   current config.
+   current config. When review is enabled, it also merges the
+   `concurrency.queue` ignore into the adopter-owned
+   `.github/actionlint.yaml` (see "Concurrency and filtering").
 4. **Config** (`.config/tend.yaml`) — inputs to the generator. Overrides
    from defaults only. `harness: claude | codex` selects the harness
    (default `claude`). A per-workflow `harness:` override (and matching
@@ -280,6 +282,9 @@ guard.
 
 **GHA queue depth.** Review sets `queue: max`, so pending PR events within
 GitHub's queue limit wait and a later push cannot replace `ready_for_review`.
+GitHub accepts the key; actionlint's schema does not, so `init` merges the
+matching ignore into `.github/actionlint.yaml`, which the binary reads for
+every invocation.
 Mention/handle and notifications keep the default one-pending-run queue; when a
 third job arrives while one runs and one queues, the pending job is replaced. For mention,
 mitigation lives in the skill prompts: dedup if the bot already responded to
