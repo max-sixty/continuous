@@ -32,20 +32,16 @@ repos:
       # caller reads — hook args would cover this one invocation only.
       - id: actionlint
   # Step bodies in standalone scripts are invisible to actionlint's built-in
-  # shellcheck, so run shellcheck directly. Generator templates become workflow
-  # `run:` bodies, so check them separately with the default severity actionlint
-  # uses. The inline bodies in claude/ and codex/ are covered by
-  # test_inline_run_bodies_pass_shellcheck; actionlint never reads action.yaml.
+  # shellcheck, so run shellcheck directly at warning severity. The generated
+  # workflow bodies are covered at actionlint's default severity by
+  # test_generated_run_bodies_pass_shellcheck; the inline bodies in claude/ and
+  # codex/ are covered by test_inline_run_bodies_pass_shellcheck.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1-1
     hooks:
       - id: shellcheck
         args: ["-S", "warning"]
-        files: ^(shared/steps/.*\.sh|proxy/.*\.sh|plugins/.*\.sh|\.config/codex-cloud/environment\.sh)$
-      - id: shellcheck
-        name: shellcheck generated workflow script templates
-        args: ["--norc"]
-        files: ^generator/src/tend/templates/.*\.sh$
+        files: ^(shared/steps/.*\.sh|generator/src/tend/templates/.*\.sh|proxy/.*\.sh|plugins/.*\.sh|\.config/codex-cloud/environment\.sh)$
   - repo: local
     hooks:
       # The Claude Code slash-command preprocessor treats a backticked token
