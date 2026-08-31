@@ -4,9 +4,8 @@ A step body is a flat module beside this one, run by the composite action as
 ``/usr/bin/python3 -E -s <action_path>/../shared/steps/<name>.py`` with its
 inputs in the environment, exactly as the shell bodies were. Only the standard
 library is available: the steps run on the runner's ``/usr/bin/python3``, before
-and without tend's own ``uv``. That is 3.12 on the pinned ubuntu-24.04 image,
-but an adopter can select an older image through the documented ``runs-on``
-override, so these modules stay 3.10-compatible.
+and without tend's own ``uv``. Tend supports the Python 3.12 system interpreter
+on its pinned ubuntu-24.04 runner image.
 
 Every GitHub call goes through :func:`gh`, and every step module calls it as
 ``_common.gh(...)`` rather than importing the name, so a test replaces one
@@ -221,9 +220,7 @@ def utcnow() -> datetime.datetime:
     baseline range — is UTC, and a local-time reading would silently shift a
     day boundary the limits are scoped to.
     """
-    # These modules stay 3.10-compatible (see this module's docstring);
-    # `datetime.UTC` is 3.11+.
-    return datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017
+    return datetime.datetime.now(datetime.UTC)
 
 
 def read_ndjson(path: Path) -> Iterator[dict[str, Any]]:

@@ -103,7 +103,7 @@ tend/
 ├── shared/
 │   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
 │   └── system-prompt.md  # Harness-neutral system prompt base
-├── proxy/                # Credential-injection proxy (setup-sandbox.sh, addon)
+├── proxy/                # Credential-injection proxy (setup_sandbox.py, addon)
 ├── generator/            # Python package (uvx tend@latest), uv_build backend
 │   ├── src/tend/
 │   │   ├── config.py     # Reads .config/tend.yaml

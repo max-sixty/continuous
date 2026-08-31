@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the pinned uv that runs the credential-injection proxy
-# (setup-sandbox.sh launches mitmdump through it).
+# (setup_sandbox.py launches mitmdump through it).
 #
 # Deliberately isolated: it installs into a tend-owned dir and never touches
 # $GITHUB_PATH, so it can neither be shadowed by nor shadow the adopter's own

@@ -33,7 +33,7 @@ per-repo `tend-review-runs` carries the routine loop; the workflow file's header
 explains the pause.
 
 A dispatched run's window opens at the **previous successful `review-reviewers`
-run**, floored 6h back (`list-recent-runs.sh`). With no cron, dispatches usually
+run**, floored 6h back (`list_recent_runs.py`). With no cron, dispatches usually
 sit further apart than that, so the floor is the normal case: the run covers the
 last 6h and warns on stderr that the rest is a coverage gap. Dispatch it within
 ~6h of whatever you want it to see.
@@ -49,8 +49,10 @@ Pass extra prefixes when running token reports or listing runs so these
 workflows are included:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "${HOURS:-24}" "review-"
-TARGET_REPO=max-sixty/tend "${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh" "tend-" "review-"
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/token_report.py" "${HOURS:-24}" "review-"
+TARGET_REPO=max-sixty/tend "${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/list_recent_runs.py" "tend-" "review-"
 ```
 
 Under `review-runs`, `$HOURS` is the lookback derived from its Step 1 anchor —
@@ -241,7 +243,7 @@ behavior, slash-command or Skill-tool handling) and note it in the PR.
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
 addon-related in its CHANGELOG against the `mitmdump` flags in
-`proxy/setup-sandbox.sh`, and report the comparison in the PR. `uv_version`
+`proxy/setup_sandbox.py`, and report the comparison in the PR. `uv_version`
 only launches that mitmproxy and CI smokes the two together, so it needs no
 release stream of its own; move both in one PR.
 

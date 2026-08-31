@@ -142,10 +142,16 @@ jobs:
       url: ${{ steps.check.outputs.url }}
       ts: ${{ steps.check.outputs.ts }}
     steps:
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "<<uv_version>>"
+          ignore-empty-workdir: true
       - name: Verify bot engagement
         id: check
         run: |
+          uv run --script - <<heredoc>>'TEND_PY'
 <<check_script|indent(10, first=True)>>
+          TEND_PY
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           BOT_NAME: <<cfg.bot_name>>

@@ -18,6 +18,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 from ruamel.yaml import YAML
+from tend.workflows import UV_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -59,6 +60,43 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
         f"uv this repo pins ({uv_version}); `uv build` warns and the wheel is "
         "built by a backend a release older than the uv building it"
     )
+
+
+def test_every_tend_owned_uv_runtime_uses_the_action_pin() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+    action_version = action["inputs"]["uv_version"]["default"]
+    launcher = (
+        REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "tend-uv.sh"
+    ).read_text()
+    match = re.search(r'^UV_VERSION="([^"]+)"$', launcher, re.MULTILINE)
+
+    assert match, "tend-uv.sh must declare the private uv version"
+    assert UV_VERSION == action_version == match.group(1)
+    assert 'UV_DIR="$HOME/.tend-uv/$UV_VERSION"' in launcher
+
+
+def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+    step = next(
+        step
+        for step in action["runs"]["steps"]
+        if step.get("name") == "Set up credential-isolation sandbox"
+    )
+    run = step["run"]
+
+    assert step["env"]["BASH_ENV"] == ""
+    assert step["env"]["BASHOPTS"] == ""
+    assert step["env"]["SHELLOPTS"] == ""
+    assert step["env"]["PS4"] == ""
+    assert run.startswith("set +x\n")
+    assert "/usr/bin/env -i" in run
+    assert "UV_NO_CONFIG=1" in run
+    assert "PYTHONNOUSERSITE=1" in run
+    assert "--no-python-downloads --python /usr/bin/python3 --script" in run
 
 
 # Every `${{ github.action_path }}/…` reference in the two composite actions.

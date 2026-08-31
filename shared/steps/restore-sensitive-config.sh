@@ -18,7 +18,7 @@
 # claude-code-action makes — narrow UX cost for closing the RCE surface.
 #
 # Runs before the credential-isolation handoff: it needs the git credential
-# actions/checkout persisted, which setup-sandbox.sh strips.
+# actions/checkout persisted, which setup_sandbox.py strips.
 #
 # Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME, GITHUB_EVENT_PATH
 # (from Actions).

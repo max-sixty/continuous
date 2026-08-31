@@ -121,7 +121,7 @@ def test_verdict_survives_a_stream_json_that_was_never_written(
 def test_verdict_names_the_cause_in_the_annotation(verdict: Verdict) -> None:
     """The last non-blank assistant text is what a maintainer triages from.
 
-    enrich-tend-outage-issues.sh carries the annotation into the tend-outage
+    enrich_tend_outage_issues.py carries the annotation into the tend-outage
     issue, so "session limit" versus "auth failure" has to survive into it
     rather than being left in an artifact nobody downloads.
     """
@@ -162,7 +162,7 @@ def test_verdict_keeps_a_multi_line_reason_on_one_line(verdict: Verdict) -> None
 def test_verdict_bounds_the_reason_it_quotes(verdict: Verdict) -> None:
     """The reason is a whole assistant text block, so it can be the whole answer.
 
-    `enrich-tend-outage-issues.sh` pastes these annotations into one batched
+    `enrich_tend_outage_issues.py` pastes these annotations into one batched
     issue comment under a 64 KiB cap; unbounded, one run's closing summary
     crowds out the rows for every other run in the batch.
     """

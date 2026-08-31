@@ -1,4 +1,4 @@
-"""Tests for plugins/tend-ci-runner/scripts/review-runs-corrections.sh.
+"""Tests for plugins/tend-ci-runner/scripts/review_runs_corrections.py.
 
 Step 4 of review-runs decides whether the tracking issue records "no
 maintainer corrections", which later runs read as ground truth under Gate 1.
@@ -19,14 +19,14 @@ from pathlib import Path
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path, uv_script
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
     / "plugins"
     / "tend-ci-runner"
     / "scripts"
-    / "review-runs-corrections.sh"
+    / "review_runs_corrections.py"
 )
 
 BOT = "tend-bot"
@@ -81,7 +81,7 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
+        uv_script(SCRIPT, *args), env=env, capture_output=True, text=True, check=False
     )
 
 
@@ -214,6 +214,18 @@ def test_bot_comments_are_excluded_from_both_endpoints(env: dict[str, str]) -> N
     assert _collect(env)["comments"] == []
 
 
+def test_a_deleted_comment_author_is_still_a_human_correction(
+    env: dict[str, str],
+) -> None:
+    comment = _comment(IN_WINDOW)
+    comment["user"] = None
+    _write(env, "ISSUE_COMMENTS_JSON", [comment])
+
+    (row,) = _collect(env)["comments"]
+
+    assert row["body"] == "that is not what the code does"
+
+
 def test_both_comment_endpoints_are_read_and_paginated(env: dict[str, str]) -> None:
     """The response is ascending by `created_at`, so a single unpaginated page
     drops the newest comments — the ones a fresh correction sits in."""
@@ -287,6 +299,19 @@ def test_bot_reviews_are_excluded(env: dict[str, str]) -> None:
     _write(env, "REVIEWS_JSON", [_review(IN_WINDOW, author=BOT)])
 
     assert _collect(env)["reviews"] == []
+
+
+def test_a_deleted_review_author_is_still_a_human_correction(
+    env: dict[str, str],
+) -> None:
+    review = _review(IN_WINDOW)
+    review["user"] = None
+    _write(env, "CANDIDATES_JSON", [{"number": 7}])
+    _write(env, "REVIEWS_JSON", [review])
+
+    (row,) = _collect(env)["reviews"]
+
+    assert row["body"] == "wrong"
 
 
 def test_no_candidate_prs_leaves_reviews_empty(env: dict[str, str]) -> None:

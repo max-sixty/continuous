@@ -1,4 +1,4 @@
-"""Tests for bot-review-state.sh — which of the bot's reviews anchors the head.
+"""Tests for bot_review_state.py — which of the bot's reviews anchors the head.
 
 Every field here decides an outward action: whether the bot re-reviews a
 commit, whether it approves one it never read, whether it edits an existing
@@ -15,14 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path, uv_script
 
 BOT_REVIEW_STATE = (
     Path(__file__).resolve().parents[2]
     / "plugins"
     / "tend-ci-runner"
     / "scripts"
-    / "bot-review-state.sh"
+    / "bot_review_state.py"
 )
 REVIEW_SKILL = BOT_REVIEW_STATE.parent.parent / "skills" / "review" / "SKILL.md"
 
@@ -81,7 +81,7 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 def _state(env: dict[str, str]) -> dict:
     result = subprocess.run(
-        [BASH, str(BOT_REVIEW_STATE), "7"],
+        uv_script(BOT_REVIEW_STATE, "7"),
         env=env,
         capture_output=True,
         text=True,
@@ -97,7 +97,7 @@ def _write(env: dict[str, str], key: str, value: object) -> None:
 
 def _review(
     rid: int,
-    at: str,
+    at: str | None,
     *,
     author: str = BOT,
     body: str = "",
@@ -229,6 +229,17 @@ def test_another_authors_review_is_not_ours(env: dict[str, str]) -> None:
     assert state["fresh_approval_sha"] == ""
 
 
+def test_a_deleted_review_author_is_not_ours(env: dict[str, str]) -> None:
+    review = _review(1, "2026-01-01T00:00:00Z", state="APPROVED")
+    review["user"] = None
+    _write(env, "REVIEWS_JSON", [review])
+
+    state = _state(env)
+
+    assert state["at_head"] is None
+    assert state["fresh_approval_sha"] == ""
+
+
 # ---------------------------------------------------------------------------
 # Force-push re-anchoring
 # ---------------------------------------------------------------------------
@@ -256,6 +267,20 @@ def test_a_rewrite_before_the_review_leaves_it_standing(env: dict[str, str]) -> 
 
     assert state["force_pushed_since"] is False
     assert state["at_head"]["id"] == 1
+
+
+def test_a_pending_review_without_a_timestamp_predates_a_rewrite(
+    env: dict[str, str],
+) -> None:
+    """GitHub permits a null submitted_at on PENDING reviews."""
+    _write(env, "REVIEWS_JSON", [_review(1, None, body="draft findings")])
+    _rewrite_at(env, "2026-01-02T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["last_substantive"]["at"] is None
+    assert state["force_pushed_since"] is True
+    assert state["at_head"] is None
 
 
 def test_the_newest_rewrite_is_the_one_that_counts(env: dict[str, str]) -> None:
@@ -327,6 +352,16 @@ def test_an_approval_on_an_older_commit_is_not_an_approval_of_this_one(
 
     assert state["fresh_approval_sha"] == OLD
     assert state["at_head"] is None
+
+
+def test_an_approval_whose_commit_was_deleted_has_no_fresh_sha(
+    env: dict[str, str],
+) -> None:
+    review = _review(3, "2026-01-01T00:00:00Z", state="APPROVED")
+    review["commit_id"] = None
+    _write(env, "REVIEWS_JSON", [review])
+
+    assert _state(env)["fresh_approval_sha"] == ""
 
 
 # ---------------------------------------------------------------------------

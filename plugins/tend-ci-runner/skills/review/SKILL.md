@@ -42,9 +42,10 @@ else
 fi
 
 # Which of the bot's reviews actually anchors this head — reply containers and
-# force-push re-anchoring both discounted. See the script header for why
-# `.commit_id` alone can't be read directly.
-STATE=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number>)
+# force-push re-anchoring both discounted. GitHub can re-point an old review's
+# `.commit_id` at the new head after a force push, so the timeline also matters.
+STATE=$("${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" <number>)
 LAST_REVIEW_SHA=$(jq -r '.last_substantive.sha // empty' <<<"$STATE")
 FORCE_PUSHED=$(jq -r '.force_pushed_since' <<<"$STATE")
 ```
@@ -268,7 +269,8 @@ fi
 # synthetic reply container and a review re-anchored by a rewrite are excluded.
 # A forced ready-for-review pass may replace Tend's earlier draft COMMENT, but
 # no other substantive review — including a full pass that raced this one.
-POST_STATE=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number>)
+POST_STATE=$("${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" <number>)
 ALREADY_POSTED=$(jq -r --argjson force "${FORCE_FULL_REVIEW:-false}" '
   if .at_head == null or ($force and .at_head.draft_mode)
   then "" else .at_head.at end' <<<"$POST_STATE")
@@ -288,7 +290,7 @@ The state check matters because the maintainer may close (or another path may me
 - **Also read `git show --cc <merge sha>` on a base merge**, for what the merge itself changed. Where it conflicted, the author's resolution is committed *inside* the merge, and both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. A finding the resolution already fixed must drop out. `--cc` prints only hunks differing from every parent, so a resolution that took the base side prints nothing at all — it tells you what a merge changed, never that a merge changed nothing, which is why re-verification above is unconditional.
 - Re-compose every `suggestion` block on a file the delta touched, reading the new content with `git show "$CURRENT_HEAD":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged reverts the author's newest edit on one click, and a multi-line one deletes every in-range line it doesn't reproduce.
 
-**Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what `bot-review-state.sh` reports as `LAST_REVIEW_SHA`: pinned to the head you re-targeted onto, the queued run's step 1 finds that head already reviewed and finishes without posting a second review of the same code.
+**Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what `bot_review_state.py` reports as `LAST_REVIEW_SHA`: pinned to the head you re-targeted onto, the queued run's step 1 finds that head already reviewed and finishes without posting a second review of the same code.
 
 **Before APPROVE specifically**, re-read live HEAD and require it to still equal `/tmp/reviewed-head`. The rollup below is the live head's, so once they differ it is not the pinned commit's rollup and the red-check gate is reading the wrong commit; post findings if you have them, otherwise finish and leave the approval to the queued run. Then peek that rollup: if any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal. Re-check the author-readiness gate on the same pass — a comment withholding merge readiness can land after the review began, and the conversation you read in step 1 is by now stale.
 
@@ -400,7 +402,8 @@ GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when
 # rewrite is excluded too — it reports `.commit_id == $HEAD_SHA`, so without
 # that filter the PUT destroys a published review, leaving this run's findings
 # over the old review's inline comments on code that no longer exists.
-ORPHAN_ID=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> \
+ORPHAN_ID=$("${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" <number> \
   | jq -r '.orphan_id // empty')
 ```
 

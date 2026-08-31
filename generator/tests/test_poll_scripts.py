@@ -1,28 +1,35 @@
 """Tests for the CI-poll scripts in plugins/tend-ci-runner/scripts/.
 
-poll-pr-checks.sh queries a *commit's* rollup, never the PR's — the false
+poll_pr_checks.py queries a *commit's* rollup, never the PR's — the false
 green this design exists to prevent is a poll silently retargeting a head
-another actor pushed. The fake `gh` serves raw GraphQL fixtures and the
-script's own jq does every reduction, because that filter is the behaviour
-under test: which conclusions count as red, which check runs are superseded,
-and which never read as green at all. `sleep` is faked, so the 9-iteration
-loop runs in milliseconds.
+another actor pushed. The fake `gh` serves raw GraphQL fixtures while the
+Python reducer decides which conclusions count as red, which check runs are
+superseded, and which never read as green at all. Sleep is injected, so the
+9-iteration loop runs in milliseconds.
 """
 
 from __future__ import annotations
 
+import contextlib
+import importlib
+import io
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts"
-POLL_PR_CHECKS = SCRIPTS / "poll-pr-checks.sh"
-RERUN_FAILED_JOBS = SCRIPTS / "rerun-failed-jobs.sh"
+POLL_PR_CHECKS = SCRIPTS / "poll_pr_checks.py"
+RERUN_FAILED_JOBS = SCRIPTS / "rerun_failed_jobs.py"
+sys.path.insert(0, str(SCRIPTS))
+poll_pr_checks = importlib.import_module("poll_pr_checks")
+rerun_failed_jobs = importlib.import_module("rerun_failed_jobs")
 
 HEAD_SHA = "aaaa111122223333aaaa111122223333aaaa1111"
 
@@ -181,14 +188,28 @@ def _serve_page(env: dict[str, str], cursor: str, response: str) -> None:
     (Path(env["ROLLUP_DIR"]) / f"page-{cursor}.json").write_text(response)
 
 
-def _poll(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [BASH, str(POLL_PR_CHECKS), "7", HEAD_SHA],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+def _invoke(
+    module: object, env: dict[str, str], args: list[str]
+) -> subprocess.CompletedProcess[str]:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(os, "environ", env.copy())
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                returncode = module.main(args, sleep=lambda _: None)
+            except subprocess.CalledProcessError as error:
+                returncode = error.returncode
+    return subprocess.CompletedProcess(
+        args, returncode, stdout.getvalue(), stderr.getvalue()
     )
+
+
+def _poll_args(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    return _invoke(poll_pr_checks, env, list(args))
+
+
+def _poll(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return _poll_args(env, "7", HEAD_SHA)
 
 
 def test_settled_green(env: dict[str, str]) -> None:
@@ -464,13 +485,7 @@ def test_abbreviated_sha_is_rejected_at_entry(env: dict[str, str]) -> None:
     was passed in. Reject the argument before any API call."""
     _serve(env, _resp(_check_run("tests")))
 
-    result = subprocess.run(
-        [BASH, str(POLL_PR_CHECKS), "7", HEAD_SHA[:7]],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _poll_args(env, "7", HEAD_SHA[:7])
     out = result.stdout + result.stderr
 
     assert result.returncode == 2, out
@@ -487,13 +502,7 @@ def test_uppercase_sha_is_rejected_at_entry(env: dict[str, str]) -> None:
     spurious "branch advanced" note pointing at that same commit."""
     _serve(env, _resp(_check_run("tests")))
 
-    result = subprocess.run(
-        [BASH, str(POLL_PR_CHECKS), "7", HEAD_SHA.upper()],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _poll_args(env, "7", HEAD_SHA.upper())
     out = result.stdout + result.stderr
 
     assert result.returncode == 2, out
@@ -509,13 +518,7 @@ def test_omitted_sha_is_rejected_not_reported_red(env: dict[str, str]) -> None:
     the same UNVERIFIED path as any other unusable argument."""
     _serve(env, _resp(_check_run("tests")))
 
-    result = subprocess.run(
-        [BASH, str(POLL_PR_CHECKS), "7"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _poll_args(env, "7")
     out = result.stdout + result.stderr
 
     assert result.returncode == 2, out
@@ -540,17 +543,11 @@ def test_moved_head_is_reported_not_absorbed(env: dict[str, str]) -> None:
     )
 
 
-# --- rerun-failed-jobs.sh ---------------------------------------------------
+# --- rerun_failed_jobs.py ---------------------------------------------------
 
 
 def _rerun(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [BASH, str(RERUN_FAILED_JOBS), "9000"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return _invoke(rerun_failed_jobs, env, ["9000"])
 
 
 def _attempts(env: dict[str, str], *values: int) -> None:

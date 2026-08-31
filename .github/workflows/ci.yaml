@@ -35,16 +35,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
-      # mitmdump starts the way setup-sandbox.sh starts it, so a release that
+      # mitmdump starts the way setup_sandbox.py starts it, so a release that
       # drops a flag, moves the CA file, or breaks the addon's import fails
       # here rather than on every adopter's next run. It goes through the
       # pinned uv, which nothing else in CI installs. The --allow-hosts value
-      # is a throwaway: setup-sandbox.sh owns the real regex, which must track
+      # is a throwaway: setup_sandbox.py owns the real regex, which must track
       # the allowlists in inject_credentials.py.
       #
       # It installs uv by running install-proxy-uv.sh rather than repeating it,
       # which also gives that script its only CI coverage, then warms the uvx
-      # cache as setup-sandbox.sh does. An empty replay lets mitmdump reach its
+      # cache as setup_sandbox.py does. An empty replay lets mitmdump reach its
       # running lifecycle hook, then its own KeepServing addon shuts it down.
       # The foreground process exits non-zero on startup failure and is reaped
       # by the shell; port 0 gives the fixture a listener it owns.
@@ -74,7 +74,7 @@ jobs:
           grep -qF 'HTTP(S) proxy listening at 127.0.0.1:' "$log"
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
-  # setup-sandbox.sh and sandbox_setup.py need a second uid, sudo, and a runner
+  # setup_sandbox.py and sandbox_setup.py need a second uid, sudo, and a runner
   # PATH to derive from, so no Python test reaches them. Running them for real
   # leaves the runner changed — checkout's persisted git credential deleted,
   # o+x along the workspace's ancestors, the proxy CA in the system trust store,
@@ -164,7 +164,8 @@ jobs:
           # and every skill shelling out to ${CLAUDE_PLUGIN_ROOT}/scripts/
           # would break with the job still green.
           test -f "$root/skills/triage/SKILL.md"
-          test -x "$root/scripts/list-recent-runs.sh"
+          test -f "$root/scripts/list_recent_runs.py"
+          test -x "$root/scripts/tend-uv.sh"
 
           # `model_reasoning_effort` is passed as a `-c` override, so a rename
           # would be silently ignored rather than rejected — `--help` can't see

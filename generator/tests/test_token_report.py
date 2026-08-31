@@ -1,4 +1,4 @@
-"""Tests for plugins/tend-ci-runner/scripts/token-report.sh.
+"""Tests for plugins/tend-ci-runner/scripts/token_report.py.
 
 The report exists to answer "what did the spend go to?", so what is pinned
 here is the grouping and the ranking: subjects come off the record each run
@@ -9,7 +9,7 @@ orders disagree so a regression to token-ranking fails.
 
 The fake `gh` serves a run list and materialises each run's artifact into the
 `--dir` the script passes, which is the whole of what the script needs from
-GitHub. `date` is faked so the window is a fixed string.
+GitHub.
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ from typing import Any
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path, uv_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "token-report.sh"
+SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "token_report.py"
 
 FAKE_GH = (
     GH_PREAMBLE
@@ -61,9 +61,6 @@ esac
 """
 )
 
-# The window is a fixed string; nothing here depends on the real clock.
-FAKE_DATE = "#!/usr/bin/env bash\necho 2026-08-22T00:00:00Z\n"
-
 
 def _record(**over: Any) -> dict[str, Any]:
     """One job's token-usage.json, as the "Token usage" step writes it."""
@@ -96,7 +93,7 @@ class Report:
         self._usage_dir = tmp_path / "usage"
         self._usage_dir.mkdir()
         self._env = {
-            "PATH": tool_path(fake_bin(tmp_path, gh=FAKE_GH, date=FAKE_DATE)),
+            "PATH": tool_path(fake_bin(tmp_path, gh=FAKE_GH)),
             "GH_CALLS": str(tmp_path / "gh-calls.log"),
             "WF_JSON": str(tmp_path / "wf.json"),
             "RUNS_JSON": str(tmp_path / "runs.json"),
@@ -148,7 +145,7 @@ class Report:
         )
         Path(self._env["RUNS_JSON"]).write_text(json.dumps(self._runs))
         result = subprocess.run(
-            [BASH, str(SCRIPT), "168", *prefixes],
+            uv_script(SCRIPT, "168", *prefixes),
             env=self._env,
             capture_output=True,
             text=True,

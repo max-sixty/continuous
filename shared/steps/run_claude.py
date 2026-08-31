@@ -5,7 +5,7 @@ user, supervises it to exit or timeout, then turns the finished stream-json into
 the step's exit code and ``::error::`` annotation.
 
 Reads (env): ``SANDBOX`` and ``AGENT_ENV_FILE`` (exported by
-``proxy/setup-sandbox.sh`` via ``$GITHUB_ENV``), ``RUNNER_TEMP``,
+``proxy/setup_sandbox.py`` via ``$GITHUB_ENV``), ``RUNNER_TEMP``,
 ``GITHUB_WORKSPACE``, ``GITHUB_OUTPUT``, ``TEND_MODEL``,
 ``TEND_ALLOWED_TOOLS``, ``TEND_SYSTEM_PROMPT``, ``TEND_PROMPT``,
 ``TEND_TIMEOUT_SEC``, ``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``,
@@ -54,7 +54,7 @@ STDERR_TAIL_BYTES = 64 * 1024
 
 #: Characters of the agent's own reason quoted in the failure annotation.
 #: The reason is a whole assistant text block, which can be the agent's entire
-#: final answer, and ``enrich-tend-outage-issues.sh`` pastes these annotations
+#: final answer, and ``enrich_tend_outage_issues.py`` pastes these annotations
 #: into one batched issue comment under a 64 KiB cap — so an unbounded reason
 #: crowds out the other runs' rows.
 REASON_MAX_CHARS = 500
@@ -299,7 +299,7 @@ def failure_reason(events: Iterable[dict[str, Any]]) -> str:
 
     A session-limit exit is non-zero and emits a ``<synthetic>`` assistant
     message ("You've hit your session limit · resets 8:30am (UTC)"), so the last
-    assistant text names the cause; ``enrich-tend-outage-issues.sh`` carries the
+    assistant text names the cause; ``enrich_tend_outage_issues.py`` carries the
     annotation into the tend-outage issue. A ``tool_use`` block is not text and
     a tool name is not a failure cause, so only ``text`` blocks are considered,
     and a blank one is no reason at all.
@@ -460,7 +460,7 @@ def main() -> int:
 
     # Written as the sandbox user so the agent can read it back. It lands in the
     # adopter's checkout untracked, next to the `.claude/skills/` they do track;
-    # setup-sandbox.sh's global gitignore for the sandbox user keeps a broad
+    # setup_sandbox.py's global gitignore for the sandbox user keeps a broad
     # `git add -A` from committing `bypassPermissions` into the session's PR.
     # `stdin` is closed on every `sudo` here: without a tty a `sudo` that needs
     # a password fails instead of waiting for one on the step's stdin. The `tee`
@@ -478,7 +478,7 @@ def main() -> int:
         check=True,
     )
 
-    # The agent's launch env is $AGENT_ENV_FILE (written by setup-sandbox.sh;
+    # The agent's launch env is $AGENT_ENV_FILE (written by setup_sandbox.py;
     # shared with the plugin-install step so the two can't drift): proxy
     # routing, CA trust for every client family, and DUMMY GitHub + Anthropic
     # credentials in the production schemes — the proxy replaces them with the

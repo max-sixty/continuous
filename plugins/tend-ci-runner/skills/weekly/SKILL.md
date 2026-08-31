@@ -34,7 +34,8 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    # rebased PR carrying an approval it never earned. Dependency PRs are the
    # population tend rewrites on purpose (`nightly` posts `@dependabot
    # recreate` and ticks renovate's rebase-check), so this matters here most.
-   LAST_APPROVAL_SHA=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> \
+   LAST_APPROVAL_SHA=$("${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+     "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" <number> \
      | jq -r '.fresh_approval_sha')
 
    # The file is per-PR and removed on the skip path: step 2 loops over every
@@ -76,7 +77,8 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    # PR's state is the pre-rewrite one — never merely when some stale approval
    # exists, which would dismiss a review a later approval already superseded
    # and leave the live one untouched.
-   STALE_APPROVAL_ID=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> \
+   STALE_APPROVAL_ID=$("${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+     "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" <number> \
      | jq -r '.stale_approval_id')
 
    if [ -n "$STALE_APPROVAL_ID" ]; then

@@ -173,7 +173,7 @@ PREFIX_RE="^($(IFS='|'; echo "${PREFIXES[*]}"))"
 # `status=completed` dropped it there — filtering on `created` here would drop
 # it again and nobody would ever see it, and those are the long-running runs
 # Step 3 goes on to hunt. So over-fetch by `created` and filter on
-# `updated_at`, as `list-recent-runs.sh` does. The floor is a run's whole
+# `updated_at`, as `list_recent_runs.py` does. The floor is a run's whole
 # lifetime, not its job cap: `created_at` starts at queue time, and a
 # `cancel-in-progress: false` group can hold a run queued for many hours
 # before its 6h of execution even begins.
@@ -257,7 +257,9 @@ Run the token report script to get per-run token counts:
 # unset `$SINCE` makes `date -d ""` today's midnight, not an error.
 SINCE=$(cat /tmp/review-runs-since)
 HOURS=$(( ( $(date -u +%s) - $(date -u -d "$SINCE" +%s) + 3599 ) / 3600 ))
-"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "$HOURS" > /tmp/token-report.json
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/token_report.py" "$HOURS" \
+  > /tmp/token-report.json
 ```
 
 Pass the same extra prefixes Step 1 censuses (after `$HOURS`, which the script reads as its first positional arg), so the two steps agree on what the fleet is — the repo's `running-tend` skill is the source for both (e.g. `review-` for a `review-reviewers` workflow that uses the tend action but isn't named `tend-*`).
@@ -284,7 +286,9 @@ mention, notifications, weekly, and review-reviewers runs get the same treatment
 Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, or requesting changes on a bot PR, leaves labels and state untouched and is equally a correction; where the bot authors most of the PRs, a review body is the *first* place a maintainer writes. The script collects all three — dispositions, thread comments, review bodies — for the window:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/review-runs-corrections.sh" "$(cat /tmp/review-runs-since)"
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/review_runs_corrections.py" \
+  "$(cat /tmp/review-runs-since)"
 ```
 
 Read every row: a correction is a maintainer contradicting a bot claim, not merely replying. Comment rows carry both timestamps because the window filters on `updated_at` — a `created` before the anchor is an older comment edited inside the window, a real hit rather than a broken filter. Empty `dispositions`, `comments`, and `reviews` is the all-clear.

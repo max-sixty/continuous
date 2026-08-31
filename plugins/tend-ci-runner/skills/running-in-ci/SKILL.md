@@ -276,7 +276,8 @@ PINNED_SHA=$(git rev-parse HEAD)
 # In a review session, HEAD is the ephemeral refs/pull/N/merge commit, which
 # carries no rollup at all; pin the PR head instead:
 #   PINNED_SHA=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
-${CLAUDE_PLUGIN_ROOT}/scripts/poll-pr-checks.sh <number> "$PINNED_SHA"
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/poll_pr_checks.py" <number> "$PINNED_SHA"
 ```
 
 Invoke this Bash call in the foreground (no `run_in_background`) with `timeout: 600000` (10 min) — the poll runs up to ~9.5 minutes, and the default 2-min Bash timeout would kill it early.
@@ -305,7 +306,8 @@ Poll your checks to terminal, do the follow-up you were gated on, and exit; name
 To rerun a run's failed jobs and wait for the outcome, use the bundled script — it reruns, finds the new attempt's jobs (the parent run's `.status` and the commit rollup stay pending on unrelated siblings, so neither is a usable signal), and polls them to terminal:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/rerun-failed-jobs.sh <run-id>
+"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/rerun_failed_jobs.py" <run-id>
 ```
 
 Same foreground invocation and 10-min `timeout` as above. Exit 0 prints each job's conclusion — `completed` is not `success`; the follow-up turns on the conclusions. Any other exit means the rerun never took or the jobs are still running at the cap: report them as unverified rather than re-entering.
