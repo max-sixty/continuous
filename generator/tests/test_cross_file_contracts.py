@@ -281,6 +281,9 @@ def test_nightly_regen_pins_its_poll_to_the_commit_it_pushed() -> None:
         "recording the pushed OID; the poll that follows has no correct local "
         "source for it."
     )
+    assert block.index("git commit") < block.index(capture[0]), (
+        "the OID must be captured after the commit it names"
+    )
     assert block.index(capture[0]) < block.index("git worktree remove"), (
         "the OID must be captured while the worktree still exists"
     )
