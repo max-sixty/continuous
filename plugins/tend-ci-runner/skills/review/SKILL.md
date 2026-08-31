@@ -205,7 +205,7 @@ REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 REVIEWED=$(cat /tmp/reviewed-head) || exit 0
 ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
   gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
-    -f event=APPROVE -f commit_id="$REVIEWED" -f body="" && echo "✓ approved"
+    -f event=APPROVE -f commit_id="$REVIEWED" -f body=""
 ```
 
 `/tmp/reviewed-head` holds the commit this session reviewed — written in step 1, rewritten by **Posting mechanics** if HEAD moved. Every path that posts a review reads it back; see **Pin every review to the commit you read**.
@@ -243,7 +243,11 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number>
 
 On `skip`, post nothing and finish. A re-targeted result also prints `delta: <path>` and updates `/tmp/reviewed-head`. Read that entire file in chunks, update the review, then run the preflight again. Do not post from the re-targeting pass.
 
-A non-zero exit means nothing was decided. Fix the error and re-run the preflight.
+A non-zero exit from this commandless check means nothing was decided. Fix the
+error and re-run it. In command mode below, `post:` means the outward command
+was attempted; handle that command's failure directly. For a review POST that
+returns 422, use the orphan-aware recovery procedure below instead of blindly
+rerunning the preflight.
 
 Every review POST below passes its `gh api` command to the preflight after `--`. In that mode the preflight does not re-target: it runs the command only when two live snapshots and `bot-review-state.sh` agree that the pinned head is open and unreviewed. This keeps the final check beside the outward action.
 
