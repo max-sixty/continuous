@@ -31,11 +31,21 @@ repos:
       # .github/actionlint.yaml, which `tend init` writes and every actionlint
       # caller reads — hook args would cover this one invocation only.
       - id: actionlint
-  # Step bodies in standalone scripts are invisible to actionlint's built-in
-  # shellcheck, so run shellcheck directly at warning severity. The generated
-  # workflow bodies are covered at actionlint's default severity by
-  # test_generated_run_bodies_pass_shellcheck; the inline bodies in claude/ and
-  # codex/ are covered by test_inline_run_bodies_pass_shellcheck.
+      # Snapshot tests keep these full rendered workflows current. Linting the
+      # artifacts exercises actionlint's own ShellCheck preprocessing and
+      # default severity before the generator is released.
+      - id: actionlint
+        name: Lint generated workflow snapshots
+        args:
+          - -ignore
+          - 'unexpected key "queue" for "concurrency" section'
+        types: [file]
+        files: ^generator/tests/_regtest_outputs/test_generate\..*\.out$
+  # Step bodies in standalone scripts (shared/steps/, proxy/,
+  # generator/src/tend/templates/, .config/codex-cloud/) are invisible to
+  # actionlint's built-in shellcheck, so run shellcheck directly at warning
+  # severity. The inline `run:` bodies that remain in claude/ and codex/ are
+  # covered by test_inline_run_bodies_pass_shellcheck.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1-1
     hooks:
