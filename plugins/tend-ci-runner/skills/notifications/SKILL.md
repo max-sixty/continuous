@@ -1,13 +1,13 @@
 ---
 name: notifications
-description: Drains the bot's unread GitHub notifications as a recovery queue for issue and PR work that event workflows did not finish. Runs on a schedule.
+description: Drains unread GitHub notifications and resolves conflicts on configured-bot PRs. Runs on a schedule.
 metadata:
   internal: true
 ---
 
-# Check Notifications
+# Check Notifications and Bot PRs
 
-Unread notifications are the recovery queue. Event workflows are the fast path; after a successful run they mark the notification that triggered them read. This poll handles whatever remains.
+Unread notifications are the recovery queue. Event workflows are the fast path; after a successful run they mark the notification that triggered them read. This poll handles whatever remains and repairs conflicts on the configured bot's PRs.
 
 The workflow prompt supplies the **notification snapshot cutoff**. This run owns unread activity before that time; activity at or after it stays unread.
 
@@ -24,7 +24,8 @@ jq '.[] | {id, reason, repo: .repository.full_name, updated_at,
   subject_url: .subject.url}' /tmp/tend-notifications.json
 ```
 
-If the snapshot is empty, exit.
+If the snapshot is empty and the prompt reports no possible conflicted PRs, exit.
+Otherwise continue; notification work still comes before conflict repair.
 
 ## 2. Load the CI rules
 
@@ -103,4 +104,12 @@ gh api "repos/$GITHUB_REPOSITORY/notifications" -X PUT \
 
 Skip the call when the unresolved item is the first same-repository item in the snapshot, or when the snapshot contains no same-repository items. The next poll starts with the unresolved item instead of repeating completed work. Never acknowledge a same-repository thread individually.
 
-Report the notifications handled, responses posted, items deferred, and whether the repository cutoff was acknowledged.
+## 5. Resolve possible conflicts
+
+If the prompt reports possible conflicted PRs, load
+`/tend-ci-runner:resolve-conflicts` and resolve conflicts for the configured bot
+only. The count is a boot signal; the conflict skill re-reads and test-merges the
+current PR heads before changing a branch.
+
+Report the notifications handled, responses posted, items deferred, repository
+cutoff, and conflict outcomes.

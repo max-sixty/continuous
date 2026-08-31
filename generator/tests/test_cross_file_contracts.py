@@ -4,7 +4,10 @@ A rule split across two files drifts silently: nothing runs both halves
 together, so each reads correct on its own while the pair stops agreeing.
 """
 
+import json
 from pathlib import Path
+
+from tests import _yaml as yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,6 +42,37 @@ def test_notification_skill_pins_the_fragile_dedup_queries() -> None:
     assert ".display_title == $title" in skill
     assert "issues/$NUMBER/timeline?per_page=100" in skill
     assert '.event == "cross-referenced"' in skill
+
+
+def test_frequent_poll_and_nightly_share_conflict_resolution() -> None:
+    notifications = _read(
+        "plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md"
+    )
+    nightly = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
+    resolver = _read(
+        "plugins", "tend-ci-runner", "skills", "resolve-conflicts", "SKILL.md"
+    )
+    check = _read("generator", "src", "tend", "templates", "notifications-check.sh")
+
+    for caller in (notifications, nightly):
+        assert "/tend-ci-runner:resolve-conflicts" in caller
+    assert "configured bot only" in " ".join(notifications.split())
+    assert "this bot and upstream dependency bots" in " ".join(nightly.split())
+    assert "app/dependabot" in resolver
+    assert "app/renovate" in resolver
+    assert "baseRefName" in resolver
+    assert "baseRefOid" in resolver
+    assert "headRefName" in resolver
+    assert "headRepository" in resolver
+    assert '"refs/heads/<base>:refs/tend/base/<number>"' in resolver
+    assert '"refs/tend/base/<number>" "refs/tend/pr/<number>"' in resolver
+    assert "headRefOid" in resolver
+    assert '--force-with-lease="refs/heads/<headRefName>:<headRefOid>"' in resolver
+    assert "<!-- tend-conflict-deferred head=<head SHA> -->" in resolver
+    assert r"<!-- tend-conflict-deferred head=\($pr.headRefOid) -->" in check
+    assert "comments(last: 100)" in check
+    assert r'split("\n") | last' in check
+    assert "origin/main" not in resolver
 
 
 def test_review_runs_pins_current_state_recovery() -> None:
@@ -117,6 +151,8 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert skill.count("REVIEWED=$(cat /tmp/reviewed-head) || exit 0") == 2
     assert '-f commit_id="$REVIEWED"' in skill
     assert '--arg sha "$REVIEWED"' in skill
+    assert skill.count("review-preflight.sh <number> --") == 3
+    assert '--edit-review "$ORPHAN_ID" --' in skill
 
     # Both logs reach the session in one stream, so the skill names both halves.
     assert "**Read both halves of the delta file as a pair.**" in skill
@@ -127,6 +163,7 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     # nothing anywhere, so the override below has to be unconditional.
     assert "git show --cc" in skill
     assert "even if the scoped log printed nothing" in skill
+    assert "Re-compose every `suggestion` block after re-targeting" in skill
 
 
 def test_weekly_approval_pins_the_commit_it_checked() -> None:
@@ -154,21 +191,21 @@ def test_weekly_approval_pins_the_commit_it_checked() -> None:
 def test_review_approval_gates_on_author_stated_readiness() -> None:
     """A PR whose author says it must not merge withholds the verdict the same
     way the draft flag does, and the draft flag is the only signal the skill
-    used to read. Every approving path — step 5's no-issues approve, the
+    used to read. Every approving path — step 6's no-issues approve, the
     trivial-incremental "your findings are now addressed" approve, and the
     dedup rule's "resolves the last open one" approve — has to reach the gate,
     so each carries a pointer to it.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
 
-    # Stated once, under step 5, where every approving path is sent for the
+    # Stated once, under step 6, where every approving path is sent for the
     # POST recipe.
     assert "**Unless the author withheld merge readiness.**" in skill
     # The bot's own findings closing out is what fired the wrong approval:
     # the two conditions are independent and only the author clears the second.
     assert "independent conditions" in skill
 
-    # The incremental paths approve without reading step 5's prose, so the
+    # The incremental paths approve without reading step 6's prose, so the
     # pointer rides on each sentence that prescribes the approval: the
     # trivial-skip one and the dedup rule's, which fire from the same trigger.
     assert "so the PR isn't left in limbo — and the author-readiness gate" in skill
@@ -185,3 +222,25 @@ def test_review_approval_gates_on_author_stated_readiness() -> None:
     # A blocker can also arrive mid-session, after the review began, so the
     # pre-APPROVE peek re-checks it alongside the red-check gate.
     assert "Re-check the author-readiness gate" in skill
+
+
+def test_review_second_pass_is_a_submit_precondition() -> None:
+    """A full review cannot quietly skip the standalone second pass, including
+    after a safe re-target; both step-1 close-out paths remain exempt."""
+    skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+
+    second_pass = skill.index("### 5. Second pass")
+    submit = skill.index("### 6. Submit")
+    assert second_pass < submit
+    assert "For a review that reached step 5, before submitting" in skill
+    assert "Step 1's trivial-increment and dedup close-out paths" in skill
+    assert "Run step 5 again over the updated merged tree" in skill
+
+
+def test_review_reviewers_matrix_covers_consumers() -> None:
+    workflow = yaml.safe_load(_read(".github", "workflows", "review-reviewers.yaml"))
+    matrix = workflow["jobs"]["review-reviewers"]["strategy"]["matrix"]["repo"]
+    consumers = [entry["repo"] for entry in json.loads(_read("data", "consumers.json"))]
+
+    missing = sorted(set(consumers) - set(matrix))
+    assert not missing, f"add consumers to review-reviewers.yaml matrix: {missing}"
