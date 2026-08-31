@@ -28,6 +28,10 @@
 {% if cfg.harness == 'claude' %}
           claude_code_oauth_token: ${{ secrets.<<claude_token_secret>> }}
           anthropic_api_key: ${{ secrets.<<anthropic_api_key_secret>> }}
+{% if cfg.memory_gist %}
+          memory_gist: "true"
+          memory_gist_id: ${{ secrets.<<memory_gist_secret>> }}
+{% endif %}
 {% else %}
           openai_api_key: ${{ secrets.<<openai_key_secret>> }}
 {% if cfg.effort %}

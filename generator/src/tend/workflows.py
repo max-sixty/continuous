@@ -21,6 +21,7 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     Config,
     WorkflowConfig,
@@ -118,6 +119,7 @@ _JINJA.globals["tend_environment"] = TEND_ENVIRONMENT
 _JINJA.globals["bot_token_secret"] = BOT_TOKEN_SECRET
 _JINJA.globals["claude_token_secret"] = CLAUDE_TOKEN_SECRET
 _JINJA.globals["anthropic_api_key_secret"] = ANTHROPIC_API_KEY_SECRET
+_JINJA.globals["memory_gist_secret"] = MEMORY_GIST_SECRET
 _JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
 # Labels tend puts on the issues it files about its own health. Workflows skip
 # issues carrying them, so the bot's own record-keeping cannot re-trigger it:

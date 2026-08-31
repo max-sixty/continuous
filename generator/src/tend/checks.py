@@ -35,6 +35,7 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     Config,
 )
@@ -1344,6 +1345,29 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
     return CheckResult("secrets", False, msg)
 
 
+def check_memory_gist_repository(repo: str) -> CheckResult:
+    """Secret Gists are unlisted rather than private, so memory is public-only."""
+    is_public = _repo_is_public(repo)
+    if is_public is None:
+        return CheckResult(
+            "memory-gist",
+            None,
+            f"Could not determine whether {repo} is public",
+        )
+    if not is_public:
+        return CheckResult(
+            "memory-gist",
+            False,
+            "memory_gist is experimental and available only for public repositories: "
+            "a secret Gist is unlisted, not private",
+        )
+    return CheckResult(
+        "memory-gist",
+        True,
+        "memory_gist is experimental and limited to this public repository",
+    )
+
+
 def _repo_is_public(repo: str) -> bool | None:
     """Whether `repo` is public. None when it cannot be determined."""
     result = _gh("api", f"repos/{repo}", "--jq", ".private")
@@ -1684,6 +1708,8 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     # The engine-specific auth secret is verified by check_claude_auth /
     # check_codex_auth below, which name the relevant one in their message.
     required_secrets = [BOT_TOKEN_SECRET]
+    if cfg.memory_gist:
+        required_secrets.append(MEMORY_GIST_SECRET)
 
     # The operational secrets are deliberately absent from `allowed`: they
     # belong to the environment, and a copy left at repo level is readable by
@@ -1701,9 +1727,12 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     results.append(check_environment_deployments(repo))
     results.append(check_credential_environments(repo, cfg, admitted))
     results.append(check_secrets(repo, required_secrets))
-    if cfg.harness == "claude":
+    if cfg.memory_gist:
+        results.append(check_memory_gist_repository(repo))
+    enabled_harnesses = cfg.enabled_harnesses()
+    if "claude" in enabled_harnesses:
         results.append(check_claude_auth(repo))
-    else:
+    if "codex" in enabled_harnesses:
         results.append(check_codex_auth(repo))
     results.append(check_repo_secret_allowlist(repo, allowed))
     return results

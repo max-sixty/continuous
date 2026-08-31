@@ -48,6 +48,53 @@ def test_bot_name_only(tmp_path: Path) -> None:
     assert cfg.setup == []
     assert cfg.workflows == {}
     assert cfg.allowed_repo_secrets == []
+    assert cfg.memory_gist is False
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "{}"])
+def test_memory_gist_requires_a_boolean(tmp_path: Path, value: str) -> None:
+    path = _write_config(tmp_path, f"bot_name: my-bot\nmemory_gist: {value}\n")
+    with pytest.raises(ClickException, match="must be true or false"):
+        Config.load(path)
+
+
+def test_memory_gist_requires_a_claude_workflow(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        harness: codex
+        model: gpt-5.5
+        memory_gist: true
+    """),
+    )
+    with pytest.raises(ClickException, match="requires at least one enabled workflow"):
+        Config.load(path)
+
+
+def test_memory_gist_ignores_a_disabled_top_level_harness(
+    tmp_path: Path,
+) -> None:
+    disabled = "\n".join(
+        f"  {name}: false"
+        for name in (
+            "review",
+            "mention",
+            "triage",
+            "ci-fix",
+            "nightly",
+            "weekly",
+            "notifications",
+            "review-runs",
+        )
+    )
+    path = _write_config(
+        tmp_path,
+        f"bot_name: my-bot\nmemory_gist: true\nworkflows:\n{disabled}\n",
+    )
+
+    with pytest.raises(ClickException, match="requires at least one enabled workflow"):
+        Config.load(path)
 
 
 # ---------------------------------------------------------------------------

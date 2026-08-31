@@ -66,6 +66,9 @@ bot_name: my-project-bot
 #
 # The Claude action prefers the subscription token
 # (`CLAUDE_CODE_OAUTH_TOKEN`) over the API key when both are set.
+# `TEND_MEMORY_GIST_ID` is required only when the experimental `memory_gist`
+# setting is true. It keeps the secret Gist's unlisted URL out of a public
+# config file.
 #
 # Classic PAT scopes: `repo`, `workflow`, `notifications`, `write:discussion`,
 # `gist`, `user`. `workflow` is required to push commits that modify
@@ -233,6 +236,28 @@ bot_name: my-project-bot
 #
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.
+
+# ## Memory Gist (experimental, Claude harness)
+#
+# `memory_gist: true` restores Claude Code's model-authored auto memory from a
+# Gist before each Claude run and saves its changes afterwards. This setting is
+# experimental. The default is false, and the field is rejected when no enabled
+# workflow uses the Claude harness.
+#
+# The bot account must own a secret Gist containing `MEMORY.md`. Its description
+# must be exactly `tend auto memory: OWNER/REPO`. Store the Gist ID in the
+# `TEND_MEMORY_GIST_ID` secret of the repo's `tend` environment:
+#
+#     gh secret set TEND_MEMORY_GIST_ID --repo OWNER/REPO --env tend
+#
+# Secret Gists are unlisted, not private, so this experiment supports public
+# repositories only and memory must not contain credentials or private facts.
+# Recalled notes are untrusted context: they may be stale or influenced by text
+# Claude read in an earlier run. Gists are flat, so a nested memory directory
+# makes that run's save fail with a warning. Concurrent saves preserve conflicts
+# visible at fetch time, but GitHub's Gist API cannot make the final update atomic.
+#
+# memory_gist: true
 
 # ## Workflows
 #

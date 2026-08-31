@@ -16,7 +16,9 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
+    STANDARD_WORKFLOWS,
     Config,
 )
 from tend.workflows import (
@@ -36,6 +38,10 @@ def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(f"bot_name: test-bot\n{extra}")
     return cfg
+
+
+def test_standard_workflow_registry_matches_the_generators() -> None:
+    assert STANDARD_WORKFLOWS == set(GENERATORS)
 
 
 def test_minimal_config_generates_seven_workflows(tmp_path: Path) -> None:
@@ -268,6 +274,53 @@ def test_sandbox_levers_absent_by_default(tmp_path: Path) -> None:
     for wf in generate_all(cfg):
         for inputs in _agent_step_inputs(wf.content):
             assert not levers & inputs
+
+
+def test_memory_gist_is_an_explicit_experimental_claude_only_input(
+    tmp_path: Path,
+) -> None:
+    disabled = Config.load(_minimal_config(tmp_path))
+    for wf in generate_all(disabled):
+        for inputs in _agent_step_inputs(wf.content):
+            assert "memory_gist" not in inputs
+            assert "memory_gist_id" not in inputs
+
+    enabled = Config.load(_minimal_config(tmp_path, "memory_gist: true\n"))
+    for wf in generate_all(enabled):
+        data = yaml.safe_load(wf.content)
+        agent_steps = [
+            step
+            for job in data["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("max-sixty/tend/claude@")
+        ]
+        for step in agent_steps:
+            assert step["with"]["memory_gist"] == "true"
+            assert step["with"]["memory_gist_id"] == (
+                f"${{{{ secrets.{MEMORY_GIST_SECRET} }}}}"
+            )
+
+
+def test_memory_gist_follows_a_per_workflow_claude_override(
+    tmp_path: Path,
+) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+            harness: codex
+            model: gpt-5.5
+            memory_gist: true
+            workflows:
+              nightly:
+                harness: claude
+                model: opus
+        """),
+        )
+    )
+    workflows = {wf.filename: wf.content for wf in generate_all(cfg)}
+    assert "memory_gist:" in workflows["tend-nightly.yaml"]
+    assert "memory_gist:" not in workflows["tend-review.yaml"]
 
 
 def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:

@@ -450,6 +450,7 @@ def launch(
         timed_out: bool = False,
         term_ends_it: bool = True,
         launch_error: Exception | None = None,
+        agent_env_text: str = "HOME=/sandbox\nGITHUB_TOKEN=dummy\nPATH=/usr/bin\n",
         **overrides: str,
     ) -> Launch:
         runner_temp = tmp_path / "runner-temp"
@@ -457,7 +458,7 @@ def launch(
         agent_env = tmp_path / "agent-env"
         runner_temp.mkdir(exist_ok=True)
         workspace.mkdir(exist_ok=True)
-        agent_env.write_text("HOME=/sandbox\nGITHUB_TOKEN=dummy\nPATH=/usr/bin\n")
+        agent_env.write_text(agent_env_text)
 
         # github_files owns the withheld names; clearing the rest makes the
         # composed argv the fixture's, not the developer's shell's.
@@ -547,6 +548,24 @@ def test_launch_steers_the_agent_entirely_through_argv(launch: Launcher) -> None
     ]
 
 
+def test_launch_adds_the_restored_auto_memory_settings(launch: Launcher) -> None:
+    settings_file = "/home/tend-sandbox/run/auto-memory/.tend-settings.json"
+    result = launch(
+        stream=_ev_result(),
+        TEND_AUTO_MEMORY_SETTINGS=settings_file,
+        agent_env_text=(
+            "HOME=/sandbox\n"
+            "GITHUB_TOKEN=dummy\n"
+            "PATH=/usr/bin\n"
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1\n"
+        ),
+    )
+    argv = result.command("claude").argv
+
+    assert argv[-3:] == ["--settings", settings_file, "review the PR"]
+    assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1" not in argv
+
+
 def test_launch_composes_the_file_then_the_context_then_tends_own_names(
     launch: Launcher,
 ) -> None:
@@ -622,7 +641,10 @@ def test_launch_publishes_the_stream_json_output(
     """The Token usage step and the session-logs artifact both read it."""
     result = launch(stream=_ev_result())
 
-    assert github_files.outputs() == {"stream_json": str(result.stream_json)}
+    assert github_files.outputs() == {
+        "stream_json": str(result.stream_json),
+        "sandbox_reaped": "true",
+    }
 
 
 def test_launch_reaps_the_sandbox_uid_after_every_run(launch: Launcher) -> None:

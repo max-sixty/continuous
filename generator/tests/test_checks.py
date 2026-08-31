@@ -23,6 +23,7 @@ from tend.checks import (
     check_credential_environments,
     check_environment,
     check_environment_deployments,
+    check_memory_gist_repository,
     check_repo_secret_allowlist,
     check_secrets,
     detect_canonical_owner,
@@ -35,8 +36,10 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     Config,
+    WorkflowConfig,
 )
 from tend.workflows import TEND_ENVIRONMENT
 
@@ -48,6 +51,8 @@ def _config(
     protected_branches: list[str] | None = None,
     harness: str = "claude",
     model: str = "opus",
+    memory_gist: bool = False,
+    workflows: dict[str, WorkflowConfig] | None = None,
 ) -> Config:
     """Build a Config for tests without hand-listing every positional arg."""
     return Config(
@@ -58,7 +63,8 @@ def _config(
         model=model,
         effort="",
         setup=[],
-        workflows={},
+        workflows=workflows or {},
+        memory_gist=memory_gist,
     )
 
 
@@ -1089,7 +1095,7 @@ def test_run_all_checks_no_repo() -> None:
 _BRANCH_HAS_UPDATE_RULE = _make_branch_rules("update")
 
 
-def _gh_all_pass(*admitted: str):
+def _gh_all_pass(*admitted: str, environment_secrets: tuple[str, ...] | None = None):
     """A gh CLI where every check passes, for a repo whose environment admits
     `admitted` (default `main`). The admitted set is a parameter because the
     environment check demands it match the config's protected refs exactly, so
@@ -1108,7 +1114,11 @@ def _gh_all_pass(*admitted: str):
             # membership check wants a JSON array, the environment sweep one
             # name per line. The fake answers whichever was asked for.
             names = (
-                [BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET]
+                list(
+                    (BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET)
+                    if environment_secrets is None
+                    else environment_secrets
+                )
                 if url.endswith(f"{TEND_ENVIRONMENT}/secrets")
                 else []
             )
@@ -1163,6 +1173,64 @@ def test_run_all_checks_with_explicit_repo() -> None:
     ):
         results = run_all_checks(_config(), repo="owner/repo")
     assert all(r.passed is True for r in results)
+
+
+def test_run_all_checks_requires_auth_for_each_effective_harness() -> None:
+    cfg = _config(
+        harness="codex",
+        model="gpt-5.5",
+        workflows={
+            "nightly": WorkflowConfig(harness="claude", model="opus"),
+        },
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch(
+            "tend.checks._gh",
+            side_effect=_gh_all_pass(
+                environment_secrets=(BOT_TOKEN_SECRET, OPENAI_KEY_SECRET)
+            ),
+        ),
+    ):
+        results = run_all_checks(cfg, repo="owner/repo")
+
+    auth = {result.name: result for result in results if result.name.endswith("-auth")}
+    assert auth["codex-auth"].passed is True
+    assert auth["claude-auth"].passed is False
+    assert CLAUDE_TOKEN_SECRET in auth["claude-auth"].message
+
+
+def test_memory_gist_requires_its_environment_secret() -> None:
+    def fake(*args, **kwargs):
+        if args[1] == "repos/owner/repo" and ".private" in args:
+            return _make_completed("false\n")
+        return _gh_all_pass()(*args, **kwargs)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=fake),
+    ):
+        results = run_all_checks(_config(memory_gist=True), repo="owner/repo")
+
+    secrets = next(result for result in results if result.name == "secrets")
+    assert secrets.passed is False
+    assert MEMORY_GIST_SECRET in secrets.message
+
+
+@pytest.mark.parametrize(
+    ("private", "passed"),
+    [("false", True), ("true", False), ("malformed", None)],
+)
+def test_memory_gist_checks_repository_visibility(
+    private: str, passed: bool | None
+) -> None:
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(private + "\n"),
+    ):
+        result = check_memory_gist_repository("owner/repo")
+
+    assert result.passed is passed
 
 
 def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:

@@ -13,7 +13,7 @@ from ruamel.yaml import YAML
 # trap and the Norway problem (yes/no/on/off coerced to bool).
 _YAML = YAML(typ="safe", pure=True)
 
-KNOWN_WORKFLOWS = {
+STANDARD_WORKFLOWS = {
     "review",
     "mention",
     "triage",
@@ -22,12 +22,16 @@ KNOWN_WORKFLOWS = {
     "weekly",
     "notifications",
     "review-runs",
+}
+KNOWN_WORKFLOWS = {
+    *STANDARD_WORKFLOWS,
     # install-test is opt-in via `tend init --with-install-test` but still
     # honors workflow_extra / jobs overrides from .config/tend.yaml.
     "install-test",
 }
 KNOWN_TOP_LEVEL = {
     "bot_name",
+    "memory_gist",
     "harness",
     "model",
     "effort",
@@ -51,7 +55,9 @@ BOT_TOKEN_SECRET = "TEND_BOT_TOKEN"
 CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"
 ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY"
 OPENAI_KEY_SECRET = "OPENAI_API_KEY"
+MEMORY_GIST_SECRET = "TEND_MEMORY_GIST_ID"
 OPERATIONAL_SECRETS = {
+    MEMORY_GIST_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
     ANTHROPIC_API_KEY_SECRET,
@@ -200,6 +206,14 @@ class Config:
     sandbox_path: list[str] = field(default_factory=list)
     sandbox_env: dict[str, str] = field(default_factory=dict)
     sandbox_setup: list[str] = field(default_factory=list)
+    # Opt-in experiment that persists Claude Code's model-authored auto memory
+    # in a bot-owned secret Gist. The Gist ID stays in a fixed environment
+    # secret so a public repository does not publish the unlisted URL.
+    memory_gist: bool = False
+
+    def enabled_harnesses(self) -> set[str]:
+        """Harnesses used by the workflows a normal regeneration emits."""
+        return _enabled_harnesses(self.harness, self.workflows)
 
     def default_prompt(self, skill: str, args: str = "") -> str:
         """Default prompt invoking a tend-ci-runner skill in harness-native syntax.
@@ -273,6 +287,10 @@ class Config:
             raise click.ClickException(
                 f"effort is only valid for harness = 'codex' (got harness = '{harness}')"
             )
+
+        memory_gist = raw.get("memory_gist", False)
+        if not isinstance(memory_gist, bool):
+            raise click.ClickException("memory_gist must be true or false")
 
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
@@ -570,20 +588,23 @@ class Config:
         # render gate (macros.yaml.j2 emits them per effective harness): a
         # top-level `codex` with a per-workflow `claude` override does apply
         # them, so don't warn there.
-        if sandbox_path or sandbox_env or sandbox_setup:
-            effective_harnesses = {harness} | {
-                wf.harness
-                for wf in workflows.values()
-                if wf.enabled and wf.harness is not None
-            }
-            if "claude" not in effective_harnesses:
-                click.echo(
-                    "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
-                    "to the Claude harness (the proxy sandbox). The "
-                    "codex harness runs the agent on the runner, where the "
-                    "`setup:` section already reaches its environment.",
-                    err=True,
-                )
+        enabled_harnesses = _enabled_harnesses(harness, workflows)
+        if (
+            sandbox_path or sandbox_env or sandbox_setup
+        ) and "claude" not in enabled_harnesses:
+            click.echo(
+                "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
+                "to the Claude harness (the proxy sandbox). The "
+                "codex harness runs the agent on the runner, where the "
+                "`setup:` section already reaches its environment.",
+                err=True,
+            )
+
+        if memory_gist and "claude" not in enabled_harnesses:
+            raise click.ClickException(
+                "memory_gist is experimental and requires at least one enabled "
+                "workflow using the Claude harness"
+            )
 
         allowed = secrets.get("allowed", [])
         if not isinstance(allowed, list) or not all(
@@ -619,6 +640,20 @@ class Config:
             sandbox_path=sandbox_path,
             sandbox_env=sandbox_env,
             sandbox_setup=sandbox_setup,
+            memory_gist=memory_gist,
             workflows=workflows,
             allowed_repo_secrets=allowed,
         )
+
+
+def _enabled_harnesses(harness: str, workflows: dict[str, WorkflowConfig]) -> set[str]:
+    """Effective harnesses of enabled, normally generated workflows."""
+    enabled = set()
+    for name in STANDARD_WORKFLOWS:
+        workflow = workflows.get(name, WorkflowConfig())
+        if not workflow.enabled:
+            continue
+        if name == "ci-fix" and workflow.watched_workflows is None:
+            continue
+        enabled.add(workflow.harness or harness)
+    return enabled
