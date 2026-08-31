@@ -197,7 +197,7 @@ What counts as core is repo-specific; let the project's own guidance (CLAUDE.md,
 
 ### 6. Submit
 
-**Before submitting, say what the step 5 pass returned** — its confirmed findings, or "no findings". That statement is a compliance check: say it in the session, not the review body, so an empty-body APPROVE stays empty. The findings themselves still get folded into the review, per step 5. If you can't say, the pass didn't run — go back to step 5 and run it. A review that reaches this point without it is not submittable.
+**For a review that reached step 5, before submitting, say what that pass returned** — its confirmed findings, or "no findings". That statement is a compliance check: say it in the session, not the review body, so an empty-body APPROVE stays empty. The findings themselves still get folded into the review, per step 5. If you can't say, the pass didn't run — go back to step 5 and run it. A full review that reaches this point without it is not submittable. Step 1's trivial-increment close-out path deliberately skips steps 2–7 and is exempt.
 
 **If there are no issues, approve with an empty body — silence means correct.**
 
@@ -260,6 +260,7 @@ Every review POST below passes its `gh api` command to the preflight after `--`.
 **A push mid-review re-targets the review.** Everything read so far still holds for the code it was read against, and the delta is the only new information — however many pushes it spans. Read it, then post against the new head:
 
 - Review the delta to the standard step 4 sets — it is new code, and the review you post covers it. A skim is not enough.
+- Run step 5 again over the updated merged tree. The second pass must see the delta before step 6 can post against the new head.
 - Findings the delta left alone stand. Post them.
 - Findings the delta fixed drop out. If that empties the review and the delta itself reads clean, approve the new head: an empty-body approval is a verdict here, not the absence of one.
 - Finish without posting only when you can't judge the delta — it rewrites what you just reviewed, or it is a review's worth of new code in its own right. The queued run then reviews the new head in full.

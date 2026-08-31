@@ -193,6 +193,19 @@ def test_review_approval_gates_on_author_stated_readiness() -> None:
     assert "Re-check the author-readiness gate" in skill
 
 
+def test_review_second_pass_is_a_submit_precondition() -> None:
+    """A full review cannot quietly skip the standalone second pass, including
+    after a safe re-target; the trivial-increment close-out remains exempt."""
+    skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+
+    second_pass = skill.index("### 5. Second pass")
+    submit = skill.index("### 6. Submit")
+    assert second_pass < submit
+    assert "For a review that reached step 5, before submitting" in skill
+    assert "Step 1's trivial-increment close-out path" in skill
+    assert "Run step 5 again over the updated merged tree" in skill
+
+
 def test_review_reviewers_matrix_covers_consumers() -> None:
     workflow = yaml.safe_load(_read(".github", "workflows", "review-reviewers.yaml"))
     matrix = workflow["jobs"]["review-reviewers"]["strategy"]["matrix"]["repo"]
