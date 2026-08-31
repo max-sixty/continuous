@@ -175,8 +175,9 @@ bot_name: my-project-bot
 # `sandbox_setup:` for home-scoped installs or version changes such as
 # `cargo install`, `pip install --user`, or `uv tool install`.
 #
-# Tend installs no language toolchain of its own. These keys make deliberate
-# additions inside the sandbox:
+# Tend appends a pinned `uv` fallback after the `setup:` PATH. It installs no
+# other language toolchain. These keys make deliberate additions inside the
+# sandbox:
 #
 # - `sandbox_path`: directories prepended to the sandbox PATH. A leading `~`
 #   expands to the sandbox home. Use it for a system directory the installer did

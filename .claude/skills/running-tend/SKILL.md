@@ -193,8 +193,7 @@ git grep -nE '(==|~=|<=?)[0-9]' -- '*pyproject.toml'
 uv lock --upgrade --dry-run
 
 # pre-commit hook revs — the updater rewrites them, `git diff` is the report.
-# Through uvx: the weekly job installs uv and nothing else.
-uvx pre-commit autoupdate
+uv tool run pre-commit autoupdate
 
 # npm: `Wanted` ≠ `Current` is lockfile drift (`npm update`); `Latest` ≠
 # `Wanted` needs the range in package.json moved. Exits 1 when a row prints.
@@ -243,7 +242,7 @@ swamped run finishes nothing.
 |---|---|---|
 | `claude_version` | `claude/action.yaml` | npm's `latest` dist-tag, not `stable` |
 | `mitmproxy_version` | `claude/action.yaml` | move the root `pyproject.toml` `==` pin with it and `uv lock` |
-| `uv_version` | `claude/action.yaml` | move it with `mitmproxy_version` |
+| `uv_version` | both harness `action.yaml` files | move both defaults together, with `mitmproxy_version` |
 | `codex_version` | `codex/action.yaml` | `latest`; `alpha` only for a fix not yet released |
 | `uv_build` | `generator/pyproject.toml` | its range must contain the uv doing the build; a stale one only warns during `uv build`, so only this sweep catches it |
 | `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh` and that `wt config approvals add --yes` still records approvals without a TTY |
@@ -258,8 +257,8 @@ behavior, slash-command or Skill-tool handling) and note it in the PR.
 credential, so a security fix there matters here. Check anything security- or
 addon-related in its CHANGELOG against the `mitmdump` flags in
 `proxy/setup-sandbox.sh`, and report the comparison in the PR. `uv_version`
-only launches that mitmproxy and CI smokes the two together, so it needs no
-release stream of its own; move both in one PR.
+also supplies the agent fallback in both harnesses. CI smokes the installer and
+proxy together, so move uv and mitmproxy in one PR.
 
 For `codex_version`, CI's `test-codex-surface` job installs whatever is pinned
 and asserts the CLI surface the action depends on, so a bump that breaks it

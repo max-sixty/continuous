@@ -79,10 +79,9 @@ inputs:
   uv_version:
     default: "0.12.7"
     description: >-
-      Pinned `uv` version used to run the credential-injection proxy. Installed
-      into a tend-owned dir off $PATH, so it neither shadows nor is shadowed by
-      an adopter's own uv. The agent does not get this one; skills needing uv
-      install their own.
+      Pinned `uv` version. The credential-injection proxy always uses a private
+      copy off $PATH. The agent gets a separate fallback after the adopter PATH,
+      so an adopter-provided version stays selected.
   sandbox_path:
     default: ""
     description: >-
@@ -168,10 +167,10 @@ runs:
 
     - name: Install proxy uv
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/install-proxy-uv.sh"
+      run: bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
       env:
         UV_VERSION: ${{ inputs.uv_version }}
-        TEND_UV_DIR: ${{ runner.temp }}/tend-uv
+        UV_INSTALL_DIR: ${{ runner.temp }}/tend-uv
 
     # Restore PR-authored sensitive config (.claude, CLAUDE.md, …) from the
     # reviewed base branch to close the startup-RCE surface. Runs before the
@@ -218,8 +217,8 @@ runs:
     # plugins, and the run all execute as the sandbox user. Cache the proxy's
     # mitmproxy download (a sizeable dependency) in an isolated uv cache dir,
     # keyed on the pinned version. First run populates; every run after restores
-    # in seconds instead of a cold ~20s resolve. Scoped to the proxy's uv; a
-    # skill that installs its own uv gets that uv's default cache, untouched.
+    # in seconds instead of a cold ~20s resolve. This cache belongs only to the
+    # proxy; agent and adopter uv caches stay separate.
     - name: Cache mitmproxy
       uses: actions/cache@v6
       with:
@@ -259,6 +258,19 @@ runs:
       run: bash "${{ github.action_path }}/../shared/steps/install-claude-binary.sh"
       env:
         CLAUDE_VERSION: ${{ inputs.claude_version }}
+
+    # Install a pinned fallback after the adopter PATH, as the sandbox user.
+    - name: Install agent uv fallback (sandbox)
+      shell: bash
+      run: |
+        sudo -u "$SANDBOX" env \
+          HOME="$AGENT_HOME" \
+          PATH=/usr/bin:/bin \
+          UV_VERSION="$UV_VERSION" \
+          UV_INSTALL_DIR="$TEND_AGENT_UV_DIR" \
+          /usr/bin/bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
+      env:
+        UV_VERSION: ${{ inputs.uv_version }}
 
     # Install the tend plugins into the sandbox's own ~/.claude. MARKETPLACE_ROOT
     # is the dir holding .claude-plugin/ and plugins/; for this root action

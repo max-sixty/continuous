@@ -330,7 +330,8 @@ installs into its own directory, off `$PATH`, so the process holding both
 credentials starts from a known binary rather than whatever an adopter's
 `setup:` happened to leave on the runner. (`claude` is Node and ignores the
 system trust store, so it trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) Shared
-system and hosted-toolcache PATH entries remain available to the sandbox. A
+system and hosted-toolcache PATH entries remain available to the sandbox. Tend
+appends a pinned `uv` fallback after those paths before `sandbox_setup:` runs. A
 runner-home PATH entry may select an independently seeded directory already
 owned by the sandbox user; runner-home files themselves stay off the sandbox
 PATH except for checkout paths. Tend does not infer which files under the
