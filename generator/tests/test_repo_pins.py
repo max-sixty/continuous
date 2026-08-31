@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tomllib
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,8 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 from ruamel.yaml import YAML
+from tend.config import Config
+from tend.workflows import GENERATORS, generate_all
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -118,21 +121,163 @@ def test_action_path_references_resolve(harness: str) -> None:
 # regex covers the standalone step scripts, not `claude/` or `codex/`.
 ACTIONS = ("claude/action.yaml", "codex/action.yaml")
 
-# actionlint substitutes `${{ … }}` with a shell VARIABLE before handing a body
-# to shellcheck, and the choice matters: a literal placeholder makes shellcheck
-# judge the surrounding test (`[ -z "literal" ]` → SC2157 "always false",
-# `[ "literal" = "true" ]` → SC2050 "expression is constant") and report on the
-# substitution rather than the code. A variable is opaque to those checks.
 GHA_EXPR = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
+ACTIONLINT_SHELLCHECK_REV = "v1.7.12"
+ACTIONLINT_SHELLCHECK_EXCLUDES = "SC1091,SC2194,SC2050,SC2153,SC2154,SC2157,SC2043"
+ACTIONLINT_SHELLCHECK_ARGS = (
+    "--norc",
+    "-x",
+    "--shell",
+    "bash",
+    "-e",
+    ACTIONLINT_SHELLCHECK_EXCLUDES,
+)
+
+
+def _prepare_composite_body(body: str) -> str:
+    """Replace expressions with the opaque variable used by this local check."""
+    return GHA_EXPR.sub("${_GHA_EXPR}", body)
+
+
+def _prepare_workflow_body(body: str) -> str:
+    """Apply actionlint's expression substitution and Bash setup preamble."""
+    sanitized = GHA_EXPR.sub(
+        lambda match: "_" * len(match.group().encode("utf-8")), body
+    )
+    return f"set -eo pipefail\n{sanitized}\n"
+
+
+def _shellcheck_bodies(
+    shellcheck: str,
+    args: Sequence[str],
+    bodies: list[tuple[str, str]],
+    prepare: Callable[[str], str],
+) -> None:
+    findings = []
+    for label, body in bodies:
+        result = subprocess.run(
+            [shellcheck, *args, "-"],
+            input=prepare(body),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            findings.append(f"--- {label}\n{result.stdout}")
+
+    assert not findings, "\n".join(findings)
+
+
+def test_actionlint_shellcheck_contract_tracks_pin() -> None:
+    """Make actionlint upgrades refresh the emulated ShellCheck contract."""
+    config = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / ".pre-commit-config.yaml").read_text()
+    )
+    actionlint = next(
+        repo for repo in config["repos"] if repo["repo"].endswith("/actionlint")
+    )
+    assert actionlint["rev"] == ACTIONLINT_SHELLCHECK_REV
+
+
+def test_generated_run_bodies_pass_shellcheck(tmp_path: Path) -> None:
+    """Lint the in-tree generator output at actionlint's ShellCheck severity."""
+    shellcheck = shutil.which("shellcheck")
+    assert shellcheck, "install shellcheck (preinstalled on CI runners)"
+
+    config = tmp_path / ".config" / "tend.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        "bot_name: test-bot\n"
+        "setup:\n"
+        "  - uses: ./.github/actions/tend-setup\n"
+        "workflows:\n"
+        "  ci-fix:\n"
+        '    watched_workflows: ["ci"]\n'
+    )
+    workflows = generate_all(Config.load(config), with_install_test=True)
+    assert {workflow.filename for workflow in workflows} == {
+        f"tend-{name}.yaml" for name in GENERATORS
+    } | {"tend-install-test.yaml"}
+
+    bodies = []
+    for workflow in workflows:
+        document = YAML(typ="safe", pure=True).load(workflow.content)
+        jobs = document["jobs"]
+        for job_name, job in jobs.items():
+            steps = [step for step in job.get("steps", []) if "run" in step]
+            if not steps:
+                continue
+            assert "defaults" not in document, f"{workflow.filename}: non-default shell"
+            runner = job["runs-on"]
+            assert isinstance(runner, str) and runner.startswith("ubuntu-"), (
+                f"{workflow.filename} :: {job_name}: non-Bash runner"
+            )
+            assert "defaults" not in job, (
+                f"{workflow.filename} :: {job_name}: non-default shell"
+            )
+            for step in steps:
+                label = (
+                    f"{workflow.filename} :: {job_name} :: "
+                    f"{step.get('name', '<unnamed>')}"
+                )
+                assert "shell" not in step, f"{label}: non-default shell"
+                bodies.append((label, step["run"]))
+
+    assert bodies, "generated workflows contain no `run:` bodies"
+    _shellcheck_bodies(
+        shellcheck,
+        ACTIONLINT_SHELLCHECK_ARGS,
+        bodies,
+        _prepare_workflow_body,
+    )
+
+
+def test_actionlint_shellcheck_preprocessing_regression() -> None:
+    """Keep the emulation aligned on expression handling and exclusions."""
+    shellcheck = shutil.which("shellcheck")
+    assert shellcheck, "install shellcheck (preinstalled on CI runners)"
+    _shellcheck_bodies(
+        shellcheck,
+        ACTIONLINT_SHELLCHECK_ARGS,
+        [
+            ("quoted expression", "printf '%s\\n' '${{ github.repository }}'"),
+            ("runner-only source", "source ./runner-generated.sh"),
+        ],
+        _prepare_workflow_body,
+    )
+    with pytest.raises(AssertionError, match="SC2078"):
+        _shellcheck_bodies(
+            shellcheck,
+            ACTIONLINT_SHELLCHECK_ARGS,
+            [
+                (
+                    "expression truthiness",
+                    'if [[ "${{ github.ref }}" ]]; then echo yes; fi',
+                )
+            ],
+            _prepare_workflow_body,
+        )
+    with pytest.raises(AssertionError, match="SC10"):
+        _shellcheck_bodies(
+            shellcheck,
+            ACTIONLINT_SHELLCHECK_ARGS,
+            [
+                (
+                    "Unicode expression byte length",
+                    (
+                        "cat <<'${{ true && 'x' || 'é' }}'\n"
+                        "body\n"
+                        "${{ true && 'x' || 'y' }}"
+                    ),
+                )
+            ],
+            _prepare_workflow_body,
+        )
 
 
 @pytest.mark.parametrize("action", ACTIONS)
 def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
-    """Hold inline step bodies to the same shellcheck the step scripts get.
-
-    Severity matches the shellcheck hook in .pre-commit-config.yaml, which
-    matches actionlint's own default.
-    """
+    """Hold inline action bodies to the standalone-script warning severity."""
     shellcheck = shutil.which("shellcheck")
     assert shellcheck, "install shellcheck (preinstalled on CI runners)"
 
@@ -144,17 +289,12 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
     not_bash = [s.get("name") for s in steps if "bash" not in s.get("shell", "")]
     assert not not_bash, f"{action}: not shellcheck-able as bash: {not_bash}"
 
-    findings = []
-    for step in steps:
-        name, body = step.get("name", "<unnamed>"), step["run"]
-        result = subprocess.run(
-            [shellcheck, "-S", "warning", "-s", "bash", "-"],
-            input=GHA_EXPR.sub("${_GHA_EXPR}", body),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            findings.append(f"--- {action} :: {name}\n{result.stdout}")
-
-    assert not findings, "\n".join(findings)
+    bodies = [
+        (f"{action} :: {step.get('name', '<unnamed>')}", step["run"]) for step in steps
+    ]
+    _shellcheck_bodies(
+        shellcheck,
+        ["-S", "warning", "-s", "bash"],
+        bodies,
+        _prepare_composite_body,
+    )
