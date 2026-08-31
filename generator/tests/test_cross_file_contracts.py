@@ -272,8 +272,11 @@ def test_nightly_regen_stages_every_path_init_writes(
     # The stamp-only skip and the `git status` inspection both read the staged
     # set: a file `init` newly created is invisible to a plain `git diff`, so a
     # release whose only change is a new output path would skip the PR as a
-    # no-op.
-    assert "git diff --cached" in skill
+    # no-op. They must name the same paths the `git add -A` lines stage —
+    # widening only the staging leaves the no-op check blind to the new path.
+    specs = " ".join(staged)
+    assert f"git status --porcelain {specs}" in skill
+    assert f"git diff --cached --no-color {specs}" in skill
 
     config = tmp_path / ".config" / "tend.yaml"
     config.parent.mkdir(parents=True)
