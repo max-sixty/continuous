@@ -5,7 +5,12 @@ together, so each reads correct on its own while the pair stops agreeing.
 """
 
 import json
+import re
 from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+from tend.cli import main
 
 from tests import _yaml as yaml
 
@@ -244,3 +249,51 @@ def test_review_reviewers_matrix_covers_consumers() -> None:
 
     missing = sorted(set(consumers) - set(matrix))
     assert not missing, f"add consumers to review-reviewers.yaml matrix: {missing}"
+
+
+def test_nightly_regen_stages_every_path_init_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 7's `git add -A` pathspecs must cover everything `tend init` writes.
+
+    The recipe names a fixed pathspec while the generator's output set grows —
+    `.github/actionlint.yaml` arrived after the recipe was written, and while
+    the pathspec read `.github/workflows .config` the regeneration PR shipped
+    without it, leaving adopters who lint workflows red and re-creating the
+    file untracked every night.
+    """
+    skill = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
+
+    pathspecs = re.findall(r"^git add -A (.+)$", skill, re.MULTILINE)
+    assert pathspecs, "Step 7 no longer stages the regenerated files"
+    assert len(set(pathspecs)) == 1, f"Step 7 stages inconsistent sets: {pathspecs}"
+    staged = pathspecs[0].split()
+
+    # The stamp-only skip and the `git status` inspection both read the staged
+    # set: a file `init` newly created is invisible to a plain `git diff`, so a
+    # release whose only change is a new output path would skip the PR as a
+    # no-op.
+    assert "git diff --cached" in skill
+
+    config = tmp_path / ".config" / "tend.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("bot_name: test-bot\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["init"])
+    assert result.exit_code == 0, result.output
+
+    written = {
+        p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()
+    }
+    assert ".github/actionlint.yaml" in written, "review no longer writes the ignore"
+
+    uncovered = sorted(
+        path
+        for path in written
+        if not any(path == spec or path.startswith(f"{spec}/") for spec in staged)
+    )
+    assert not uncovered, (
+        f"`tend init` writes paths the nightly regeneration never stages: {uncovered}. "
+        "Widen Step 7's `git add -A` pathspecs so the regeneration PR carries them."
+    )
