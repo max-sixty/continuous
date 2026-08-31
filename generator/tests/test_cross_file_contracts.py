@@ -244,3 +244,53 @@ def test_review_reviewers_matrix_covers_consumers() -> None:
 
     missing = sorted(set(consumers) - set(matrix))
     assert not missing, f"add consumers to review-reviewers.yaml matrix: {missing}"
+
+
+def _bash_blocks(markdown: str) -> list[str]:
+    return [block.split("```", 1)[0] for block in markdown.split("```bash\n")[1:]]
+
+
+def test_nightly_regen_pins_its_poll_to_the_commit_it_pushed() -> None:
+    """Step 7 must stash the pushed OID before it removes the regen worktree.
+
+    The commit is made on `tend/update-workflows` inside `/tmp`, and the block
+    destroys that worktree on the way out. Afterwards the main checkout's
+    `git rev-parse HEAD` — the derivation **CI Monitoring** prescribes "after
+    your own push" — resolves to the default branch, a different commit on a
+    different branch, so the session is steered to the two sources tend has
+    ruled out: the PR head (which a sibling push retargets mid-poll) or the
+    abbreviated OID retyped out of `git commit`'s output.
+    """
+    skill = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
+
+    ship = [
+        block
+        for block in _bash_blocks(skill)
+        if "gh pr create" in block and "git worktree remove" in block
+    ]
+    assert len(ship) == 1, "Step 7 no longer ships the regen PR from one block"
+    block = ship[0]
+
+    capture = [
+        line
+        for line in block.splitlines()
+        if line.startswith("git rev-parse HEAD > ") and "/tmp/" in line
+    ]
+    assert capture, (
+        "Step 7 pushes from the /tmp worktree and then removes it without "
+        "recording the pushed OID; the poll that follows has no correct local "
+        "source for it."
+    )
+    assert block.index(capture[0]) < block.index("git worktree remove"), (
+        "the OID must be captured while the worktree still exists"
+    )
+
+    stash = capture[0].split(">", 1)[1].strip().strip('"')
+    poll = [
+        line
+        for line in skill.splitlines()
+        if "poll-pr-checks.sh" in line and f"cat {stash}" in line
+    ]
+    assert poll, (
+        f"Step 7 stashes the pushed OID at {stash} but never points the poll at it"
+    )

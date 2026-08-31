@@ -276,6 +276,9 @@ PINNED_SHA=$(git rev-parse HEAD)
 # In a review session, HEAD is the ephemeral refs/pull/N/merge commit, which
 # carries no rollup at all; pin the PR head instead:
 #   PINNED_SHA=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
+# When the push happened in a /tmp worktree the recipe then removes, capture
+# the OID there — `git rev-parse HEAD > /tmp/<name>-sha` — before the removal.
+# Back in the main checkout HEAD is the default branch, not what you pushed.
 ${CLAUDE_PLUGIN_ROOT}/scripts/poll-pr-checks.sh <number> "$PINNED_SHA"
 ```
 
