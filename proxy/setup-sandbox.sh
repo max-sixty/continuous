@@ -240,9 +240,8 @@ for _d in "${_runner_path[@]}"; do
     for _command_path in "${_resolved_path}"/*; do
       [ -f "${_command_path}" ] && [ -x "${_command_path}" ] || continue
       _command_name=${_command_path##*/}
-      # Tend supplies uv after the adopter PATH when a runner-home copy cannot
-      # cross the sandbox boundary.
-      [ "${_command_name}" = uv ] && continue
+      # Tend supplies uv and uvx when runner-home copies cannot cross the boundary.
+      case "${_command_name}" in uv | uvx) continue ;; esac
       _selected_command=$(PATH="$RUNNER_TOOL_PATH" type -P -- "${_command_name}" || true)
       if [ -n "${_selected_command}" ] && \
          [ "$(readlink -f -- "$(dirname -- "${_selected_command}")")" = \

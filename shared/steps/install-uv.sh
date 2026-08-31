@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 # Install pinned uv into a caller-owned directory without changing PATH.
-# The Claude proxy uses an absolute path to its copy. Agent setup places a
-# separate copy after adopter-provided PATH entries.
-#
 # Inputs (env): UV_VERSION, UV_INSTALL_DIR.
 set -euo pipefail
 

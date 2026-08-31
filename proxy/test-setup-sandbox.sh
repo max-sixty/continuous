@@ -135,6 +135,8 @@ verify() {
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-seeded)" = sandbox-seed
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-workspace-explicit)" = workspace-explicit
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-workspace-path)" = workspace-path
+  sudo -u "$SANDBOX" test -x "$TEND_AGENT_UV_DIR/uv"
+  grep -q "^PATH=.*:${TEND_AGENT_UV_DIR}$" "$AGENT_ENV_FILE"
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" uv --version)" = adopter-uv
 
   # The dropped runner-home command is reported; shared, workspace, and
