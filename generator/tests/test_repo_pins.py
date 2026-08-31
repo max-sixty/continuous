@@ -128,11 +128,7 @@ GHA_EXPR = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
 
 @pytest.mark.parametrize("action", ACTIONS)
 def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
-    """Hold inline step bodies to the same shellcheck the step scripts get.
-
-    Severity matches the shellcheck hook in .pre-commit-config.yaml, which
-    matches actionlint's own default.
-    """
+    """Hold inline action bodies to the standalone-script warning severity."""
     shellcheck = shutil.which("shellcheck")
     assert shellcheck, "install shellcheck (preinstalled on CI runners)"
 
