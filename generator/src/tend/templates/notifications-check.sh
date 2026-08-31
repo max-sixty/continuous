@@ -55,7 +55,7 @@ if BOT_LOGIN=$(gh api user --jq .login 2>/dev/null) \
       | select(.mergeable != "MERGEABLE")
       | . as $pr
       | "<!-- tend-conflict-deferred head=\($pr.headRefOid) -->" as $marker
-      | select(any($pr.comments[]?;
+      | select(any($pr.comments.nodes[]?;
           .author.login == $bot
           and (((.body // "") | sub("\\s+$"; "") | split("\n") | last) == $marker))
         | not)]

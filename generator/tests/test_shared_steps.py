@@ -343,7 +343,7 @@ case "$1:$2" in
     ;;
   api:graphql)
     [ -z "${FAIL_PRS:-}" ] || exit 1
-    emit "$(jq -c '{data: {search: {nodes: .}}}' "$PULLS_JSON")"
+    emit "$(jq -c '{data: {search: {nodes: [.[] | .comments = {nodes: .comments}]}}}' "$PULLS_JSON")"
     ;;
   *) exit 1 ;;
 esac
