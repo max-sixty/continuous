@@ -192,7 +192,9 @@ def test_save_checks_the_directory_before_reading_its_baseline(
     memory = tmp_path / "memory"
     memory.symlink_to(actual, target_is_directory=True)
 
-    with pytest.raises(gist_memory.MemoryError, match="directory must not be a symlink"):
+    with pytest.raises(
+        gist_memory.MemoryError, match="directory must not be a symlink"
+    ):
         gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
 
     assert fake_gh.calls[-1] == ("api", f"/repos/{REPOSITORY}")
