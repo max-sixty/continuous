@@ -219,11 +219,13 @@ stored as secrets in the repo's `tend` GitHub Environment, whose deployment
 branch policy admits only the branches `tend check` confirmed the bot
 cannot write — the default branch and any `protected_branches` that exist
 and are protected. A workflow the bot pushes to any other ref is refused
-them before its first step. The `gist` scope supports bot-owned secret gists
-used by `review-reviewers` as a per-month structured evidence store
-(avoids the 65 KB comment-body limit). The `user` scope lets `install-tend`
-set the bot's profile bio (`PATCH /user`) so the account's authorization
-stance is discoverable on the bot's user page.
+them before its first step. The `gist` scope supports bot-owned secret
+gists, of which there are two: `review-reviewers` keeps a per-month
+structured evidence store (avoids the 65 KB comment-body limit), and the
+experimental `memory_gist` setting persists Claude Code's auto memory
+across runs. The `user` scope lets `install-tend` set the bot's profile
+bio (`PATCH /user`) so the account's authorization stance is discoverable
+on the bot's user page.
 
 Classic PATs are all-or-nothing — `public_repo` grants full write to every
 public repo the user can access. Fine-grained PATs allow per-category
