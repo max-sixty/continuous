@@ -52,6 +52,7 @@ def test_frequent_poll_and_nightly_share_conflict_resolution() -> None:
     resolver = _read(
         "plugins", "tend-ci-runner", "skills", "resolve-conflicts", "SKILL.md"
     )
+    check = _read("generator", "src", "tend", "templates", "notifications-check.sh")
 
     for caller in (notifications, nightly):
         assert "/tend-ci-runner:resolve-conflicts" in caller
@@ -59,7 +60,6 @@ def test_frequent_poll_and_nightly_share_conflict_resolution() -> None:
     assert "this bot and upstream dependency bots" in " ".join(nightly.split())
     assert "app/dependabot" in resolver
     assert "app/renovate" in resolver
-    assert "up to 100 open PRs" in resolver
     assert "baseRefName" in resolver
     assert "baseRefOid" in resolver
     assert "headRefName" in resolver
@@ -68,15 +68,10 @@ def test_frequent_poll_and_nightly_share_conflict_resolution() -> None:
     assert '"refs/tend/base/<number>" "refs/tend/pr/<number>"' in resolver
     assert "headRefOid" in resolver
     assert '--force-with-lease="refs/heads/<headRefName>:<headRefOid>"' in resolver
-    assert "Fetch the live base again" in resolver
-    assert "remove any prior conflict-deferral comment" in " ".join(
-        resolver.lower().split()
-    )
-    assert "When called from `notifications`" in resolver
-    assert "Nightly ignores the marker" in " ".join(resolver.split())
-    assert "paginated issue-comment API" in resolver
-    assert "only when it already names this head" in resolver
     assert "<!-- tend-conflict-deferred head=<head SHA> -->" in resolver
+    assert r"<!-- tend-conflict-deferred head=\($pr.headRefOid) -->" in check
+    assert "comments(last: 100)" in check
+    assert r'split("\n") | last' in check
     assert "origin/main" not in resolver
 
 

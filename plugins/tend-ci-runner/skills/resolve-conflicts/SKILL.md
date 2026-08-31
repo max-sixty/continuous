@@ -71,18 +71,18 @@ For each PR:
    `/tend-ci-runner:running-in-ci`.
 
 If resolution is too complex, abort the merge and re-read the PR. When it is
-still open at the original head, create or update one bot-authored comment that
-explains manual resolution is needed and ends with:
+still open at the original head and has no same-head deferral, create one
+bot-authored comment that explains manual resolution is needed. Its final line
+must be exactly:
 
 ```markdown
 <!-- tend-conflict-deferred head=<head SHA> -->
 ```
 
-Find prior deferral comments through the paginated issue-comment API. Update a
-comment only when it already names this head; otherwise create one. After the
-write, re-read the head and comments. If the head changed, delete only the stale
-comment. Otherwise keep the oldest current-head comment and remove every other
-deferral comment. The frequent poll skips the marked head; nightly retries it,
+Find prior deferrals through the paginated issue-comment API. After creating a
+comment, re-read the head and comments. Delete only the new comment if the head
+changed or an older same-head deferral won a concurrent race. Never edit another
+head's deferral. The frequent poll skips the marked head; nightly retries it,
 and a new head is eligible immediately.
 
 Remove the temporary worktrees when all subagents finish.

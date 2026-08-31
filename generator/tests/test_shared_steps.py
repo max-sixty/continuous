@@ -341,9 +341,9 @@ case "$1:$2" in
     [ -z "${FAIL_PRS:-}" ] || exit 1
     emit '{"login":"test-bot"}'
     ;;
-  pr:list)
+  api:graphql)
     [ -z "${FAIL_PRS:-}" ] || exit 1
-    cat "$PULLS_JSON"
+    emit "$(jq -c '{data: {search: {nodes: .}}}' "$PULLS_JSON")"
     ;;
   *) exit 1 ;;
 esac
@@ -483,12 +483,12 @@ def test_notifications_check_boots_for_unknown_or_conflicting_bot_prs(
     assert _output(notifications_env, "count") == "0"
     assert _output(notifications_env, "conflict_count") == "2"
     assert "2 possible conflicted bot PR(s)" in result.stdout
-    calls = _calls(notifications_env)
-    pr_list = next(call for call in calls if call.startswith("pr list "))
-    assert "--repo owner/repo" in pr_list
-    assert "--author test-bot" in pr_list
-    assert "app/dependabot" not in pr_list
-    assert "app/renovate" not in pr_list
+    calls = Path(notifications_env["GH_CALLS"]).read_text()
+    assert "api graphql" in calls
+    assert "comments(last: 100)" in calls
+    assert "repo:owner/repo author:test-bot is:pr is:open" in calls
+    assert "app/dependabot" not in calls
+    assert "app/renovate" not in calls
 
 
 def test_notifications_check_suppresses_only_the_marked_bot_head(
@@ -552,9 +552,8 @@ def test_notifications_check_suppresses_only_the_marked_bot_head(
 
     assert result.returncode == 0, result.stderr
     assert _output(notifications_env, "conflict_count") == "3"
-    calls = _calls(notifications_env)
-    pr_list = next(call for call in calls if call.startswith("pr list "))
-    assert "--json mergeable,headRefOid,comments" in pr_list
+    calls = Path(notifications_env["GH_CALLS"]).read_text()
+    assert "comments(last: 100)" in calls
 
 
 def test_notifications_check_retries_a_failed_conflict_scan_next_cycle(
