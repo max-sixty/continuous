@@ -408,22 +408,20 @@ def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
     assert build["env"] == {"RUSTFLAGS": "-D warnings"}
 
 
-def test_setup_step_user_if_preserved_in_notifications(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(
+    "condition",
+    ["runner.os == 'Linux'", "${{ runner.os == 'Linux' }}"],
+)
+def test_setup_step_user_if_narrows_notifications_guard(
+    tmp_path: Path, condition: str
 ) -> None:
-    """User-supplied `if:` on a setup step is passed through; tend does not
-    add its own notifications guard on top. A warning is emitted so the user
-    knows they've opted out of the pre-check gating."""
-    extra = dedent("""\
+    extra = dedent(f"""\
         setup:
           - run: ./flaky.sh
-            if: "runner.os == 'Linux'"
+            if: "{condition}"
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    captured = capsys.readouterr()
-    assert "explicit `if:`" in captured.err
 
     notifications = workflows["tend-notifications.yaml"]
     data = yaml.safe_load(notifications.content)
@@ -432,7 +430,11 @@ def test_setup_step_user_if_preserved_in_notifications(
         for s in data["jobs"]["notifications"]["steps"]
         if s.get("run") == "./flaky.sh"
     )
-    assert step["if"] == "runner.os == 'Linux'"
+    assert step["if"] == (
+        "(steps.check.outputs.count != '0' || "
+        "steps.check.outputs.conflict_count != '0' || "
+        "github.event_name == 'workflow_dispatch') && (runner.os == 'Linux')"
+    )
 
 
 def test_setup_step_rejects_unknown_field(tmp_path: Path) -> None:

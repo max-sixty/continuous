@@ -27,8 +27,6 @@ PIN_INSTRUCTION_FILES = REPO_ROOT / "shared" / "steps" / "pin-instruction-files.
 RESTORE_SENSITIVE_CONFIG = (
     REPO_ROOT / "shared" / "steps" / "restore-sensitive-config.sh"
 )
-
-
 # Fork-PR instruction pinning. One tampered checkout exercises every shape a
 # fork can give an instruction path — a rewrite, a move, a directory's name
 # pointed outside the checkout (so a write or delete through it would land
@@ -322,8 +320,8 @@ NOTIFICATIONS_CHECK = (
 FAKE_GH_NOTIFICATIONS = (
     GH_PREAMBLE
     + r"""
-case "$2" in
-  notifications\?*)
+case "$1:$2" in
+  api:notifications\?*)
     [ -z "${FAIL_NOTIFS:-}" ] || exit 1
     # A 200 carrying something other than JSON, verbatim.
     if [ -n "${RAW_BODY:-}" ]; then cat "$RAW_BODY"; exit 0; fi
@@ -332,10 +330,18 @@ case "$2" in
     jq -c --arg cutoff "$NOTIF_CUTOFF" \
       '[.[] | select(.updated_at < $cutoff)] | map([.])' "$NOTIFICATIONS_JSON"
     ;;
-  repos/*/subscription)
+  api:repos/*/subscription)
     [ -z "${FAIL_SUBSCRIPTION_WRITE:-}" ] || exit 1
     echo "put" >> "$SUBSCRIPTION_WRITES"
     emit '{"subscribed":true,"ignored":false}'
+    ;;
+  api:user)
+    [ -z "${FAIL_PRS:-}" ] || exit 1
+    emit '{"login":"test-bot"}'
+    ;;
+  api:graphql)
+    [ -z "${FAIL_PRS:-}" ] || exit 1
+    emit "$(jq -c '{data: {search: {nodes: [.[] | .comments = {nodes: .comments}]}}}' "$PULLS_JSON")"
     ;;
   *) exit 1 ;;
 esac
@@ -373,6 +379,8 @@ def notifications_env(tmp_path: Path) -> dict[str, str]:
 
     notifications = tmp_path / "notifications.json"
     notifications.write_text("[]")
+    pulls = tmp_path / "pulls.json"
+    pulls.write_text("[]")
     subscription_writes = tmp_path / "subscription-writes"
     subscription_writes.write_text("")
 
@@ -382,6 +390,7 @@ def notifications_env(tmp_path: Path) -> dict[str, str]:
         "GITHUB_OUTPUT": str(tmp_path / "output.txt"),
         "GITHUB_REPOSITORY": "owner/repo",
         "NOTIFICATIONS_JSON": str(notifications),
+        "PULLS_JSON": str(pulls),
         "NOTIF_CUTOFF": NOTIF_CUTOFF,
         "SUBSCRIPTION_WRITES": str(subscription_writes),
     }
@@ -409,6 +418,7 @@ def test_notifications_check_reports_no_work_on_an_empty_inbox(
 
     assert result.returncode == 0, result.stderr
     assert _output(notifications_env, "count") == "0"
+    assert _output(notifications_env, "conflict_count") == "0"
     assert _output(notifications_env, "cutoff") == NOTIF_CUTOFF
     assert Path(notifications_env["SUBSCRIPTION_WRITES"]).read_text() == "put\n"
 
@@ -435,6 +445,125 @@ def test_notifications_check_counts_a_complete_cutoff_snapshot_without_acknowled
     assert f"notifications?before={NOTIF_CUTOFF}&per_page=100" in calls
     assert "--paginate --slurp" in calls
     assert "notifications/threads/" not in calls
+
+
+def test_notifications_check_boots_for_unknown_or_conflicting_bot_prs(
+    notifications_env: dict[str, str],
+) -> None:
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [
+            {
+                "number": 11,
+                "mergeable": "MERGEABLE",
+                "headRefOid": "head-11",
+                "comments": [],
+            },
+            {
+                "number": 22,
+                "mergeable": "UNKNOWN",
+                "headRefOid": "head-22",
+                "comments": [],
+            },
+            {
+                "number": 33,
+                "mergeable": "CONFLICTING",
+                "headRefOid": "head-33",
+                "comments": [],
+            },
+        ],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "count") == "0"
+    assert _output(notifications_env, "conflict_count") == "2"
+    assert "2 possible conflicted bot PR(s)" in result.stdout
+    calls = Path(notifications_env["GH_CALLS"]).read_text()
+    assert "api graphql" in calls
+    assert "comments(last: 100)" in calls
+    assert "repo:owner/repo author:test-bot is:pr is:open" in calls
+    assert "app/dependabot" not in calls
+    assert "app/renovate" not in calls
+
+
+def test_notifications_check_suppresses_only_the_marked_bot_head(
+    notifications_env: dict[str, str],
+) -> None:
+    _write_json(
+        notifications_env,
+        "PULLS_JSON",
+        [
+            {
+                "number": 22,
+                "mergeable": "UNKNOWN",
+                "headRefOid": "head-22",
+                "comments": [
+                    {
+                        "author": {"login": "test-bot"},
+                        "body": "<!-- tend-conflict-deferred head=head-22 -->",
+                    }
+                ],
+            },
+            {
+                "number": 33,
+                "mergeable": "CONFLICTING",
+                "headRefOid": "head-33",
+                "comments": [
+                    {
+                        "author": {"login": "test-bot"},
+                        "body": "<!-- tend-conflict-deferred head=old-head -->",
+                    }
+                ],
+            },
+            {
+                "number": 44,
+                "mergeable": "CONFLICTING",
+                "headRefOid": "head-44",
+                "comments": [
+                    {
+                        "author": {"login": "someone-else"},
+                        "body": "<!-- tend-conflict-deferred head=head-44 -->",
+                    }
+                ],
+            },
+            {
+                "number": 55,
+                "mergeable": "CONFLICTING",
+                "headRefOid": "head-55",
+                "comments": [
+                    {
+                        "author": {"login": "test-bot"},
+                        "body": (
+                            "Quoting <!-- tend-conflict-deferred head=head-55 -->"
+                            " is not resolver state."
+                        ),
+                    }
+                ],
+            },
+        ],
+    )
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "conflict_count") == "3"
+    calls = Path(notifications_env["GH_CALLS"]).read_text()
+    assert "comments(last: 100)" in calls
+
+
+def test_notifications_check_retries_a_failed_conflict_scan_next_cycle(
+    notifications_env: dict[str, str],
+) -> None:
+    notifications_env["FAIL_PRS"] = "1"
+
+    result = _run_check(notifications_env)
+
+    assert result.returncode == 0, result.stderr
+    assert _output(notifications_env, "conflict_count") == "0"
+    assert "bot PR conflict scan failed" in result.stdout
 
 
 def test_notifications_check_enforces_repository_watching_every_cycle(

@@ -132,10 +132,10 @@ class SetupStep:
     Exactly one of `uses` or `run`, plus any of `with`, `env`, `name`,
     `id`, `shell`, `working-directory`, `continue-on-error`,
     `timeout-minutes`, `if`. In the workflows that pre-check whether the
-    agent needs to boot, the renderer injects that check as the step's `if:`
-    guard when the step declares none. For multi-step setup, add multiple
-    entries to the `setup:` list — or reference a local composite action
-    with `uses`.
+    agent needs to boot, the renderer adds that check to every step's `if:`.
+    A step's own condition narrows the check. For multi-step setup, add
+    multiple entries to the `setup:` list — or reference a local composite
+    action with `uses`.
     """
 
     fields: dict
@@ -345,6 +345,27 @@ class Config:
             for k in DICT_STEP_FIELDS:
                 if k in entry and not isinstance(entry[k], dict):
                     raise click.ClickException(f"setup[{i}]: `{k}` must be a mapping")
+            if "if" in entry:
+                condition = entry["if"]
+                if not isinstance(condition, str) or not condition.strip():
+                    raise click.ClickException(
+                        f"setup[{i}]: `if` must be a non-empty string; quote "
+                        'it (`if: "false"`) so YAML does not read it as a '
+                        "boolean, number, or list"
+                    )
+                condition = condition.strip()
+                if condition.startswith("${{") and condition.endswith("}}"):
+                    condition = condition[3:-2].strip()
+                    if not condition:
+                        raise click.ClickException(
+                            f"setup[{i}]: `if` must contain an expression"
+                        )
+                if "${{" in condition or "}}" in condition:
+                    raise click.ClickException(
+                        f"setup[{i}]: `if` must be a plain expression or one "
+                        "whole `${{ ... }}` expression"
+                    )
+                entry = {**entry, "if": condition}
             setup.append(SetupStep(fields=dict(entry)))
 
         sandbox_path = raw.get("sandbox_path", []) or []

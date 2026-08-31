@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Establish the repository's notification recovery queue and decide whether the
+# Establish the repository's frequent maintenance queue and decide whether the
 # agent needs to boot. Inlined into the generated workflow: env in,
 # GITHUB_OUTPUT out.
 #
@@ -34,8 +34,45 @@ fi
 
 echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
-if [ "$COUNT" = "0" ]; then
-  echo "No notification work before $CUTOFF — skipping"
+# GitHub computes mergeability lazily after the base moves. UNKNOWN therefore
+# means "worth a synchronous local test", not "clean". This is only a cheap
+# boot gate; the agent test-merges every candidate before changing a branch.
+# Read the newest comments: a deferral is normally the PR's latest activity.
+# An older marker can waste boots, but the resolver paginates before acting.
+if BOT_LOGIN=$(gh api user --jq .login 2>/dev/null) \
+  && PRS=$(gh api graphql -f query='
+    query($q: String!) {
+      search(query: $q, type: ISSUE, first: 100) {
+        nodes { ... on PullRequest {
+          mergeable headRefOid
+          comments(last: 100) { nodes { author { login } body } }
+        } }
+      }
+    }' -f q="repo:$GITHUB_REPOSITORY author:$BOT_LOGIN is:pr is:open" \
+    --jq '.data.search.nodes' 2>/dev/null) \
+  && CONFLICT_COUNT=$(jq -er --arg bot "$BOT_LOGIN" '
+    [.[]
+      | select(.mergeable != "MERGEABLE")
+      | . as $pr
+      | "<!-- tend-conflict-deferred head=\($pr.headRefOid) -->" as $marker
+      | select(any($pr.comments.nodes[]?;
+          .author.login == $bot
+          and (((.body // "") | sub("\\s+$"; "") | split("\n") | last) == $marker))
+        | not)]
+    | length' <<<"$PRS"); then
+  :
 else
-  echo "$COUNT notification task(s) — proceeding"
+  CONFLICT_COUNT=0
+  echo "::warning::bot PR conflict scan failed; retrying next cycle"
+fi
+
+echo "conflict_count=$CONFLICT_COUNT" >> "$GITHUB_OUTPUT"
+
+if [ "$COUNT" = "0" ] && [ "$CONFLICT_COUNT" = "0" ]; then
+  echo "No notification or conflict work — skipping"
+else
+  [ "$COUNT" = "0" ] || \
+    echo "$COUNT notification task(s) — proceeding"
+  [ "$CONFLICT_COUNT" = "0" ] || \
+    echo "$CONFLICT_COUNT possible conflicted bot PR(s) — proceeding"
 fi

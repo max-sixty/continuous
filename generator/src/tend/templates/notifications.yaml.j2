@@ -15,7 +15,7 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
-      - name: Check for unread notifications
+      - name: Check for unread notifications and conflicted PRs
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}

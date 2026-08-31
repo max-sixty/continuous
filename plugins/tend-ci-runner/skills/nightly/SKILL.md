@@ -32,12 +32,10 @@ The script prints `key=value` lines. Act on `STATUS`:
 ## Step 2: Check tend configuration drift
 
 Run `tend check` to verify this repo's tend setup (branch protection, bot
-permission, and where credentials live). `tend-uvx.sh` is `uvx` backed by a
-tend-private uv — the agent's PATH carries the repo's own, which tend must not
-override:
+permission, and where credentials live):
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest check 2>&1 | tee /tmp/tend-check.txt
+uv tool run tend@latest check 2>&1 | tee /tmp/tend-check.txt
 ```
 
 If **every** check line is `PASS` (no `FAIL` *and* no `SKIP`), close any
@@ -74,85 +72,8 @@ a one-line reason) plus a `_Last refreshed: <YYYY-MM-DD>_` footer. Updates:
 
 ## Step 3: Resolve conflicts on bot PRs
 
-Find conflicted PRs from this bot and from upstream dependency bots:
-
-Don't filter `gh pr list --json mergeable` on `== "CONFLICTING"`. `mergeable` is computed lazily: the first query after `main` moves returns `UNKNOWN` and only *enqueues* the computation, so a cold read reports a conflicted PR as clean. There is no blocking read — [the REST docs](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request) prescribe resubmitting the request until the value settles. Test-merge locally instead: `git merge-tree` answers the same question synchronously, in-process, with no retry loop.
-
-```bash
-BOT_LOGIN=$(gh api user --jq '.login')
-git fetch --quiet origin main
-for author in "$BOT_LOGIN" app/dependabot app/renovate; do
-  # A failed query and "no open PRs" both print nothing; only the first is a
-  # reason to stop. --limit 100 because the default 30 truncates silently.
-  prs=$(gh pr list --author "$author" --limit 100 --json number,title) \
-    || { echo "query for $author never landed — conflicts unverified"; continue; }
-  # One fetch for every head, forced because bot branches get force-pushed.
-  mapfile -t refs < <(jq -r '.[].number | "refs/pull/\(.)/head:refs/tend/pr/\(.)"' <<<"$prs")
-  [ "${#refs[@]}" -eq 0 ] && continue
-  git fetch --quiet --force origin "${refs[@]}"
-  # Conflict, missing ref, unreadable ref: all non-zero, all need a look.
-  jq -r '.[] | [.number, .title] | @tsv' <<<"$prs" | while IFS=$'\t' read -r n title; do
-    git merge-tree --write-tree origin/main "refs/tend/pr/$n" >/dev/null \
-      || echo "needs a rebase: $author #$n $title"
-  done
-done
-```
-
-Skip the rest of this step only when every query landed and nothing printed.
-
-### Upstream dependency bots: trigger the bot's own rebase
-
-`dependabot[bot]` and `renovate[bot]` both attempt rebases on their own, but stop once `main` rewrites a file the bump also touched (`Cargo.lock`, `uv.lock`, generated headers). The PR then sits `CONFLICTING`. Each bot exposes a way to force a fresh rebuild against current `main`.
-
-For each conflicted PR by one of these bots, first confirm the branch has no human commits — both triggers force-push and would discard local edits. The check compares each commit's author login against the bot's commit-author login (`dependabot[bot]` or `renovate[bot]`); note that the PR's `.author.login` is the App slug (`app/dependabot`, `app/renovate`) and does **not** match — use the literal commit-author login below.
-
-```bash
-# COMMIT_LOGIN is "dependabot[bot]" or "renovate[bot]" depending on the bot.
-# `--json commits` caps at this PR's first 100 commits; a bump branch carries
-# one or two, so the cap can't hide a human commit here.
-gh pr view <number> --json commits \
-  | jq --arg bot "$COMMIT_LOGIN" \
-       '[.commits[].authors[].login] | unique | map(select(. != $bot))'
-```
-
-- Empty → trigger the bot per the table below.
-- Non-empty → skip. Leave the PR for manual resolution; the force-push would throw away the human commits.
-
-| `--author` (PR list) | Commit-author login | Trigger |
-| --- | --- | --- |
-| `app/dependabot` | `dependabot[bot]` | Post `@dependabot recreate` as a comment. |
-| `app/renovate` | `renovate[bot]` | Edit the PR body and replace `- [ ] <!-- rebase-check -->` with `- [x] <!-- rebase-check -->`. Renovate has no comment command for rebase. |
-
-Do not check out or rebase manually — the bot owns the branch and will overwrite anything you push.
-
-### Bot-authored PRs: resolve manually
-
-Set the git identity once in the main session **before dispatching** — the subagents below `git commit --no-edit` in fresh worktrees, and as separate invocations they don't reliably load `running-in-ci`. `--global` writes to the runner's shared `~/.gitconfig`, so the subagents inherit it and don't fail with `Author identity unknown`. See "Configure git identity before the first commit" in `/tend-ci-runner:running-in-ci`.
-
-```bash
-BOT_LOGIN=$(gh api user --jq '.login'); BOT_ID=$(gh api user --jq '.id')
-git config --global user.name "$BOT_LOGIN"
-git config --global user.email "${BOT_ID}+${BOT_LOGIN}@users.noreply.github.com"
-```
-
-For each conflicted PR authored by `$BOT_LOGIN`, dispatch a subagent to:
-
-1. Check out the PR: `gh pr checkout <number>`
-2. Merge the default branch: `git fetch origin main && git merge origin/main` — the detection loop's fetch is minutes stale by the time a subagent runs.
-3. Resolve conflicts (read files, understand both sides), `git add`, `git commit --no-edit`
-4. Push, then confirm the pushed head actually left the conflicted state before polling anything:
-
-   ```bash
-   git fetch --quiet origin main
-   git merge-tree --write-tree origin/main HEAD >/dev/null \
-     || echo "main advanced during the resolution — merge it again and push"
-   ```
-
-   Re-merge and push until that test passes; only then wait for CI per **CI Monitoring** in `/tend-ci-runner:running-in-ci`. A `CONFLICTING` PR gets **no** `pull_request` run — GitHub can't compute `refs/pull/N/merge` — so a poll of that head reports UNVERIFIED rather than red, and the absence reads as slow CI. If the re-merge keeps losing the race, report the PR as still conflicted rather than as a verified resolution.
-5. If conflicts are too complex, `git merge --abort` and comment explaining manual resolution is needed
-
-Run subagents in parallel. Each must work in isolation (`git worktree add /tmp/pr-<number>
-<branch>`). After all complete, clean up temp worktrees.
+Load `/tend-ci-runner:resolve-conflicts` and resolve conflicts for this bot and
+upstream dependency bots.
 
 ## Step 4: Review recent commits
 
@@ -262,18 +183,22 @@ grep -hoE '^# Generated by tend [0-9]+\.[0-9]+\.[0-9]+' \
   | sed -E 's/^# Generated by tend //' | sort -u | head -1 \
   > "/tmp/tend-old-ver"
 
-"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uvx.sh" tend@latest init
+uv tool run tend@latest init
 # `init` auto-migrates a legacy `.config/tend.toml` → `.yaml` if it finds
 # one (verifies parsed equivalence before swapping); `.config/` is checked
 # alongside `.github/workflows` so that one-shot upgrade ships in the same
 # nightly PR as the regenerated workflows that depend on it.
-git status --porcelain .github/workflows .config
+# Stage before inspecting: with review enabled, `init` may create
+# `.github/actionlint.yaml`, which `git diff` cannot see while it is untracked.
+# `.github` covers it and the workflow files in one pathspec that always exists.
+git add -A .github .config
+git status --porcelain .github .config
 
 # Stamp-only check: if the only diff is the `# Generated by tend X.Y.Z`
 # header (e.g. dependabot has already bumped the action refs in a patch
 # release), the workflow bodies are unchanged and the existing files are
 # still accurate. A header-only PR carries no value — treat it as a no-op.
-NON_STAMP_DIFF=$(git diff --no-color .github/workflows .config \
+NON_STAMP_DIFF=$(git diff --cached --no-color .github .config \
   | grep -E '^[+-]' \
   | grep -vE '^(\+\+\+|---) ' \
   | grep -vE '^[+-]# Generated by tend [0-9]+\.[0-9]+\.[0-9]+\. Regenerate with: uvx tend@latest init$' \
@@ -320,7 +245,7 @@ Then ship it:
 
 ```bash
 TITLE=$(cat "/tmp/tend-pr-title")
-git add -A .github/workflows .config
+git add -A .github .config
 # A fresh /tmp worktree has no git identity; without this the commit fails with
 # `Author identity unknown` and an empty branch gets pushed. Idempotent — see
 # "Configure git identity before the first commit" in /tend-ci-runner:running-in-ci.

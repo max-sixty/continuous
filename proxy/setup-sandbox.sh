@@ -24,7 +24,7 @@
 # TEND_ANTHROPIC_API_KEY (real Anthropic credential, injected for
 # api.anthropic.com), ACTION_PATH (this action's checkout), MITMPROXY_VERSION
 # (pinned mitmproxy version), TEND_UV_DIR (tend's own pinned uv, installed by
-# shared/steps/install-proxy-uv.sh). GITHUB_WORKSPACE / RUNNER_TEMP /
+# shared/steps/install-uv.sh). GITHUB_WORKSPACE / RUNNER_TEMP /
 # UV_CACHE_DIR come from Actions. TEND_RUNNER_TOOL_PATH carries the runner PATH
 # as data while this process resolves commands from fixed system directories.
 # Optional adopter levers (from
@@ -52,8 +52,8 @@ PROXY_URL="http://127.0.0.1:${PROXY_PORT}"
 # pointed at by NODE_EXTRA_CA_CERTS for claude. World-readable so the sandbox
 # (a different UID) can read it.
 PROXY_CA_CERT=/usr/local/share/ca-certificates/tend-proxy.crt
-# Run dir (sentinels, PTY log, wrapper) lives in the sandbox's own home so it
-# can write there freely; the runner reads it via the 0755 home path. (Under
+# Run artifacts live in the sandbox's own home so it can write there freely;
+# the runner reads them via the 0755 home path. (Under
 # RUNNER_TEMP the sandbox can't create it — that dir is runner-owned.)
 TEND_RUN_DIR="${AGENT_HOME}/run"
 CONFDIR="${RUNNER_TEMP}/tend-proxy"
@@ -240,6 +240,8 @@ for _d in "${_runner_path[@]}"; do
     for _command_path in "${_resolved_path}"/*; do
       [ -f "${_command_path}" ] && [ -x "${_command_path}" ] || continue
       _command_name=${_command_path##*/}
+      # Tend supplies uv and uvx when runner-home copies cannot cross the boundary.
+      case "${_command_name}" in uv | uvx) continue ;; esac
       _selected_command=$(PATH="$RUNNER_TOOL_PATH" type -P -- "${_command_name}" || true)
       if [ -n "${_selected_command}" ] && \
          [ "$(readlink -f -- "$(dirname -- "${_selected_command}")")" = \
@@ -286,6 +288,9 @@ if [ "${#_blocked_home_command[@]}" -gt 0 ]; then
   )
   log "runner-home commands blocked from shared fallbacks: ${_blocked_home_command[*]}"
 fi
+# Tend's pinned uv is only a fallback; every adopter path stays ahead of it.
+TEND_AGENT_UV_DIR="${AGENT_HOME}/.tend-uv/bin"
+_add_agent_path "$TEND_AGENT_UV_DIR"
 AGENT_PATH="$(IFS=:; printf '%s' "${_agent_path[*]}")"
 # The composed PATH is logged so sandbox_path expansion and dropped locations
 # are visible. sandbox_setup.py reports missing commands after sandbox_setup
@@ -356,6 +361,7 @@ fi
 {
   echo "SANDBOX=${SANDBOX}"
   echo "AGENT_HOME=${AGENT_HOME}"
+  echo "TEND_AGENT_UV_DIR=${TEND_AGENT_UV_DIR}"
   echo "PROXY_URL=${PROXY_URL}"
   echo "TEND_RUN_DIR=${TEND_RUN_DIR}"
   echo "PROXY_CA_CERT=${PROXY_CA_CERT}"
@@ -406,9 +412,8 @@ sudo -u "$SANDBOX" test -r "$GITHUB_WORKSPACE/.git/config" \
   || { echo "::error::sandbox cannot access the workspace at $GITHUB_WORKSPACE"; exit 1; }
 log "workspace handed to $SANDBOX"
 
-# Shared dir the sandbox writes (sentinels, PTY log, wrapper) and the runner
-# reads. Sandbox-owned so its hooks can touch the sentinels; the runner
-# supervisor polls them via the 0755 home/temp path.
+# Sandbox-owned run directory; the runner can read it through the 0755 home
+# path.
 sudo -u "$SANDBOX" mkdir -p "$TEND_RUN_DIR"
 log "run dir $TEND_RUN_DIR"
 
@@ -422,7 +427,7 @@ chmod 700 "$CONFDIR"
 # the readiness wait below measures startup, not a cold dependency resolve.
 # Pinned + UV_CACHE_DIR (set by the action) point at the actions/cache-backed
 # dir, so this is a fast restore after the first run.
-# $TEND_UV_DIR holds tend's own pinned uv (shared/steps/install-proxy-uv.sh),
+# $TEND_UV_DIR holds tend's own pinned uv (shared/steps/install-uv.sh),
 # addressed absolutely rather than through PATH: the binary that launches the
 # credential-holding process is tend's, not whatever the adopter's `setup:`
 # left on PATH.

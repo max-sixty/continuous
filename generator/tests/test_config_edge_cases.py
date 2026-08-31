@@ -700,6 +700,62 @@ def test_setup_steps_entry_both_keys(tmp_path: Path) -> None:
         Config.load(path)
 
 
+@pytest.mark.parametrize("value", ["false", "true", "0", "[]", "null", "''", "'   '"])
+def test_setup_step_if_requires_non_empty_string(tmp_path: Path, value: str) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f"""\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: {value}
+    """),
+    )
+
+    with pytest.raises(ClickException, match="`if` must be a non-empty string"):
+        Config.load(path)
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "${{ runner.os == 'Linux' }} && ${{ github.event_name == 'push' }}",
+        "runner.os == 'Linux' || ${{ github.event_name == 'push' }}",
+        "${{ runner.os == 'Linux' }} || github.event_name == 'push'",
+    ],
+)
+def test_setup_step_if_rejects_mixed_expression_wrappers(
+    tmp_path: Path, condition: str
+) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f'''\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: "{condition}"
+    '''),
+    )
+
+    with pytest.raises(ClickException, match="plain expression or one whole"):
+        Config.load(path)
+
+
+def test_setup_step_if_rejects_empty_expression_wrapper(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: "${{ }}"
+    """),
+    )
+
+    with pytest.raises(ClickException, match="`if` must contain an expression"):
+        Config.load(path)
+
+
 def test_workflow_disabled_boolean_shorthand_not_generated(tmp_path: Path) -> None:
     """Boolean shorthand `review: false` should prevent generation."""
     path = _write_config(

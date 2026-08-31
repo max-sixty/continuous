@@ -113,9 +113,11 @@ bot_name: my-project-bot
 # codex there is no such lever; the agent installs what it needs itself.
 #
 # `tend-notifications` decides up front whether the agent needs to boot and
-# injects an `if:` guard on every setup step so an empty-inbox run does no setup
-# either. A user-supplied `if:` is passed through unchanged (with a
-# generation-time warning) — your condition wins.
+# injects an `if:` guard on every setup step so a run with no unread
+# notifications or possible PR conflicts does no setup either. A user-supplied
+# `if:` narrows that guard; it cannot run setup after the pre-check declined the
+# job. Write it as a plain expression or one whole `${{ ... }}`; mixing the two
+# is rejected at `init`.
 #
 # Each form below shows the config and the YAML it produces inside the
 # `steps:` block. The guard is shown on the first example; it's added the same
@@ -128,7 +130,7 @@ bot_name: my-project-bot
 #
 #     # renders as (in tend-notifications):
 #     #   - uses: astral-sh/setup-uv@v10.0.1
-#     #     if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
+#     #     if: steps.check.outputs.count != '0' || steps.check.outputs.conflict_count != '0' || github.event_name == 'workflow_dispatch'
 #     #
 #     # in other workflows:
 #     #   - uses: astral-sh/setup-uv@v10.0.1
@@ -178,8 +180,9 @@ bot_name: my-project-bot
 # `sandbox_setup:` for home-scoped installs or version changes such as
 # `cargo install`, `pip install --user`, or `uv tool install`.
 #
-# Tend installs no language toolchain of its own. These keys make deliberate
-# additions inside the sandbox:
+# Tend appends a pinned `uv` fallback after the `setup:` PATH. It installs no
+# other language toolchain. These keys make deliberate additions inside the
+# sandbox:
 #
 # - `sandbox_path`: directories prepended to the sandbox PATH. A leading `~`
 #   expands to the sandbox home. Use it for a system directory the installer did
@@ -339,8 +342,8 @@ bot_name: my-project-bot
 
 # ### notifications
 #
-# Every 15 minutes. Keeps the bot watching the repository and drains unread
-# notifications as a recovery queue for issue and PR work.
+# Every 15 minutes. Keeps the bot watching the repository, drains unread
+# notifications as a recovery queue, and repairs conflicts on bot-authored PRs.
 
 # ### review-runs
 #
