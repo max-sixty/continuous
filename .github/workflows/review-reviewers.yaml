@@ -62,10 +62,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Mirrors data/consumers.json. Keep in sync when a repo adopts tend.
+        # Must cover data/consumers.json; test_cross_file_contracts.py enforces it.
         repo:
           - PRQL/prql
+          - diffplug/dormouse
+          - jakobtfaber/Faber2026
           - max-sixty/cargo-affected
+          - max-sixty/leaf
           - max-sixty/tend
           - max-sixty/worktrunk
           - numbagg/numbagg

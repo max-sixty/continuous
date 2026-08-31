@@ -4,7 +4,10 @@ A rule split across two files drifts silently: nothing runs both halves
 together, so each reads correct on its own while the pair stops agreeing.
 """
 
+import json
 from pathlib import Path
+
+from tests import _yaml as yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -188,3 +191,12 @@ def test_review_approval_gates_on_author_stated_readiness() -> None:
     # A blocker can also arrive mid-session, after the review began, so the
     # pre-APPROVE peek re-checks it alongside the red-check gate.
     assert "Re-check the author-readiness gate" in skill
+
+
+def test_review_reviewers_matrix_covers_consumers() -> None:
+    workflow = yaml.safe_load(_read(".github", "workflows", "review-reviewers.yaml"))
+    matrix = workflow["jobs"]["review-reviewers"]["strategy"]["matrix"]["repo"]
+    consumers = [entry["repo"] for entry in json.loads(_read("data", "consumers.json"))]
+
+    missing = sorted(set(consumers) - set(matrix))
+    assert not missing, f"add consumers to review-reviewers.yaml matrix: {missing}"
