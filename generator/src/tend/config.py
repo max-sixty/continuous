@@ -340,6 +340,11 @@ class Config:
                         raise click.ClickException(
                             f"setup[{i}]: `if` must contain an expression"
                         )
+                if "${{" in condition or "}}" in condition:
+                    raise click.ClickException(
+                        f"setup[{i}]: `if` must be a plain expression or one "
+                        "whole `${{ ... }}` expression"
+                    )
                 entry = {**entry, "if": condition}
             setup.append(SetupStep(fields=dict(entry)))
 

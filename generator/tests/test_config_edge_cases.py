@@ -669,6 +669,31 @@ def test_setup_step_if_requires_non_empty_string(tmp_path: Path, value: str) -> 
         Config.load(path)
 
 
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "${{ runner.os == 'Linux' }} && ${{ github.event_name == 'push' }}",
+        "runner.os == 'Linux' || ${{ github.event_name == 'push' }}",
+        "${{ runner.os == 'Linux' }} || github.event_name == 'push'",
+    ],
+)
+def test_setup_step_if_rejects_mixed_expression_wrappers(
+    tmp_path: Path, condition: str
+) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f'''\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: "{condition}"
+    '''),
+    )
+
+    with pytest.raises(ClickException, match="plain expression or one whole"):
+        Config.load(path)
+
+
 def test_workflow_disabled_boolean_shorthand_not_generated(tmp_path: Path) -> None:
     """Boolean shorthand `review: false` should prevent generation."""
     path = _write_config(
