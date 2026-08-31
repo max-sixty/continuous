@@ -10,7 +10,7 @@ https://github.com/max-sixty/tend/compare for their history.
 
 ### Improved
 
-- **Claude runs can opt into persistent auto memory.** `memory_gist: true` restores and saves Claude Code's model-authored memory through a bot-owned secret Gist for public repositories. Gist ownership, repository binding, file shapes, signed baselines, and remote conflicts are checked; synchronization failures remain warnings. ([#1110](https://github.com/max-sixty/tend/pull/1110))
+- **Claude runs can opt into persistent auto memory.** The experimental `memory_gist: true` setting restores and saves Claude Code's model-authored memory through a bot-owned secret Gist for public repositories. Gist ownership, repository binding, file shapes, signed baselines, and remote conflicts are checked; synchronization failures remain warnings. ([#1110](https://github.com/max-sixty/tend/pull/1110))
 - **The 15-minute notifications poll repairs conflicts on bot-authored PRs.** It boots for possible conflicts even with an empty inbox, verifies each merge locally, and either pushes against an exact head lease or leaves a per-head deferral for the nightly retry. ([#1108](https://github.com/max-sixty/tend/pull/1108))
 - **Both harnesses provide a pinned `uv` fallback to agent sessions.** Project-installed `uv` stays ahead on `PATH`, while Claude's credential proxy keeps its isolated copy. ([#1109](https://github.com/max-sixty/tend/pull/1109))
 
