@@ -38,16 +38,31 @@ BEFORE = "2026-01-01T12:00:00Z"
 FAKE_GH = (
     GH_PREAMBLE
     + r"""
+emit_json() {
+  if [ "${CLICOLOR_FORCE:-}" = "1" ]; then
+    printf '\033[36m%s\033[0m\n' "$1"
+  else
+    emit "$1"
+  fi
+}
+
 case "$*" in
   "api user"*)             emit '{"login":"'"$BOT_LOGIN"'"}' ;;
   # The reviews candidate list is the only `pr list` carrying --search.
   "pr list"*--search*)
     [ -n "${SEARCH_FAILS:-}" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     emit "$(cat "$CANDIDATES_JSON")" ;;
-  "pr list"*)              emit "$(cat "$BOT_PRS_JSON")" ;;
-  *"/issues/comments"*)    emit "$(cat "$ISSUE_COMMENTS_JSON")" ;;
+  "pr list"*)              emit_json "$(cat "$BOT_PRS_JSON")" ;;
+  *"/issues/comments"*)
+    [ -n "${ISSUE_COMMENTS_FAILS:-}" ] && { echo "issues unavailable" >&2; exit 17; }
+    emit "$(cat "$ISSUE_COMMENTS_JSON")" ;;
   *"/pulls/comments"*)     emit "$(cat "$PR_COMMENTS_JSON")" ;;
-  *"/pulls/"*"/reviews"*)  emit "$(cat "$REVIEWS_JSON")" ;;
+  *"/pulls/"*"/reviews"*)
+    if [ -n "${REVIEW_FAIL_PR:-}" ] && [[ "$*" == *"/pulls/$REVIEW_FAIL_PR/reviews"* ]]; then
+      echo "reviews unavailable" >&2
+      exit 18
+    fi
+    emit "$(cat "$REVIEWS_JSON")" ;;
   *) exit 1 ;;
 esac
 """
@@ -157,6 +172,26 @@ def test_a_failed_candidate_search_aborts_rather_than_reporting_no_reviews(
     assert result.stdout == ""
 
 
+def test_a_failed_comment_page_aborts_even_when_the_next_endpoint_succeeds(
+    env: dict[str, str],
+) -> None:
+    env["ISSUE_COMMENTS_FAILS"] = "1"
+
+    result = _run(env, SINCE)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_since_is_encoded_when_used_as_an_api_query(env: dict[str, str]) -> None:
+    since = "2026-01-02T01:00:00+01:00"
+
+    _collect(env, since)
+
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert "since=2026-01-02T01%3A00%3A00%2B01%3A00" in calls
+
+
 def test_a_quiet_window_reports_empty_lists(env: dict[str, str]) -> None:
     out = _collect(env)
 
@@ -167,6 +202,12 @@ def test_a_quiet_window_reports_empty_lists(env: dict[str, str]) -> None:
         "comments": [],
         "reviews": [],
     }
+
+
+def test_forced_cli_color_cannot_corrupt_json(env: dict[str, str]) -> None:
+    env["CLICOLOR_FORCE"] = "1"
+
+    assert _collect(env)["dispositions"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +307,18 @@ def test_a_human_review_body_is_collected(env: dict[str, str]) -> None:
 
     assert row["state"] == "CHANGES_REQUESTED"
     assert row["at"] == IN_WINDOW
+
+
+def test_a_failed_review_page_aborts_even_when_a_later_pr_succeeds(
+    env: dict[str, str],
+) -> None:
+    _write(env, "CANDIDATES_JSON", [{"number": 7}, {"number": 8}])
+    env["REVIEW_FAIL_PR"] = "7"
+
+    result = _run(env, SINCE)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
 
 
 def test_an_empty_bodied_review_container_is_not_a_correction(

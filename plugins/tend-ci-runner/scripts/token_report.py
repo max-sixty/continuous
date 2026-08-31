@@ -7,12 +7,10 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import subprocess
 import sys
 import tempfile
-from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -20,14 +18,195 @@ from typing import Any
 import github_cli
 
 RUN_LIMIT = 1000
-TOP_SUBJECTS = 20
-COUNT_FIELDS = (
-    "input_tokens",
-    "output_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens",
-    "turns",
-)
+
+REPORT_JQ = r"""
+def sum(f): map(f) | add // 0;
+def pick(f): map(f // empty) | first;
+
+def run_entry:
+  {
+    run_id: .[0].run_id,
+    _order: .[0]._order,
+    workflow: .[0].workflow,
+    created_at: .[0].created_at,
+    repo: pick(.repo),
+    event: pick(.event),
+    number: pick(.number),
+    head_sha: pick(.head_sha),
+    input_tokens: sum(.input_tokens),
+    output_tokens: sum(.output_tokens),
+    cache_creation_input_tokens: sum(.cache_creation_input_tokens),
+    cache_read_input_tokens: sum(.cache_read_input_tokens),
+    turns: sum(.turns),
+    cost_usd: sum(.cost_usd),
+    partial: (map(.partial // false) | any)
+  }
+  | .subject = (
+      if .number then "#\(.number)"
+      elif .head_sha then .head_sha
+      else "?"
+      end
+    );
+
+def fmt:
+  if . >= 1000000 then "\(. / 100000 | floor | . / 10)M"
+  elif . >= 1000 then "\(. / 100 | floor | . / 10)K"
+  else "\(.)"
+  end;
+
+def usd:
+  ((. + 1e-12) * 100 | round / 100)
+  | tostring
+  | if test("\\.")
+    then split(".") | "\(.[0]).\((.[1] + "00")[:2])"
+    else . + ".00"
+    end
+  | "$" + .;
+
+def floor_marker: if . then "+" else "" end;
+def short: .[:12];
+def pad($width): . + ((" " * ($width - length)) // "");
+
+def table($rows):
+  ($rows | transpose | map(map(length) | max)) as $widths
+  | $rows
+  | map(
+      . as $row
+      | [
+          range(0; $row | length) as $index
+          | $row[$index] | pad($widths[$index])
+        ]
+      | join("  ")
+      | sub(" +$"; "")
+    );
+
+def rollup:
+  {
+    n: length,
+    cost: sum(.cost_usd),
+    partial: (map(.partial) | any),
+    i: sum(.input_tokens),
+    o: sum(.output_tokens),
+    cc: sum(.cache_creation_input_tokens),
+    cr: sum(.cache_read_input_tokens)
+  };
+
+def cost_cell: (.cost | usd) + (.partial | floor_marker);
+def by_cost: sort_by(.cost) | reverse;
+def subjects:
+  group_by(.subject)
+  | map({key: (.[0].subject | short), workflows: (map(.workflow) | unique | join(","))} + rollup);
+
+def summary($since):
+  .totals as $totals
+  | .runs as $runs
+  | [
+      "",
+      "\($runs | length) runs since \($since)",
+      "Total cost: \($totals.cost_usd | usd)\($totals.partial_runs > 0 | floor_marker)"
+        + (if $totals.partial_runs > 0
+           then " (\($totals.partial_runs) of \($runs | length) runs cost-unknown)"
+           else ""
+           end),
+      "Tokens: \($totals.input_tokens | fmt) in, \($totals.output_tokens | fmt) out, \($totals.cache_creation_input_tokens | fmt) cache-create, \($totals.cache_read_input_tokens | fmt) cache-read",
+      ""
+    ]
+  + table(
+      [["WORKFLOW", "RUNS", "COST", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ"]]
+      + ($runs
+         | group_by(.workflow)
+         | map({key: .[0].workflow} + rollup)
+         | by_cost
+         | map([
+             .key,
+             (.n | tostring),
+             cost_cell,
+             (.i | fmt),
+             (.o | fmt),
+             (.cc | fmt),
+             (.cr | fmt)
+           ]))
+    )
+  + [""]
+  + table(
+      [["SUBJECT", "RUNS", "COST", "WORKFLOWS", "CACHE-READ"]]
+      + ($runs
+         | subjects
+         | by_cost
+         | .[:20]
+         | map([.key, (.n | tostring), cost_cell, .workflows, (.cr | fmt)]))
+    )
+  + [""]
+  + (if $totals.partial_runs > 0
+     then table(
+       [["COST-UNKNOWN", "RUNS", "CACHE-READ", "OUTPUT", "WORKFLOWS"]]
+       + ($runs
+          | map(select(.partial))
+          | subjects
+          | sort_by(.cr)
+          | reverse
+          | map([.key, (.n | tostring), (.cr | fmt), (.o | fmt), .workflows]))
+     ) + [""]
+     else []
+     end)
+  + table(
+      [["RUN", "WORKFLOW", "SUBJECT", "COST", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ", "TIME"]]
+      + ($runs
+         | map([
+             (.run_id | tostring),
+             .workflow,
+             (.subject | short),
+             ((.cost_usd | usd) + (.partial | floor_marker)),
+             (.input_tokens | fmt),
+             (.output_tokens | fmt),
+             (.cache_creation_input_tokens | fmt),
+             (.cache_read_input_tokens | fmt),
+             .created_at[:16]
+           ]))
+    )
+  + [""]
+  + (($runs | map(.subject) | unique | length) as $count
+     | if $count > 20
+       then ["Subjects: showing the 20 costliest of \($count); the JSON on stdout has them all."]
+       else []
+       end)
+  + (if $totals.partial_runs > 0
+     then ["COST-UNKNOWN lists the runs that emitted no result event, typically cancelled: their tokens are counted everywhere, their cost is not recoverable. A '+' marks a cost that is a floor rather than the spend."]
+     else []
+     end)
+  + (if $totals.skipped_runs > 0
+     then ["\($totals.skipped_runs) run(s) uploaded no readable claude-session-logs artifact and are absent entirely: codex-harness runs, runs that ended before the upload, and torn uploads."]
+     else []
+     end)
+  + ["Cost at API list prices — a large multiple of the effective rate on Claude Code subscriptions."]
+  | join("\n") + "\n";
+
+. as $input
+| ($input.jobs
+   | to_entries
+   | map(.value + {_order: .key})
+   | group_by(.run_id)
+   | map(run_entry)
+   | sort_by(.created_at, ._order)
+   | group_by(.created_at)
+   | reverse
+   | (add // [])
+   | map(del(._order))) as $runs
+| {
+    runs: $runs,
+    totals: ($runs | {
+      input_tokens: sum(.input_tokens),
+      output_tokens: sum(.output_tokens),
+      cache_creation_input_tokens: sum(.cache_creation_input_tokens),
+      cache_read_input_tokens: sum(.cache_read_input_tokens),
+      turns: sum(.turns),
+      cost_usd: (sum(.cost_usd) | (. + 1e-12) * 100 | round / 100),
+      partial_runs: (map(select(.partial)) | length),
+      skipped_runs: $input.skipped
+    })
+  } as $report
+| {report: $report, summary: ($report | summary($input.since))}
+"""
 
 
 def _json_documents(path: Path) -> list[dict[str, Any]]:
@@ -47,249 +226,15 @@ def _json_documents(path: Path) -> list[dict[str, Any]]:
     return documents
 
 
-def _sum(rows: list[dict[str, Any]], field: str) -> int | float:
-    return sum(row.get(field) or 0 for row in rows)
-
-
-def _pick(rows: list[dict[str, Any]], field: str) -> Any:
-    return next((row[field] for row in rows if row.get(field) is not None), None)
-
-
-def build_report(jobs: list[dict[str, Any]], *, skipped: int) -> dict[str, Any]:
-    """Collapse job records into run records and report totals."""
-    grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for job in jobs:
-        grouped[int(job["run_id"])].append(job)
-
-    runs: list[dict[str, Any]] = []
-    for run_id, rows in grouped.items():
-        run = {
-            "run_id": run_id,
-            "workflow": rows[0]["workflow"],
-            "created_at": rows[0]["created_at"],
-            "repo": _pick(rows, "repo"),
-            "event": _pick(rows, "event"),
-            "number": _pick(rows, "number"),
-            "head_sha": _pick(rows, "head_sha"),
-            **{field: _sum(rows, field) for field in COUNT_FIELDS},
-            "cost_usd": _sum(rows, "cost_usd"),
-            "partial": any(bool(row.get("partial")) for row in rows),
-        }
-        run["subject"] = (
-            f"#{run['number']}" if run["number"] else str(run["head_sha"] or "?")
-        )
-        runs.append(run)
-    runs.sort(key=lambda run: run["created_at"], reverse=True)
-
-    totals = {
-        **{field: _sum(runs, field) for field in COUNT_FIELDS},
-        "cost_usd": round(float(_sum(runs, "cost_usd")) + 1e-12, 2),
-        "partial_runs": sum(bool(run["partial"]) for run in runs),
-        "skipped_runs": skipped,
-    }
-    return {"runs": runs, "totals": totals}
-
-
-def _fmt_count(value: float) -> str:
-    if value >= 1_000_000:
-        return f"{math.floor(value / 100_000) / 10:g}M"
-    if value >= 1_000:
-        return f"{math.floor(value / 100) / 10:g}K"
-    return f"{value:g}"
-
-
-def _usd(value: float) -> str:
-    return f"${round(float(value) + 1e-12, 2):.2f}"
-
-
-def _table(rows: list[list[str]]) -> list[str]:
-    widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
-    return [
-        "  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)).rstrip()
-        for row in rows
-    ]
-
-
-def _rollup(runs: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "n": len(runs),
-        "cost": _sum(runs, "cost_usd"),
-        "partial": any(bool(run["partial"]) for run in runs),
-        "i": _sum(runs, "input_tokens"),
-        "o": _sum(runs, "output_tokens"),
-        "cc": _sum(runs, "cache_creation_input_tokens"),
-        "cr": _sum(runs, "cache_read_input_tokens"),
-    }
-
-
-def _group_rollups(runs: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for run in runs:
-        groups[str(run[key])].append(run)
-    values = []
-    for name, grouped in groups.items():
-        values.append(
-            {
-                "key": name,
-                "workflows": ",".join(sorted({run["workflow"] for run in grouped})),
-                **_rollup(grouped),
-            }
-        )
-    return values
-
-
-def render_summary(report: dict[str, Any], *, since: str) -> str:
-    """Render the human-readable stderr summary."""
-    runs = report["runs"]
-    totals = report["totals"]
-    floor = "+" if totals["partial_runs"] else ""
-    blocks: list[list[str]] = [
-        [
-            f"{len(runs)} runs since {since}",
-            f"Total cost: {_usd(totals['cost_usd'])}{floor}"
-            + (
-                f" ({totals['partial_runs']} of {len(runs)} runs cost-unknown)"
-                if totals["partial_runs"]
-                else ""
-            ),
-            (
-                "Tokens: "
-                f"{_fmt_count(totals['input_tokens'])} in, "
-                f"{_fmt_count(totals['output_tokens'])} out, "
-                f"{_fmt_count(totals['cache_creation_input_tokens'])} cache-create, "
-                f"{_fmt_count(totals['cache_read_input_tokens'])} cache-read"
-            ),
-        ]
-    ]
-
-    workflows = sorted(
-        _group_rollups(runs, "workflow"), key=lambda item: item["cost"], reverse=True
+def _report(jobs: list[dict[str, Any]], *, skipped: int, since: str) -> dict[str, Any]:
+    result = subprocess.run(
+        ["jq", "-c", REPORT_JQ],
+        input=json.dumps({"jobs": jobs, "skipped": skipped, "since": since}),
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
     )
-    blocks.append(
-        _table(
-            [
-                [
-                    "WORKFLOW",
-                    "RUNS",
-                    "COST",
-                    "INPUT",
-                    "OUTPUT",
-                    "CACHE-CREATE",
-                    "CACHE-READ",
-                ]
-            ]
-            + [
-                [
-                    item["key"],
-                    str(item["n"]),
-                    _usd(item["cost"]) + ("+" if item["partial"] else ""),
-                    _fmt_count(item["i"]),
-                    _fmt_count(item["o"]),
-                    _fmt_count(item["cc"]),
-                    _fmt_count(item["cr"]),
-                ]
-                for item in workflows
-            ]
-        )
-    )
-
-    subjects = sorted(
-        _group_rollups(runs, "subject"), key=lambda item: item["cost"], reverse=True
-    )
-    blocks.append(
-        _table(
-            [["SUBJECT", "RUNS", "COST", "WORKFLOWS", "CACHE-READ"]]
-            + [
-                [
-                    item["key"][:12],
-                    str(item["n"]),
-                    _usd(item["cost"]) + ("+" if item["partial"] else ""),
-                    item["workflows"],
-                    _fmt_count(item["cr"]),
-                ]
-                for item in subjects[:TOP_SUBJECTS]
-            ]
-        )
-    )
-
-    if totals["partial_runs"]:
-        unknown = sorted(
-            _group_rollups([run for run in runs if run["partial"]], "subject"),
-            key=lambda item: item["cr"],
-            reverse=True,
-        )
-        blocks.append(
-            _table(
-                [["COST-UNKNOWN", "RUNS", "CACHE-READ", "OUTPUT", "WORKFLOWS"]]
-                + [
-                    [
-                        item["key"][:12],
-                        str(item["n"]),
-                        _fmt_count(item["cr"]),
-                        _fmt_count(item["o"]),
-                        item["workflows"],
-                    ]
-                    for item in unknown
-                ]
-            )
-        )
-
-    blocks.append(
-        _table(
-            [
-                [
-                    "RUN",
-                    "WORKFLOW",
-                    "SUBJECT",
-                    "COST",
-                    "INPUT",
-                    "OUTPUT",
-                    "CACHE-CREATE",
-                    "CACHE-READ",
-                    "TIME",
-                ]
-            ]
-            + [
-                [
-                    str(run["run_id"]),
-                    run["workflow"],
-                    run["subject"][:12],
-                    _usd(run["cost_usd"]) + ("+" if run["partial"] else ""),
-                    _fmt_count(run["input_tokens"]),
-                    _fmt_count(run["output_tokens"]),
-                    _fmt_count(run["cache_creation_input_tokens"]),
-                    _fmt_count(run["cache_read_input_tokens"]),
-                    run["created_at"][:16],
-                ]
-                for run in runs
-            ]
-        )
-    )
-
-    notes: list[str] = []
-    if len(subjects) > TOP_SUBJECTS:
-        notes.append(
-            f"Subjects: showing the {TOP_SUBJECTS} costliest of {len(subjects)}; "
-            "the JSON on stdout has them all."
-        )
-    if totals["partial_runs"]:
-        notes.append(
-            "COST-UNKNOWN lists the runs that emitted no result event, typically "
-            "cancelled: their tokens are counted everywhere, their cost is not "
-            "recoverable. A '+' marks a cost that is a floor rather than the spend."
-        )
-    if totals["skipped_runs"]:
-        notes.append(
-            f"{totals['skipped_runs']} run(s) uploaded no readable "
-            "claude-session-logs artifact and are absent entirely: codex-harness "
-            "runs, runs that ended before the upload, and torn uploads."
-        )
-    notes.append(
-        "Cost at API list prices — a large multiple of the effective rate on "
-        "Claude Code subscriptions."
-    )
-    blocks.append(notes)
-    return "\n\n" + "\n\n".join("\n".join(block) for block in blocks) + "\n"
+    return json.loads(result.stdout)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -344,9 +289,9 @@ def main(argv: list[str] | None = None) -> int:
         if len(rows) >= RUN_LIMIT:
             print(
                 f"WARNING: '{workflow}' returned {RUN_LIMIT} runs, the Actions "
-                "API's pagination ceiling — older runs in the window are unreachable "
-                "and the totals below under-report it. Narrow HOURS to bring the "
-                "window under the ceiling; raising RUN_LIMIT cannot help.",
+                "API's pagination ceiling — older runs in the window are "
+                "unreachable and the totals below under-report it. Narrow HOURS "
+                "to bring the window under the ceiling; raising RUN_LIMIT cannot help.",
                 file=sys.stderr,
             )
         for row in rows:
@@ -394,9 +339,9 @@ def main(argv: list[str] | None = None) -> int:
             }
             jobs.extend({**record, **stamp} for record in run_jobs)
 
-    report = build_report(jobs, skipped=skipped)
-    github_cli.dump(report)
-    sys.stderr.write(render_summary(report, since=since))
+    output = _report(jobs, skipped=skipped, since=since)
+    github_cli.dump(output["report"])
+    sys.stderr.write(output["summary"])
     return 0
 
 
