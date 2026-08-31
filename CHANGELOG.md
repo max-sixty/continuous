@@ -6,6 +6,12 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.24
+
+### Fixed
+
+- **Generated notifications workflows pass actionlint.** The literal GraphQL `$q` variable now carries a scoped ShellCheck directive, avoiding SC2016 without allowing the shell to expand it. ([#1112](https://github.com/max-sixty/tend/pull/1112))
+
 ## 0.1.23
 
 ### Improved
