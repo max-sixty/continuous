@@ -63,9 +63,12 @@ def json_stream(*args: str, quiet: bool = False) -> list[Any]:
 def paginated(*args: str, quiet: bool = False) -> list[Any]:
     """Return every item from a paginated array endpoint in API order."""
     items: list[Any] = []
-    for page in json_stream(*args, quiet=quiet):
+    pages = json_stream(*args, quiet=quiet)
+    if not pages:
+        raise ValueError("paginated GitHub response was empty")
+    for page in pages:
         if not isinstance(page, list):
-            raise ValueError("paginated GitHub response was not an array")
+            raise TypeError("paginated GitHub response was not an array")
         items.extend(page)
     return items
 

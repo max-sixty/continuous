@@ -22,7 +22,7 @@ RUN_LIMIT = 200
 
 
 def _parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return datetime.fromisoformat(value)
 
 
 def _stamp(value: datetime) -> str:
@@ -33,7 +33,9 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     prefixes = args or ["tend-"]
     now = now or datetime.now(UTC)
-    repo_args = ["-R", os.environ["TARGET_REPO"]] if os.environ.get("TARGET_REPO") else []
+    repo_args = (
+        ["-R", os.environ["TARGET_REPO"]] if os.environ.get("TARGET_REPO") else []
+    )
 
     workflow_rows = github_cli.json_call(
         "workflow", "list", *repo_args, "--json", "name"
@@ -88,9 +90,7 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     else:
         completed_after = now - AD_HOC_WINDOW
 
-    created_since = (completed_after - CREATION_CUSHION).strftime(
-        "%Y-%m-%dT%H:%M:%S"
-    )
+    created_since = (completed_after - CREATION_CUSHION).strftime("%Y-%m-%dT%H:%M:%S")
     runs_by_id: dict[int, dict[str, Any]] = {}
     for workflow in workflows:
         rows = github_cli.json_call(

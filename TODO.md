@@ -250,7 +250,7 @@ built-in out of the 2.1.226 binary says it isn't worth reaching:
 Revisit when one of those moves: a pinned version whose Opus row is
 angle-based again, `ReportFindings` in the allowlist, or a Codex equivalent.
 Cutting over then costs a prompt reshape plus a per-harness branch in the
-`review` skill's step 4, which only pays once the built-in is the better pass.
+`review` skill's step 5, which only pays once the built-in is the better pass.
 
 ## Worker: Phase 2 LLM summary of `/activity`
 

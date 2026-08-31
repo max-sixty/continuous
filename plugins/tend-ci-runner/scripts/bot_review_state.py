@@ -28,6 +28,7 @@ def review_state(
         review
         for review in reviews
         if github_cli.actor_login(review.get("user")) == bot
+        and review.get("submitted_at") is not None
     ]
     substantive = [
         review

@@ -70,7 +70,9 @@ Four pieces:
    the adopter's `.github/workflows/` from `.config/tend.yaml`. Picks the
    right action ref and secret names per `harness`. Generation is
    idempotent — running `init` again overwrites all files from the
-   current config.
+   current config. When review is enabled, it also merges the
+   `concurrency.queue` ignore into the adopter-owned
+   `.github/actionlint.yaml` (see "Concurrency and filtering").
 4. **Config** (`.config/tend.yaml`) — inputs to the generator. Overrides
    from defaults only. `harness: claude | codex` selects the harness
    (default `claude`). A per-workflow `harness:` override (and matching
@@ -250,8 +252,9 @@ Events pass through three layers before the bot does work:
    group, never queues).
 2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
    whether the agent boots: mention's verify job checks engagement, and
-   notifications' check repairs repository watching then captures a paginated
-   cutoff snapshot.
+   notifications' check repairs repository watching, captures a paginated
+   cutoff snapshot, and finds configured-bot PR conflicts whose current heads
+   have not already been deferred for manual resolution.
 3. **Concurrency groups** — at most one running job per group.
 
 Concurrency groups:
@@ -263,7 +266,7 @@ Concurrency groups:
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
 | triage | `workflow-issue#` | yes — latest comment wins |
-| notifications | `tend-notifications` | **no** — one poll advances the unread queue at a time |
+| notifications | `tend-notifications` | **no** — one poll drains notifications and repairs bot PRs at a time |
 | ci-fix / nightly / weekly | none | rare overlap or cron-serialized |
 
 **Fork guard.** Workflows whose triggers can fire from a fork's own
@@ -279,6 +282,9 @@ guard.
 
 **GHA queue depth.** Review sets `queue: max`, so pending PR events within
 GitHub's queue limit wait and a later push cannot replace `ready_for_review`.
+GitHub accepts the key; actionlint's schema does not, so `init` merges the
+matching ignore into `.github/actionlint.yaml`, which the binary reads for
+every invocation.
 Mention/handle and notifications keep the default one-pending-run queue; when a
 third job arrives while one runs and one queues, the pending job is replaced. For mention,
 mitigation lives in the skill prompts: dedup if the bot already responded to
@@ -347,7 +353,7 @@ for Codex). When adding new capability, split work along this line:
   interprets output, and writes clearer messages than shell.
 - **Actions gate whether the agent runs at all.** Agent invocations cost
   tokens; gating them in YAML is cheap. Pre-check steps that early-exit
-  the job (e.g. `tend-notifications`'s "Check for unread notifications")
+  the job (e.g. `tend-notifications`'s notification and PR conflict check)
   save an entire agent run when there's nothing to do. A gate stays cheap
   only while it stays trivial: one pre-check against a frequent no-op (an
   empty inbox every cron tick) earns its place; a run of bespoke gates,

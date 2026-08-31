@@ -19,7 +19,7 @@ SCRIPT = (
 
 FAKE_GH = (
     GH_PREAMBLE
-    + r'''
+    + r"""
 case "$1 $2" in
   "repo view") emit '{"nameWithOwner":"owner/repo"}' ;;
   "issue list") emit '[{"number":7}]' ;;
@@ -40,7 +40,7 @@ case "$1 $2" in
     ;;
   *) exit 1 ;;
 esac
-'''
+"""
 )
 
 

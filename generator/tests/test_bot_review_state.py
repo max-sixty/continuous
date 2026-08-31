@@ -139,6 +139,20 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["force_pushed_since"] is False
 
 
+def test_an_unsubmitted_review_anchors_nothing(env: dict[str, str]) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, None, body="draft findings", state="PENDING")],
+    )
+
+    state = _state(env)
+
+    assert state["last_substantive"] is None
+    assert state["at_head"] is None
+    assert state["orphan_id"] is None
+
+
 def test_a_reply_container_does_not_read_as_a_review(env: dict[str, str]) -> None:
     """Replying to a review thread makes GitHub wrap the reply in a zero-body
     COMMENTED review anchored at the then-current head. Counted, it would tell
@@ -267,20 +281,6 @@ def test_a_rewrite_before_the_review_leaves_it_standing(env: dict[str, str]) -> 
 
     assert state["force_pushed_since"] is False
     assert state["at_head"]["id"] == 1
-
-
-def test_a_pending_review_without_a_timestamp_predates_a_rewrite(
-    env: dict[str, str],
-) -> None:
-    """GitHub permits a null submitted_at on PENDING reviews."""
-    _write(env, "REVIEWS_JSON", [_review(1, None, body="draft findings")])
-    _rewrite_at(env, "2026-01-02T00:00:00Z")
-
-    state = _state(env)
-
-    assert state["last_substantive"]["at"] is None
-    assert state["force_pushed_since"] is True
-    assert state["at_head"] is None
 
 
 def test_the_newest_rewrite_is_the_one_that_counts(env: dict[str, str]) -> None:
@@ -444,17 +444,14 @@ def test_the_repo_is_named_explicitly_on_every_call(env: dict[str, str]) -> None
 
 
 def test_review_skill_preserves_the_status_free_queue_contract() -> None:
-    """The skill deduplicates outward reviews while the workflow keeps events."""
+    """Reading and posting use the same review-state definition."""
     skill = REVIEW_SKILL.read_text()
 
     assert "repos/$REPO/statuses/$HEAD_SHA" not in skill
     assert "tend-review/<number>" not in skill
     assert "--json headRefOid,state" in skill
     assert '[ "$PR_STATE" != "OPEN" ]' in skill
-    assert '[ "$CURRENT_HEAD" != "$HEAD_SHA" ]' in skill
-    assert "ALREADY_POSTED=" in skill
-    assert ".at_head.draft_mode" in skill
-    assert '--argjson force "${FORCE_FULL_REVIEW:-false}"' in skill
+    assert "scripts/review-preflight.sh <number>" in skill
     assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in skill
     assert (
         "If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial"

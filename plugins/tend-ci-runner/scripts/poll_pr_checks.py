@@ -70,8 +70,7 @@ def reduce_rollup(
                 "status": str(node.get("status") or ""),
                 "conclusion": str(node.get("conclusion") or ""),
                 "workflow": str(
-                    _dig(node, "checkSuite", "workflowRun", "workflow", "name")
-                    or ""
+                    _dig(node, "checkSuite", "workflowRun", "workflow", "name") or ""
                 ),
                 "url": str(node.get("detailsUrl") or ""),
                 "started_at": str(node.get("startedAt") or ""),
@@ -113,9 +112,7 @@ def reduce_rollup(
         )
     return {
         "pending": [
-            context["name"]
-            for context in current
-            if context["status"] != "COMPLETED"
+            context["name"] for context in current if context["status"] != "COMPLETED"
         ],
         "failed": [
             f"{context['name']} {context['url']}"
@@ -134,7 +131,9 @@ def fetch_rollup(
     cursor: str | None = None
     nodes: list[dict[str, Any]] = []
     while True:
-        cursor_args = ["-F", "cursor=null"] if cursor is None else ["-f", f"cursor={cursor}"]
+        cursor_args = (
+            ["-F", "cursor=null"] if cursor is None else ["-f", f"cursor={cursor}"]
+        )
         try:
             response = github_cli.json_call(
                 "api",
@@ -212,11 +211,11 @@ def main(
     except subprocess.CalledProcessError:
         sleep(10)
         try:
-            github_cli.run(
-                "api", f"repos/{repo}/commits/{sha}", "--silent", quiet=True
-            )
+            github_cli.run("api", f"repos/{repo}/commits/{sha}", "--silent", quiet=True)
         except subprocess.CalledProcessError:
-            print(f"could not resolve {sha} as a commit in {repo} — UNVERIFIED, not green")
+            print(
+                f"could not resolve {sha} as a commit in {repo} — UNVERIFIED, not green"
+            )
             return 2
 
     last: dict[str, list[str]] | None = None

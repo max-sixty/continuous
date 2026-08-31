@@ -41,7 +41,7 @@ def gh_paginated(path: str) -> list[dict[str, Any]]:
             break
         page, position = decoder.raw_decode(text, position)
         if not isinstance(page, list):
-            raise ValueError("paginated GitHub response was not an array")
+            raise TypeError("paginated GitHub response was not an array")
         items.extend(page)
     return items
 

@@ -52,9 +52,7 @@ def main(
 
     response = github_cli.json_call("api", f"{run_api}/jobs?filter=latest")
     job_ids = [
-        int(job["id"])
-        for job in response["jobs"]
-        if int(job["run_attempt"]) == attempt
+        int(job["id"]) for job in response["jobs"] if int(job["run_attempt"]) == attempt
     ]
     if not job_ids:
         print(f"attempt {attempt} exists but lists no jobs yet — UNVERIFIED")

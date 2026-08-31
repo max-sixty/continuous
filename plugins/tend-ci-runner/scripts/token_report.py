@@ -42,7 +42,7 @@ def _json_documents(path: Path) -> list[dict[str, Any]]:
             break
         value, position = decoder.raw_decode(text, position)
         if not isinstance(value, dict):
-            raise ValueError(f"{path} contains a non-object JSON value")
+            raise TypeError(f"{path} contains a non-object JSON value")
         documents.append(value)
     return documents
 
@@ -76,9 +76,7 @@ def build_report(jobs: list[dict[str, Any]], *, skipped: int) -> dict[str, Any]:
             "partial": any(bool(row.get("partial")) for row in rows),
         }
         run["subject"] = (
-            f"#{run['number']}"
-            if run["number"]
-            else str(run["head_sha"] or "?")
+            f"#{run['number']}" if run["number"] else str(run["head_sha"] or "?")
         )
         runs.append(run)
     runs.sort(key=lambda run: run["created_at"], reverse=True)
@@ -92,7 +90,7 @@ def build_report(jobs: list[dict[str, Any]], *, skipped: int) -> dict[str, Any]:
     return {"runs": runs, "totals": totals}
 
 
-def _fmt_count(value: int | float) -> str:
+def _fmt_count(value: float) -> str:
     if value >= 1_000_000:
         return f"{math.floor(value / 100_000) / 10:g}M"
     if value >= 1_000:
@@ -100,7 +98,7 @@ def _fmt_count(value: int | float) -> str:
     return f"{value:g}"
 
 
-def _usd(value: int | float) -> str:
+def _usd(value: float) -> str:
     return f"${round(float(value) + 1e-12, 2):.2f}"
 
 
@@ -124,9 +122,7 @@ def _rollup(runs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _group_rollups(
-    runs: list[dict[str, Any]], key: str
-) -> list[dict[str, Any]]:
+def _group_rollups(runs: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for run in runs:
         groups[str(run[key])].append(run)
@@ -156,11 +152,13 @@ def render_summary(report: dict[str, Any], *, since: str) -> str:
                 if totals["partial_runs"]
                 else ""
             ),
-            "Tokens: "
-            f"{_fmt_count(totals['input_tokens'])} in, "
-            f"{_fmt_count(totals['output_tokens'])} out, "
-            f"{_fmt_count(totals['cache_creation_input_tokens'])} cache-create, "
-            f"{_fmt_count(totals['cache_read_input_tokens'])} cache-read",
+            (
+                "Tokens: "
+                f"{_fmt_count(totals['input_tokens'])} in, "
+                f"{_fmt_count(totals['output_tokens'])} out, "
+                f"{_fmt_count(totals['cache_creation_input_tokens'])} cache-create, "
+                f"{_fmt_count(totals['cache_read_input_tokens'])} cache-read"
+            ),
         ]
     ]
 
@@ -169,7 +167,17 @@ def render_summary(report: dict[str, Any], *, since: str) -> str:
     )
     blocks.append(
         _table(
-            [["WORKFLOW", "RUNS", "COST", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ"]]
+            [
+                [
+                    "WORKFLOW",
+                    "RUNS",
+                    "COST",
+                    "INPUT",
+                    "OUTPUT",
+                    "CACHE-CREATE",
+                    "CACHE-READ",
+                ]
+            ]
             + [
                 [
                     item["key"],
@@ -228,7 +236,19 @@ def render_summary(report: dict[str, Any], *, since: str) -> str:
 
     blocks.append(
         _table(
-            [["RUN", "WORKFLOW", "SUBJECT", "COST", "INPUT", "OUTPUT", "CACHE-CREATE", "CACHE-READ", "TIME"]]
+            [
+                [
+                    "RUN",
+                    "WORKFLOW",
+                    "SUBJECT",
+                    "COST",
+                    "INPUT",
+                    "OUTPUT",
+                    "CACHE-CREATE",
+                    "CACHE-READ",
+                    "TIME",
+                ]
+            ]
             + [
                 [
                     str(run["run_id"]),
@@ -281,7 +301,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     extra_prefixes = args[1:] if args else []
     since = (datetime.now(UTC) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    repo_args = ["-R", os.environ["TARGET_REPO"]] if os.environ.get("TARGET_REPO") else []
+    repo_args = (
+        ["-R", os.environ["TARGET_REPO"]] if os.environ.get("TARGET_REPO") else []
+    )
 
     workflow_rows = github_cli.json_call(
         "workflow", "list", *repo_args, "--json", "name"
@@ -351,9 +373,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 usage_files = list(run_dir.rglob("token-usage.json"))
                 run_jobs = [
-                    record
-                    for path in usage_files
-                    for record in _json_documents(path)
+                    record for path in usage_files for record in _json_documents(path)
                 ]
                 if not run_jobs:
                     raise ValueError("no token usage records")
