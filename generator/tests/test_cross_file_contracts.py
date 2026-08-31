@@ -202,7 +202,7 @@ def test_review_second_pass_is_a_submit_precondition() -> None:
     submit = skill.index("### 6. Submit")
     assert second_pass < submit
     assert "For a review that reached step 5, before submitting" in skill
-    assert "Step 1's trivial-increment close-out path" in skill
+    assert "Step 1's trivial-increment and dedup close-out paths" in skill
     assert "Run step 5 again over the updated merged tree" in skill
 
 
