@@ -39,6 +39,7 @@ echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 # boot gate; the agent test-merges every candidate before changing a branch.
 # Read the newest comments: a deferral is normally the PR's latest activity.
 # An older marker can waste boots, but the resolver paginates before acting.
+# shellcheck disable=SC2016  # $q is a GraphQL variable, not a shell variable.
 if BOT_LOGIN=$(gh api user --jq .login 2>/dev/null) \
   && PRS=$(gh api graphql -f query='
     query($q: String!) {
