@@ -38,6 +38,7 @@ from tend.config import (
     CLAUDE_TOKEN_SECRET,
     MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
+    STANDARD_WORKFLOWS,
     Config,
     WorkflowConfig,
 )
@@ -1198,6 +1199,30 @@ def test_run_all_checks_requires_auth_for_each_effective_harness() -> None:
     assert auth["codex-auth"].passed is True
     assert auth["claude-auth"].passed is False
     assert CLAUDE_TOKEN_SECRET in auth["claude-auth"].message
+
+
+def test_run_all_checks_requires_configured_auth_when_all_workflows_are_disabled() -> (
+    None
+):
+    cfg = _config(
+        harness="codex",
+        model="gpt-5.5",
+        workflows={name: WorkflowConfig(enabled=False) for name in STANDARD_WORKFLOWS},
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch(
+            "tend.checks._gh",
+            side_effect=_gh_all_pass(environment_secrets=(BOT_TOKEN_SECRET,)),
+        ),
+    ):
+        results = run_all_checks(cfg, repo="owner/repo")
+
+    auth = [result for result in results if result.name.endswith("-auth")]
+    assert len(auth) == 1
+    assert auth[0].name == "codex-auth"
+    assert auth[0].passed is False
+    assert OPENAI_KEY_SECRET in auth[0].message
 
 
 def test_memory_gist_requires_its_environment_secret() -> None:

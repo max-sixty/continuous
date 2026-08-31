@@ -2,15 +2,15 @@
 
 The caller supplies the Gist ID; descriptions are not unique enough to be a
 key. ``restore`` downloads the memory directory and records a baseline.
-``save`` uploads only locally changed files whose remote version still matches
-that baseline when read. This preserves remote edits that have already landed,
-but Gist PATCH has no atomic precondition: truly simultaneous writes can still
-race, so synchronization is best-effort.
+``save`` uploads the local change set only when every changed remote file still
+matches that baseline when read. If any changed file conflicts, no files are
+patched. Gist PATCH has no atomic precondition, so truly simultaneous writes
+can still race and synchronization remains best-effort.
 
 This is opt-in and limited to public repositories. A secret Gist is unlisted,
-not private, and Claude decides what is worth remembering. The CLI reads the
-Gist locator and signed-baseline key from its environment so they never appear
-in the process command line.
+not private, and Claude decides what is worth remembering. The CLI reads its
+configuration from the environment, so the signed-baseline key never reaches a
+command line; the Gist ID still appears in the ``gh api /gists/<id>`` argv.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ _GITHUB_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 _BASELINE_KEY = re.compile(r"^[a-f0-9]{64}$")
 
 
-class MemoryError(RuntimeError):
+class GistMemoryError(RuntimeError):
     """The remote or local memory cannot be synchronized safely."""
 
 
@@ -70,9 +70,11 @@ def _api(path: str, *, method: str = "GET", payload: dict | None = None) -> Any:
         )
         return None
     except subprocess.CalledProcessError as error:
-        raise MemoryError("GitHub API request failed") from error
+        raise GistMemoryError("GitHub API request failed") from error
     except json.JSONDecodeError as error:
-        raise MemoryError(f"GitHub API returned invalid JSON: {error.msg}") from error
+        raise GistMemoryError(
+            f"GitHub API returned invalid JSON: {error.msg}"
+        ) from error
 
 
 def _validate_inputs(
@@ -83,21 +85,21 @@ def _validate_inputs(
     baseline_key: str,
 ) -> None:
     if not _GIST_ID.fullmatch(gist_id):
-        raise MemoryError("Gist ID must be alphanumeric")
+        raise GistMemoryError("Gist ID must be alphanumeric")
     if not _REPOSITORY.fullmatch(repository):
-        raise MemoryError("repository must be owner/name")
+        raise GistMemoryError("repository must be owner/name")
     if not _GITHUB_LOGIN.fullmatch(gist_owner):
-        raise MemoryError("Gist owner must be a GitHub login")
+        raise GistMemoryError("Gist owner must be a GitHub login")
     if not directory.is_absolute() or directory == Path("/"):
-        raise MemoryError("memory directory must be an absolute non-root path")
+        raise GistMemoryError("memory directory must be an absolute non-root path")
     if not _BASELINE_KEY.fullmatch(baseline_key):
-        raise MemoryError("baseline key must be 32 bytes encoded as lowercase hex")
+        raise GistMemoryError("baseline key must be 32 bytes encoded as lowercase hex")
 
 
 def _require_public_repository(repository: str) -> None:
     response = _api(f"/repos/{repository}")
     if not isinstance(response, dict) or response.get("visibility") != "public":
-        raise MemoryError(
+        raise GistMemoryError(
             "Gist-backed auto memory is available only for public repositories"
         )
 
@@ -117,7 +119,7 @@ def _gist_files(gist_id: str, repository: str, gist_owner: str) -> dict[str, str
         or not isinstance(response.get("files"), dict)
         or "MEMORY.md" not in response["files"]
     ):
-        raise MemoryError(
+        raise GistMemoryError(
             f"Gist must be owned by {gist_owner}, secret, complete, and "
             f"described as '{description}'"
         )
@@ -125,16 +127,16 @@ def _gist_files(gist_id: str, repository: str, gist_owner: str) -> dict[str, str
     files: dict[str, str] = {}
     for name, value in response["files"].items():
         if not isinstance(name, str) or not _is_memory_filename(name):
-            raise MemoryError(f"unsupported memory filename: {name!r}")
+            raise GistMemoryError(f"unsupported memory filename: {name!r}")
         if (
             not isinstance(value, dict)
             or value.get("truncated") is not False
             or not isinstance(value.get("content"), str)
         ):
-            raise MemoryError(f"memory file is truncated or malformed: {name}")
+            raise GistMemoryError(f"memory file is truncated or malformed: {name}")
         content = value["content"]
         if len(content.encode()) > MAX_FILE_BYTES:
-            raise MemoryError(f"memory file exceeds the 1 MB inline limit: {name}")
+            raise GistMemoryError(f"memory file exceeds the 1 MB inline limit: {name}")
         files[name] = content
     return files
 
@@ -171,10 +173,10 @@ def restore(
     files = _gist_files(gist_id, repository, gist_owner)
 
     if directory.is_symlink():
-        raise MemoryError("memory directory must not be a symlink")
+        raise GistMemoryError("memory directory must not be a symlink")
     directory.mkdir(parents=True, exist_ok=True)
     if any(directory.iterdir()):
-        raise MemoryError("memory directory is not empty")
+        raise GistMemoryError("memory directory is not empty")
     for name, content in files.items():
         (directory / name).write_text(content)
     _baseline_path(directory).write_text(
@@ -198,7 +200,7 @@ def _read_baseline(
     try:
         value = json.loads(_baseline_path(directory).read_text())
     except (OSError, json.JSONDecodeError) as error:
-        raise MemoryError("memory baseline is missing or malformed") from error
+        raise GistMemoryError("memory baseline is missing or malformed") from error
     if (
         not isinstance(value, dict)
         or set(value) != {"repository", "files", "signature"}
@@ -210,34 +212,36 @@ def _read_baseline(
             for name, content in value["files"].items()
         )
     ):
-        raise MemoryError("memory baseline is malformed or belongs to another repo")
+        raise GistMemoryError("memory baseline is malformed or belongs to another repo")
     expected = _signed_baseline(repository, value["files"], baseline_key)["signature"]
     if not hmac.compare_digest(value["signature"], expected):
-        raise MemoryError("memory baseline was modified during the agent run")
+        raise GistMemoryError("memory baseline was modified during the agent run")
     return value["files"]
 
 
 def _local_files(directory: Path) -> dict[str, str]:
     if directory.is_symlink():
-        raise MemoryError("memory directory must not be a symlink")
+        raise GistMemoryError("memory directory must not be a symlink")
     files: dict[str, str] = {}
     for path in directory.iterdir():
         if path.is_symlink():
-            raise MemoryError(f"memory entry must not be a symlink: {path.name!r}")
+            raise GistMemoryError(f"memory entry must not be a symlink: {path.name!r}")
         if path.is_dir():
-            raise MemoryError(
+            raise GistMemoryError(
                 f"nested memory directories are not supported by Gists: {path.name!r}"
             )
         if not path.is_file() or not path.name.endswith(".md"):
             continue
         if not _is_memory_filename(path.name):
-            raise MemoryError(f"unsupported memory filename: {path.name!r}")
+            raise GistMemoryError(f"unsupported memory filename: {path.name!r}")
         content = path.read_text()
         if len(content.encode()) > MAX_FILE_BYTES:
-            raise MemoryError(f"memory file exceeds the 1 MB inline limit: {path.name}")
+            raise GistMemoryError(
+                f"memory file exceeds the 1 MB inline limit: {path.name}"
+            )
         files[path.name] = content
     if "MEMORY.md" not in files:
-        raise MemoryError("local memory has no MEMORY.md entrypoint")
+        raise GistMemoryError("local memory has no MEMORY.md entrypoint")
     return files
 
 
@@ -248,11 +252,11 @@ def save(
     directory: Path,
     baseline_key: str,
 ) -> int:
-    """Save local changes that do not conflict with the fetched remote state."""
+    """Save local changes only when the entire change set is conflict-free."""
     _validate_inputs(gist_id, repository, gist_owner, directory, baseline_key)
     _require_public_repository(repository)
     if directory.is_symlink():
-        raise MemoryError("memory directory must not be a symlink")
+        raise GistMemoryError("memory directory must not be a symlink")
     baseline = _read_baseline(repository, directory, baseline_key)
     local = _local_files(directory)
     remote = _gist_files(gist_id, repository, gist_owner)
@@ -272,13 +276,16 @@ def save(
             continue
         writes[name] = None if after is None else {"content": after}
 
-    if writes:
-        _api(f"/gists/{gist_id}", method="PATCH", payload={"files": writes})
     if conflicts:
         print(
-            "Gist memory: skipped concurrent changes to " + ", ".join(conflicts),
+            "Gist memory: skipped entire save because remote changes conflict in "
+            + ", ".join(conflicts),
             file=sys.stderr,
         )
+        print("Gist memory: saved 0 file(s)")
+        return 0
+    if writes:
+        _api(f"/gists/{gist_id}", method="PATCH", payload={"files": writes})
     print(f"Gist memory: saved {len(writes)} file(s)")
     return 0
 
@@ -304,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         values = {name: os.environ.get(name, "") for name in names}
         missing = [name for name, value in values.items() if not value]
         if missing:
-            raise MemoryError("missing required environment: " + ", ".join(missing))
+            raise GistMemoryError("missing required environment: " + ", ".join(missing))
         gist_id = values["TEND_MEMORY_GIST_ID"]
         repository = values["GITHUB_REPOSITORY"]
         gist_owner = values["TEND_AUTO_MEMORY_GIST_OWNER"]
@@ -313,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         if command == "restore":
             return restore(gist_id, repository, gist_owner, directory, baseline_key)
         return save(gist_id, repository, gist_owner, directory, baseline_key)
-    except (MemoryError, OSError, UnicodeError) as error:
+    except (GistMemoryError, OSError, UnicodeError) as error:
         print(f"Gist memory: {error}", file=sys.stderr)
         return 1
 

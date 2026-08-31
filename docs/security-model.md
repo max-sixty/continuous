@@ -431,7 +431,7 @@ Claude carry model-authored notes into unrelated later runs. Those notes are
 context, not policy, and may preserve stale facts or the effect of an earlier
 prompt injection. The adapter accepts only a bot-owned secret Gist bound to the
 exact repository, signs its per-run baseline, rejects symlinks and nested paths,
-and skips conflicts it observes before saving. A secret Gist is still readable
+and skips the entire save when it observes a conflict. A secret Gist is readable
 to anyone who learns its URL, so the Gist ID stays out of committed public files
 and the experiment is refused for private repositories. It is not hidden from
 the session: the agent's proxied bot access can list the account's Gists.

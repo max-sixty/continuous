@@ -1729,7 +1729,7 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     results.append(check_secrets(repo, required_secrets))
     if cfg.memory_gist:
         results.append(check_memory_gist_repository(repo))
-    enabled_harnesses = cfg.enabled_harnesses()
+    enabled_harnesses = cfg.enabled_harnesses() or {cfg.harness}
     if "claude" in enabled_harnesses:
         results.append(check_claude_auth(repo))
     if "codex" in enabled_harnesses:

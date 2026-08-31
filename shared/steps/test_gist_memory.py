@@ -108,13 +108,13 @@ def test_restore_refuses_memory_that_is_not_safe_to_recall(
     assert isinstance(files, dict)
     _serve(fake_gh, files, visibility=visibility, **overrides)
 
-    with pytest.raises(gist_memory.MemoryError):
+    with pytest.raises(gist_memory.GistMemoryError):
         gist_memory.restore(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
 
     assert not memory.exists()
 
 
-def test_save_preserves_remote_changes_from_an_overlapping_run(
+def test_save_skips_the_entire_change_set_when_one_file_conflicts(
     tmp_path: Path, fake_gh: FakeGh, capsys: pytest.CaptureFixture[str]
 ) -> None:
     memory = tmp_path / "memory"
@@ -137,6 +137,30 @@ def test_save_preserves_remote_changes_from_an_overlapping_run(
         "remote-only.md": "Another run added this.\n",
     }
     _serve(fake_gh, remote)
+    assert gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY) == 0
+
+    assert not fake_gh.called("api", f"/gists/{GIST_ID}", "-X", "PATCH")
+    captured = capsys.readouterr()
+    assert "skipped entire save" in captured.err
+    assert "debugging.md" in captured.err
+    assert "saved 0 file(s)" in captured.out
+
+
+def test_save_patches_one_consistent_change_set(
+    tmp_path: Path, fake_gh: FakeGh
+) -> None:
+    memory = tmp_path / "memory"
+    original = {
+        "MEMORY.md": "# Memory\n\nOld index.\n",
+        "obsolete.md": "Remove me.\n",
+    }
+    _serve(fake_gh, original)
+    gist_memory.restore(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
+
+    (memory / "MEMORY.md").write_text("# Memory\n\nNew index.\n")
+    (memory / "patterns.md").write_text("New topic.\n")
+    (memory / "obsolete.md").unlink()
+    _serve(fake_gh, original)
     fake_gh.respond("api", f"/gists/{GIST_ID}", "-X", "PATCH", with_="")
 
     assert gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY) == 0
@@ -146,12 +170,11 @@ def test_save_preserves_remote_changes_from_an_overlapping_run(
     )
     assert json.loads(fake_gh.stdins[patch_call] or "") == {
         "files": {
-            "MEMORY.md": {"content": "# Memory\n\nNew local index.\n"},
+            "MEMORY.md": {"content": "# Memory\n\nNew index.\n"},
             "obsolete.md": None,
-            "patterns.md": {"content": "New local topic.\n"},
+            "patterns.md": {"content": "New topic.\n"},
         }
     }
-    assert "skipped concurrent changes to debugging.md" in capsys.readouterr().err
 
 
 def test_save_refuses_a_baseline_modified_by_the_agent(
@@ -165,7 +188,7 @@ def test_save_refuses_a_baseline_modified_by_the_agent(
     baseline["files"]["MEMORY.md"] = "invented baseline"
     baseline_path.write_text(json.dumps(baseline))
 
-    with pytest.raises(gist_memory.MemoryError, match="modified"):
+    with pytest.raises(gist_memory.GistMemoryError, match="modified"):
         gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
 
 
@@ -179,7 +202,7 @@ def test_save_refuses_to_follow_a_memory_symlink(
     outside.write_text("must not leave this machine\n")
     (memory / "linked.md").symlink_to(outside)
 
-    with pytest.raises(gist_memory.MemoryError, match="symlink"):
+    with pytest.raises(gist_memory.GistMemoryError, match="symlink"):
         gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
 
 
@@ -193,7 +216,7 @@ def test_save_checks_the_directory_before_reading_its_baseline(
     memory.symlink_to(actual, target_is_directory=True)
 
     with pytest.raises(
-        gist_memory.MemoryError, match="directory must not be a symlink"
+        gist_memory.GistMemoryError, match="directory must not be a symlink"
     ):
         gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
 
@@ -210,7 +233,7 @@ def test_save_refuses_to_silently_drop_nested_memory(
     topic.mkdir()
     (topic / "testing.md").write_text("Nested topic.\n")
 
-    with pytest.raises(gist_memory.MemoryError, match="nested"):
+    with pytest.raises(gist_memory.GistMemoryError, match="nested"):
         gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
 
 
