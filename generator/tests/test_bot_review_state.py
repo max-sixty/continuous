@@ -409,17 +409,14 @@ def test_the_repo_is_named_explicitly_on_every_call(env: dict[str, str]) -> None
 
 
 def test_review_skill_preserves_the_status_free_queue_contract() -> None:
-    """The skill deduplicates outward reviews while the workflow keeps events."""
+    """Reading and posting use the same review-state definition."""
     skill = REVIEW_SKILL.read_text()
 
     assert "repos/$REPO/statuses/$HEAD_SHA" not in skill
     assert "tend-review/<number>" not in skill
     assert "--json headRefOid,state" in skill
     assert '[ "$PR_STATE" != "OPEN" ]' in skill
-    assert '[ "$CURRENT_HEAD" != "$HEAD_SHA" ]' in skill
-    assert "ALREADY_POSTED=" in skill
-    assert ".at_head.draft_mode" in skill
-    assert '--argjson force "${FORCE_FULL_REVIEW:-false}"' in skill
+    assert "scripts/review-preflight.sh <number>" in skill
     assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in skill
     assert (
         "If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial"
