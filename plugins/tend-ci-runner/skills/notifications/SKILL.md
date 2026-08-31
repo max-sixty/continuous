@@ -9,7 +9,7 @@ metadata:
 
 Unread notifications are the recovery queue. Event workflows are the fast path; after a successful run they mark the notification that triggered them read. This poll handles whatever remains and repairs conflicts on the configured bot's PRs.
 
-The workflow prompt supplies the **notification snapshot cutoff**. This run owns activity that became unread before that time; activity at or after it belongs to the next poll.
+The workflow prompt supplies the **notification snapshot cutoff**. This run owns whatever the snapshot returned; anything the snapshot did not return belongs to the next poll.
 
 ## 1. Snapshot the queue
 
@@ -24,7 +24,7 @@ jq '.[] | {id, reason, repo: .repository.full_name, updated_at,
   subject_url: .subject.url}' /tmp/tend-notifications.json
 ```
 
-A thread's `updated_at` can be later than the cutoff. `before` filters on when the thread became unread, while `updated_at` tracks the latest activity of any kind — including the bot's own, which bumps the thread without re-notifying. Those threads are the run's to handle; do not filter them back out.
+A thread's `updated_at` can be later than the cutoff. `before` is documented as filtering on `updated_at`, but threads bumped after they became unread — including by the bot's own activity, which bumps a thread without re-notifying — have been observed in snapshots taken minutes after the bump. Take the snapshot's membership as the run's scope rather than re-deriving it: whatever came back is this run's to handle, so do not filter it back out on `updated_at`.
 
 If the snapshot is empty and the prompt reports no possible conflicted PRs, exit.
 Otherwise continue; notification work still comes before conflict repair.
@@ -51,7 +51,7 @@ Process the snapshot oldest first. Read the live issue or PR and decide what it 
 - Otherwise use the normal live workflow: `/tend-ci-runner:triage` for an issue, `/tend-ci-runner:review` for an unreviewed PR head, or answer a comment or review thread that asks the bot for something.
 - A closed thread or a human conversation that needs nothing from the bot has the semantic outcome “no action”.
 - A non-conversational subject, such as a release or check suite, also has the outcome “no action”. Default-branch CI recovery belongs to the daily current-state scan.
-- A subject with no readable target — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR, whose `subject.url` 404s — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would pin the Step 4 cutoff permanently. A read that fails for any other reason — a 5xx, a rate limit — leaves the item unresolved.
+- A subject with no readable target — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR, whose `subject.url` 404s — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would hand it to every later poll to re-examine. A read that fails for any other reason — a 5xx, a rate limit — leaves the item unresolved.
 
 Judge deduplication from current state, including bot reviews and bot-authored PRs that cross-reference an issue. The notification timestamp alone does not prove whether a response covered the activity.
 
@@ -92,7 +92,7 @@ gh api "notifications/threads/$THREAD_ID" -X PATCH --silent
 
 Never acknowledge a thread before it has an outcome. A deferred or unresolved thread is left alone and the next poll picks it up.
 
-Never acknowledge repository-wide (`PUT /repos/{owner}/{repo}/notifications`). Its `last_read_at` bounds on when each thread became unread, which is not the `updated_at` the snapshot shows, so no cutoff computed from a deferred thread's `updated_at` can spare it — and REST has no "mark unread" to walk the overshoot back.
+Never acknowledge repository-wide (`PUT /repos/{owner}/{repo}/notifications`). It marks threads by timestamp rather than by outcome, so it acts on threads this run never examined — and REST has no "mark unread" to walk an overshoot back.
 
 ## 5. Resolve possible conflicts
 

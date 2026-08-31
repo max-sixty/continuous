@@ -27,12 +27,11 @@ def test_notification_skill_uses_one_paginated_cutoff_snapshot() -> None:
 def test_notification_skill_acknowledges_only_the_threads_it_resolved() -> None:
     """The acknowledgement is per thread, never repository-wide.
 
-    `PUT /repos/{owner}/{repo}/notifications` bounds itself on GitHub's own
-    notification timestamp, not the `updated_at` the list endpoint returns.
-    The bot's own activity bumps `updated_at` without re-notifying, so a
-    deferred thread whose in-flight workflow has since posted looks newer than
-    any cutoff derived from it and is marked read anyway. REST has no
-    "mark unread", so that overshoot is unrecoverable.
+    `PUT /repos/{owner}/{repo}/notifications` marks by timestamp rather than by
+    outcome, so it acts on threads the run never examined — including a thread
+    deferred because its dedicated workflow is still in flight. REST has no
+    "mark unread", so that overshoot is unrecoverable. Acknowledging exactly the
+    threads that reached an outcome needs no timestamp reasoning at all.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md")
 
