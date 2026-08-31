@@ -209,8 +209,9 @@ REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
 # missing file substitutes the empty string and the POST still runs, which is
 # the unpinned review this pins against.
 REVIEWED=$(cat /tmp/reviewed-head) || exit 0
-gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
-  -f event=APPROVE -f commit_id="$REVIEWED" -f body="" && echo "✓ approved"
+${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
+  gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
+    -f event=APPROVE -f commit_id="$REVIEWED" -f body=""
 ```
 
 `/tmp/reviewed-head` holds the commit this session reviewed — written in step 1, rewritten by **Posting mechanics** if HEAD moved. Every path that posts a review reads it back; see **Pin every review to the commit you read**.
@@ -240,15 +241,21 @@ gh api "repos/$REPO/issues/<number>/reactions" -f content="+1"
 
 #### Posting mechanics
 
-Before posting, run the preflight. It checks the PR is open, re-targets onto a newer descendant head, and stops duplicate reviews:
+Before composing the final payload, run the preflight without a command. It checks the PR is open, re-targets onto a newer descendant head, and stops duplicate reviews:
 
 ```bash
 ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number>
 ```
 
-On `skip`, post nothing and finish. On `post`, anchor the review at `/tmp/reviewed-head`; the preflight updates the file when HEAD moves. A re-targeted post also prints `delta: <path>`. Read that entire file in chunks as needed before posting; it is the push that landed mid-review.
+On `skip`, post nothing and finish. A re-targeted result also prints `delta: <path>` and updates `/tmp/reviewed-head`. Read that entire file in chunks, update the review, then run the preflight again. Do not post from the re-targeting pass.
 
-A non-zero exit means nothing was decided. Fix the error and re-run the preflight.
+A non-zero exit from this commandless check means nothing was decided. Fix the
+error and re-run it. In command mode below, `post:` means the outward command
+was attempted; handle that command's failure directly. For a review POST that
+returns 422, use the orphan-aware recovery procedure below instead of blindly
+rerunning the preflight.
+
+Every review POST below passes its `gh api` command to the preflight after `--`. In that mode the preflight does not re-target: it runs the command only when two live snapshots and `bot-review-state.sh` agree that the pinned head is open and unreviewed. This keeps the final check beside the outward action.
 
 **A push mid-review re-targets the review.** Everything read so far still holds for the code it was read against, and the delta is the only new information — however many pushes it spans. Read it, then post against the new head:
 
@@ -259,7 +266,7 @@ A non-zero exit means nothing was decided. Fix the error and re-run the prefligh
 - Inline comments resolve against the commit the review pins, so re-verify each one against the current `gh pr diff`, which now returns the new head's. On a file the delta didn't touch, the line is unchanged and the comment stands. On one it did, move the comment to the line the code sits on now; where the line no longer falls inside a hunk, put the finding in the review body as a fenced quote with its path, as under **Recovering from inline comment 422 errors**.
 - **Read both halves of the delta file as a pair.** It contains two logs in sequence: the scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click. When a `base merge:` line appears, re-verify every inline comment against the new `gh pr diff` even if the scoped log printed nothing — the merge re-scopes hunks in files the scoped delta cannot show, so the "file the delta didn't touch" shortcut above does not hold.
 - **Also read `git show --cc <merge sha>` on a base merge**, for what the merge itself changed. Where it conflicted, the author's resolution is committed *inside* the merge, and both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. A finding the resolution already fixed must drop out. `--cc` prints only hunks differing from every parent, so a resolution that took the base side prints nothing at all — it tells you what a merge changed, never that a merge changed nothing, which is why re-verification above is unconditional.
-- Re-compose every `suggestion` block on a file the delta touched, reading the new content with `git show "$(cat /tmp/reviewed-head)":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged reverts the author's newest edit on one click, and a multi-line one deletes every in-range line it doesn't reproduce.
+- Re-compose every `suggestion` block after re-targeting, reading the new content with `git show "$(cat /tmp/reviewed-head)":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged can revert the author's newest edit or base-merged content.
 
 **Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what `bot-review-state.sh` reports as `LAST_REVIEW_SHA`: pinned to the head you re-targeted onto, the queued run's step 1 finds that head already reviewed and finishes without posting a second review of the same code.
 
@@ -340,9 +347,10 @@ REVIEWED=$(cat /tmp/reviewed-head) || exit 0
 jq --arg body "$BODY" --arg sha "$REVIEWED" \
   '.body = $body | .commit_id = $sha' /tmp/review-payload.json > /tmp/review-final.json
 
-gh api "repos/$REPO/pulls/<number>/reviews" \
-  --method POST \
-  --input /tmp/review-final.json
+${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
+  gh api "repos/$REPO/pulls/<number>/reviews" \
+    --method POST \
+    --input /tmp/review-final.json
 `````
 
 **Do not** use `-f 'comments[0][path]=...'` flag syntax — `gh api` converts array indices to object keys, which GitHub rejects.
@@ -381,12 +389,20 @@ Then, in either case, **move the failed inline comments into the review body** a
 
 - **If `ORPHAN_ID` is non-empty (case a)**: edit the existing review instead of creating a duplicate.
   ```bash
-  gh api "repos/$REPO/pulls/<number>/reviews/$ORPHAN_ID" \
-    -X PUT -F body=@/tmp/updated-review-body.md
+  ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> \
+    --edit-review "$ORPHAN_ID" -- \
+    gh api "repos/$REPO/pulls/<number>/reviews/$ORPHAN_ID" \
+      -X PUT -F body=@/tmp/updated-review-body.md
   ```
   If the edit itself fails, **do not post another review** — the body-only review is sufficient.
 
 - **If `ORPHAN_ID` is empty (case b)**: retry the `POST` with `comments` omitted (body-only), since no duplicate is possible.
+  ```bash
+  jq 'del(.comments)' /tmp/review-final.json > /tmp/review-body-only.json
+  ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
+    gh api "repos/$REPO/pulls/<number>/reviews" \
+      --method POST --input /tmp/review-body-only.json
+  ```
 
 Prevention: before writing any inline comment, verify the target line falls inside one of the PR's diff hunks. For fixes outside the diff, use the "push a fix commit" path instead of an inline suggestion (see above).
 

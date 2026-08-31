@@ -4,7 +4,10 @@ A rule split across two files drifts silently: nothing runs both halves
 together, so each reads correct on its own while the pair stops agreeing.
 """
 
+import json
 from pathlib import Path
+
+from tests import _yaml as yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -117,6 +120,8 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert skill.count("REVIEWED=$(cat /tmp/reviewed-head) || exit 0") == 2
     assert '-f commit_id="$REVIEWED"' in skill
     assert '--arg sha "$REVIEWED"' in skill
+    assert skill.count("review-preflight.sh <number> --") == 3
+    assert '--edit-review "$ORPHAN_ID" --' in skill
 
     # Both logs reach the session in one stream, so the skill names both halves.
     assert "**Read both halves of the delta file as a pair.**" in skill
@@ -127,6 +132,7 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     # nothing anywhere, so the override below has to be unconditional.
     assert "git show --cc" in skill
     assert "even if the scoped log printed nothing" in skill
+    assert "Re-compose every `suggestion` block after re-targeting" in skill
 
 
 def test_weekly_approval_pins_the_commit_it_checked() -> None:
@@ -185,3 +191,12 @@ def test_review_approval_gates_on_author_stated_readiness() -> None:
     # A blocker can also arrive mid-session, after the review began, so the
     # pre-APPROVE peek re-checks it alongside the red-check gate.
     assert "Re-check the author-readiness gate" in skill
+
+
+def test_review_reviewers_matrix_covers_consumers() -> None:
+    workflow = yaml.safe_load(_read(".github", "workflows", "review-reviewers.yaml"))
+    matrix = workflow["jobs"]["review-reviewers"]["strategy"]["matrix"]["repo"]
+    consumers = [entry["repo"] for entry in json.loads(_read("data", "consumers.json"))]
+
+    missing = sorted(set(consumers) - set(matrix))
+    assert not missing, f"add consumers to review-reviewers.yaml matrix: {missing}"

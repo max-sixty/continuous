@@ -4,8 +4,8 @@
 #
 # Usage: bot-review-state.sh <pr-number>
 #
-# Two GitHub behaviours make `.commit_id` alone unreadable, and every caller
-# that reads a review anchor has to account for both:
+# Three GitHub behaviours make `.commit_id` alone unreadable, and every caller
+# that reads a review anchor has to account for all of them:
 #
 #   Reply containers. Replying to a review thread (POST
 #   /pulls/{n}/comments/{id}/replies) makes GitHub wrap the reply in a synthetic
@@ -21,6 +21,9 @@
 #   that no longer exists reports the current head, and `.commit_id` alone
 #   cannot tell an ordinary push from a rewrite. Anything submitted before the
 #   newest `head_ref_force_pushed` is discounted.
+#
+#   Unsubmitted reviews. GitHub returns the caller's PENDING reviews with a null
+#   `submitted_at`. They anchor nothing, so the resolver drops them up front.
 #
 # Output (one object, all fields always present; absent values are null or ""):
 #   head_sha            the PR's current head
@@ -76,7 +79,7 @@ gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
   | jq -s --argjson sub "$SUBSTANTIVE" --arg bot "$BOT" --arg head "$HEAD_SHA" \
       --arg fp "$LAST_FORCE_PUSH_AT" '
     add
-    | [.[] | select(.user.login == $bot)] as $mine
+    | [.[] | select(.user.login == $bot and .submitted_at != null)] as $mine
     | ($mine | map(select((.body | length) > 0 or (.id | IN($sub[])) or .state == "APPROVED"))) as $subs
     | ($subs | last) as $lastsub
     | ($mine | map(select(.state == "APPROVED")) | last) as $lastapp
