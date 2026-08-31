@@ -22,6 +22,30 @@ from ruamel.yaml import YAML
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_generated_workflow_snapshot_hook_covers_every_snapshot() -> None:
+    config = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / ".pre-commit-config.yaml").read_text()
+    )
+    hooks = [
+        hook
+        for repo in config["repos"]
+        for hook in repo["hooks"]
+        if hook.get("name") == "Lint generated workflow snapshots"
+    ]
+    assert len(hooks) == 1, f"expected one snapshot actionlint hook, got: {hooks}"
+
+    snapshots = sorted((REPO_ROOT / "generator/tests/_regtest_outputs").glob("*.out"))
+    assert snapshots, "no generated workflow snapshots found"
+
+    pattern = re.compile(hooks[0]["files"])
+    unmatched = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in snapshots
+        if not pattern.search(path.relative_to(REPO_ROOT).as_posix())
+    ]
+    assert not unmatched, f"snapshot actionlint hook skips: {unmatched}"
+
+
 def test_claude_transcript_summary_is_opt_in() -> None:
     action = YAML(typ="safe", pure=True).load(
         (REPO_ROOT / "claude" / "action.yaml").read_text()
