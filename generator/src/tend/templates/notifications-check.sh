@@ -6,9 +6,9 @@
 # env: GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_TOKEN
 
 # Activity newer than this belongs to an event workflow that may still be
-# running. The same cutoff is passed to the agent and, once every older item has
-# a semantic outcome, to GitHub's repository-level mark-read endpoint. Newer
-# activity therefore cannot be acknowledged by this run.
+# running. The cutoff is passed to the agent, which acknowledges each thread it
+# resolves individually. Newer activity never enters the snapshot, so this run
+# cannot acknowledge it.
 CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
 echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
 

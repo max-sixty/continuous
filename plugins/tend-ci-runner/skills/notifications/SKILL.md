@@ -9,7 +9,7 @@ metadata:
 
 Unread notifications are the recovery queue. Event workflows are the fast path; after a successful run they mark the notification that triggered them read. This poll handles whatever remains and repairs conflicts on the configured bot's PRs.
 
-The workflow prompt supplies the **notification snapshot cutoff**. This run owns unread activity before that time; activity at or after it stays unread.
+The workflow prompt supplies the **notification snapshot cutoff**. This run owns activity that became unread before that time; activity at or after it belongs to the next poll.
 
 ## 1. Snapshot the queue
 
@@ -23,6 +23,8 @@ jq '.[] | {id, reason, repo: .repository.full_name, updated_at,
   subject_type: .subject.type, subject_title: .subject.title,
   subject_url: .subject.url}' /tmp/tend-notifications.json
 ```
+
+A thread's `updated_at` can be later than the cutoff. `before` filters on when the thread became unread, while `updated_at` tracks the latest activity of any kind — including the bot's own, which bumps the thread without re-notifying. Those threads are the run's to handle; do not filter them back out.
 
 If the snapshot is empty and the prompt reports no possible conflicted PRs, exit.
 Otherwise continue; notification work still comes before conflict repair.
@@ -44,7 +46,7 @@ For each notification, identify the activity that made the thread unread and app
 
 Process the snapshot oldest first. Read the live issue or PR and decide what it needs now:
 
-- If a dedicated tend workflow is still running for the subject, defer it. Its `updated_at` limits the repository acknowledgement in Step 4.
+- If a dedicated tend workflow is still running for the subject, defer it. Step 4 leaves it unread for the next poll.
 - If the bot already handled the latest activity, record it as handled without posting again.
 - Otherwise use the normal live workflow: `/tend-ci-runner:triage` for an issue, `/tend-ci-runner:review` for an unreviewed PR head, or answer a comment or review thread that asks the bot for something.
 - A closed thread or a human conversation that needs nothing from the bot has the semantic outcome “no action”.
@@ -80,29 +82,17 @@ gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/timeline?per_page=100" \
           and .created_at > $cutoff)] | length'
 ```
 
-After a cross-repository notification has an outcome, acknowledge that thread individually:
+## 4. Acknowledge each resolved thread
+
+Acknowledge a thread as soon as it has an outcome, one call per thread, same repository or not:
 
 ```bash
-gh api "notifications/threads/<thread-id>" -X PATCH
+gh api "notifications/threads/$THREAD_ID" -X PATCH --silent
 ```
 
-## 4. Acknowledge the cutoff
+Never acknowledge a thread before it has an outcome. A deferred or unresolved thread is left alone and the next poll picks it up.
 
-Set the acknowledgement cutoff from the oldest unresolved same-repository item. If every same-repository item has an outcome, use the snapshot cutoff. Otherwise set it to one second before the unresolved item's `updated_at`:
-
-```bash
-# $UNRESOLVED_AT is the first unresolved same-repository item's `updated_at`,
-# empty when every same-repository item has an outcome.
-if [ -n "$UNRESOLVED_AT" ]; then
-  ACK_CUTOFF=$(date -u -d "$UNRESOLVED_AT -1 second" +%Y-%m-%dT%H:%M:%SZ)
-else
-  ACK_CUTOFF=$CUTOFF
-fi
-gh api "repos/$GITHUB_REPOSITORY/notifications" -X PUT \
-  -f last_read_at="$ACK_CUTOFF" --silent
-```
-
-Skip the call when the unresolved item is the first same-repository item in the snapshot, or when the snapshot contains no same-repository items. The next poll starts with the unresolved item instead of repeating completed work. Never acknowledge a same-repository thread individually.
+Never acknowledge repository-wide (`PUT /repos/{owner}/{repo}/notifications`). Its `last_read_at` bounds on when each thread became unread, which is not the `updated_at` the snapshot shows, so no cutoff computed from a deferred thread's `updated_at` can spare it — and REST has no "mark unread" to walk the overshoot back.
 
 ## 5. Resolve possible conflicts
 
@@ -111,5 +101,5 @@ If the prompt reports possible conflicted PRs, load
 only. The count is a boot signal; the conflict skill re-reads and test-merges the
 current PR heads before changing a branch.
 
-Report the notifications handled, responses posted, items deferred, repository
-cutoff, and conflict outcomes.
+Report the notifications handled, responses posted, items deferred, threads
+acknowledged, and conflict outcomes.
