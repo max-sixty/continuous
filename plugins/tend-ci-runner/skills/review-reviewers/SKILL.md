@@ -203,7 +203,7 @@ If the file doesn't exist, try common alternatives (`.claude/skills/running-tend
 Then list recently completed tend CI runs on the target repo:
 
 ```bash
-TARGET_REPO=$ARGUMENTS "${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+TARGET_REPO=$ARGUMENTS uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/list_recent_runs.py"
 ```
 

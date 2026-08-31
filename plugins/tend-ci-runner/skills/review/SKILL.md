@@ -44,7 +44,7 @@ fi
 # Which of the bot's reviews actually anchors this head — reply containers and
 # force-push re-anchoring both discounted. GitHub can re-point an old review's
 # `.commit_id` at the new head after a force push, so the timeline also matters.
-STATE=$("${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+STATE=$(uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" <number>)
 LAST_REVIEW_SHA=$(jq -r '.last_substantive.sha // empty' <<<"$STATE")
 FORCE_PUSHED=$(jq -r '.force_pushed_since' <<<"$STATE")
@@ -383,7 +383,7 @@ GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when
 # rewrite is excluded too — it reports `.commit_id == $HEAD_SHA`, so without
 # that filter the PUT destroys a published review, leaving this run's findings
 # over the old review's inline comments on code that no longer exists.
-ORPHAN_ID=$("${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+ORPHAN_ID=$(uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" <number> \
   | jq -r '.orphan_id // empty')
 ```

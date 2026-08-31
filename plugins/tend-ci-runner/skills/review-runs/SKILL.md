@@ -257,7 +257,7 @@ Run the token report script to get per-run token counts:
 # unset `$SINCE` makes `date -d ""` today's midnight, not an error.
 SINCE=$(cat /tmp/review-runs-since)
 HOURS=$(( ( $(date -u +%s) - $(date -u -d "$SINCE" +%s) + 3599 ) / 3600 ))
-"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/token_report.py" "$HOURS" \
   > /tmp/token-report.json
 ```
@@ -286,7 +286,7 @@ mention, notifications, weekly, and review-reviewers runs get the same treatment
 Dispositions — merged, closed, relabeled, reverted — are only half the signal. A maintainer replying in-thread that a bot claim was wrong, or requesting changes on a bot PR, leaves labels and state untouched and is equally a correction; where the bot authors most of the PRs, a review body is the *first* place a maintainer writes. The script collects all three — dispositions, thread comments, review bodies — for the window:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/tend-uv.sh" run --script \
+uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/review_runs_corrections.py" \
   "$(cat /tmp/review-runs-since)"
 ```

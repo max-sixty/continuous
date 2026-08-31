@@ -34,10 +34,10 @@ def test_claude_transcript_summary_is_opt_in() -> None:
 def test_uv_build_range_admits_the_pinned_uv() -> None:
     # uv only *warns* when `build-system.requires` doesn't contain the uv
     # running the build, so a stale range survives every release and every
-    # `uv sync` without failing anything. `uv_version` in claude/action.yaml is
-    # the repo's statement of which uv is current — the weekly sweep moves it to
-    # the latest release — so tying the range to it makes that sweep carry the
-    # backend along instead of leaving it for someone to notice in the noise.
+    # `uv sync` without failing anything. The harness `uv_version` inputs are
+    # the repo's statement of which uv is current — the weekly sweep moves them
+    # to the latest release — so tying the range to them makes that sweep carry
+    # the backend along instead of leaving it for someone to notice in the noise.
     # Both operands are in-repo, so this can only go red on a bump, never on
     # the day astral publishes something.
     requires = tomllib.loads((REPO_ROOT / "generator" / "pyproject.toml").read_text())[
@@ -50,10 +50,14 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
     ]
     assert len(backends) == 1, f"expected one uv_build requirement, got: {requires}"
 
-    action = YAML(typ="safe", pure=True).load(
-        (REPO_ROOT / "claude" / "action.yaml").read_text()
-    )
-    uv_version = action["inputs"]["uv_version"]["default"]
+    uv_versions = [
+        YAML(typ="safe", pure=True).load(
+            (REPO_ROOT / harness / "action.yaml").read_text()
+        )["inputs"]["uv_version"]["default"]
+        for harness in ("claude", "codex")
+    ]
+    assert uv_versions[0] == uv_versions[1], f"harness uv pins differ: {uv_versions}"
+    uv_version = uv_versions[0]
 
     assert Version(uv_version) in backends[0].specifier, (
         f"build-system.requires pins `{backends[0]}`, which does not contain the "
@@ -62,19 +66,12 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
     )
 
 
-def test_every_tend_owned_uv_runtime_uses_the_action_pin() -> None:
+def test_generated_workflow_uv_uses_the_action_pin() -> None:
     action = YAML(typ="safe", pure=True).load(
         (REPO_ROOT / "claude" / "action.yaml").read_text()
     )
-    action_version = action["inputs"]["uv_version"]["default"]
-    launcher = (
-        REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "tend-uv.sh"
-    ).read_text()
-    match = re.search(r'^UV_VERSION="([^"]+)"$', launcher, re.MULTILINE)
 
-    assert match, "tend-uv.sh must declare the private uv version"
-    assert UV_VERSION == action_version == match.group(1)
-    assert 'UV_DIR="$HOME/.tend-uv/$UV_VERSION"' in launcher
+    assert UV_VERSION == action["inputs"]["uv_version"]["default"]
 
 
 def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration() -> None:

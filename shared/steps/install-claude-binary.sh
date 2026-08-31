@@ -5,13 +5,6 @@
 # moving breaks it. The installer fetches over the direct network (no proxy env
 # here). Used by the Claude harness action.
 #
-# Only claude: nothing here provisions a language toolchain. A uv installed at
-# $AGENT_HOME/.local/bin would sit ahead of the adopter's own on the sandbox
-# PATH, overriding the version their uv.toml pins. Skills that need uv go
-# through plugins/tend-ci-runner/scripts/tend-uv.sh, which keeps
-# its uv off PATH; the proxy has a separate pinned one
-# (shared/steps/install-proxy-uv.sh).
-#
 # Inputs (env): CLAUDE_VERSION (claude binary version), SANDBOX and AGENT_HOME
 # (exported by setup_sandbox.py via $GITHUB_ENV).
 set -eo pipefail

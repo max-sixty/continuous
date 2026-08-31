@@ -121,7 +121,7 @@ if [ -r "${GITHUB_EVENT_PATH:-}" ] \
   FORCE=true
 fi
 
-REVIEW_STATE=$(GITHUB_REPOSITORY="$REPO" "$HERE/tend-uv.sh" run --script \
+REVIEW_STATE=$(GITHUB_REPOSITORY="$REPO" uv run --script \
   "$HERE/bot_review_state.py" "$PR")
 STATE_HEAD=$(jq -r '.head_sha // empty' <<<"$REVIEW_STATE")
 if [ "$STATE_HEAD" != "$REVIEWED" ]; then

@@ -60,6 +60,11 @@ inputs:
       `rust-v0.131.0-alpha.17`). That was `alpha`-only when the pin was
       first set; stable carries it now, so this tracks `latest`. CI's
       `test-codex-surface` job confirms whichever version is pinned.
+  uv_version:
+    default: "0.12.7"
+    description: >-
+      Pinned fallback `uv` version. The agent PATH appends it after any
+      adopter-provided version.
   allowed_bots:
     default: "*"
     description: Bots allowed to trigger workflows (engagement gate, not used yet)
@@ -113,6 +118,13 @@ runs:
           echo "::error::OPENAI_API_KEY is unset. Set the OPENAI_API_KEY repo secret."
           exit 1
         fi
+
+    - name: Install agent uv fallback
+      shell: bash
+      run: bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
+      env:
+        UV_VERSION: ${{ inputs.uv_version }}
+        UV_INSTALL_DIR: ${{ runner.temp }}/tend-agent-uv
 
     # Install the Codex CLI from npm. `@openai/codex` ships a prebuilt
     # per-platform binary, so this is ~3 s with no Rust toolchain. We pin
@@ -213,7 +225,7 @@ runs:
           ARGS+=(--config "model_reasoning_effort=\"$EFFORT\"")
         fi
         set +e
-        codex exec "${ARGS[@]}" "$PROMPT"
+        PATH="$PATH:$RUNNER_TEMP/tend-agent-uv" codex exec "${ARGS[@]}" "$PROMPT"
         EXIT=$?
         set -e
 

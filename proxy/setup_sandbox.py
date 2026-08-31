@@ -31,6 +31,7 @@ PROXY_PORT = 8899
 PROXY_URL = f"http://127.0.0.1:{PROXY_PORT}"
 PROXY_CA_CERT = Path("/usr/local/share/ca-certificates/tend-proxy.crt")
 TEND_RUN_DIR = AGENT_HOME / "run"
+TEND_AGENT_UV_DIR = AGENT_HOME / ".tend-uv/bin"
 ALLOW_HOSTS = (
     r"^((api\.|codeload\.|uploads\.)?github\.com|raw\.githubusercontent\.com|"
     r"api\.anthropic\.com)(:[0-9]+)?$"
@@ -231,6 +232,8 @@ def plan_agent_path(
                 for candidate in canonical.iterdir():
                     if not candidate.is_file() or not os.access(candidate, os.X_OK):
                         continue
+                    if candidate.name in {"uv", "uvx"}:
+                        continue
                     selected = shutil.which(candidate.name, path=runner_tool_path)
                     if selected and resolved(Path(selected).parent) == canonical:
                         append_unique(blocked, candidate.name)
@@ -244,6 +247,7 @@ def plan_agent_path(
     blocked_path = AGENT_HOME / ".tend-blocked/bin" if blocked else None
     if blocked_path:
         agent_path.insert(prefix_count, str(blocked_path))
+    append_unique(agent_path, str(TEND_AGENT_UV_DIR))
     return PathPlan(agent_path, dropped, blocked, blocked_path)
 
 
@@ -323,6 +327,7 @@ def write_agent_environment(
     exports = {
         "SANDBOX": SANDBOX,
         "AGENT_HOME": str(AGENT_HOME),
+        "TEND_AGENT_UV_DIR": str(TEND_AGENT_UV_DIR),
         "PROXY_URL": PROXY_URL,
         "TEND_RUN_DIR": str(TEND_RUN_DIR),
         "PROXY_CA_CERT": str(PROXY_CA_CERT),

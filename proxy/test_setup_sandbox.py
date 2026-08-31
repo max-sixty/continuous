@@ -60,6 +60,29 @@ def test_workspace_path_keeps_precedence_over_runner_home_rewrite(
     assert plan.dropped_home_paths == []
 
 
+def test_agent_uv_fallback_trails_adopter_paths_and_needs_no_blocker(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    runner_bin = paths.runner_home / "bin"
+    runner_bin.mkdir()
+    for name in ("uv", "uvx", "tend-probe"):
+        executable = runner_bin / name
+        executable.touch(mode=0o755)
+    adopter_bin = tmp_path / "adopter-bin"
+
+    plan = setup_sandbox.plan_agent_path(
+        runner_tool_path=str(runner_bin),
+        extras=[str(adopter_bin)],
+        paths=paths,
+        can_execute=lambda _: False,
+    )
+
+    assert plan.agent_path[0] == str(adopter_bin)
+    assert plan.agent_path[-1] == str(setup_sandbox.TEND_AGENT_UV_DIR)
+    assert plan.blocked_commands == ["tend-probe"]
+
+
 @pytest.mark.parametrize(
     ("raw", "message"),
     [

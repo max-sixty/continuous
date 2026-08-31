@@ -27,8 +27,6 @@ PIN_INSTRUCTION_FILES = REPO_ROOT / "shared" / "steps" / "pin-instruction-files.
 RESTORE_SENSITIVE_CONFIG = (
     REPO_ROOT / "shared" / "steps" / "restore-sensitive-config.sh"
 )
-
-
 # Fork-PR instruction pinning. One tampered checkout exercises every shape a
 # fork can give an instruction path — a rewrite, a move, a directory's name
 # pointed outside the checkout (so a write or delete through it would land

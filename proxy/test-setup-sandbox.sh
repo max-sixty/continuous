@@ -21,7 +21,8 @@ plant() {
   workspace_path="$GITHUB_WORKSPACE/.tend-path/bin"
   mkdir -p "$bin" "$seeded" "$workspace_explicit" "$workspace_path"
   printf '#!/bin/sh\necho probe\n' >"$bin/tend-probe"
-  chmod +x "$bin/tend-probe"
+  printf '#!/bin/sh\necho runner-home-uv\n' >"$bin/uv"
+  chmod +x "$bin/tend-probe" "$bin/uv"
   # useradd copies /etc/skel into an independent sandbox home. A corresponding
   # runner-home PATH entry should resolve to that sandbox-owned copy.
   printf '#!/bin/sh\necho runner-seed\n' >"$seeded/tend-seeded"
@@ -43,7 +44,8 @@ plant() {
   sudo chmod +x /usr/local/bin/tend-probe
   sudo install -d -m 755 "$shared"
   printf '#!/bin/sh\necho shared\n' | sudo tee "$shared/tend-shared" >/dev/null
-  sudo chmod +x "$shared/tend-shared"
+  printf '#!/bin/sh\necho adopter-uv\n' | sudo tee "$shared/uv" >/dev/null
+  sudo chmod +x "$shared/tend-shared" "$shared/uv"
   # setup_sandbox.py must capture this PATH entry as tool data without resolving
   # its privileged utilities through an adopter-controlled directory.
   printf '#!/bin/sh\nexit 99\n' >"$bin/sudo"
@@ -72,7 +74,7 @@ setup() {
   MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
   export MITMPROXY_VERSION
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml) \
-    bash shared/steps/install-proxy-uv.sh
+    UV_INSTALL_DIR="$TEND_UV_DIR" bash shared/steps/install-uv.sh
   # The setup step receives both real credentials. Repository-controlled
   # Python and uv environment variables must not execute code before the
   # runner-owned script has established the sandbox boundary.
@@ -128,6 +130,15 @@ setup() {
   rm "$HOME/.cargo-install/tend-probe/bin/sudo"
 }
 
+install_agent_uv() {
+  local action_run
+  UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml)
+  export UV_VERSION
+  action_run=$(yq -er '.runs.steps[] | select(.name == "Install agent uv fallback (sandbox)") | .run' claude/action.yaml)
+  action_run=${action_run//'${{ github.action_path }}'/"$GITHUB_WORKSPACE/claude"}
+  /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run"
+}
+
 verify() {
   local blocked_output rc report setup_commands dummy_token
   local -a agent_env
@@ -143,6 +154,9 @@ verify() {
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-seeded)" = sandbox-seed
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-workspace-explicit)" = workspace-explicit
   test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" tend-workspace-path)" = workspace-path
+  sudo -u "$SANDBOX" test -x "$TEND_AGENT_UV_DIR/uv"
+  grep -q "^PATH=.*:${TEND_AGENT_UV_DIR}$" "$AGENT_ENV_FILE"
+  test "$(sudo -u "$SANDBOX" env "${agent_env[@]}" uv --version)" = adopter-uv
 
   # The dropped runner-home command is reported; shared, workspace, and
   # independently seeded sandbox-home commands are reachable and stay absent.
@@ -349,7 +363,7 @@ cleanup() {
     /usr/bin/sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
   fi
   /usr/bin/sudo rm -f "$GITHUB_WORKSPACE/.claude/settings.local.json"
-  /usr/bin/sudo rm -f /usr/local/bin/tend-probe "$shared/tend-shared"
+  /usr/bin/sudo rm -f /usr/local/bin/tend-probe "$shared/tend-shared" "$shared/uv"
   /usr/bin/sudo rmdir "$shared" "${shared%/bin}" 2>/dev/null || true
   /usr/bin/sudo rm -f /etc/skel/.tend-seeded/bin/tend-seeded
   /usr/bin/sudo rmdir /etc/skel/.tend-seeded/bin \
@@ -359,12 +373,13 @@ cleanup() {
 case "${1:-}" in
   plant) plant ;;
   setup) setup ;;
+  install-agent-uv) install_agent_uv ;;
   verify) verify ;;
   verify-refusals) verify_refusals ;;
   verify-launch) verify_launch ;;
   cleanup) cleanup ;;
   *)
-    echo "usage: $0 {plant|setup|verify|verify-refusals|verify-launch|cleanup}" >&2
+    echo "usage: $0 {plant|setup|install-agent-uv|verify|verify-refusals|verify-launch|cleanup}" >&2
     exit 2
     ;;
 esac

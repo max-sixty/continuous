@@ -25,5 +25,6 @@ you when to read them; read those in full too.
 
 - `gh` is authenticated as the bot via `$GH_TOKEN`. Use it to post
   comments, open PRs, push commits.
+- `uv` is on PATH for Python environments and one-shot tools.
 - The bot's user ID is available via `gh api users/${BOT_NAME} --jq .id`
   if you need it for `author.id` comparisons.

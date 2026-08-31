@@ -42,7 +42,7 @@ jobs:
       # is a throwaway: setup_sandbox.py owns the real regex, which must track
       # the allowlists in inject_credentials.py.
       #
-      # It installs uv by running install-proxy-uv.sh rather than repeating it,
+      # It installs uv by running install-uv.sh rather than repeating it,
       # which also gives that script its only CI coverage, then warms the uvx
       # cache as setup_sandbox.py does. An empty replay lets mitmdump reach its
       # running lifecycle hook, then its own KeepServing addon shuts it down.
@@ -52,8 +52,8 @@ jobs:
         run: |
           uv_v=$(yq -e '.inputs.uv_version.default' ../claude/action.yaml)
           mitm_v=$(yq -e '.inputs.mitmproxy_version.default' ../claude/action.yaml)
-          UV_VERSION="$uv_v" TEND_UV_DIR="$RUNNER_TEMP/tend-uv" \
-            bash ../shared/steps/install-proxy-uv.sh
+          UV_VERSION="$uv_v" UV_INSTALL_DIR="$RUNNER_TEMP/tend-uv" \
+            bash ../shared/steps/install-uv.sh
           confdir=$RUNNER_TEMP/tend-mitm-conf
           log=$RUNNER_TEMP/tend-mitm.log
           flows=$RUNNER_TEMP/tend-empty.flows
@@ -81,8 +81,9 @@ jobs:
   # mitmdump still on 8899 — so a step added after these needs to expect that;
   # only the workspace ownership is restored. This job runs both for
   # real, against the new boundary: shared paths cross, runner-home paths do
-  # not, same-name system fallbacks are blocked, and sandbox_setup can install
-  # a required home-scoped tool explicitly. It then runs the agent launch
+  # not, same-name system fallbacks are blocked, Tend preserves a shared uv,
+  # and sandbox_setup can install a required home-scoped tool explicitly. It
+  # then runs the agent launch
   # itself against a stub `claude`, which is the only place shared/steps/
   # run_claude.py crosses the uid boundary at all — the unit tests replace
   # subprocess.run, and an adopter first runs the launch after a release.
@@ -94,6 +95,8 @@ jobs:
         run: bash proxy/test-setup-sandbox.sh plant
       - name: Set up the sandbox
         run: bash proxy/test-setup-sandbox.sh setup
+      - name: Install agent uv fallback
+        run: bash proxy/test-setup-sandbox.sh install-agent-uv
       - name: Verify the boundary and sandbox_setup
         run: bash proxy/test-setup-sandbox.sh verify
       - name: Launch, supervise and tear down the agent
@@ -165,7 +168,6 @@ jobs:
           # would break with the job still green.
           test -f "$root/skills/triage/SKILL.md"
           test -f "$root/scripts/list_recent_runs.py"
-          test -x "$root/scripts/tend-uv.sh"
 
           # `model_reasoning_effort` is passed as a `-c` override, so a rename
           # would be silently ignored rather than rejected — `--help` can't see
