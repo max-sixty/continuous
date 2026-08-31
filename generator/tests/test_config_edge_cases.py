@@ -694,6 +694,21 @@ def test_setup_step_if_rejects_mixed_expression_wrappers(
         Config.load(path)
 
 
+def test_setup_step_if_rejects_empty_expression_wrapper(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: "${{ }}"
+    """),
+    )
+
+    with pytest.raises(ClickException, match="`if` must contain an expression"):
+        Config.load(path)
+
+
 def test_workflow_disabled_boolean_shorthand_not_generated(tmp_path: Path) -> None:
     """Boolean shorthand `review: false` should prevent generation."""
     path = _write_config(

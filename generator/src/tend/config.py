@@ -331,7 +331,9 @@ class Config:
                 condition = entry["if"]
                 if not isinstance(condition, str) or not condition.strip():
                     raise click.ClickException(
-                        f"setup[{i}]: `if` must be a non-empty string"
+                        f"setup[{i}]: `if` must be a non-empty string; quote "
+                        'it (`if: "false"`) so YAML does not read it as a '
+                        "boolean, number, or list"
                     )
                 condition = condition.strip()
                 if condition.startswith("${{") and condition.endswith("}}"):
