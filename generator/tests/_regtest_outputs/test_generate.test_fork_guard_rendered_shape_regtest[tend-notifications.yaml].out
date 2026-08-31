@@ -41,9 +41,9 @@ jobs:
           # env: GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_TOKEN
 
           # Activity newer than this belongs to an event workflow that may still be
-          # running. The cutoff bounds the snapshot below, which is passed to the agent;
-          # the agent acknowledges each thread it resolves individually, so this run can
-          # only acknowledge threads the snapshot returned.
+          # running. The cutoff bounds the snapshot below and is the value passed to the
+          # agent, which takes its own snapshot with it and acknowledges each thread it
+          # resolves individually ? so this run acknowledges only threads it examined.
           CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
           echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
 
