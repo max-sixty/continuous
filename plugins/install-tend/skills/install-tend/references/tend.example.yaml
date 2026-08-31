@@ -257,9 +257,9 @@ bot_name: my-project-bot
 # repositories only and memory must not contain credentials or private facts.
 # Recalled notes are untrusted context: they may be stale or influenced by text
 # Claude read in an earlier run. Gists are flat, so a nested memory directory
-# makes that run's save fail with a warning. If any file changed remotely after
-# restore, the run skips its entire save. GitHub's Gist API still cannot make
-# the final update atomic.
+# makes that run's save fail with a warning. If a file this run changed also
+# changed remotely, the run skips its entire save. GitHub's Gist API still
+# cannot make the final update atomic.
 #
 # memory_gist: true
 
