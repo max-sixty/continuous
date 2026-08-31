@@ -41,6 +41,42 @@ def test_notification_skill_pins_the_fragile_dedup_queries() -> None:
     assert '.event == "cross-referenced"' in skill
 
 
+def test_frequent_poll_and_nightly_share_conflict_resolution() -> None:
+    notifications = _read(
+        "plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md"
+    )
+    nightly = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
+    resolver = _read(
+        "plugins", "tend-ci-runner", "skills", "resolve-conflicts", "SKILL.md"
+    )
+
+    for caller in (notifications, nightly):
+        assert "/tend-ci-runner:resolve-conflicts" in caller
+    assert "configured bot only" in " ".join(notifications.split())
+    assert "this bot and upstream dependency bots" in " ".join(nightly.split())
+    assert "app/dependabot" in resolver
+    assert "app/renovate" in resolver
+    assert "up to 100 open PRs" in resolver
+    assert "baseRefName" in resolver
+    assert "baseRefOid" in resolver
+    assert "headRefName" in resolver
+    assert "headRepository" in resolver
+    assert '"refs/heads/<base>:refs/tend/base/<number>"' in resolver
+    assert '"refs/tend/base/<number>" "refs/tend/pr/<number>"' in resolver
+    assert "headRefOid" in resolver
+    assert '--force-with-lease="refs/heads/<headRefName>:<headRefOid>"' in resolver
+    assert "Fetch the live base again" in resolver
+    assert "remove any prior conflict-deferral comment" in " ".join(
+        resolver.lower().split()
+    )
+    assert "When called from `notifications`" in resolver
+    assert "Nightly ignores the marker" in " ".join(resolver.split())
+    assert "paginated issue-comment API" in resolver
+    assert "only when it already names this head" in resolver
+    assert "<!-- tend-conflict-deferred head=<head SHA> -->" in resolver
+    assert "origin/main" not in resolver
+
+
 def test_review_runs_pins_current_state_recovery() -> None:
     skill = _read("plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md")
 

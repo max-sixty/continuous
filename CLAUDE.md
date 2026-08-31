@@ -250,8 +250,9 @@ Events pass through three layers before the bot does work:
    group, never queues).
 2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
    whether the agent boots: mention's verify job checks engagement, and
-   notifications' check repairs repository watching then captures a paginated
-   cutoff snapshot.
+   notifications' check repairs repository watching, captures a paginated
+   cutoff snapshot, and finds configured-bot PR conflicts whose current heads
+   have not already been deferred for manual resolution.
 3. **Concurrency groups** — at most one running job per group.
 
 Concurrency groups:
@@ -263,7 +264,7 @@ Concurrency groups:
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
 | triage | `workflow-issue#` | yes — latest comment wins |
-| notifications | `tend-notifications` | **no** — one poll advances the unread queue at a time |
+| notifications | `tend-notifications` | **no** — one poll drains notifications and repairs bot PRs at a time |
 | ci-fix / nightly / weekly | none | rare overlap or cron-serialized |
 
 **Fork guard.** Workflows whose triggers can fire from a fork's own
@@ -347,7 +348,7 @@ for Codex). When adding new capability, split work along this line:
   interprets output, and writes clearer messages than shell.
 - **Actions gate whether the agent runs at all.** Agent invocations cost
   tokens; gating them in YAML is cheap. Pre-check steps that early-exit
-  the job (e.g. `tend-notifications`'s "Check for unread notifications")
+  the job (e.g. `tend-notifications`'s notification and PR conflict check)
   save an entire agent run when there's nothing to do. A gate stays cheap
   only while it stays trivial: one pre-check against a frequent no-op (an
   empty inbox every cron tick) earns its place; a run of bespoke gates,

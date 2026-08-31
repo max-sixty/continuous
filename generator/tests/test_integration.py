@@ -503,8 +503,7 @@ def test_init_mention_workflow_has_two_jobs(
 def test_init_notifications_has_precheck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The notifications workflow checks for unread notifications before
-    invoking Claude, and skips all subsequent steps when count is 0."""
+    """The frequent poll boots only for notifications or possible conflicts."""
     _write_config(tmp_path, "bot_name: test-bot")
     monkeypatch.chdir(tmp_path)
     _run_init()
@@ -531,11 +530,13 @@ def test_init_notifications_has_precheck(
             f"step {step.get('uses', step.get('name'))} missing if guard"
         )
         assert "steps.check.outputs.count" in step["if"]
+        assert "steps.check.outputs.conflict_count" in step["if"]
         # workflow_dispatch bypasses the pre-check
         assert "workflow_dispatch" in step["if"]
 
     agent_step = steps[-1]
     assert "steps.check.outputs.cutoff" in agent_step["with"]["prompt"]
+    assert "steps.check.outputs.conflict_count" in agent_step["with"]["prompt"]
 
 
 def test_notifications_precheck_tolerates_transient_non_json(

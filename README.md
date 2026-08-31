@@ -77,7 +77,7 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **ci-fix**        | CI fails on default branch | Reads failure logs, identifies root cause, searches for the same pattern elsewhere, opens a fix PR.                                                         |
 | **nightly**       | Daily                      | Resolves conflicts on open PRs, reviews recent commits, surveys ~10 files for bugs and stale docs, closes resolved issues, regenerates tend workflow files. |
 | **weekly**        | Weekly                     | Reviews dependency PRs, approves safe patch and minor updates (the bot never merges — a merge restriction is the security boundary).                        |
-| **notifications** | Every 15 minutes           | Keeps the bot watching the repository and drains unread notifications as a recovery queue for issue and PR work.                                             |
+| **notifications** | Every 15 minutes           | Drains unread notifications as a recovery queue and repairs conflicts on bot-authored PRs.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
 
 The bot reacts 👀 while a session is working: on an issue when it opens, on a

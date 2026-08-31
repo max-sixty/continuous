@@ -400,11 +400,15 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     prompt = (
         f"{prompt}\n\n"
         "Notification snapshot cutoff: "
-        "${{ steps.check.outputs.cutoff }}"
+        "${{ steps.check.outputs.cutoff }}\n"
+        "Possible conflicted bot PR count: "
+        "${{ steps.check.outputs.conflict_count }}"
     )
 
     skip_condition = (
-        "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'"
+        "steps.check.outputs.count != '0' || "
+        "steps.check.outputs.conflict_count != '0' || "
+        "github.event_name == 'workflow_dispatch'"
     )
     check_script = (
         importlib.resources.files("tend") / "templates" / "notifications-check.sh"
