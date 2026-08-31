@@ -195,7 +195,7 @@ def test_review_approval_gates_on_author_stated_readiness() -> None:
 
 def test_review_second_pass_is_a_submit_precondition() -> None:
     """A full review cannot quietly skip the standalone second pass, including
-    after a safe re-target; the trivial-increment close-out remains exempt."""
+    after a safe re-target; both step-1 close-out paths remain exempt."""
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
 
     second_pass = skill.index("### 5. Second pass")
