@@ -37,6 +37,10 @@ typecheck. Its arguments narrow pytest and nothing else, so a filtered run
 still pays for worker/; `uv run pytest -k render`
 is the Python half on its own.
 
+`pre-commit` is not on the CI sandbox's PATH. A tend session runs the lint gate
+as `uv tool run pre-commit run --all-files`; a narrower substitute (ruff alone,
+shellcheck alone) skips typos, actionlint and uv-lock.
+
 ## Architecture
 
 Four pieces:
