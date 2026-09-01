@@ -23,6 +23,11 @@
 # env: GITHUB_REPOSITORY (optional; falls back to the checkout's remote)
 
 set -euo pipefail
+# Bash does not apply `-e` inside a command substitution unless this is on,
+# and every collection below is one. Without it a `gh` call that fails in any
+# but the last iteration of a loop is dropped from the JSON and the run
+# reports the remainder as the whole window.
+shopt -s inherit_errexit
 
 SINCE="${1:-}"
 if [ -z "$SINCE" ]; then
@@ -65,11 +70,10 @@ COMMENTS=$(
 # wraps around a standalone inline reply, which would otherwise report a
 # correction on every thread where anyone replied inline.
 #
-# The candidate list is its own assignment because `set -e` checks an
-# assignment's command substitution but not a `for` word list's: inline, a
-# failed `--search` — the search API's 30 req/min, not the 5000/h core budget —
-# would yield an empty list, skip the loop, and report `reviews: []` as an
-# all-clear.
+# The candidate list is its own assignment because a `for` word list is the one
+# place `inherit_errexit` does not reach: inline, a failed `--search` — the
+# search API's 30 req/min, not the 5000/h core budget — would yield an empty
+# list, skip the loop, and report `reviews: []` as an all-clear.
 CANDIDATES=$(gh pr list --repo "$REPO" --state all --limit 200 \
   --search "updated:>=$SINCE" --json number --jq '.[].number')
 REVIEWS=$(
