@@ -181,14 +181,6 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
     assert not findings, "\n".join(findings)
 
 
-# Inputs whose value is secret. Matched by name suffix so an input added later
-# is covered without anyone remembering this test exists, which holds while
-# credentials keep being named for what they are (`github_token`,
-# `anthropic_api_key`, `claude_code_oauth_token`, `openai_api_key`). The one
-# input that needed the convention widened for it is `memory_gist_id`: it comes
-# from a repo secret and grants read/write to the bot's memory gist, so
-# `gist_id` joins the suffixes rather than the test skipping it.
-CREDENTIAL_INPUT = re.compile(r"(_token|_key|secret|password|gist_id)$")
 # Anchoring on `${{ … }}` would match the bare reference alone, letting
 # `${{ inputs.x || '' }}` and `${{ format('{0}', inputs.x) }}` through. Any
 # `inputs.<name>` in a `run:` body is necessarily a GHA expression — bash has no
@@ -198,28 +190,27 @@ INPUT_REF = re.compile(r"inputs\.([A-Za-z0-9_]+)")
 
 
 @pytest.mark.parametrize("action", ACTIONS)
-def test_credential_inputs_reach_run_bodies_through_env(action: str) -> None:
-    """A credential must not be interpolated into an inline `run:` body.
+def test_inputs_reach_run_bodies_through_env(action: str) -> None:
+    """An input must not be interpolated into an inline `run:` body.
 
     GitHub substitutes `${{ … }}` into the script *text* before bash parses it,
-    so a secret carrying a quote or `$(…)` stops being a string being compared
-    and becomes script executing as the runner user — which holds the real PAT
-    and, under codex, the model key. Through `env:` the value is passed to the
-    process, never to the parser. Nothing else catches this: shellcheck sees
-    the placeholder the sibling test substitutes in, and actionlint does not
-    read action.yaml at all.
+    so a value carrying a quote or `$(…)` stops being a string and becomes
+    script executing as the runner user — which holds the real PAT and, under
+    codex, the model key. Through `env:` the value is passed to the process,
+    never to the parser. Nothing else catches this: shellcheck sees the
+    placeholder the sibling test substitutes in, and actionlint does not read
+    action.yaml at all.
+
+    Every input in both actions already arrives this way, so the rule is a flat
+    ban rather than a list of which values are secret enough to deserve it.
     """
     doc = YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())
-
-    credentials = {n for n in doc["inputs"] if CREDENTIAL_INPUT.search(n)}
-    assert credentials, f"{action}: no credential-shaped inputs — did they rename?"
 
     inlined = [
         f"{step.get('name', '<unnamed>')} inlines inputs.{name}"
         for step in doc["runs"]["steps"]
         if "run" in step
         for name in sorted(set(INPUT_REF.findall(step["run"])))
-        if name in credentials
     ]
     assert not inlined, (
         f"{action}: pass these through the step's `env:` instead of `${{{{ }}}}` "

@@ -144,8 +144,10 @@ runs:
     # prerelease only for a fix that hasn't been released yet.
     - name: Install Codex CLI
       shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs.codex_version }}
       run: |
-        npm install -g "@openai/codex@${{ inputs.codex_version }}"
+        npm install -g "@openai/codex@$CODEX_VERSION"
         codex --version
 
     # Install the tend-ci-runner plugin from the action's own checkout.
