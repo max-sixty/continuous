@@ -22,7 +22,8 @@
 #
 # Inputs (env): TEND_GH_TOKEN (real PAT), TEND_ANTHROPIC_OAUTH_TOKEN and/or
 # TEND_ANTHROPIC_API_KEY (real Anthropic credential, injected for
-# api.anthropic.com), ACTION_PATH (this action's checkout), MITMPROXY_VERSION
+# api.anthropic.com), or TEND_GITHUB_ONLY=1 when another process owns model
+# authentication; ACTION_PATH (this action's checkout), MITMPROXY_VERSION
 # (pinned mitmproxy version), TEND_UV_DIR (tend's own pinned uv, installed by
 # shared/steps/install-uv.sh). GITHUB_WORKSPACE / RUNNER_TEMP /
 # UV_CACHE_DIR come from Actions. TEND_RUNNER_TOOL_PATH carries the runner PATH
@@ -114,7 +115,10 @@ log "global gitignore at ${AGENT_HOME}/.config/git/ignore"
 # the proxy (which inherits this shell's env) can never disagree with the
 # dummy the agent gets — the addon injects whichever scheme it sees set,
 # and only one is set. OAuth wins, matching the action's input precedence.
-if [ -n "${TEND_ANTHROPIC_OAUTH_TOKEN:-}" ]; then
+if [ "${TEND_GITHUB_ONLY:-}" = "1" ]; then
+  unset TEND_ANTHROPIC_OAUTH_TOKEN TEND_ANTHROPIC_API_KEY
+  ANTHROPIC_DUMMY=""
+elif [ -n "${TEND_ANTHROPIC_OAUTH_TOKEN:-}" ]; then
   unset TEND_ANTHROPIC_API_KEY
   ANTHROPIC_DUMMY="CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-tendproxydummy0000000000000000000000000000"
 else
@@ -346,7 +350,8 @@ if [ -n "${TEND_SANDBOX_ENV:-}" ]; then
       HOME|PATH|XDG_CONFIG_HOME|XDG_CACHE_HOME|XDG_DATA_HOME|XDG_STATE_HOME|\
       HTTPS_PROXY|HTTP_PROXY|https_proxy|http_proxy|NO_PROXY|no_proxy|\
       NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|REQUESTS_CA_BUNDLE|\
-      GH_TOKEN|GITHUB_TOKEN|CLAUDE_CODE_REMOTE|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)
+      GH_TOKEN|GITHUB_TOKEN|CLAUDE_CODE_REMOTE|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|\
+      OPENAI_API_KEY)
         echo "::error::sandbox_env may not set reserved key '$name'"
         exit 1
         ;;

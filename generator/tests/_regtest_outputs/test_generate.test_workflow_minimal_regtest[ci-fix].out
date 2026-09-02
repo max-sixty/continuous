@@ -14,8 +14,36 @@ on:
     branches: ["main"]
 
 jobs:
+  classify:
+    if: contains(fromJSON('["failure", "cancelled"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-24.04
+    outputs:
+      should_fix: ${{ steps.classify.outputs.should_fix }}
+    steps:
+      - name: Classify completed run
+        id: classify
+        shell: python
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+          UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
+        run: |
+          import datetime
+          import os
+
+          should_fix = os.environ["CONCLUSION"] == "failure"
+          if os.environ["CONCLUSION"] == "cancelled":
+              parse = lambda value: datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+              elapsed = parse(os.environ["UPDATED_AT"]) - parse(os.environ["STARTED_AT"])
+              # GitHub's hard cap is six hours. Leave five minutes for timestamp
+              # rounding and runner teardown, while excluding ordinary cancels.
+              should_fix = elapsed >= datetime.timedelta(hours=5, minutes=55)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"should_fix={str(should_fix).lower()}", file=output)
+
   fix-ci:
-    if: github.event.workflow_run.conclusion == 'failure'
+    needs: classify
+    if: needs.classify.outputs.should_fix == 'true'
     runs-on: ubuntu-24.04
     environment:
       name: tend

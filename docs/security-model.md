@@ -55,7 +55,7 @@ each.
 
 ## What we do
 
-Two load-bearing boundaries:
+Three load-bearing boundaries:
 
 1. **The bot cannot land code.** A merge restriction keeps every protected
    branch behind a human; where releases rely on tags, an all-tags ruleset
@@ -63,10 +63,13 @@ Two load-bearing boundaries:
 2. **A run the bot can cause reads no secrets.** Every stored secret sits
    behind a gate the bot cannot pass, or is explicitly allowlisted in the
    tend config as accepted repo-level exposure.
+3. **Future published releases cannot be rewritten.** GitHub immutable
+   releases lock the release record, its assets, and the associated tag from
+   the point the repository setting is enabled.
 
-`tend check` fails until both hold, so a passing check *is* the claim. The
-rest of this section is the mechanism behind the second sentence; the first
-is the merge restriction below.
+`tend check` fails until the first two hold and the third is enabled, so a
+passing check *is* the claim for future releases. GitHub does not apply the
+setting retroactively.
 
 **Merge restriction.** A GitHub ruleset (or branch protection) prevents the
 bot from merging to protected branches (the default branch plus any in
@@ -204,6 +207,13 @@ refuses `POST /repos/{repo}/releases` when the named tag does not exist
 yet, so the Releases API is not a way around it. The
 `credential-environments` sweep above verifies every such environment.
 
+Immutable releases close the separate write path: once a release is published,
+GitHub locks its assets and associated tag. This is a repository setting, not a
+ruleset inference; `tend check` verifies it directly and `--fix` enables it.
+The setting is prospective, so enable it before the repository's next release.
+It does not make `release: published` safe for secrets: a write actor
+can still publish a new release against an existing unpublished tag.
+
 The gate bounds what a run can *read*; it does not by itself bound *when*
 a reviewed workflow fires. A workflow reachable only by updating a gated
 ref (`push: tags:` for release, `push: branches: [main]` for continuous
@@ -273,20 +283,19 @@ load-bearing.
 **Action distribution integrity.** Generated workflows pin the composite
 action to the generator's own release version
 (`max-sixty/tend/<harness>@X.Y.Z`), never a floating ref. Release-tag
-immutability is the boundary this relies on: a `tag` ruleset on
-`max-sixty/tend` restricts `update` and `deletion` on `refs/tags/[0-9]*`
-and lists no bypass actors at all, so a published release tag cannot be
-moved or deleted by anyone. Unlike the merge restriction, an admin session
-does not void it. `creation` stays open so a release can push a new
-`X.Y.Z`. A leaked bot token or hijacked session therefore cannot
-retroactively change the code every adopter already runs; the worst it can
-do is add a release tag, which adopters only pick up on their next nightly
-regen, as a reviewable workflow-file diff in their own repo. Adopters
+immutability is the boundary this relies on for new releases: GitHub's
+immutable-releases setting locks each release, its assets, and its tag when it
+is published. The tag ruleset also restricts updates. Tend's releases from
+before the setting was enabled have no uploaded assets and their tag code is
+protected by a no-bypass tag ruleset, but their GitHub release records are not
+retroactively immutable. The separate all-tags ruleset prevents the bot from
+creating or repointing any release tag, so a leaked bot token or hijacked
+session cannot change the action code every adopter already runs. Adopters
 extend trust to `max-sixty/tend`'s release-tag integrity the same way they
 trust any third-party action's publisher; pinning to `X.Y.Z` (or a commit
 SHA) bounds that trust to a reviewed, immutable point.
 
-**Config pinning.** The Claude harness actions restore RCE-relevant config from
+**Config pinning.** Both harness actions restore RCE-relevant config from
 the PR base branch before the agent starts: `.claude/`, `.mcp.json`, `.claude.json`,
 `.gitmodules`, `.ripgreprc`, `.husky` at the root, plus — as a prompt-injection
 defense — every `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` at
@@ -309,25 +318,26 @@ before running them — the default branch, or in `tend-review` the PR's base
 branch — and lands the PR's tree only afterwards. A contributor's build
 backend, added dependencies, and local `uses: ./` actions therefore execute
 under the agent, inside the sandbox, rather than ahead of it. `sandbox_setup:`
-is the lever for project setup that must see the PR's own manifests. Codex
-adopters get the ordering without the containment, since that harness runs the
-agent on the runner.
+is the lever for project setup that must see the PR's own manifests. Both
+harnesses run it as the non-sudo sandbox user.
 
-**Credential isolation (Claude harnesses).** The Claude harness actions run the
-agent as a separate non-sudo `tend-sandbox` user, sharing the proxy machinery
-under the top-level `proxy/`. Both the bot PAT and the Anthropic credential (OAuth token
-or API key) live only in a local mitmproxy that the agent reaches over
-`HTTPS_PROXY`; the proxy injects each into requests to its own hosts (the PAT for
-GitHub hosts, the Anthropic secret for `api.anthropic.com`) and tunnels
-everything else. The agent holds only dummies, so it can't read the real
-secrets: a different UID with no sudo can't read the proxy's
+**Credential isolation.** Both harness actions run the agent as a separate
+non-sudo `tend-sandbox` user, sharing the GitHub proxy machinery under the
+top-level `proxy/`. The bot PAT lives only in a local mitmproxy that the agent
+reaches over `HTTPS_PROXY`; the proxy injects it only for exact GitHub hosts
+and tunnels everything else. Claude's Anthropic credential (OAuth token or API
+key) uses the same proxy and is injected only for `api.anthropic.com`. Codex's
+OpenAI key is instead read from stdin by OpenAI's hardened Responses API proxy,
+which exposes only `POST /v1/responses` on loopback. The agent holds only a
+dummy PAT and the local inference endpoint, so it can't read the real secrets:
+a different UID with no sudo can't read either proxy's
 `/proc/<pid>/environ`, the credential `actions/checkout` persists in
 `.git/config` is stripped before the workspace is handed over, and the model
 auth is never written to the agent's env or disk. The injection allowlist is
 exact-match on the connection's real destination, so a request to a lookalike
-host gets no token. The proxy itself is launched by a pinned `uv` that tend
-installs into its own directory, off `$PATH`, so the process holding both
-credentials starts from a known binary rather than whatever an adopter's
+host gets no token. The GitHub proxy is launched by a pinned `uv` that tend
+installs into its own directory, off `$PATH`, so the process holding the PAT
+starts from a known binary rather than whatever an adopter's
 `setup:` happened to leave on the runner. (`claude` is Node and ignores the
 system trust store, so it trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) Shared
 system and hosted-toolcache PATH entries remain available to the sandbox. Tend
@@ -340,15 +350,11 @@ made as the sandbox user with `sandbox_setup:`. A generic failure shim keeps a
 dropped home-selected command from silently falling through to a different
 same-named system tool.
 
-The Codex harness (`codex/action.yaml`) still passes both the PAT and the model
-auth directly to the agent. The merge restriction and the environment gate
-remain the load-bearing boundaries regardless of harness.
-
 **Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
 spike detection (today's volume vs 6-day baseline, scaled per repo) abort
-the run before Claude starts, catching runaway loops between workflows.
+the run before the agent starts, catching runaway loops between workflows.
 The check runs as its own step in the composite action, so a
-prompt-injection attack inside the Claude session cannot skip it. Concrete limits live in
+prompt-injection attack inside the agent session cannot skip it. Concrete limits live in
 `shared/steps/rate_limit_preflight.py`.
 
 The spike limit is resumable by a maintainer, the burst limit is not. On a
@@ -367,8 +373,8 @@ links. Automating that is deferred (see `TODO.md`).
 
 **Fixed prompts and marketplace skills.** The prompt and skill set come from
 the composite action and the tend marketplace, not from the PR. An attacker
-can influence what Claude *reads* (the diff, the issue body) but not the
-*instructions* Claude follows or the *tools* it has access to.
+can influence what the agent *reads* (the diff, the issue body) but not the
+*instructions* it follows or the *tools* it has access to.
 
 **GitHub's log masking.** Secrets stored in GitHub are automatically redacted
 from workflow logs. This is exact-match only — if a token appears
@@ -376,20 +382,22 @@ base64-encoded or embedded in JSON, the redaction misses it.
 
 ## Remaining risks
 
-**Claude executes attacker-controlled code.** This is the biggest open gap.
-When Claude runs tests or build commands on a fork PR, it executes code the
+**The agent executes attacker-controlled code.** This is the biggest open gap.
+When an agent runs tests or build commands on a fork PR, it executes code the
 attacker wrote. A `Makefile`, `package.json` postinstall hook, or
-`conftest.py` can do anything the runner can — including reading environment
-variables and sending them over the network. Config pinning prevents
+`conftest.py` can do anything the sandbox user can and send data over the
+network. It cannot read the real credentials, but it can use the GitHub proxy
+as the bot for the lifetime of the run and use the model proxy for inference.
+Config pinning prevents
 *Claude Code's own* startup hooks from being hijacked, but it can't prevent
-Claude from voluntarily running `make test` on a repo where `make test` has
-been weaponized. The Codex harness makes this explicit: its composite
-action runs with `sandbox: danger-full-access`, deliberately not relying
-on codex's inner bwrap jail. The ephemeral single-use runner VM is the
-isolation boundary; the inner sandbox is redundant there and unavailable
-on the standard runner image anyway. The boundaries that are load-bearing
-(merge restriction, scope-limited credentials) sit outside the harness's
-local-exec sandbox regardless.
+an agent from voluntarily running `make test` on a repo where `make test` has
+been weaponized. The experimental Codex harness currently defaults to
+`sandbox: danger-full-access`. Current Codex bundles a bubblewrap fallback on
+Linux, and CI exercises that sandbox primitive; lack of bubblewrap is not the
+reason for the default. Tend has not yet validated its full workflow under the
+more restrictive modes. The ephemeral runner VM contains local execution, and
+the separate UID plus credential proxy keeps the real credentials outside the
+agent process either way.
 
 **Write access still starts workflows.** With the operational secrets
 environment-gated, a write-scoped actor can no longer read them out of a
@@ -401,23 +409,19 @@ GitHub holds rather than to the payload. The secrets are also still in
 memory during every legitimate run, so an attacker who gets code execution
 inside one retains everything the side-channel entry below describes.
 
-**Token exfiltration via side channels.** Log masking only catches exact
-string matches in stdout. An attacker who gets code execution can exfiltrate
-what the run holds via DNS queries, HTTP requests to an external server, or
-encoding tricks that bypass the log filter; on GitHub-hosted runners there's
-no way to restrict outbound network access. On the Claude harnesses the
-credential isolation above keeps both real tokens out of the agent's reach,
-so they are not among what a hijacked session can send. The Codex harness
-passes its model auth (an OpenAI key) and the PAT directly, so there the
-channel carries both.
+**Data exfiltration via side channels.** An attacker who gets code execution
+can exfiltrate repository contents and agent-visible context via DNS queries,
+HTTP requests to an external server, or workflow logs; on GitHub-hosted
+runners there's no way to restrict outbound network access. On both harnesses
+the credential isolation above keeps the real tokens out of the agent's reach,
+so they are not among what a hijacked session can send.
 
-**Long-lived PAT exposure.** A classic PAT is valid until revoked and grants
-access to every repo the bot account can reach. A single successful
-exfiltration gives the attacker persistent, broad write access. The merge
-restriction limits what they can *do* with it, but they can still push
-branches, create PRs, and post comments indefinitely. The credential isolation
-above keeps both the PAT and the Claude token out of the agent on both Claude
-harnesses; both remain directly exposed on the Codex harness.
+**Long-lived PAT authority.** A classic PAT is valid until revoked and grants
+access to every public repo the bot account can reach. Credential isolation
+prevents the agent from carrying that authority away after the run, but a
+hijacked session can still use it through the live proxy to push unprotected
+branches, create PRs, close issues, and post comments. The merge restriction,
+environment gate, and immutable releases bound the higher-impact operations.
 
 **Prompt injection without code execution.** Even without hijacking the
 tools, an attacker who controls what Claude reads can influence its behavior.

@@ -412,7 +412,7 @@ def test_codex_main_publishes_the_record_three_ways(
     monkeypatch.setenv("GITHUB_WORKFLOW", "tend-review")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
     monkeypatch.setenv("GITHUB_SHA", "base0")
-    home = tmp_path / "home"
+    home = tmp_path / "agent-home"
     _ndjson(
         home / ".codex" / "sessions" / "2026" / "08" / "25" / "rollout-a.jsonl",
         [
@@ -420,9 +420,17 @@ def test_codex_main_publishes_the_record_three_ways(
             {"type": "token_count", "token_count": {"output_tokens": 30}},
         ],
     )
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AGENT_HOME", str(home))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner-temp"))
     monkeypatch.setenv("MODEL", "gpt-5-codex")
     monkeypatch.setattr(sys, "argv", ["token_usage.py", "--harness", "codex"])
+
+    run_command = token_usage.best_effort
+
+    def run_without_sudo(*argv: str) -> None:
+        run_command(*(argv[1:] if argv[:1] == ("sudo",) else argv))
+
+    monkeypatch.setattr(token_usage, "best_effort", run_without_sudo)
 
     assert token_usage.main() == 0
 
@@ -442,7 +450,7 @@ def test_codex_main_publishes_the_record_three_ways(
         "model": "gpt-5-codex",
         "cost_usd": 0,
     }
-    written = home / ".codex" / "projects" / "token-usage.json"
+    written = tmp_path / "runner-temp" / "tend-codex-logs" / "token-usage.json"
     assert json.loads(written.read_text()) == record
     assert github_files.summary.read_text() == (
         "## Token Usage (Codex)\n"
@@ -456,6 +464,47 @@ def test_codex_main_publishes_the_record_three_ways(
         "\n"
         f"{token_usage.CODEX_COST_NOTE}\n"
     )
+
+
+def test_agent_log_copy_drops_nested_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "agent" / ".codex" / "sessions"
+    source.mkdir(parents=True)
+    (source / "rollout.jsonl").write_text("{}\n")
+    (source / "escape").symlink_to("/etc/passwd")
+    destination = tmp_path / "logs"
+
+    run_command = token_usage.best_effort
+
+    def run_without_sudo(*argv: str) -> None:
+        run_command(*(argv[1:] if argv[:1] == ("sudo",) else argv))
+
+    monkeypatch.setattr(token_usage, "best_effort", run_without_sudo)
+    token_usage.copy_agent_tree(source, destination)
+
+    assert (destination / "rollout.jsonl").is_file()
+    assert not (destination / "escape").exists()
+
+
+def test_agent_log_copy_refuses_symlink_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    source = tmp_path / "agent" / ".codex" / "sessions"
+    source.parent.mkdir(parents=True)
+    source.symlink_to(real, target_is_directory=True)
+    destination = tmp_path / "logs"
+
+    monkeypatch.setattr(
+        token_usage,
+        "best_effort",
+        lambda *_argv: pytest.fail("a symlink source must not be copied"),
+    )
+    token_usage.copy_agent_tree(source, destination)
+
+    assert not destination.exists()
 
 
 def test_cost_renders_to_the_cent_and_says_so_when_unknown() -> None:

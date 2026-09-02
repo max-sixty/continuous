@@ -54,6 +54,33 @@ def test_claude_transcript_summary_is_opt_in() -> None:
     assert action["inputs"]["show_full_output"]["default"] == "false"
 
 
+def test_codex_agent_step_receives_only_proxy_dummies() -> None:
+    """Real credentials stop in their runner-owned proxy setup steps."""
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "action.yaml").read_text()
+    )
+    steps = {step["name"]: step for step in action["runs"]["steps"]}
+
+    assert "experimental" in action["name"].lower()
+    setup_env = steps["Set up credential-isolation sandbox"]["env"]
+    assert setup_env["TEND_GH_TOKEN"] == "${{ inputs.github_token }}"
+    assert setup_env["TEND_GITHUB_ONLY"] == "1"
+    assert "TEND_OPENAI_API_KEY" not in setup_env
+    openai_proxy = steps["Start OpenAI Responses proxy"]
+    assert openai_proxy["env"]["PROXY_API_KEY"] == "${{ inputs.openai_api_key }}"
+    assert "env -u PROXY_API_KEY" in openai_proxy["run"]
+    assert '<<< "$PROXY_API_KEY"' in openai_proxy["run"]
+    assert [
+        name
+        for name, step in steps.items()
+        if "${{ inputs.openai_api_key }}" in str(step)
+    ] == ["Start OpenAI Responses proxy"]
+    run_env = steps["Run Codex"]["env"]
+    assert not ({"OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"} & run_env.keys())
+    assert 'mapfile -t AGENT_ENV < "$AGENT_ENV_FILE"' in steps["Run Codex"]["run"]
+    assert 'model_provider="tend-openai"' in steps["Run Codex"]["run"]
+
+
 def test_experimental_memory_gist_sync_cannot_replace_the_agent_verdict() -> None:
     action = YAML(typ="safe", pure=True).load(
         (REPO_ROOT / "claude" / "action.yaml").read_text()

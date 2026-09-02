@@ -66,8 +66,8 @@ have. A ``0`` there would repeat the bug the fallback exists to fix, one field
 down; ``partial`` is what keeps a reconstructed total distinguishable from a
 run that really cost nothing.
 
-Codex has one path: sum ``token_count`` across
-``~/.codex/sessions/**/rollout-*.jsonl``. That schema isn't versioned, so a
+Codex has one path: consolidate the sandbox user's rollouts, then sum
+``sessions/**/rollout-*.jsonl``. That schema isn't versioned, so a
 missing field counts as zero — and no rollouts at all is the same computation
 over no events, which yields the all-zero record on its own. Cost stays 0: the
 Codex CLI doesn't surface API list prices and computing them here would mean
@@ -193,10 +193,12 @@ def claude_step(model: str) -> tuple[dict[str, Any], Path]:
 
 
 def codex_step(model: str) -> tuple[dict[str, Any], Path]:
-    home = Path(_common.require_env("HOME")["HOME"])
-    logs_dir = home / ".codex" / "projects"
+    runner_temp = Path(_common.require_env("RUNNER_TEMP")["RUNNER_TEMP"])
+    logs_dir = runner_temp / "tend-codex-logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    rollouts = sorted((home / ".codex" / "sessions").rglob("rollout-*.jsonl"))
+    agent_home = Path(os.environ.get("AGENT_HOME") or "/nonexistent")
+    copy_agent_tree(agent_home / ".codex" / "sessions", logs_dir / "sessions")
+    rollouts = sorted((logs_dir / "sessions").rglob("rollout-*.jsonl"))
     return codex_usage(read_all(rollouts), model), logs_dir
 
 
@@ -209,12 +211,56 @@ def consolidate_logs(logs_dir: Path, runner_temp: Path) -> None:
     exporting it; the placeholder keeps every command below well-formed and
     failing, which is the same nothing-to-copy outcome.
     """
-    agent_home = os.environ.get("AGENT_HOME") or "/nonexistent"
-    best_effort("sudo", "chmod", "a+x", agent_home, f"{agent_home}/.claude")
-    best_effort("sudo", "chmod", "-R", "a+rX", f"{agent_home}/.claude/projects")
     logs_dir.mkdir(parents=True, exist_ok=True)
-    best_effort("cp", "-a", f"{agent_home}/.claude/projects/.", f"{logs_dir}/")
+    agent_home = Path(os.environ.get("AGENT_HOME") or "/nonexistent")
+    copy_agent_tree(agent_home / ".claude" / "projects", logs_dir)
     best_effort("cp", "-a", str(runner_temp / "tend-claude-stderr.log"), f"{logs_dir}/")
+
+
+def copy_agent_tree(source: Path, destination: Path) -> None:
+    """Copy a reaped agent's files without letting symlinks cross the UID boundary.
+
+    The runner is privileged and the source is agent-owned. Refuse a symlink at
+    either source boundary, copy nested links without dereferencing them, then
+    delete those links before the runner or upload-artifact reads the result.
+    """
+    for boundary in (source.parent, source):
+        if not safe_agent_directory(boundary):
+            return
+    destination.mkdir(parents=True, exist_ok=True)
+    best_effort("sudo", "cp", "-a", f"{source}/.", f"{destination}/")
+    best_effort("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(destination))
+    best_effort("find", str(destination), "-type", "l", "-delete")
+
+
+def safe_agent_directory(path: Path) -> bool:
+    """Whether *path* is an actual directory, checked without dereferencing it."""
+    try:
+        if path.exists() or path.is_symlink():
+            return path.is_dir() and not path.is_symlink()
+    except PermissionError:
+        pass
+    is_dir = (
+        subprocess.run(
+            ["sudo", "test", "-d", str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+    is_link = (
+        subprocess.run(
+            ["sudo", "test", "-L", str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+    return is_dir and not is_link
 
 
 def best_effort(*argv: str) -> None:

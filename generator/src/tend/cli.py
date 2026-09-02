@@ -16,6 +16,8 @@ from tend.checks import (
     detect_repo,
     fix_branch_protection,
     fix_environment,
+    fix_immutable_releases,
+    fix_tag_protection,
     run_all_checks,
 )
 from tend.config import Config
@@ -218,7 +220,7 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 )
 @click.option("--fix", is_flag=True, help="Fix failing checks (creates rulesets, etc.)")
 def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
-    """Verify security prerequisites (branch protection, bot access, credentials)."""
+    """Verify release integrity, branch protection, bot access, and credentials."""
     cfg = Config.load(config_path)
     results = run_all_checks(cfg, repo)
 
@@ -272,6 +274,22 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
             # whose only failure was the missing ruleset, an empty one.
             results = run_all_checks(cfg, repo)
             failures = [r for r in results if r.passed is False]
+
+    if any(r.name == "immutable-releases" for r in failures):
+        click.echo()
+        click.echo("Enabling immutable releases...")
+        fix_result = fix_immutable_releases(repo)
+        _print_check_results([fix_result])
+        if fix_result.passed:
+            fixed_any = True
+
+    if any(r.name == "tag-protection" for r in failures):
+        click.echo()
+        click.echo("Protecting tag operations...")
+        fix_result = fix_tag_protection(repo)
+        _print_check_results([fix_result])
+        if fix_result.passed:
+            fixed_any = True
 
     if any(r.name == "environment" for r in failures):
         click.echo()

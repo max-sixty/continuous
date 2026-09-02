@@ -444,6 +444,15 @@ Bot-deleting an admin-pushed tag is brief availability damage at worst;
 repos that need stronger protection against published-tag deletion can
 add a no-bypass `deletion` ruleset (see the publisher uplift below).
 
+**Immutable releases.** Enable this before the next release. It locks that
+release, its assets, and its associated tag; GitHub does not apply the setting
+retroactively:
+
+```bash
+gh api "repos/$REPO/immutable-releases" \
+  -H 'X-GitHub-Api-Version: 2026-03-10' --method PUT
+```
+
 **Environment gates.** A new Environment admits every ref and requires no
 approval — `deployment_branch_policy: null`, no reviewers — so a bot-pushed
 branch or tag reaches its secrets and mints its OIDC token. Survey what
@@ -996,6 +1005,7 @@ line picks the row that matches the chosen harness):
 - [ ] Config: `.config/tend.yaml` created (with `harness` set if Codex)
 - [ ] Workflows: generated in `.github/workflows/`
 - [ ] Rulesets: merge restriction on default branch (admin bypass), tag operations on all tags (admin bypass)
+- [ ] Immutable releases: enabled before the next release
 - [ ] Release/deploy secrets: environment-protected; the environment's deployment-branch-policies list only the admin-gated refs from §3 (default branch and/or all tags)
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
 - [ ] Badge: added to README (unless skipped, or no README)

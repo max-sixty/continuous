@@ -1,7 +1,7 @@
 """Security checks for tend setup.
 
-Verifies the two boundaries docs/security-model.md claims: the bot cannot
-land code (branch protection on configured branches, bot permission level),
+Verifies the boundaries docs/security-model.md claims: the bot cannot land
+code (protected branches and tag operations), future releases are immutable,
 and a run the bot can cause reaches no credential (the `tend` environment's
 deployment branch policy, every other credential-holding environment's gate,
 the operational secrets living in the environment, and no repo-level secret
@@ -83,6 +83,8 @@ BYPASS_ACTOR_TYPES_ABOVE_BOT = frozenset({"OrganizationAdmin", "EnterpriseOwner"
 # achieves is re-publishing what an admin already published.
 BOT_STEERABLE_TRIGGERS = frozenset({"release", "repository_dispatch"})
 
+IMMUTABLE_RELEASES_API_VERSION = "2026-03-10"
+
 
 @dataclass
 class CheckResult:
@@ -156,6 +158,70 @@ def detect_default_branch(repo: str) -> str | None:
         branch = result.stdout.strip()
         return branch or None
     return None
+
+
+def check_immutable_releases(repo: str) -> CheckResult:
+    """Check that future published releases and their tags cannot be rewritten."""
+    result = _gh(
+        "api",
+        "-H",
+        f"X-GitHub-Api-Version: {IMMUTABLE_RELEASES_API_VERSION}",
+        f"repos/{repo}/immutable-releases",
+    )
+    if result is None:
+        return CheckResult("immutable-releases", None, "gh CLI not found")
+    if result.returncode != 0:
+        # GitHub represents the disabled state as 404 rather than a JSON body.
+        if "HTTP 404" in result.stderr:
+            return CheckResult(
+                "immutable-releases",
+                False,
+                "Immutable releases are disabled. A write-access bot can "
+                "rewrite a published release's assets or notes. Run "
+                "`tend check --fix`.",
+            )
+        return CheckResult(
+            "immutable-releases", None, f"API error: {result.stderr.strip()}"
+        )
+    try:
+        enabled = json.loads(result.stdout)["enabled"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return CheckResult(
+            "immutable-releases", None, "GitHub returned an unreadable response"
+        )
+    if enabled is True:
+        return CheckResult(
+            "immutable-releases",
+            True,
+            "Future published releases and their tags will be immutable.",
+        )
+    return CheckResult(
+        "immutable-releases",
+        False,
+        "Immutable releases are disabled. A write-access bot can rewrite a "
+        "published release's assets or notes. Run `tend check --fix`.",
+    )
+
+
+def check_tag_protection(repo: str, bot_name: str) -> CheckResult:
+    """Check that the bot can neither create nor repoint a tag."""
+    protected = _tags_admin_gated(repo, bot_name)
+    if protected is None:
+        return CheckResult(
+            "tag-protection", None, "Could not verify the all-tags ruleset"
+        )
+    if protected:
+        return CheckResult(
+            "tag-protection",
+            True,
+            "All tag creation and updates require admin access.",
+        )
+    return CheckResult(
+        "tag-protection",
+        False,
+        "The bot can create or repoint a tag. Run `tend check --fix` to "
+        "create an admin-gated all-tags ruleset.",
+    )
 
 
 def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResult:
@@ -1539,6 +1605,31 @@ def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
     )
 
 
+def _tag_operations_ruleset() -> str:
+    """Build the canonical admin-gated all-tags ruleset body."""
+    return json.dumps(
+        {
+            "name": "Tag operations",
+            "target": "tag",
+            "enforcement": "active",
+            "conditions": {
+                "ref_name": {
+                    "include": ["~ALL"],
+                    "exclude": [],
+                }
+            },
+            "rules": [{"type": "creation"}, {"type": "update"}],
+            "bypass_actors": [
+                {
+                    "actor_id": ROLE_ID_ADMIN,
+                    "actor_type": "RepositoryRole",
+                    "bypass_mode": "exempt",
+                }
+            ],
+        }
+    )
+
+
 def admitted_refs(results: list[CheckResult]) -> list[str]:
     """The refs the environment may admit, read off the branch-protection runs.
 
@@ -1637,6 +1728,57 @@ def fix_environment(repo: str, admitted: list[str]) -> CheckResult:
     )
 
 
+def fix_immutable_releases(repo: str) -> CheckResult:
+    """Enable GitHub's repository-level immutable releases setting."""
+    result = _gh(
+        "api",
+        "-X",
+        "PUT",
+        "-H",
+        f"X-GitHub-Api-Version: {IMMUTABLE_RELEASES_API_VERSION}",
+        f"repos/{repo}/immutable-releases",
+    )
+    if result is None:
+        return CheckResult("immutable-releases", None, "gh CLI not found")
+    if result.returncode != 0:
+        return CheckResult(
+            "immutable-releases",
+            False,
+            f"Could not enable immutable releases: {result.stderr.strip()}",
+        )
+    return CheckResult(
+        "immutable-releases",
+        True,
+        "Enabled immutable releases for future published releases.",
+    )
+
+
+def fix_tag_protection(repo: str) -> CheckResult:
+    """Create the canonical admin-gated all-tags ruleset."""
+    result = _gh(
+        "api",
+        f"repos/{repo}/rulesets",
+        "--method",
+        "POST",
+        "--input",
+        "-",
+        input=_tag_operations_ruleset(),
+    )
+    if result is None:
+        return CheckResult("tag-protection", None, "gh CLI not found")
+    if result.returncode != 0:
+        return CheckResult(
+            "tag-protection",
+            False,
+            f"Failed to create tag ruleset: {result.stderr.strip()}",
+        )
+    return CheckResult(
+        "tag-protection",
+        True,
+        "Created 'Tag operations' ruleset — only admins can create or update tags.",
+    )
+
+
 def fix_branch_protection(
     repo: str,
     default_branch: str,
@@ -1722,6 +1864,8 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
         if branch != default_branch:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
     results.append(check_bot_permission(repo, cfg.bot_name))
+    results.append(check_tag_protection(repo, cfg.bot_name))
+    results.append(check_immutable_releases(repo))
     admitted = admitted_refs(results)
     results.append(check_environment(repo, admitted))
     results.append(check_environment_deployments(repo))

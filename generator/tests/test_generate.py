@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.resources
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -323,9 +325,8 @@ def test_memory_gist_follows_a_per_workflow_claude_override(
     assert "memory_gist:" not in workflows["tend-review.yaml"]
 
 
-def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
-    """Codex runs on the runner (no proxy sandbox), so the sandbox_* inputs are
-    not threaded — a codex adopter uses `setup:` instead."""
+def test_sandbox_levers_rendered_for_codex(tmp_path: Path) -> None:
+    """Codex shares the proxy sandbox, so its action receives the levers."""
     extra = dedent("""\
         harness: codex
         model: gpt-5.5
@@ -335,7 +336,7 @@ def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path, extra))
     for wf in generate_all(cfg):
         for inputs in _agent_step_inputs(wf.content):
-            assert "sandbox_path" not in inputs
+            assert "sandbox_path" in inputs
 
 
 def test_setup_uses_with_parameters_gets_if_guard(tmp_path: Path) -> None:
@@ -749,6 +750,47 @@ def test_ci_fix_custom_branches(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     ci_fix = workflows["tend-ci-fix.yaml"]
     assert 'branches: ["main", "release"]' in ci_fix.content
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "started", "updated", "expected"),
+    [
+        ("failure", "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", "true"),
+        ("cancelled", "2026-01-01T00:00:00Z", "2026-01-01T05:54:59Z", "false"),
+        ("cancelled", "2026-01-01T00:00:00Z", "2026-01-01T05:55:00Z", "true"),
+    ],
+)
+def test_ci_fix_classifies_six_hour_cancellations(
+    tmp_path: Path,
+    conclusion: str,
+    started: str,
+    updated: str,
+    expected: str,
+) -> None:
+    cfg = Config.load(_minimal_config(tmp_path, _extra_for("ci-fix")))
+    workflow = yaml.safe_load(
+        next(
+            wf for wf in generate_all(cfg) if wf.filename == "tend-ci-fix.yaml"
+        ).content
+    )
+    script = workflow["jobs"]["classify"]["steps"][0]["run"]
+    output = tmp_path / "output"
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={
+            "CONCLUSION": conclusion,
+            "STARTED_AT": started,
+            "UPDATED_AT": updated,
+            "GITHUB_OUTPUT": str(output),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == f"should_fix={expected}\n"
 
 
 def test_cli_init_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1265,11 +1307,11 @@ def test_fork_guard_omitted_when_repo_owner_empty(tmp_path: Path) -> None:
                 f"{filename} job '{job_name}' must not contain the guard "
                 "when repo_owner is unset"
             )
-    # ci-fix's pre-existing conclusion check must survive even without the guard
+    # ci-fix still classifies failure vs six-hour cancellation without the guard.
     ci_fix = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
-    assert (
-        ci_fix["jobs"]["fix-ci"]["if"]
-        == "github.event.workflow_run.conclusion == 'failure'"
+    assert "github.event.workflow_run.conclusion" in ci_fix["jobs"]["classify"]["if"]
+    assert ci_fix["jobs"]["fix-ci"]["if"] == (
+        "needs.classify.outputs.should_fix == 'true'"
     )
 
 

@@ -54,11 +54,12 @@ on its own merits. Neither is being pursued: both require tend to stand up
 and operate a hosted service (a token-minting endpoint or a full webhook
 handler), which gives up tend's defining property of stamping workflow files
 into the adopter's repo and running nothing of its own. The credential proxy
-keeps the PAT out of the agent on the Claude harness, and the environment gate
-keeps it out of any workflow the bot can start on its own. What remains is that
-the PAT is long-lived, and that the Codex harness still passes it directly; both
-are accepted, and `docs/security-model.md` records them. The analysis is kept
-for the record.
+keeps the PAT out of the agent on both harnesses, and the environment gate keeps
+it out of any workflow the bot can start on its own. What remains is that the
+PAT is broad and long-lived if the runner or proxy itself is compromised, and a
+hijacked agent can exercise its authority through the live proxy for the run's
+lifetime. Both are accepted, and `docs/security-model.md` records them. The
+analysis is kept for the record.
 
 ### Model A: token-minting service
 

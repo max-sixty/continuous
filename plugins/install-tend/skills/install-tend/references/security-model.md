@@ -33,6 +33,11 @@ The two admin-gated operations are:
   by `creation`, so a deleted tag can't be substituted with malicious
   code; the only damage is brief availability of the tag itself.
 
+GitHub's immutable-releases setting closes the adjacent Releases API path:
+once a release is published, its record, assets, and associated tag are
+locked. The setting is prospective, so install-tend enables it before the
+next release and `tend check` verifies it directly.
+
 The "all tags" scope is deliberate: matching every tag removes a per-repo
 pattern choice and keeps the chain a single uniform rule. Adopters that
 need a narrower or layered configuration (per-pattern rulesets,

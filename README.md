@@ -25,7 +25,7 @@ To use Tend, a project needs:
   - A Claude Max subscription (harness = "claude")
   - An OpenAI API key (harness = "codex"). A ChatGPT subscription via
     a Codex `auth.json` is **not** compatible with tend's concurrent
-    workflows — see [Codex (alternative)](#codex-alternative).
+    workflows — see [Codex (experimental alternative)](#codex-experimental-alternative).
 
 Tend offers the default code & guidance for the agent. Specifically that means:
 
@@ -61,11 +61,11 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
   - Maintainers of sizeable OSS projects [get a 20x Claude Max subscription
     for free from
     Anthropic](https://claude.com/contact-sales/claude-for-oss).
-- While it's built to protect important secrets, a determined attacker can
-  get a) the bot's token and b) the harness auth credential (Claude OAuth
-  token, OpenAI API key, or ChatGPT auth.json). They can't do that much
-  with these: burn some tokens and close some issues.
-  - They specifically _cannot_ merge to the default branch, nor create releases.
+- A hijacked agent can use the bot's proxied GitHub authority while that run
+  is alive and spend model tokens. The agent cannot read the credentials
+  themselves, but the live proxies are still capabilities it can invoke.
+  - They specifically _cannot_ merge to the default branch. Releases published
+    after installation are immutable, including their tag and assets.
 
 ## Workflows
 
@@ -119,17 +119,18 @@ resolve bot identity. They differ in how the agent runs:
   credential-injecting proxy, so the bot token and Anthropic credential
   never enter the agent's environment. Each workflow's prompt is a slash
   command (`/tend-ci-runner:review`) that loads the matching skill.
-- **Codex harness** — installs the `@openai/codex` CLI on the runner and
-  shells out to `codex exec`. An AGENTS.md staged into `$CODEX_HOME`
-  teaches Codex to resolve `/tend-ci-runner:NAME` references to the
-  bundled skill markdown.
+- **Codex harness** — installs the `@openai/codex` CLI, then runs
+  `codex exec` as the same non-sudo sandbox user. GitHub calls use Tend's
+  exact-host proxy; model calls use OpenAI's narrow Responses API proxy.
+  An AGENTS.md staged into `$CODEX_HOME` teaches Codex to resolve
+  `/tend-ci-runner:NAME` references to the bundled skill markdown.
 
 Edit the config or the generator — not the workflow files. They're regenerated
 on every `tend@latest init`.
 
 ## Security
 
-Tend gives Claude write access to a repository. The security model has six
+Tend gives an agent write access to a repository. The security model has seven
 layers:
 
 **Merge restriction** is the primary boundary. A GitHub ruleset prevents the
@@ -140,6 +141,10 @@ default branch (`current_user_can_bypass` — GitHub's evaluation, so teams,
 custom roles, and org-level rulesets are all accounted for) and refuses to
 start unless the answer is no. `tend check` verifies the setup;
 `tend check --fix` creates the ruleset.
+
+**Immutable releases** lock each release published after the setting is
+enabled, including its assets and tag. `tend check` requires the setting and
+`--fix` enables it before the next release.
 
 **Environment-gated credentials** — a workflow the bot can cause to run
 reaches no credential: not the bot token, not the model auth, not a release
@@ -156,11 +161,11 @@ steers. It flags any repo-level secret not explicitly listed in
 `tend check --fix` creates the environment and sets its policy; moving the
 secrets into it stays manual — their values can't be read back.
 
-**Credential isolation** — the Claude harness runs the agent as a separate
-non-sudo user and keeps the bot token and Anthropic credential in a local
-proxy that injects them per host. The agent holds only dummies, so code
-running in the session can't read the real secrets. The Codex harness passes
-them directly.
+**Credential isolation** — both harnesses run the agent as a separate non-sudo
+user. Tend's exact-host proxy holds the bot token; Claude model auth uses the
+same mechanism, while Codex model auth uses OpenAI's proxy that accepts only
+Responses API calls. Code running in the session can invoke those live
+capabilities but cannot read the real credentials.
 
 **Config pinning** — the action restores `.mcp.json`, `.claude.json`,
 `.gitmodules`, `.ripgreprc`, `.husky`, and every `CLAUDE.md`, `CLAUDE.local.md`,
@@ -203,7 +208,7 @@ it; `tend check` verifies it), depend on the harness:
 [example config](docs/tend.example.yaml) for scopes.
 `CLAUDE_CODE_OAUTH_TOKEN` is from `claude setup-token`. The other two
 are standard API keys from console.anthropic.com and
-platform.openai.com. See [Codex (alternative)](#codex-alternative) for
+platform.openai.com. See [Codex (experimental alternative)](#codex-experimental-alternative) for
 why the Codex subscription `auth.json` path isn't supported;
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
@@ -245,11 +250,13 @@ environment. Two auth modes:
 The proxy injects whichever you set into requests to api.anthropic.com; the
 agent itself only ever holds a dummy.
 
-### Codex (alternative)
+### Codex (experimental alternative)
 
-Installs `@openai/codex` on the runner and invokes `codex exec` against a
-bundled `AGENTS.md` that teaches it to resolve tend's slash commands to
-skill markdown.
+Installs `@openai/codex` and invokes `codex exec` as the non-sudo sandbox user.
+GitHub access goes through Tend's exact-host proxy; the OpenAI key is read from
+stdin by OpenAI's narrow Responses API proxy and is never placed in the agent's
+environment. A bundled `AGENTS.md` teaches Codex to resolve tend's slash
+commands to skill markdown.
 
 Use `OPENAI_API_KEY` (a standard OpenAI API key, pay-per-token, from
 platform.openai.com). Works for any repo, public or private.
