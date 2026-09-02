@@ -1521,6 +1521,21 @@ def test_cli_check_all_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert "PASS" in result.output
 
 
+def test_cli_check_reports_disabled_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(tmp_path, "bot_name: test-bot\nenabled: false\n")
+    monkeypatch.chdir(tmp_path)
+
+    with patch("tend.cli.run_all_checks", return_value=[]):
+        result = CliRunner().invoke(main, ["check"])
+
+    assert result.exit_code == 0
+    assert (
+        "Tend is disabled in config; new operational jobs will skip." in result.output
+    )
+
+
 def test_cli_check_failure_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

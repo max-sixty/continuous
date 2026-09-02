@@ -233,8 +233,10 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
     """Verify security prerequisites (branch protection, bot access, credentials)."""
     cfg = Config.load(config_path)
-    results = run_all_checks(cfg, repo)
+    if not cfg.enabled:
+        click.echo("Tend is disabled in config; new operational jobs will skip.")
 
+    results = run_all_checks(cfg, repo)
     click.echo("Security checks:")
     _print_check_results(results)
 
