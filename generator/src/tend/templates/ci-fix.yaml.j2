@@ -20,6 +20,7 @@ jobs:
     permissions:
 <<permissions(issues=False)>>
     steps:
-<<checkout(cfg, ref=cfg.default_branch)>>
+<<check_tend_enabled(cfg)>>
+<<checkout(cfg, ref=cfg.default_branch, if_condition=tend_enabled_condition)>>
 <<setup>>
-<<agent_step(cfg, block_input('prompt', full_prompt))>>
+<<agent_step(cfg, block_input('prompt', full_prompt), if_condition=tend_enabled_condition)>>

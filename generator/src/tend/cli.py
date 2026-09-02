@@ -43,6 +43,16 @@ def _detect_default_branch_local() -> str:
     return "main"
 
 
+def _runtime_config_path(path: Path) -> str:
+    """Return the config's repository-relative path for runtime checks."""
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError as error:
+        raise click.ClickException(
+            f"Config must be inside the repository so workflows can read it: {path}"
+        ) from error
+
+
 def _update_actionlint_config(dry_run: bool) -> None:
     """Ensure `.github/actionlint.yaml` ignores the `concurrency.queue` schema
     false positive, so an adopter's workflow lint stays green on regen.
@@ -142,6 +152,9 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
             preview_path = Path(tmp) / "tend.yaml"
             preview_path.write_text(preview_yaml, encoding="utf-8")
             cfg = Config.load(preview_path)
+    cfg.config_path = _runtime_config_path(
+        config_path if config_path is not None else Path(".config/tend.yaml")
+    )
     cfg.default_branch = _detect_default_branch_local()
     cfg.repo_owner = detect_canonical_owner() or ""
     if not cfg.repo_owner:

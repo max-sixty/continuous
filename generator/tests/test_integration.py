@@ -419,7 +419,25 @@ def test_init_custom_config_path(
     assert result.exit_code == 0
 
     for path in _workflow_dir(tmp_path).glob("tend-*.yaml"):
-        assert "custom-bot" in path.read_text(), f"{path.name} missing custom bot name"
+        content = path.read_text()
+        assert "custom-bot" in content, f"{path.name} missing custom bot name"
+        if path.name != "tend-install-test.yaml":
+            assert "contents/custom/my-tend.yaml" in content
+
+
+def test_init_rejects_a_config_outside_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    custom = tmp_path / "tend.yaml"
+    custom.write_text("bot_name: custom-bot")
+    monkeypatch.chdir(repo)
+
+    result = CliRunner().invoke(main, ["init", "-c", str(custom)])
+
+    assert result.exit_code == 1
+    assert "Config must be inside the repository" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -717,15 +735,16 @@ def test_init_notifications_has_precheck(
     }
     steps = data["jobs"]["notifications"]["steps"]
 
-    # First step is the pre-check
-    check_step = steps[0]
+    assert steps[0]["id"] == "tend_enabled"
+    check_index = next(i for i, step in enumerate(steps) if step.get("id") == "check")
+    check_step = steps[check_index]
     assert check_step["id"] == "check"
     assert "--paginate --slurp" in check_step["run"]
     assert "subscription" in check_step["run"]
     assert "notifications/threads/" not in check_step["run"]
 
-    # All subsequent steps are gated on the check output
-    for step in steps[1:]:
+    # Everything after the notification check is gated on its output.
+    for step in steps[check_index + 1 :]:
         assert "if" in step, (
             f"step {step.get('uses', step.get('name'))} missing if guard"
         )
@@ -754,7 +773,11 @@ def test_notifications_precheck_tolerates_transient_non_json(
     data = yaml.safe_load(
         (_workflow_dir(tmp_path) / "tend-notifications.yaml").read_text()
     )
-    script = data["jobs"]["notifications"]["steps"][0]["run"]
+    script = next(
+        step["run"]
+        for step in data["jobs"]["notifications"]["steps"]
+        if step.get("id") == "check"
+    )
 
     # Fake `gh` accepts the idempotent repository-watch write, then mimics a
     # transient notifications blip: the endpoint returns a 200 with an HTML
@@ -957,6 +980,11 @@ def test_install_test_workflow_shape(
     assert "head.repo.full_name == github.repository" in job["if"]
     assert job["permissions"] == {"contents": "read"}
     assert "secrets." not in content
+    steps = job["steps"]
+    assert steps[0]["id"] == "tend_enabled"
+    assert "?ref=${{ github.event.pull_request.head.sha }}" in steps[0]["run"]
+    for step in steps[1:]:
+        assert step["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
     # Generator-drift step regenerates with the same flag to keep output stable.
     # Version is pinned from the committed header (not `@latest`) so a release

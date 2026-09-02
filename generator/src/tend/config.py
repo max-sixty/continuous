@@ -31,6 +31,7 @@ KNOWN_WORKFLOWS = {
 }
 KNOWN_TOP_LEVEL = {
     "bot_name",
+    "enabled",
     "memory_gist",
     "harness",
     "model",
@@ -190,6 +191,10 @@ class Config:
     effort: str
     setup: list[SetupStep]
     workflows: dict[str, WorkflowConfig]
+    # Runtime kill switch. Generated workflows stay installed and read this
+    # value from the default branch at the start of every operational job.
+    enabled: bool = True
+    config_path: str = ".config/tend.yaml"
     # Owner of the repo where workflows will run. Used to gate jobs that fail
     # noisily on forks (no access to bot/Claude secrets). Not user-configurable;
     # cli.init populates this via `gh repo view` so fork-based maintainer
@@ -291,6 +296,10 @@ class Config:
         memory_gist = raw.get("memory_gist", False)
         if not isinstance(memory_gist, bool):
             raise click.ClickException("memory_gist must be true or false")
+
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise click.ClickException("enabled must be true or false")
 
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
@@ -662,6 +671,7 @@ class Config:
             sandbox_env=sandbox_env,
             sandbox_setup=sandbox_setup,
             memory_gist=memory_gist,
+            enabled=enabled,
             workflows=workflows,
             allowed_repo_secrets=allowed,
         )

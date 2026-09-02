@@ -31,7 +31,57 @@ jobs:
       actions: read
       issues: write
     steps:
+      - name: Check whether tend is enabled
+        id: tend_enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/.config/tend.yaml" \
+            > "$RUNNER_TEMP/tend.yaml"
+          ruby - "$RUNNER_TEMP/tend.yaml" <<'RUBY' >> "$GITHUB_OUTPUT"
+          # Inspect the parsed YAML node so the extra YAML 1.1 boolean words (yes/no/on/off)
+          # do not diverge from the YAML 1.2 parser used by `tend init`.
+          require "psych"
+
+          path = ARGV.fetch(0)
+          documents = Psych.parse_stream(File.read(path)).children
+          unless documents.length == 1
+            abort "tend config must contain exactly one YAML document"
+          end
+
+          mapping = documents.first.root
+          unless mapping.is_a?(Psych::Nodes::Mapping)
+            abort "tend config must contain a YAML mapping"
+          end
+
+          matches = mapping.children.each_slice(2).select do |key, _value|
+            key.is_a?(Psych::Nodes::Scalar) && key.value == "enabled"
+          end
+          abort "tend config: enabled must appear at most once" if matches.length > 1
+
+          value = matches.dig(0, 1)
+          enabled = true
+          if value
+            bool_tag = value.respond_to?(:tag) && value.tag == "tag:yaml.org,2002:bool"
+            literal = value.value.downcase if value.is_a?(Psych::Nodes::Scalar)
+            unless value.is_a?(Psych::Nodes::Scalar) &&
+                (value.plain || bool_tag) &&
+                ["true", "false"].include?(literal)
+              abort "tend config: enabled must be true or false"
+            end
+            enabled = literal == "true"
+          end
+
+          puts "enabled=#{enabled}"
+
+          unless enabled
+            warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
+          end
+          RUBY
       - name: React with eyes
+        if: steps.tend_enabled.outputs.enabled == 'true'
         run: |
           gh api "repos/$REPO/$TARGET/reactions" -f content=eyes --silent \
             || echo "::warning::could not add the eyes reaction"
@@ -47,6 +97,7 @@ jobs:
       # tree.
       - name: Resolve PR checkout ref
         id: pr_ref
+        if: steps.tend_enabled.outputs.enabled == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
@@ -58,6 +109,7 @@ jobs:
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
       - uses: actions/checkout@v7
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           ref: ${{ steps.pr_ref.outputs.ref }}
           allow-unsafe-pr-checkout: true
@@ -66,6 +118,7 @@ jobs:
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
       - uses: max-sixty/tend/claude@X.Y.Z
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -76,7 +129,9 @@ jobs:
             /tend-ci-runner:review ${{ github.event.pull_request.number }}
 
       - name: Remove the eyes reaction
-        if: always()
+        if: |
+          always()
+          && (steps.tend_enabled.outputs.enabled == 'true')
         run: |
           REACTION_ID=$(gh api --paginate \
             "repos/$REPO/$TARGET/reactions?content=eyes&per_page=100" \

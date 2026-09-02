@@ -186,10 +186,17 @@ Claude; `harness: codex` selects OpenAI Codex (see
 ```yaml
 bot_name: my-project-bot
 
+# Optional runtime switch — every new job skips before checkout or setup
+# enabled: false
+
 # Optional — defaults to "claude"
 # harness: codex
 # effort: medium   # codex only: low | medium | high | xhigh
 ```
+
+Top-level `enabled: false` pauses tend from the default branch without removing
+its workflows. Setting it back to `true` (or removing it) resumes new jobs
+without regeneration.
 
 The secrets, stored in the repo's `tend` environment (install-tend creates
 it; `tend check` verifies it), depend on the harness:
