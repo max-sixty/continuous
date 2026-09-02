@@ -179,3 +179,41 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
             findings.append(f"--- {action} :: {name}\n{result.stdout}")
 
     assert not findings, "\n".join(findings)
+
+
+# Inputs whose value is a credential. Matched by name so an input added later
+# is covered without anyone remembering this test exists — every credential
+# either action takes is named for what it is (`github_token`,
+# `anthropic_api_key`, `claude_code_oauth_token`, `openai_api_key`).
+CREDENTIAL_INPUT = re.compile(r"(_token|_key|secret|password)$")
+INPUT_REF = re.compile(r"\$\{\{\s*inputs\.([A-Za-z0-9_]+)\s*\}\}")
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_credential_inputs_reach_run_bodies_through_env(action: str) -> None:
+    """A credential must not be interpolated into an inline `run:` body.
+
+    GitHub substitutes `${{ … }}` into the script *text* before bash parses it,
+    so a secret carrying a quote or `$(…)` stops being a string being compared
+    and becomes script executing as the runner user — which holds the real PAT
+    and, under codex, the model key. Through `env:` the value is passed to the
+    process, never to the parser. Nothing else catches this: shellcheck sees
+    the placeholder the sibling test substitutes in, and actionlint does not
+    read action.yaml at all.
+    """
+    doc = YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())
+
+    credentials = {n for n in doc["inputs"] if CREDENTIAL_INPUT.search(n)}
+    assert credentials, f"{action}: no credential-shaped inputs — did they rename?"
+
+    inlined = [
+        f"{step.get('name', '<unnamed>')} inlines inputs.{name}"
+        for step in doc["runs"]["steps"]
+        if "run" in step
+        for name in sorted(set(INPUT_REF.findall(step["run"])))
+        if name in credentials
+    ]
+    assert not inlined, (
+        f"{action}: pass these through the step's `env:` instead of `${{{{ }}}}` "
+        f"in the body: {inlined}"
+    )
