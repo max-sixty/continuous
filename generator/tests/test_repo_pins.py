@@ -181,12 +181,20 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
     assert not findings, "\n".join(findings)
 
 
-# Inputs whose value is a credential. Matched by name so an input added later
-# is covered without anyone remembering this test exists — every credential
-# either action takes is named for what it is (`github_token`,
-# `anthropic_api_key`, `claude_code_oauth_token`, `openai_api_key`).
-CREDENTIAL_INPUT = re.compile(r"(_token|_key|secret|password)$")
-INPUT_REF = re.compile(r"\$\{\{\s*inputs\.([A-Za-z0-9_]+)\s*\}\}")
+# Inputs whose value is secret. Matched by name suffix so an input added later
+# is covered without anyone remembering this test exists, which holds while
+# credentials keep being named for what they are (`github_token`,
+# `anthropic_api_key`, `claude_code_oauth_token`, `openai_api_key`). The one
+# input that needed the convention widened for it is `memory_gist_id`: it comes
+# from a repo secret and grants read/write to the bot's memory gist, so
+# `gist_id` joins the suffixes rather than the test skipping it.
+CREDENTIAL_INPUT = re.compile(r"(_token|_key|secret|password|gist_id)$")
+# Anchoring on `${{ … }}` would match the bare reference alone, letting
+# `${{ inputs.x || '' }}` and `${{ format('{0}', inputs.x) }}` through. Any
+# `inputs.<name>` in a `run:` body is necessarily a GHA expression — bash has no
+# such syntax — so the unanchored match is both simpler and strictly broader.
+# (`inputs['x']` index syntax is missed either way.)
+INPUT_REF = re.compile(r"inputs\.([A-Za-z0-9_]+)")
 
 
 @pytest.mark.parametrize("action", ACTIONS)
