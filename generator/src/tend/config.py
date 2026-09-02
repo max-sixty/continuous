@@ -8,10 +8,33 @@ from pathlib import Path
 
 import click
 from ruamel.yaml import YAML
+from ruamel.yaml.nodes import MappingNode, Node, SequenceNode
 
 # ruamel.yaml parses YAML 1.2 by default, which fixes PyYAML's `on:` → True
 # trap and the Norway problem (yes/no/on/off coerced to bool).
 _YAML = YAML(typ="safe", pure=True)
+
+
+def _has_yaml_merge_key(node: Node | None, seen: set[int] | None = None) -> bool:
+    """Return whether a parsed YAML tree contains a `<<` merge key."""
+    if node is None:
+        return False
+    if seen is None:
+        seen = set()
+    if id(node) in seen:
+        return False
+    seen.add(id(node))
+
+    if isinstance(node, MappingNode):
+        for key, value in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                return True
+            if _has_yaml_merge_key(key, seen) or _has_yaml_merge_key(value, seen):
+                return True
+    elif isinstance(node, SequenceNode):
+        return any(_has_yaml_merge_key(value, seen) for value in node.value)
+    return False
+
 
 STANDARD_WORKFLOWS = {
     "review",
@@ -247,8 +270,10 @@ class Config:
                     "and regenerates workflows in one step)."
                 )
             raise click.ClickException(f"Config not found: {path}")
-        with path.open(encoding="utf-8") as f:
-            raw = _YAML.load(f) or {}
+        text = path.read_text(encoding="utf-8")
+        if _has_yaml_merge_key(_YAML.compose(text)):
+            raise click.ClickException("YAML merge keys (<<) are not supported")
+        raw = _YAML.load(text) or {}
 
         if not isinstance(raw, dict):
             raise click.ClickException(

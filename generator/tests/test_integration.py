@@ -931,6 +931,7 @@ def test_init_removes_stale_files_when_no_workflows_enabled(
     result = _run_init()
     assert result.exit_code == 0
     assert not stale.exists()
+    assert "No workflows generated from config." in result.output
     assert "Removed 1 stale" in result.output
 
 

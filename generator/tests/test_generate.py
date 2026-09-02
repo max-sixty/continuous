@@ -134,6 +134,7 @@ def test_top_level_disable_keeps_workflows_installed_and_gates_every_job(
         ("bot_name: bot\n", "true"),
         ("bot_name: bot\nenabled: true\n", "true"),
         ("bot_name: bot\nenabled: false\n", "false"),
+        ("\ufeffbot_name: bot\nenabled: false\n", "false"),
     ],
 )
 def test_runtime_enabled_check(tmp_path: Path, config: str, enabled: str) -> None:
@@ -192,6 +193,23 @@ def test_runtime_enabled_check_rejects_multiple_documents(tmp_path: Path) -> Non
 
     assert result.returncode != 0
     assert "exactly one YAML document" in result.stderr
+
+
+def test_runtime_enabled_check_rejects_yaml_merge_keys(tmp_path: Path) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(
+        "defaults: &defaults\n  enabled: false\n<<: *defaults\nbot_name: bot\n"
+    )
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "YAML merge keys" in result.stderr
 
 
 def test_setup_steps_rendered(tmp_path: Path) -> None:

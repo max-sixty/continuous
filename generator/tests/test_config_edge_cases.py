@@ -59,6 +59,16 @@ def test_enabled_requires_a_boolean(tmp_path: Path, value: str) -> None:
         Config.load(path)
 
 
+def test_yaml_merge_keys_are_rejected(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        "defaults: &defaults\n  enabled: false\n<<: *defaults\nbot_name: my-bot\n",
+    )
+
+    with pytest.raises(ClickException, match="YAML merge keys"):
+        Config.load(path)
+
+
 @pytest.mark.parametrize("value", ["yes", "1", "{}"])
 def test_memory_gist_requires_a_boolean(tmp_path: Path, value: str) -> None:
     path = _write_config(tmp_path, f"bot_name: my-bot\nmemory_gist: {value}\n")

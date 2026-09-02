@@ -210,7 +210,7 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 
     if not workflows:
         suffix = f" Removed {removed} stale tend-*.yaml file(s)." if removed else ""
-        click.echo(f"No workflows enabled in config.{suffix}")
+        click.echo(f"No workflows generated from config.{suffix}")
         return
 
     suffix = f" ({removed} removed)" if removed else ""
