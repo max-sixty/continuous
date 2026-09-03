@@ -164,6 +164,7 @@ Check the project's CLAUDE.md for language-specific review criteria and conventi
 **Testing:**
 
 - Are the changes adequately tested?
+- Where a doc comment and the code disagree, the finding is which one is wrong — don't suggest a test that pins the current output, which freezes behavior nobody has called intended.
 
 **Same pattern elsewhere:**
 
