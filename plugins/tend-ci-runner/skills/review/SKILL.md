@@ -225,7 +225,7 @@ If there are actionable findings, submit as a review with inline suggestions for
 
 Don't explain what the code does — the author wrote it. Don't nitpick formatting — that's what linters are for. Explain *why* something should change, not just *what*.
 
-**A findings review never supersedes a standing approval — dismiss it.** GitHub moves `reviewDecision` only on an `APPROVED` or a `CHANGES_REQUESTED`, so a COMMENT posted over the bot's own earlier approval leaves the PR reading as bot-approved and mergeable over the findings you just posted. How the head moved makes no difference: an ordinary push leaves the approval standing exactly as a rewrite does. So whenever this round posts findings rather than an approval, dismiss the approval that still decides the PR — after the review POST lands, so a failed post doesn't leave the PR with neither a verdict nor findings:
+**A findings review never supersedes a standing approval — dismiss it.** GitHub moves `reviewDecision` only on an `APPROVED` or a `CHANGES_REQUESTED`, so a COMMENT posted over the bot's own earlier approval leaves the PR reading as bot-approved and mergeable over the findings you just posted. How the head moved makes no difference: an ordinary push leaves the approval standing exactly as a rewrite does. So whenever this round posts a COMMENT rather than an approval, dismiss the approval that still decides the PR — after the review POST lands, so a failed post doesn't leave the PR with neither a verdict nor findings. Findings are the common case, but the withheld-merge-readiness COMMENT above is reachable with an approval already standing, and it leaves the same wrong signal: the PR reads bot-approved while the review names a blocker.
 
 ```bash
 REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
@@ -237,7 +237,7 @@ STANDING=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> | jq -r '.
 if [ -n "$STANDING" ]; then
   # PUT, not POST — the dismiss endpoint requires it.
   gh api "repos/$REPO/pulls/<number>/reviews/$STANDING/dismissals" \
-    -X PUT -f message="Superseded by findings on a later commit."
+    -X PUT -f message="Superseded by the review on a later commit."
 fi
 ```
 
@@ -434,11 +434,14 @@ Then handle the outcome:
 - **All required checks passed** -> done.
 - **A check failed** and it's related to the PR -> post a follow-up COMMENT review with analysis and inline suggestions, then dismiss the bot's approval:
   ```bash
+  # Same field step 6 dismisses on: the approval this session posted is the one
+  # now deciding the PR, and it reads "" once dismissed, so a rerun is a no-op.
+  STANDING=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> | jq -r '.standing_approval_id')
   # Use PUT, not POST — the dismiss endpoint requires it
-  gh api "repos/$REPO/pulls/<number>/reviews/$REVIEW_ID/dismissals" \
+  [ -z "$STANDING" ] || gh api "repos/$REPO/pulls/<number>/reviews/$STANDING/dismissals" \
     -X PUT -f message="CI failed — <reason>"
   ```
-  Skip if already dismissed. On **human-authored PRs**, do not push fixes — post the analysis and offer to fix, then wait for the author to accept. On **third-party bot PRs** (Dependabot, renovate, etc.), don't stop at analysis: apply the fix per step 9 so the PR can go green, since no author will act on the offer. On PRs this bot authored, step 9's rule holds: the follow-up COMMENT review dispatches the author session, which applies the fix.
+  On **human-authored PRs**, do not push fixes — post the analysis and offer to fix, then wait for the author to accept. On **third-party bot PRs** (Dependabot, renovate, etc.), don't stop at analysis: apply the fix per step 9 so the PR can go green, since no author will act on the offer. On PRs this bot authored, step 9's rule holds: the follow-up COMMENT review dispatches the author session, which applies the fix.
 - **A check was cancelled** (conclusion `cancelled`) -> do nothing. Cancellations are almost always caused by concurrency groups — a new workflow run (often triggered by your own approval event) replaces the in-progress one. The replacement run will cover the cancelled checks. **Do not re-run cancelled jobs** — that creates another run that gets cancelled again, wasting time in a loop.
 - **A check failed** (conclusion `failure`, not `cancelled`) and it's a transient flake (unrelated to the PR changes) ->
   1. **Re-run the failed jobs:**

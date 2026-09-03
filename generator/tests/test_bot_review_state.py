@@ -516,3 +516,14 @@ def test_review_skill_dismisses_a_standing_approval_when_it_posts_findings() -> 
     assert "A findings review never supersedes a standing approval" in skill
     # The force-push branch defers to that one rule rather than restating it.
     assert "last_substantive.state, .last_substantive.id" not in skill
+
+
+def test_review_skill_defines_every_id_its_dismissal_recipes_use() -> None:
+    """Step 7's CI-failure dismissal read `$REVIEW_ID`, which step 1 was the
+    only site to name. With that sentence gone the path collapsed to
+    `reviews//dismissals`, leaving an approval standing over a red check."""
+    skill = REVIEW_SKILL.read_text()
+
+    assert "$REVIEW_ID" not in skill
+    # Both dismissal sites read the same field, so there is one mechanism.
+    assert skill.count("reviews/$STANDING/dismissals") == 2
