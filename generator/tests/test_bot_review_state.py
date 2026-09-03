@@ -527,3 +527,15 @@ def test_review_skill_defines_every_id_its_dismissal_recipes_use() -> None:
     assert "$REVIEW_ID" not in skill
     # Both dismissal sites read the same field, so there is one mechanism.
     assert skill.count("reviews/$STANDING/dismissals") == 2
+
+
+def test_review_skill_spares_the_approval_when_the_comment_withholds_nothing() -> None:
+    """Step 1's unanswered-question exception posts a COMMENT at a head the
+    approval already covers. A trigger keyed on any COMMENT dismisses there,
+    withdrawing a verdict the code still earns and leaving the PR with none —
+    the next run hits the already-reviewed shortcut and posts nothing."""
+    skill = REVIEW_SKILL.read_text()
+
+    assert "posts a COMMENT that withholds the verdict" in skill
+    assert "A COMMENT that withholds nothing does not qualify" in skill
+    assert "whenever this round posts a COMMENT rather than an approval" not in skill
