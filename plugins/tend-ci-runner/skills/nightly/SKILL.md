@@ -141,7 +141,7 @@ Used by both Step 4 (applied to recent diffs) and Step 6 (applied to full files)
 - Stale or incorrect documentation (comments, docstrings that no longer match behavior)
 - Missing test coverage for non-trivial logic
 
-A bug finding earns a PR only where a caller can reach it. For a defect found by reading rather than from an observed failure, name the in-repo call path that triggers it. If no caller can, the finding is a note in the Step 9 summary, not a PR — `pub` visibility doesn't clear the bar on its own, since an item exported incidentally (a utility module under a default-on feature) promises nothing to anyone. Where it *is* part of a published library's documented surface, the fix stands: say so in the PR body, naming the contract rather than the visibility keyword.
+A bug finding earns a PR only where a caller can reach it. For a defect found by reading rather than from an observed failure, name the in-repo call path that triggers it. If no caller can, the finding is a note in the Step 9 summary, not a PR — public visibility doesn't clear the bar on its own, since an item exported incidentally (a utility module under a default-on feature) promises nothing to anyone. Where it *is* part of a published library's documented surface, the fix stands: say so in the PR body, naming the contract rather than the visibility keyword.
 
 **Convention compliance (from CLAUDE.md and project skills):**
 - Code patterns that violate conventions stated in the project's CLAUDE.md
