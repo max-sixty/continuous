@@ -52,7 +52,7 @@ FORCE_PUSHED=$(jq -r '.force_pushed_since' <<<"$STATE")
 When `FORCE_FULL_REVIEW` is true, bypass both the already-reviewed and trivial-
 increment shortcuts: becoming ready asks for a full non-draft review.
 
-If `FORCE_PUSHED` is `true`, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports. If that prior review was an `APPROVED` and the re-review lands on findings rather than an approval, dismiss it too — it is re-anchored onto the rewritten head, so posting a COMMENT alone leaves the PR reading as bot-approved. `jq -r '.last_substantive.state, .last_substantive.id' <<<"$STATE"` gives the state and the `$REVIEW_ID` for step 7's `reviews/$REVIEW_ID/dismissals` call.
+If `FORCE_PUSHED` is `true`, the commit the bot reviewed was rewritten away: ignore `LAST_REVIEW_SHA` entirely and review `HEAD_SHA` in full. The incremental below can't run either — `LAST_REVIEW_SHA` now names the current head rather than anything the bot read, so `LAST_REVIEW_SHA..HEAD_SHA` is empty and every trivial-skip heuristic keyed on it under-reports. A prior `APPROVED` is re-anchored onto the rewritten head too, so it reads as an approval of code nothing reviewed — step 6's dismissal rule clears it, along with the ordinary-push case below.
 
 Otherwise, if `LAST_REVIEW_SHA == HEAD_SHA` and `FORCE_FULL_REVIEW` is false, this commit has already been reviewed — finish without posting. An unanswered conversation question directed at the bot (check below) is the exception: proceed so the review can answer it.
 
@@ -224,6 +224,22 @@ If there are actionable findings, submit as a review with inline suggestions for
 | "The threshold logic is correct" | _(nothing — silence means correct)_ |
 
 Don't explain what the code does — the author wrote it. Don't nitpick formatting — that's what linters are for. Explain *why* something should change, not just *what*.
+
+**A findings review never supersedes a standing approval — dismiss it.** GitHub moves `reviewDecision` only on an `APPROVED` or a `CHANGES_REQUESTED`, so a COMMENT posted over the bot's own earlier approval leaves the PR reading as bot-approved and mergeable over the findings you just posted. How the head moved makes no difference: an ordinary push leaves the approval standing exactly as a rewrite does. So whenever this round posts findings rather than an approval, dismiss the approval that still decides the PR — after the review POST lands, so a failed post doesn't leave the PR with neither a verdict nor findings:
+
+```bash
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+# Re-read rather than reusing step 1's blob — a whole review has passed since.
+# `standing_approval_id` is the approval currently deciding the PR, "" when a
+# dismissal or a later CHANGES_REQUESTED already cleared it, so a second run
+# over the same PR dismisses nothing.
+STANDING=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> | jq -r '.standing_approval_id')
+if [ -n "$STANDING" ]; then
+  # PUT, not POST — the dismiss endpoint requires it.
+  gh api "repos/$REPO/pulls/<number>/reviews/$STANDING/dismissals" \
+    -X PUT -f message="Superseded by findings on a later commit."
+fi
+```
 
 **Form your own opinion independently.** Do not factor in other reviewers' comments or approvals when deciding whether to approve — the value of this review is as an uncorrelated signal.
 
