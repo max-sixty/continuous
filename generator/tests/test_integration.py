@@ -538,9 +538,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
             if url.endswith("tend/secrets")
             else []
         )
-        if any(a.startswith("[.secrets") for a in args):
-            return _make_completed(json.dumps(names))
-        return _make_completed("\n".join(names) + "\n")
+        return _make_completed("".join(f"{n}\n" for n in names))
     if url == "repos/owner/repo" and ".default_branch" in args:
         return _make_completed("main\n")
     if "rules/branches" in url:
@@ -602,7 +600,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
     # deliberately the only place the operational names appear, so a check
     # reading the wrong level cannot pass by accident.
     if "secrets" in url:
-        return _make_completed("[]\n")
+        return _make_completed("")
     return _make_completed(returncode=1)
 
 
@@ -637,7 +635,7 @@ def test_check_full_pipeline_branch_not_protected(
     def fake_gh_unprotected(
         *args: str, **kwargs: str
     ) -> subprocess.CompletedProcess[str]:
-        url = args[1]
+        url = next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
         if url == "repos/owner/repo" and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -647,7 +645,7 @@ def test_check_full_pipeline_branch_not_protected(
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+            return _make_completed("TEND_BOT_TOKEN\nCLAUDE_CODE_OAUTH_TOKEN\n")
         return _make_completed(returncode=1)
 
     with (
