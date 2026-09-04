@@ -260,6 +260,24 @@ If it moved, `git fetch` and read the new commits before verifying: drop whateve
 
 When merging the default branch into a PR branch, **never use `--allow-unrelated-histories`**: if `git merge` fails because no merge base exists, the checkout is broken (usually shallow — re-checkout with `fetch-depth: 0`), and forcing the merge creates add/add conflicts in every file. If the merge fails because untracked files would be overwritten, stash them (`git stash --include-untracked`, merge, `git stash pop`) rather than deleting them.
 
+## Dismiss a standing bot approval the moment you conclude the PR shouldn't merge
+
+A bot `APPROVED` keeps deciding the PR until a dismissal or a `CHANGES_REQUESTED` replaces it. A later COMMENT doesn't, and neither does the event that actually invalidated it: another PR merging and superseding this one, a dependency bump that turns this PR into a downgrade, an approach the thread has since rejected. None of those touch the approved PR, so no review round fires and the approval stands indefinitely — with nothing between it and a merge once the branch stops conflicting. Whichever session reaches the conclusion is the one that has to clear it, whether or not this session posts anything.
+
+Keying the dismissal to a post is what leaves it standing: **Recheck Before Posting** rightly suppresses a second deferral comment when one already stands, and a dismissal that rides on that comment is suppressed with it. Dismiss on the conclusion, then say so in the summary.
+
+```bash
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+# "" once a dismissal or a later CHANGES_REQUESTED has cleared it, so a second
+# session over the same PR dismisses nothing.
+STANDING=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> | jq -r '.standing_approval_id')
+# PUT, not POST — the dismiss endpoint requires it.
+[ -z "$STANDING" ] || gh api "repos/$REPO/pulls/<number>/reviews/$STANDING/dismissals" \
+  -X PUT -f message="<what invalidated the approval>"
+```
+
+The test is the merge, not tidiness: a finding you'd have left as a review comment is no reason to withdraw a verdict the code still earns. Dismiss when merging the PR as it stands would be the wrong outcome.
+
 ## CI Monitoring
 
 After pushing, what to do depends on whether a red result creates a follow-up.
