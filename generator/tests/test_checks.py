@@ -78,12 +78,17 @@ def _make_completed(
     )
 
 
-def _secret_names(args: tuple, *names: str) -> str:
-    """A secrets listing in whichever shape the caller asked for: JSON objects
-    for `gh secret list --json name`, one name per line for the `--jq` reads,
-    which every caller makes under `--paginate`."""
-    if "--json" in args:
-        return json.dumps([{"name": n} for n in names]) + "\n"
+def _url(args: tuple[str, ...]) -> str:
+    """The API path in a `_gh` call, wherever flags put it.
+
+    A `graphql` call carries no path, so it answers with its subcommand.
+    """
+    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
+
+
+def _secret_names(*names: str) -> str:
+    """A secrets listing in the shape every caller reads: one name per line,
+    which is what `--jq` under `--paginate` emits."""
     return "".join(f"{n}\n" for n in names)
 
 
@@ -806,7 +811,7 @@ def test_org_secrets_read_every_page() -> None:
 
     def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(args)
-        url = next(a for a in args if a.startswith(("repos/", "orgs/")))
+        url = _url(args)
         if url == "orgs/acme/actions/secrets":
             return _make_completed(
                 '{"name":"FIRST_PAGE","visibility":"all"}\n'
@@ -1407,9 +1412,7 @@ def test_codex_engine_passes_with_openai_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed(
-                _secret_names(args, BOT_TOKEN_SECRET, OPENAI_KEY_SECRET)
-            )
+            return _make_completed(_secret_names(BOT_TOKEN_SECRET, OPENAI_KEY_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1437,7 +1440,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
+            return _make_completed(_secret_names(BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1488,7 +1491,7 @@ def test_claude_engine_passes_with_api_key() -> None:
             return _make_completed("write\n")
         if "secrets" in url:
             return _make_completed(
-                _secret_names(args, BOT_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET)
+                _secret_names(BOT_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET)
             )
         return _make_completed(returncode=1)
 
@@ -1516,7 +1519,7 @@ def test_claude_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
+            return _make_completed(_secret_names(BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1638,14 +1641,6 @@ def test_init_prints_check_reminder(
 # pushed to a feature branch before its first step. Each way the policy can be
 # too generous is a way the secrets come back.
 # ---------------------------------------------------------------------------
-
-
-def _url(args: tuple[str, ...]) -> str:
-    """The API path in a `_gh` call, wherever flags put it.
-
-    A `graphql` call carries no path, so it answers with its subcommand.
-    """
-    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
 
 
 def _env_gh(env_body: str | None, policies: str = "main"):

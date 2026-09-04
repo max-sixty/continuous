@@ -520,6 +520,14 @@ def _make_completed(
     )
 
 
+def _url(args: tuple[str, ...]) -> str:
+    """The API path in a `_gh` call, wherever flags put it.
+
+    A `graphql` call carries no path, so it answers with its subcommand.
+    """
+    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
+
+
 def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
     if "graphql" in args:
@@ -528,7 +536,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
         return _make_completed(
             json.dumps({"data": {"repository": {"object": {"entries": []}}}})
         )
-    url = next(a for a in args if a.startswith(("repos/", "orgs/")))
+    url = _url(args)
     # Only the ref-gated environment exists, holding the operational secrets.
     if url.endswith("/environments"):
         return _make_completed("tend\n")
@@ -635,7 +643,7 @@ def test_check_full_pipeline_branch_not_protected(
     def fake_gh_unprotected(
         *args: str, **kwargs: str
     ) -> subprocess.CompletedProcess[str]:
-        url = next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
+        url = _url(args)
         if url == "repos/owner/repo" and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
