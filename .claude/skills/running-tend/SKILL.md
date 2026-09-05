@@ -46,11 +46,13 @@ default. `uvx tend@latest init` doesn't rewrite them either, so their
 ### Usage analysis
 
 Pass extra prefixes when running token reports or listing runs so these
-workflows are included:
+workflows are included. Take each script's path from the bundled skill that
+invokes it — `${CLAUDE_PLUGIN_ROOT}` is substituted into bundled plugin skills
+but not into this repo-local one, where it expands to nothing:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/token-report.sh" "${HOURS:-24}" "review-"
-TARGET_REPO=max-sixty/tend "${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh" "tend-" "review-"
+token-report.sh "${HOURS:-24}" "review-"
+TARGET_REPO=max-sixty/tend list-recent-runs.sh "tend-" "review-"
 ```
 
 Under `review-runs`, `$HOURS` is the lookback derived from its Step 1 anchor —
