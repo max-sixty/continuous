@@ -122,6 +122,16 @@ def logs_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def reaped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The supervisor's record that every sandbox process is dead.
+
+    `consolidate_logs` copies nothing without it, so a test that exercises the
+    copy has to say the reap happened.
+    """
+    monkeypatch.setenv("SANDBOX_REAPED", "true")
+
+
+@pytest.fixture
 def sudoless(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run the consolidating copy's commands unprivileged, as themselves.
 
@@ -371,6 +381,7 @@ def test_claude_main_publishes_the_record_three_ways(
     github_files: GithubFiles,
     monkeypatch: pytest.MonkeyPatch,
     sudoless: None,
+    reaped: None,
 ) -> None:
     """End to end: consolidate the sandbox's logs, then report from them.
 
@@ -494,7 +505,7 @@ def test_cost_renders_to_the_cent_and_says_so_when_unknown() -> None:
 
 
 def test_consolidation_refuses_a_symlinked_session_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reaped: None
 ) -> None:
     """`cp -a` follows a symlinked argument, so the sandbox must not aim it.
 
@@ -518,7 +529,7 @@ def test_consolidation_refuses_a_symlinked_session_dir(
 
 
 def test_consolidation_refuses_a_symlinked_dot_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reaped: None
 ) -> None:
     """The dot-dir the session dir sits in is a boundary too.
 
@@ -543,7 +554,7 @@ def test_consolidation_refuses_a_symlinked_dot_directory(
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root is never denied the lstat")
 def test_consolidation_asks_root_about_a_path_it_cannot_stat(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reaped: None
 ) -> None:
     """A dot-dir the agent has closed must not answer the symlink check `False`.
 
@@ -585,7 +596,7 @@ def test_consolidation_asks_root_about_a_path_it_cannot_stat(
 
 
 def test_consolidation_copies_nothing_when_the_agent_never_wrote_logs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reaped: None
 ) -> None:
     """`AGENT_HOME` is unset when sandbox setup died before exporting it.
 
@@ -603,7 +614,7 @@ def test_consolidation_copies_nothing_when_the_agent_never_wrote_logs(
 
 
 def test_consolidation_drops_symlinks_from_the_uploaded_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sudoless: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sudoless: None, reaped: None
 ) -> None:
     """`cp -a` preserves links and upload-artifact resolves them as the runner.
 
@@ -626,3 +637,27 @@ def test_consolidation_drops_symlinks_from_the_uploaded_dir(
     assert (logs_dir / "project" / "session.jsonl").is_file()
     assert not (logs_dir / "project" / "leak.pem").exists()
     assert secret.read_text() == "PRIVATE KEY\n"
+
+
+def test_consolidation_waits_for_the_sandbox_to_be_reaped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A surviving agent can swap the session dir between the check and the copy.
+
+    `copy_agent_tree` checks the tree it is about to read as root, so the check
+    holds only once nothing is left running to change it. The supervisor
+    publishes the reap, and without it the run reports its usage from the
+    stream-json and uploads no session logs.
+    """
+    agent_home = tmp_path / "agent-home"
+    projects = agent_home / ".claude" / "projects" / "project"
+    projects.mkdir(parents=True)
+    (projects / "session.jsonl").write_text("{}\n")
+    monkeypatch.setenv("AGENT_HOME", str(agent_home))
+    monkeypatch.delenv("SANDBOX_REAPED", raising=False)
+    commands = _record_commands(monkeypatch)
+
+    token_usage.consolidate_logs(tmp_path / "logs", tmp_path / "runner-temp")
+
+    assert _aimed_inside(commands, agent_home) == []
+    assert list((tmp_path / "logs").iterdir()) == []

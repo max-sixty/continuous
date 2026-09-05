@@ -39,9 +39,9 @@ Claude's accounting has three paths, tried in order:
    ``usage.*`` and ``num_turns`` are per-event while ``total_cost_usd`` is
    cumulative, so the per-event fields are summed and cost taken from the last.
 2. No result event: the session JSONL this step has just consolidated. A
-   cancelled session never emits a result, and ``tend-review`` runs with
+   cancelled session never emits a result, and ``tend-triage`` runs with
    ``cancel-in-progress: true``, so this is routine rather than exotic — the
-   run may have done dozens of turns and already posted its review.
+   run may have done dozens of turns and already posted its comment.
 3. Neither: the agent never ran (a preflight failure, say). That run genuinely
    cost nothing, so it reports a real zero rather than flagging an unknown.
 
@@ -204,13 +204,25 @@ def codex_step(model: str) -> tuple[dict[str, Any], Path]:
 def consolidate_logs(logs_dir: Path, runner_temp: Path) -> None:
     """Copy the agent's session JSONL and stderr log into a runner-owned dir.
 
+    The copy waits on ``SANDBOX_REAPED``, the supervisor's record that every
+    sandbox process is dead. :func:`copy_agent_tree` checks the tree it is about
+    to read, and a surviving agent could swap a session dir for a symlink
+    between that check and the root copy that follows. The memory save keys on
+    the same output for the same reason, and that read is unprivileged where
+    this one runs as root.
+
+    It is set from a ``finally``, so only a supervisor killed outright — a
+    second signal during an escalating cancel — leaves it unset. That run
+    reports its usage from the stream-json and uploads no session logs.
+
     ``AGENT_HOME`` is unset when sandbox setup died before exporting it; the
     placeholder names nothing, which :func:`copy_agent_tree` reads as the same
     nothing-to-copy outcome as a run whose agent never started.
     """
     logs_dir.mkdir(parents=True, exist_ok=True)
     agent_home = Path(os.environ.get("AGENT_HOME") or "/nonexistent")
-    copy_agent_tree(agent_home / ".claude" / "projects", logs_dir)
+    if os.environ.get("SANDBOX_REAPED") == "true":
+        copy_agent_tree(agent_home / ".claude" / "projects", logs_dir)
     best_effort("cp", "-a", str(runner_temp / "tend-claude-stderr.log"), f"{logs_dir}/")
 
 

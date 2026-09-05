@@ -472,6 +472,9 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         STREAM_JSON: ${{ steps.claude.outputs.stream_json }}
+        # The session-log copy reads an agent-owned tree as root, so it runs
+        # only once the supervisor has reaped the sandbox uid.
+        SANDBOX_REAPED: ${{ steps.claude.outputs.sandbox_reaped }}
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/token_usage.py" --harness claude
 
     # Gate on the job being red, not on the agent step specifically. A dozen
