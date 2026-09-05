@@ -239,11 +239,12 @@ def copy_agent_tree(source: Path, destination: Path) -> None:
     - **No symlink at either boundary.** ``cp -a`` follows a symlinked
       *argument*, so the session dir and the dot-dir holding it are both
       checked; see :func:`safe_agent_directory`.
-    - **No symlink inside.** ``cp -a`` copies nested links as links, and they
-      are deleted before anything reads the copy; see :func:`drop_symlinks`.
+    - **Only regular files inside.** ``cp -a`` reproduces a nested symlink or
+      FIFO as one, and both are removed before anything reads the copy; see
+      :func:`drop_non_regular_files`.
       ``cp -a`` also preserves the agent's directory modes and ``chown`` leaves
       them alone, so the modes are normalised too: unlinking needs write on the
-      parent, and a ``0555`` directory would keep its link (and raise), a
+      parent, and a ``0555`` directory would keep what it holds (and raise), a
       ``0000`` one hide it. That chmod is nothing like the one this replaces —
       it lands on a destination the runner made and now owns, so there is
       nothing for the agent to aim it at.
@@ -260,7 +261,7 @@ def copy_agent_tree(source: Path, destination: Path) -> None:
     best_effort("sudo", "cp", "-a", f"{source}/.", f"{destination}/")
     best_effort("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(destination))
     best_effort("sudo", "chmod", "-R", "u+rwX", str(destination))
-    drop_symlinks(destination)
+    drop_non_regular_files(destination)
 
 
 def safe_agent_directory(path: Path) -> bool:
@@ -295,16 +296,20 @@ def root_test(flag: str, path: Path) -> bool:
     )
 
 
-def drop_symlinks(logs_dir: Path) -> None:
-    """Remove every symlink from the dir about to be uploaded.
+def drop_non_regular_files(logs_dir: Path) -> None:
+    """Remove everything but files and directories from the dir to be uploaded.
 
-    ``cp -a`` copies links as links and ``upload-artifact`` resolves them as
-    the runner — which can read the proxy's CA private key and its own
-    ``/proc/<pid>/environ``. The agent writes only regular files here, so a
-    link is it reaching for something else.
+    The agent writes only regular files here, so anything else is it reaching
+    for something other than its own session log, and ``cp -a`` reproduces
+    whatever it finds. A symlink stays a symlink, and ``upload-artifact``
+    resolves it as the runner — which can read the proxy's CA private key and
+    its own ``/proc/<pid>/environ``. A FIFO stays a FIFO, and the upload
+    streams every entry that isn't a directory, so opening one with no writer
+    blocks until the job times out. One test on the mode covers both.
     """
     for path in list(logs_dir.rglob("*")):
-        if path.is_symlink():
+        mode = path.lstat().st_mode
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
             path.unlink()
 
 

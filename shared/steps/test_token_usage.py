@@ -168,7 +168,7 @@ def _aimed_inside(
 def test_reconstructs_a_cancelled_session(tmp_path: Path, logs_dir: Path) -> None:
     """A cancelled session must be accounted from its session JSONL.
 
-    `tend-review` runs with `cancel-in-progress: true`, so cancellation is
+    `tend-triage` runs with `cancel-in-progress: true`, so cancellation is
     routine — and a cancelled session never emits a `type: "result"` event.
     The step is `if: always()`, so it still writes token-usage.json and still
     uploads the artifact; only the accounting would be lost. Reporting zeros
@@ -669,7 +669,7 @@ def test_consolidation_drops_a_symlink_a_directory_mode_would_shield(
     """`cp -a` preserves the agent's directory modes, and `chown` leaves them.
 
     Unlinking needs write on the parent, so a link the agent leaves in a `0555`
-    directory outlives `drop_symlinks` and takes the `if: always()` step down
+    directory outlives the sweep and takes the `if: always()` step down
     with a `PermissionError` on the way. A `0000` directory is the same cause
     with a quieter outcome: `rglob` yields nothing and the link just stays. The
     copy normalises the modes it lands, which covers both.
@@ -693,3 +693,27 @@ def test_consolidation_drops_a_symlink_a_directory_mode_would_shield(
     assert (logs_dir / "project" / "session.jsonl").is_file()
     assert not (logs_dir / "project" / "leak.pem").is_symlink()
     assert secret.read_text() == "PRIVATE KEY\n"
+
+
+def test_consolidation_drops_a_fifo_the_agent_planted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sudoless: None, reaped: None
+) -> None:
+    """`cp -a` reproduces a FIFO as a FIFO, and the upload streams it.
+
+    `upload-artifact` reads every entry that isn't a directory, and opening a
+    FIFO with no writer blocks — so one left in the session dir hangs an
+    `if: always()` upload until the job times out. `mkfifo` needs no privilege,
+    so the agent chooses whether that happens.
+    """
+    agent_home = tmp_path / "agent-home"
+    project = agent_home / ".claude" / "projects" / "project"
+    project.mkdir(parents=True)
+    (project / "session.jsonl").write_text("{}\n")
+    os.mkfifo(project / "pipe")
+    monkeypatch.setenv("AGENT_HOME", str(agent_home))
+
+    logs_dir = tmp_path / "logs"
+    token_usage.consolidate_logs(logs_dir, tmp_path / "runner-temp")
+
+    assert (logs_dir / "project" / "session.jsonl").is_file()
+    assert not (logs_dir / "project" / "pipe").exists()
