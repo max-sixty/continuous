@@ -27,9 +27,9 @@ git merge-tree --write-tree \
 ```
 
 Treat a failed query or fetch as unverified, not clean. Remove any prior
-conflict-deferral comment from a configured-bot PR that test-merges clean.
-When called from `notifications`, use every issue-comment page and skip a PR
-whose bot-authored marker names the live `headRefOid`. Nightly ignores the
+conflict-deferral comment from any PR this skill handles that test-merges
+clean. When called from `notifications`, use every issue-comment page and skip
+a PR whose bot-authored marker names the live `headRefOid`. Nightly ignores the
 marker and retries.
 
 When the caller requests dependency bots, include `app/dependabot` and
@@ -37,16 +37,26 @@ When the caller requests dependency bots, include `app/dependabot` and
 
 ## Dependency-bot PRs
 
-Before triggering a rebuild, confirm every commit author is the owning bot.
-Human commits make a force-pushing rebuild unsafe.
+Read every commit author first — it decides the path.
 
-| PR author | Required commit-author login | Trigger |
+| Commit authors | Path |
+| --- | --- |
+| The owning bot alone | Rebuild, per the trigger table. |
+| The owning bot plus this bot | Merge and push it yourself, per **Configured-bot PRs**. |
+| Anyone else | Leave for manual resolution. |
+
+| PR author | Required commit-author login | Rebuild trigger |
 | --- | --- | --- |
 | `app/dependabot` | `dependabot[bot]` | Comment `@dependabot recreate`. |
 | `app/renovate` | `renovate[bot]` | In the PR body, check `<!-- rebase-check -->`. |
 
-Leave mixed-author branches for manual resolution. Never push to a dependency
-bot's branch.
+A rebuild overwrites the branch, so it fits only row 1, where the owning bot is
+every commit's author. `review` pushes fixes to dependency-bot PRs by design,
+and the owning bot stops resolving conflicts on a branch that has been altered
+— leaving a rebuild that would discard the fix as the only trigger, and the PR
+wedged at its first conflict. That same commit is what makes the branch this
+bot's to merge: resolve it under the exact head lease, as for a configured-bot
+PR. Never force-push over a commit from anyone else.
 
 ## Configured-bot PRs
 
