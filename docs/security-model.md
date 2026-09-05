@@ -340,6 +340,21 @@ made as the sandbox user with `sandbox_setup:`. A generic failure shim keeps a
 dropped home-selected command from silently falling through to a different
 same-named system tool.
 
+**Session-log upload.** The token-usage step uploads the agent's session JSONL
+as an artifact, so the runner has to read a tree the sandbox user owns. It
+copies as root and chowns the result rather than making the source readable,
+since a `chmod -R` aimed through a symlink the agent planted would grant read on
+whatever tree it named.
+
+The agent chooses the input to every check that follows. The copy waits for the
+supervisor to reap every sandbox process, so nothing is left alive to change
+what was checked. The session directory and the dot-directory above it are
+refused if either is a symlink. The copied modes are reset to the runner's,
+since deleting an entry needs write on its parent and those modes came from the
+agent. Every entry that is not a regular file or a directory is deleted before
+`upload-artifact` reads it: a symlink it would otherwise resolve as the runner,
+a FIFO it would block on until the job times out.
+
 The Codex harness (`codex/action.yaml`) still passes both the PAT and the model
 auth directly to the agent. The merge restriction and the environment gate
 remain the load-bearing boundaries regardless of harness.
