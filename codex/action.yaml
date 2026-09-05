@@ -158,9 +158,11 @@ runs:
     # become discoverable by `codex exec`.
     #
     # We export `CLAUDE_PLUGIN_ROOT` to the install location so skills can
-    # resolve `${CLAUDE_PLUGIN_ROOT}/scripts/...` paths the same way they do
-    # under Claude Code (which sets this variable natively). One variable
-    # name across harnesses — skills stay harness-agnostic.
+    # resolve `${CLAUDE_PLUGIN_ROOT}/scripts/...` paths. Claude Code reaches the
+    # same place by a different route — it text-substitutes the variable into
+    # bundled plugin skill markdown at load time rather than setting it in the
+    # shell, so under Claude the literal resolves only inside a bundled skill.
+    # One variable name across harnesses — skills stay harness-agnostic.
     - name: Install tend-ci-runner plugin
       shell: bash
       run: |

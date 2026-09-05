@@ -54,6 +54,33 @@
           <<prompt_body>>
 {%- endmacro %}
 
+{# Read the runtime kill switch from the repository's default branch. This is
+   the first step of every operational job, before checkout, setup, reactions,
+   or the agent action. The Contents API defaults to the default branch when no
+   ref is supplied, so a PR cannot disable its own review from its head tree.
+   The one-shot install test passes its PR head explicitly because the config
+   does not exist on the default branch until that PR lands.
+
+   Ruby and its YAML parser ship on GitHub's pinned ubuntu-24.04 runner. The
+   parser lives in its own source file so its behavior can be tested directly;
+   it is inlined here because the gate runs before checkout. A missing or
+   unreadable config, invalid YAML document, or invalid `enabled` value fails
+   the step and therefore the job. #}
+{% macro check_tend_enabled(cfg, ref='') %}
+      - name: Check whether tend is enabled
+        id: tend_enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/<<cfg.config_path|urlencode>>{% if ref %}?ref=<<ref>>{% endif %}" \
+            > "$RUNNER_TEMP/tend.yaml"
+          ruby - "$RUNNER_TEMP/tend.yaml" <<'<<'>>'RUBY' >> "$GITHUB_OUTPUT"
+<<check_enabled_script|indent(10, first=True)>>
+          RUBY
+{%- endmacro %}
+
 {# Environment block at column 4. The environment is a secret scope, not a
    deploy target: its branch policy is what stops a workflow pushed to a
    feature branch reading the operational secrets (see TEND_ENVIRONMENT in
@@ -244,12 +271,16 @@
    away.
 
    #}
-{% macro restore_local_actions(run_body) %}
+{% macro restore_local_actions(run_body, if_condition='') %}
 {% if run_body %}
 
 
       - name: Restore local setup actions for POST cleanup
+{% if if_condition %}
+<<step_if("always()\n&& (" ~ if_condition ~ ")")>>
+{% else %}
         if: always()
+{% endif %}
         run: |
 <<run_body|indent(10, first=True)>>
 {%- endif %}

@@ -51,6 +51,13 @@
 #                       approval now setting the PR's state is stale, so
 #                       filtering first would name a superseded one and leave
 #                       the live approval standing.
+#   standing_approval_id  id of the bot APPROVED that currently sets the PR's
+#                       review decision, "" when none does. Not keyed on a
+#                       rewrite, unlike stale_approval_id: GitHub never lets a
+#                       later COMMENTED supersede an APPROVED, so an ordinary
+#                       push leaves the approval deciding the PR too. Only a
+#                       dismissal (which rewrites the state to DISMISSED) or a
+#                       later CHANGES_REQUESTED clears it.
 #
 # env: GITHUB_REPOSITORY (optional; falls back to the checkout's remote)
 
@@ -110,4 +117,7 @@ gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
         stale_approval_id: (
           if $lastapp != null and $fp != "" and $lastapp.submitted_at < $fp
           then $lastapp.id else "" end),
+        standing_approval_id: (($mine
+          | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED"))
+          | last | select(.state == "APPROVED") | .id) // ""),
       }'
