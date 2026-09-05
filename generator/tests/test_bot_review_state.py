@@ -25,6 +25,9 @@ BOT_REVIEW_STATE = (
     / "bot-review-state.sh"
 )
 REVIEW_SKILL = BOT_REVIEW_STATE.parent.parent / "skills" / "review" / "SKILL.md"
+RUNNING_IN_CI_SKILL = (
+    BOT_REVIEW_STATE.parent.parent / "skills" / "running-in-ci" / "SKILL.md"
+)
 
 BOT = "tend-bot"
 HEAD = "head000"
@@ -539,3 +542,20 @@ def test_review_skill_spares_the_approval_when_the_comment_withholds_nothing() -
     assert "posts a COMMENT that withholds the verdict" in skill
     assert "A COMMENT that withholds nothing does not qualify" in skill
     assert "whenever this round posts a COMMENT rather than an approval" not in skill
+
+
+def test_a_dismissal_path_exists_for_an_invalidation_that_is_not_an_event() -> None:
+    """Every dismissal site in `review` and `weekly` is keyed on something that
+    happened *on* the approved PR — a review round, a rewrite, a red check. An
+    approval superseded by a *different* PR merging reaches none of them, so it
+    stands until a human clears it. The generic rule lives in `running-in-ci`,
+    which every skill that can reach that conclusion loads, and it fires on the
+    conclusion rather than on a post — the dedup rules routinely (and rightly)
+    suppress the comment that would otherwise carry it."""
+    skill = RUNNING_IN_CI_SKILL.read_text()
+
+    assert ".standing_approval_id" in skill
+    assert "reviews/$STANDING/dismissals" in skill
+    assert "-X PUT" in skill
+    # Not keyed on this session posting anything.
+    assert "whether or not this session posts" in skill
