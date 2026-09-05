@@ -130,6 +130,17 @@ _JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
 BOOKKEEPING_LABELS = ("tend-outage", "tend-rate-limit")
 _JINJA.globals["bookkeeping_labels"] = BOOKKEEPING_LABELS
 
+# Every operational job evaluates the current config on the repository's
+# default branch before it checks out code or reads an operational secret. The
+# Contents API defaults to that branch when `ref` is omitted.
+TEND_ENABLED_CONDITION = "steps.tend_enabled.outputs.enabled == 'true'"
+_JINJA.globals["tend_enabled_condition"] = TEND_ENABLED_CONDITION
+_JINJA.globals["check_enabled_script"] = (
+    (importlib.resources.files("tend") / "templates" / "check-enabled.rb")
+    .read_text(encoding="utf-8")
+    .rstrip("\n")
+)
+
 
 # Register every macro defined in `macros.yaml.j2` as a Jinja global so
 # workflow templates can call `agent_step(...)` directly, without an
@@ -267,7 +278,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
 
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         local_actions=_restore_local_actions_run(eff),
         prompt=prompt,
     )
@@ -291,7 +302,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
 
     content = _MENTION_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         local_actions=_restore_local_actions_run(eff),
         check_script=check_script.rstrip("\n"),
     )
@@ -313,7 +324,11 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
         "{issue_number}", "${{ github.event.issue.number }}"
     )
 
-    content = _TRIAGE_TMPL.render(cfg=eff, setup=_setup_yaml(eff), prompt=prompt)
+    content = _TRIAGE_TMPL.render(
+        cfg=eff,
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
+        prompt=prompt,
+    )
     return GeneratedWorkflow(filename="tend-triage.yaml", content=content)
 
 
@@ -345,7 +360,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
         cfg=eff,
         watched=watched,
         branches=branches,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         prompt=prompt,
     )
     return GeneratedWorkflow(filename="tend-ci-fix.yaml", content=content)
@@ -378,7 +393,7 @@ def _generate_scheduled(cfg: Config, name: str) -> GeneratedWorkflow:
         cfg=eff,
         name=name,
         cron=cron,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         prompt=prompt,
     )
     return GeneratedWorkflow(filename=f"tend-{name}.yaml", content=content)
@@ -413,7 +428,10 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
         cfg=eff,
         cron=cron,
         skip_condition=skip_condition,
-        setup=_setup_yaml(eff, condition=skip_condition),
+        setup=_setup_yaml(
+            eff,
+            condition=f"({TEND_ENABLED_CONDITION}) && ({skip_condition})",
+        ),
         prompt=prompt,
         check_script=check_script.rstrip("\n"),
     )
@@ -497,6 +515,10 @@ def generate_install_test(cfg: Config) -> GeneratedWorkflow:
     verifies them. Harness auth is exercised end-to-end by `tend-review`
     on the first post-merge PR.
     """
+    # The config is introduced by the install PR itself, so this one-shot job
+    # reads the PR head rather than the default branch used by operational jobs.
+    install_ref = "${{ github.event.pull_request.head.sha }}"
+    enabled_check = _MACROS.module.check_tend_enabled(cfg, install_ref)
     content = f"""\
 {HEADER}
 name: tend-install-test
@@ -516,9 +538,13 @@ jobs:
     permissions:
       contents: read
     steps:
+{enabled_check}
       - uses: actions/checkout@v7
+        if: {TEND_ENABLED_CONDITION}
       - uses: astral-sh/setup-uv@v10.0.1
+        if: {TEND_ENABLED_CONDITION}
       - name: Verify generator output matches committed files
+        if: {TEND_ENABLED_CONDITION}
         env:
           GH_TOKEN: ${{{{ github.token }}}}
         run: |

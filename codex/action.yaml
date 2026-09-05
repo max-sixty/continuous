@@ -239,6 +239,20 @@ runs:
           UV_VERSION="$UV_VERSION" UV_INSTALL_DIR="$TEND_AGENT_UV_DIR" \
           /usr/bin/bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
 
+    # Install the tend-ci-runner plugin from the action's own checkout.
+    # `github.action_path` is .../<runner-cache>/max-sixty/tend/<ref>/codex/;
+    # the marketplace manifest at .agents/plugins/marketplace.json (one level
+    # up) registers tend-ci-runner as a local-source plugin. We copy both trees
+    # into the sandbox home so the sandbox UID can read them, register that
+    # marketplace, then `codex plugin add` installs the plugin so its skills
+    # become discoverable by `codex exec`.
+    #
+    # We export `CLAUDE_PLUGIN_ROOT` to the install location so skills can
+    # resolve `${CLAUDE_PLUGIN_ROOT}/scripts/...` paths. Claude Code reaches the
+    # same place by a different route — it text-substitutes the variable into
+    # bundled plugin skill markdown at load time rather than setting it in the
+    # shell, so under Claude the literal resolves only inside a bundled skill.
+    # One variable name across harnesses — skills stay harness-agnostic.
     - name: Install tend-ci-runner plugin (sandbox)
       shell: bash
       run: |

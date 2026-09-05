@@ -419,7 +419,25 @@ def test_init_custom_config_path(
     assert result.exit_code == 0
 
     for path in _workflow_dir(tmp_path).glob("tend-*.yaml"):
-        assert "custom-bot" in path.read_text(), f"{path.name} missing custom bot name"
+        content = path.read_text()
+        assert "custom-bot" in content, f"{path.name} missing custom bot name"
+        if path.name != "tend-install-test.yaml":
+            assert "contents/custom/my-tend.yaml" in content
+
+
+def test_init_rejects_a_config_outside_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    custom = tmp_path / "tend.yaml"
+    custom.write_text("bot_name: custom-bot")
+    monkeypatch.chdir(repo)
+
+    result = CliRunner().invoke(main, ["init", "-c", str(custom)])
+
+    assert result.exit_code == 1
+    assert "Config must be inside the repository" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +520,14 @@ def _make_completed(
     )
 
 
+def _url(args: tuple[str, ...]) -> str:
+    """The API path in a `_gh` call, wherever flags put it.
+
+    A `graphql` call carries no path, so it answers with its subcommand.
+    """
+    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
+
+
 def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
     if "graphql" in args:
@@ -510,7 +536,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
         return _make_completed(
             json.dumps({"data": {"repository": {"object": {"entries": []}}}})
         )
-    url = next(a for a in args if a.startswith(("repos/", "orgs/")))
+    url = _url(args)
     # Only the ref-gated environment exists, holding the operational secrets.
     if url.endswith("/environments"):
         return _make_completed("tend\n")
@@ -520,9 +546,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
             if url.endswith("tend/secrets")
             else []
         )
-        if any(a.startswith("[.secrets") for a in args):
-            return _make_completed(json.dumps(names))
-        return _make_completed("\n".join(names) + "\n")
+        return _make_completed("".join(f"{n}\n" for n in names))
     if url == "repos/owner/repo" and ".default_branch" in args:
         return _make_completed("main\n")
     if "rules/branches" in url:
@@ -584,7 +608,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
     # deliberately the only place the operational names appear, so a check
     # reading the wrong level cannot pass by accident.
     if "secrets" in url:
-        return _make_completed("[]\n")
+        return _make_completed("")
     return _make_completed(returncode=1)
 
 
@@ -619,7 +643,7 @@ def test_check_full_pipeline_branch_not_protected(
     def fake_gh_unprotected(
         *args: str, **kwargs: str
     ) -> subprocess.CompletedProcess[str]:
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo" and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -629,7 +653,7 @@ def test_check_full_pipeline_branch_not_protected(
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+            return _make_completed("TEND_BOT_TOKEN\nCLAUDE_CODE_OAUTH_TOKEN\n")
         return _make_completed(returncode=1)
 
     with (
@@ -717,15 +741,16 @@ def test_init_notifications_has_precheck(
     }
     steps = data["jobs"]["notifications"]["steps"]
 
-    # First step is the pre-check
-    check_step = steps[0]
+    assert steps[0]["id"] == "tend_enabled"
+    check_index = next(i for i, step in enumerate(steps) if step.get("id") == "check")
+    check_step = steps[check_index]
     assert check_step["id"] == "check"
     assert "--paginate --slurp" in check_step["run"]
     assert "subscription" in check_step["run"]
     assert "notifications/threads/" not in check_step["run"]
 
-    # All subsequent steps are gated on the check output
-    for step in steps[1:]:
+    # Everything after the notification check is gated on its output.
+    for step in steps[check_index + 1 :]:
         assert "if" in step, (
             f"step {step.get('uses', step.get('name'))} missing if guard"
         )
@@ -754,7 +779,11 @@ def test_notifications_precheck_tolerates_transient_non_json(
     data = yaml.safe_load(
         (_workflow_dir(tmp_path) / "tend-notifications.yaml").read_text()
     )
-    script = data["jobs"]["notifications"]["steps"][0]["run"]
+    script = next(
+        step["run"]
+        for step in data["jobs"]["notifications"]["steps"]
+        if step.get("id") == "check"
+    )
 
     # Fake `gh` accepts the idempotent repository-watch write, then mimics a
     # transient notifications blip: the endpoint returns a 200 with an HTML
@@ -908,6 +937,7 @@ def test_init_removes_stale_files_when_no_workflows_enabled(
     result = _run_init()
     assert result.exit_code == 0
     assert not stale.exists()
+    assert "No workflows generated from config." in result.output
     assert "Removed 1 stale" in result.output
 
 
@@ -957,6 +987,11 @@ def test_install_test_workflow_shape(
     assert "head.repo.full_name == github.repository" in job["if"]
     assert job["permissions"] == {"contents": "read"}
     assert "secrets." not in content
+    steps = job["steps"]
+    assert steps[0]["id"] == "tend_enabled"
+    assert "?ref=${{ github.event.pull_request.head.sha }}" in steps[0]["run"]
+    for step in steps[1:]:
+        assert step["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
     # Generator-drift step regenerates with the same flag to keep output stable.
     # Version is pinned from the committed header (not `@latest`) so a release

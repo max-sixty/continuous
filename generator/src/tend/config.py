@@ -8,10 +8,33 @@ from pathlib import Path
 
 import click
 from ruamel.yaml import YAML
+from ruamel.yaml.nodes import MappingNode, Node, SequenceNode
 
 # ruamel.yaml parses YAML 1.2 by default, which fixes PyYAML's `on:` → True
 # trap and the Norway problem (yes/no/on/off coerced to bool).
 _YAML = YAML(typ="safe", pure=True)
+
+
+def _has_yaml_merge_key(node: Node | None, seen: set[int] | None = None) -> bool:
+    """Return whether a parsed YAML tree contains a `<<` merge key."""
+    if node is None:
+        return False
+    if seen is None:
+        seen = set()
+    if id(node) in seen:
+        return False
+    seen.add(id(node))
+
+    if isinstance(node, MappingNode):
+        for key, value in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                return True
+            if _has_yaml_merge_key(key, seen) or _has_yaml_merge_key(value, seen):
+                return True
+    elif isinstance(node, SequenceNode):
+        return any(_has_yaml_merge_key(value, seen) for value in node.value)
+    return False
+
 
 STANDARD_WORKFLOWS = {
     "review",
@@ -31,6 +54,7 @@ KNOWN_WORKFLOWS = {
 }
 KNOWN_TOP_LEVEL = {
     "bot_name",
+    "enabled",
     "memory_gist",
     "harness",
     "model",
@@ -191,6 +215,10 @@ class Config:
     effort: str
     setup: list[SetupStep]
     workflows: dict[str, WorkflowConfig]
+    # Runtime kill switch. Generated workflows stay installed and read this
+    # value from the default branch at the start of every operational job.
+    enabled: bool = True
+    config_path: str = ".config/tend.yaml"
     # Owner of the repo where workflows will run. Used to gate jobs that fail
     # noisily on forks (no access to bot/Claude secrets). Not user-configurable;
     # cli.init populates this via `gh repo view` so fork-based maintainer
@@ -242,8 +270,10 @@ class Config:
                     "and regenerates workflows in one step)."
                 )
             raise click.ClickException(f"Config not found: {path}")
-        with path.open(encoding="utf-8") as f:
-            raw = _YAML.load(f) or {}
+        text = path.read_text(encoding="utf-8")
+        if _has_yaml_merge_key(_YAML.compose(text)):
+            raise click.ClickException("YAML merge keys (<<) are not supported")
+        raw = _YAML.load(text) or {}
 
         if not isinstance(raw, dict):
             raise click.ClickException(
@@ -291,6 +321,10 @@ class Config:
         memory_gist = raw.get("memory_gist", False)
         if not isinstance(memory_gist, bool):
             raise click.ClickException("memory_gist must be true or false")
+
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise click.ClickException("enabled must be true or false")
 
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
@@ -646,6 +680,7 @@ class Config:
             sandbox_env=sandbox_env,
             sandbox_setup=sandbox_setup,
             memory_gist=memory_gist,
+            enabled=enabled,
             workflows=workflows,
             allowed_repo_secrets=allowed,
         )

@@ -34,6 +34,14 @@ from tend.workflows import (
 from tests import ACTION_VERSION, agent_prompt
 from tests import _yaml as yaml
 
+CHECK_ENABLED = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "tend"
+    / "templates"
+    / "check-enabled.rb"
+)
+
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     cfg = tmp_path / ".config" / "tend.yaml"
@@ -80,6 +88,129 @@ def test_disabled_workflow_not_generated(tmp_path: Path) -> None:
     names = {wf.filename for wf in workflows}
     assert "tend-weekly.yaml" not in names
     assert len(workflows) == 6
+
+
+def test_top_level_disable_keeps_workflows_installed_and_gates_every_job(
+    tmp_path: Path,
+) -> None:
+    """The runtime switch can turn itself back on without regeneration."""
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                enabled: false
+                workflows:
+                  ci-fix:
+                    watched_workflows: ["ci"]
+            """),
+        )
+    )
+
+    assert cfg.enabled is False
+    workflows = generate_all(cfg, with_install_test=True)
+    assert len(workflows) == len(STANDARD_WORKFLOWS) + 1
+
+    condition = "steps.tend_enabled.outputs.enabled == 'true'"
+    for workflow in workflows:
+        jobs = yaml.safe_load(workflow.content)["jobs"]
+        for job_name, job in jobs.items():
+            steps = job["steps"]
+            gate = steps[0]
+            assert gate["id"] == "tend_enabled", (workflow.filename, job_name)
+            assert f"contents/{cfg.config_path}" in gate["run"]
+            assert "secrets." not in str(gate)
+            if workflow.filename == "tend-install-test.yaml":
+                assert "?ref=${{ github.event.pull_request.head.sha }}" in gate["run"]
+            for step in steps[1:]:
+                assert condition in str(step.get("if", "")), (
+                    workflow.filename,
+                    job_name,
+                    step,
+                )
+
+
+@pytest.mark.parametrize(
+    ("config", "enabled"),
+    [
+        ("bot_name: bot\n", "true"),
+        ("bot_name: bot\nenabled: true\n", "true"),
+        ("bot_name: bot\nenabled: false\n", "false"),
+        ("\ufeffbot_name: bot\nenabled: false\n", "false"),
+    ],
+)
+def test_runtime_enabled_check(tmp_path: Path, config: str, enabled: str) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(config)
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"enabled={enabled}\n"
+    assert ("Tend disabled" in result.stderr) is (enabled == "false")
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "bot_name: bot\nenabled: no\n",
+        'bot_name: bot\nenabled: "false"\n',
+        "bot_name: bot\nenabled:\n",
+        "bot_name: bot\nenabled: {}\n",
+        "bot_name: bot\nenabled: true\nenabled: false\n",
+    ],
+)
+def test_runtime_enabled_check_rejects_non_boolean_values(
+    tmp_path: Path, config: str
+) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(config)
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "enabled must" in result.stderr
+
+
+def test_runtime_enabled_check_rejects_multiple_documents(tmp_path: Path) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text("bot_name: bot\n---\nenabled: false\n")
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "exactly one YAML document" in result.stderr
+
+
+def test_runtime_enabled_check_rejects_yaml_merge_keys(tmp_path: Path) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(
+        "defaults: &defaults\n  enabled: false\n<<: *defaults\nbot_name: bot\n"
+    )
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "YAML merge keys" in result.stderr
 
 
 def test_setup_steps_rendered(tmp_path: Path) -> None:
@@ -144,7 +275,8 @@ def test_local_setup_action_restored_for_post_cleanup(
     chain walks.
 
     `always()` covers a failed session so cleanup still sees the version the
-    runner loaded."""
+    runner loaded. The runtime switch still applies because a disabled job
+    never loaded the local action."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
@@ -156,7 +288,9 @@ def test_local_setup_action_restored_for_post_cleanup(
     assert condition.startswith("always()"), (
         f"{name}: the restore has to run even when the session fails"
     )
-    assert condition == "always()", f"{name}: restore has an extra gate"
+    assert condition.strip() == (
+        "always()\n&& (steps.tend_enabled.outputs.enabled == 'true')"
+    ), f"{name}: restore has an unexpected gate"
     switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
@@ -432,9 +566,10 @@ def test_setup_step_user_if_narrows_notifications_guard(
         if s.get("run") == "./flaky.sh"
     )
     assert step["if"] == (
+        "((steps.tend_enabled.outputs.enabled == 'true') && "
         "(steps.check.outputs.count != '0' || "
         "steps.check.outputs.conflict_count != '0' || "
-        "github.event_name == 'workflow_dispatch') && (runner.os == 'Linux')"
+        "github.event_name == 'workflow_dispatch')) && (runner.os == 'Linux')"
     )
 
 
@@ -773,7 +908,11 @@ def test_ci_fix_classifies_six_hour_cancellations(
             wf for wf in generate_all(cfg) if wf.filename == "tend-ci-fix.yaml"
         ).content
     )
-    script = workflow["jobs"]["classify"]["steps"][0]["run"]
+    script = next(
+        step
+        for step in workflow["jobs"]["classify"]["steps"]
+        if step.get("id") == "classify"
+    )["run"]
     output = tmp_path / "output"
 
     result = subprocess.run(
@@ -927,17 +1066,17 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
 
     triage = yaml.safe_load(workflows["tend-triage.yaml"].content)
-    first = triage["jobs"]["triage"]["steps"][0]
-    assert "content=eyes" in first["run"]
-    assert first["env"]["TARGET"] == "issues/${{ github.event.issue.number }}"
-    # Every issues:opened event the job-level `if` admits is the bot's to take.
-    assert "if" not in first
+    react = _eyes_steps(triage["jobs"]["triage"]["steps"])[0]
+    assert react["env"]["TARGET"] == "issues/${{ github.event.issue.number }}"
+    # Every enabled issues:opened event the job-level `if` admits is the bot's
+    # to take.
+    assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
     react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
     assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
-    # Every admitted review run boots a session, so each one gets a reaction.
-    assert "if" not in react
+    # Every enabled review run boots a session, so each one gets a reaction.
+    assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
 
 @pytest.mark.parametrize(

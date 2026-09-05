@@ -16,11 +16,15 @@ jobs:
   classify:
     if: <<fork_guard_prefix(cfg)>>contains(fromJSON('["failure", "cancelled"]'), github.event.workflow_run.conclusion)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     outputs:
       should_fix: ${{ steps.classify.outputs.should_fix }}
     steps:
+<<check_tend_enabled(cfg)>>
       - name: Classify completed run
         id: classify
+        if: <<tend_enabled_condition>>
         shell: python
         env:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
@@ -48,6 +52,7 @@ jobs:
     permissions:
 <<permissions(issues=False)>>
     steps:
-<<checkout(cfg, ref=cfg.default_branch)>>
+<<check_tend_enabled(cfg)>>
+<<checkout(cfg, ref=cfg.default_branch, if_condition=tend_enabled_condition)>>
 <<setup>>
-<<agent_step(cfg, block_input('prompt', full_prompt))>>
+<<agent_step(cfg, block_input('prompt', full_prompt), if_condition=tend_enabled_condition)>>
