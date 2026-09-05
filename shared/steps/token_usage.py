@@ -241,6 +241,12 @@ def copy_agent_tree(source: Path, destination: Path) -> None:
       checked; see :func:`safe_agent_directory`.
     - **No symlink inside.** ``cp -a`` copies nested links as links, and they
       are deleted before anything reads the copy; see :func:`drop_symlinks`.
+      ``cp -a`` also preserves the agent's directory modes and ``chown`` leaves
+      them alone, so the modes are normalised too: unlinking needs write on the
+      parent, and a ``0555`` directory would keep its link (and raise), a
+      ``0000`` one hide it. That chmod is nothing like the one this replaces —
+      it lands on a destination the runner made and now owns, so there is
+      nothing for the agent to aim it at.
 
     A boundary that fails the check copies nothing: an empty artifact, the same
     thing a run whose agent never started leaves behind. Telling the two apart
@@ -253,6 +259,7 @@ def copy_agent_tree(source: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     best_effort("sudo", "cp", "-a", f"{source}/.", f"{destination}/")
     best_effort("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(destination))
+    best_effort("sudo", "chmod", "-R", "u+rwX", str(destination))
     drop_symlinks(destination)
 
 
@@ -304,8 +311,8 @@ def drop_symlinks(logs_dir: Path) -> None:
 def best_effort(*argv: str) -> None:
     """Run ``argv``, discarding its output and its failure.
 
-    Everything this runs is a copy or a chown that enriches the uploaded
-    artifact. None of it is worth failing an ``if: always()`` accounting step
+    Everything this runs is a copy, a chown, or a chmod that enriches the
+    uploaded artifact. None of it is worth failing an ``if: always()`` step
     for, and a partial copy still beats no artifact. ``stdin`` is closed so a
     ``sudo`` without a tty fails instead of waiting for a password.
     """

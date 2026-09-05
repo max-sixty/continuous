@@ -661,3 +661,35 @@ def test_consolidation_waits_for_the_sandbox_to_be_reaped(
 
     assert _aimed_inside(commands, agent_home) == []
     assert list((tmp_path / "logs").iterdir()) == []
+
+
+def test_consolidation_drops_a_symlink_a_directory_mode_would_shield(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sudoless: None, reaped: None
+) -> None:
+    """`cp -a` preserves the agent's directory modes, and `chown` leaves them.
+
+    Unlinking needs write on the parent, so a link the agent leaves in a `0555`
+    directory outlives `drop_symlinks` and takes the `if: always()` step down
+    with a `PermissionError` on the way. A `0000` directory is the same cause
+    with a quieter outcome: `rglob` yields nothing and the link just stays. The
+    copy normalises the modes it lands, which covers both.
+    """
+    agent_home = tmp_path / "agent-home"
+    project = agent_home / ".claude" / "projects" / "project"
+    project.mkdir(parents=True)
+    (project / "session.jsonl").write_text("{}\n")
+    secret = tmp_path / "ca-key.pem"
+    secret.write_text("PRIVATE KEY\n")
+    (project / "leak.pem").symlink_to(secret)
+    project.chmod(0o555)
+    monkeypatch.setenv("AGENT_HOME", str(agent_home))
+
+    logs_dir = tmp_path / "logs"
+    try:
+        token_usage.consolidate_logs(logs_dir, tmp_path / "runner-temp")
+    finally:
+        project.chmod(0o700)
+
+    assert (logs_dir / "project" / "session.jsonl").is_file()
+    assert not (logs_dir / "project" / "leak.pem").is_symlink()
+    assert secret.read_text() == "PRIVATE KEY\n"
