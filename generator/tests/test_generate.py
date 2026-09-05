@@ -902,7 +902,8 @@ def test_ci_fix_serializes_per_branch_and_watched_workflow(tmp_path: Path) -> No
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    job = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)["jobs"]["fix-ci"]
+    doc = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
+    job = doc["jobs"]["fix-ci"]
 
     assert job["concurrency"]["group"] == (
         "${{ github.workflow }}-${{ github.event.workflow_run.name }}"
@@ -913,7 +914,7 @@ def test_ci_fix_serializes_per_branch_and_watched_workflow(tmp_path: Path) -> No
     assert job["concurrency"]["cancel-in-progress"] is False
     # Job-level, not workflow-level: the `if` filters the green runs that make
     # up most workflow_run events, and a skipped job never enters the group.
-    assert "concurrency" not in yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
+    assert "concurrency" not in doc
 
 
 def test_cli_init_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
