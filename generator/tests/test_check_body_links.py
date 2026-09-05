@@ -141,6 +141,17 @@ def test_markdown_delimiters_do_not_leak_into_the_ref(fx: Fixture) -> None:
     assert ")" not in result.stdout.split(" in ")[0]
 
 
+def test_sentence_punctuation_does_not_skip_the_resolve(fx: Fixture) -> None:
+    """A bare `commit/<sha>` URL in prose ends at the period, which is part of the ref."""
+    result = fx.run(
+        f"Pushed as https://github.com/{SLUG}/commit/{FAKE}.\n"
+        f"See https://github.com/{SLUG}/commit/{REAL}, which is real.\n"
+    )
+    assert result.returncode == 1
+    assert f"unresolvable SHA {FAKE} in {SLUG}" in result.stdout
+    assert REAL not in result.stdout
+
+
 def test_body_without_github_links_passes_without_calling_the_api(fx: Fixture) -> None:
     result = fx.run("Thanks for reporting this — I could not reproduce it.\n")
     assert result.returncode == 0

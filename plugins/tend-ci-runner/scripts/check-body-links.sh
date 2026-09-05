@@ -58,6 +58,9 @@ while IFS= read -r url; do
   # https://github.com/OWNER/REPO/blob/REF/path -> fields 4, 5, 7
   read -r slug ref <<<"$(printf '%s\n' "$url" | awk -F/ '{print $4 "/" $5, $7}')"
   ref=${ref%%#*}
+  # A bare URL in prose ends at the sentence, so trailing punctuation lands in
+  # the ref of a `commit/<sha>` link and would skip the resolve entirely.
+  ref=${ref%[.,;:!?]}
   if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
     printf '%s %s\n' "$slug" "$ref" >>"$shas"
   elif [[ "$url" == *"#L"* ]]; then
