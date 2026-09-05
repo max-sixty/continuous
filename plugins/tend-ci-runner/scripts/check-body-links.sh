@@ -56,21 +56,21 @@ trap 'rm -f "$problems" "$shas"' EXIT
 while IFS= read -r url; do
   [ -n "$url" ] || continue
   # https://github.com/OWNER/REPO/blob/REF/path -> fields 4, 5, 7
-  read -r nwo ref <<<"$(printf '%s\n' "$url" | awk -F/ '{print $4 "/" $5, $7}')"
+  read -r slug ref <<<"$(printf '%s\n' "$url" | awk -F/ '{print $4 "/" $5, $7}')"
   ref=${ref%%#*}
   if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-    printf '%s %s\n' "$nwo" "$ref" >>"$shas"
+    printf '%s %s\n' "$slug" "$ref" >>"$shas"
   elif [[ "$url" == *"#L"* ]]; then
     printf 'un-pinned line link: ref `%s` is not a full commit SHA, so the lines it points at can move — %s\n' \
       "$ref" "$url" >>"$problems"
   fi
 done < <(grep -oE "$url_re" "$body" || true)
 
-while read -r nwo sha; do
+while read -r slug sha; do
   [ -n "$sha" ] || continue
-  gh api "repos/$nwo/commits/$sha" --jq '.sha' >/dev/null 2>&1 && continue
+  gh api "repos/$slug/commits/$sha" --jq '.sha' >/dev/null 2>&1 && continue
   printf 'unresolvable SHA %s in %s — the commit does not exist (a hand-typed OID or a wrong owner), or the token cannot read that repo\n' \
-    "$sha" "$nwo" >>"$problems"
+    "$sha" "$slug" >>"$problems"
 done < <(sort -u "$shas")
 
 if [ -s "$problems" ]; then
