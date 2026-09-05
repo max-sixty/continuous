@@ -1,15 +1,15 @@
 ---
 name: notifications
-description: Drains the bot's unread GitHub notifications as a recovery queue for issue and PR work that event workflows did not finish. Runs on a schedule.
+description: Drains unread GitHub notifications and resolves conflicts on configured-bot PRs. Runs on a schedule.
 metadata:
   internal: true
 ---
 
-# Check Notifications
+# Check Notifications and Bot PRs
 
-Unread notifications are the recovery queue. Event workflows are the fast path; after a successful run they mark the notification that triggered them read. This poll handles whatever remains.
+Unread notifications are the recovery queue. Event workflows are the fast path; after a successful run they mark the notification that triggered them read. This poll handles whatever remains and repairs conflicts on the configured bot's PRs.
 
-The workflow prompt supplies the **notification snapshot cutoff**. This run owns unread activity before that time; activity at or after it stays unread.
+The workflow prompt supplies the **notification snapshot cutoff**. This run owns whatever the snapshot returned; anything the snapshot did not return belongs to the next poll.
 
 ## 1. Snapshot the queue
 
@@ -24,7 +24,10 @@ jq '.[] | {id, reason, repo: .repository.full_name, updated_at,
   subject_url: .subject.url}' /tmp/tend-notifications.json
 ```
 
-If the snapshot is empty, exit.
+A thread's `updated_at` can be later than the cutoff. `before` is documented as filtering on `updated_at`, but threads bumped after they became unread — including by the bot's own activity, which bumps a thread without re-notifying — have been observed in snapshots taken minutes after the bump. Take the snapshot's membership as the run's scope rather than re-deriving it: whatever came back is this run's to handle, so do not filter it back out on `updated_at`.
+
+If the snapshot is empty and the prompt reports no possible conflicted PRs, exit.
+Otherwise continue; notification work still comes before conflict repair.
 
 ## 2. Load the CI rules
 
@@ -43,12 +46,12 @@ For each notification, identify the activity that made the thread unread and app
 
 Process the snapshot oldest first. Read the live issue or PR and decide what it needs now:
 
-- If a dedicated tend workflow is still running for the subject, defer it. Its `updated_at` limits the repository acknowledgement in Step 4.
+- If a dedicated tend workflow is still running for the subject, defer it. Step 4 leaves it unread for the next poll.
 - If the bot already handled the latest activity, record it as handled without posting again.
 - Otherwise use the normal live workflow: `/tend-ci-runner:triage` for an issue, `/tend-ci-runner:review` for an unreviewed PR head, or answer a comment or review thread that asks the bot for something.
 - A closed thread or a human conversation that needs nothing from the bot has the semantic outcome “no action”.
 - A non-conversational subject, such as a release or check suite, also has the outcome “no action”. Default-branch CI recovery belongs to the daily current-state scan.
-- A subject with no readable target — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR, whose `subject.url` 404s — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would pin the Step 4 cutoff permanently. A read that fails for any other reason — a 5xx, a rate limit — leaves the item unresolved.
+- A subject with no readable target — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR, whose `subject.url` 404s — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would hand it to every later poll to re-examine. A read that fails for any other reason — a 5xx, a rate limit — leaves the item unresolved.
 
 Judge deduplication from current state, including bot reviews and bot-authored PRs that cross-reference an issue. The notification timestamp alone does not prove whether a response covered the activity.
 
@@ -79,28 +82,24 @@ gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/timeline?per_page=100" \
           and .created_at > $cutoff)] | length'
 ```
 
-After a cross-repository notification has an outcome, acknowledge that thread individually:
+## 4. Acknowledge each resolved thread
+
+Acknowledge a thread as soon as it has an outcome, one call per thread, same repository or not:
 
 ```bash
-gh api "notifications/threads/<thread-id>" -X PATCH
+gh api "notifications/threads/$THREAD_ID" -X PATCH --silent
 ```
 
-## 4. Acknowledge the cutoff
+Never acknowledge a thread before it has an outcome. A deferred or unresolved thread is left alone and the next poll picks it up.
 
-Set the acknowledgement cutoff from the oldest unresolved same-repository item. If every same-repository item has an outcome, use the snapshot cutoff. Otherwise set it to one second before the unresolved item's `updated_at`:
+Never acknowledge repository-wide (`PUT /repos/{owner}/{repo}/notifications`). It marks threads by timestamp rather than by outcome, so it acts on threads this run never examined — and REST has no "mark unread" to walk an overshoot back.
 
-```bash
-# $UNRESOLVED_AT is the first unresolved same-repository item's `updated_at`,
-# empty when every same-repository item has an outcome.
-if [ -n "$UNRESOLVED_AT" ]; then
-  ACK_CUTOFF=$(date -u -d "$UNRESOLVED_AT -1 second" +%Y-%m-%dT%H:%M:%SZ)
-else
-  ACK_CUTOFF=$CUTOFF
-fi
-gh api "repos/$GITHUB_REPOSITORY/notifications" -X PUT \
-  -f last_read_at="$ACK_CUTOFF" --silent
-```
+## 5. Resolve possible conflicts
 
-Skip the call when the unresolved item is the first same-repository item in the snapshot, or when the snapshot contains no same-repository items. The next poll starts with the unresolved item instead of repeating completed work. Never acknowledge a same-repository thread individually.
+If the prompt reports possible conflicted PRs, load
+`/tend-ci-runner:resolve-conflicts` and resolve conflicts for the configured bot
+only. The count is a boot signal; the conflict skill re-reads and test-merges the
+current PR heads before changing a branch.
 
-Report the notifications handled, responses posted, items deferred, and whether the repository cutoff was acknowledged.
+Report the notifications handled, responses posted, items deferred, threads
+acknowledged, and conflict outcomes.

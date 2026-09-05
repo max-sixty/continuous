@@ -53,13 +53,18 @@ inputs:
     default: danger-full-access
     description: Codex sandbox mode (workspace-write, read-only, danger-full-access)
   codex_version:
-    default: "0.149.0"
+    default: "0.151.0"
     description: >-
       `@openai/codex` npm version to install. Must ship
       the `codex plugin add` subcommand (PR #21396, first released in
       `rust-v0.131.0-alpha.17`). That was `alpha`-only when the pin was
       first set; stable carries it now, so this tracks `latest`. CI's
       `test-codex-surface` job confirms whichever version is pinned.
+  uv_version:
+    default: "0.12.7"
+    description: >-
+      Pinned fallback `uv` version. The agent PATH appends it after any
+      adopter-provided version.
   allowed_bots:
     default: "*"
     description: Bots allowed to trigger workflows (engagement gate, not used yet)
@@ -106,13 +111,28 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # The key arrives through `env:`, not `${{ }}` in the body. GitHub
+    # substitutes an expression into the script *text* before bash parses it,
+    # so a secret carrying a quote or a `$(…)` — a mistyped value is the
+    # realistic path — is executed as script rather than compared as a string,
+    # under the runner user that holds the real PAT. The Claude harness already
+    # passes all three of its credentials this way.
     - name: Validate auth configured
       shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
       run: |
-        if [ -z "${{ inputs.openai_api_key }}" ]; then
+        if [ -z "$OPENAI_API_KEY" ]; then
           echo "::error::OPENAI_API_KEY is unset. Set the OPENAI_API_KEY repo secret."
           exit 1
         fi
+
+    - name: Install agent uv fallback
+      shell: bash
+      run: bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
+      env:
+        UV_VERSION: ${{ inputs.uv_version }}
+        UV_INSTALL_DIR: ${{ runner.temp }}/tend-agent-uv
 
     # Install the Codex CLI from npm. `@openai/codex` ships a prebuilt
     # per-platform binary, so this is ~3 s with no Rust toolchain. We pin
@@ -124,8 +144,10 @@ runs:
     # prerelease only for a fix that hasn't been released yet.
     - name: Install Codex CLI
       shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs.codex_version }}
       run: |
-        npm install -g "@openai/codex@${{ inputs.codex_version }}"
+        npm install -g "@openai/codex@$CODEX_VERSION"
         codex --version
 
     # Install the tend-ci-runner plugin from the action's own checkout.
@@ -136,9 +158,11 @@ runs:
     # become discoverable by `codex exec`.
     #
     # We export `CLAUDE_PLUGIN_ROOT` to the install location so skills can
-    # resolve `${CLAUDE_PLUGIN_ROOT}/scripts/...` paths the same way they do
-    # under Claude Code (which sets this variable natively). One variable
-    # name across harnesses — skills stay harness-agnostic.
+    # resolve `${CLAUDE_PLUGIN_ROOT}/scripts/...` paths. Claude Code reaches the
+    # same place by a different route — it text-substitutes the variable into
+    # bundled plugin skill markdown at load time rather than setting it in the
+    # shell, so under Claude the literal resolves only inside a bundled skill.
+    # One variable name across harnesses — skills stay harness-agnostic.
     - name: Install tend-ci-runner plugin
       shell: bash
       run: |
@@ -213,7 +237,7 @@ runs:
           ARGS+=(--config "model_reasoning_effort=\"$EFFORT\"")
         fi
         set +e
-        codex exec "${ARGS[@]}" "$PROMPT"
+        PATH="$PATH:$RUNNER_TEMP/tend-agent-uv" codex exec "${ARGS[@]}" "$PROMPT"
         EXIT=$?
         set -e
 

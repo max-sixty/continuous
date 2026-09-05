@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC
 from pathlib import Path
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -26,9 +28,9 @@ NOW = 1700000000
 
 
 def _iso(epoch: int) -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 FAKE_GH = (
@@ -135,7 +137,7 @@ def _runs(env: dict[str, str], *entries: dict) -> None:
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True
+        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
     )
 
 

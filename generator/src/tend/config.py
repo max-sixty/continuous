@@ -8,12 +8,35 @@ from pathlib import Path
 
 import click
 from ruamel.yaml import YAML
+from ruamel.yaml.nodes import MappingNode, Node, SequenceNode
 
 # ruamel.yaml parses YAML 1.2 by default, which fixes PyYAML's `on:` → True
 # trap and the Norway problem (yes/no/on/off coerced to bool).
 _YAML = YAML(typ="safe", pure=True)
 
-KNOWN_WORKFLOWS = {
+
+def _has_yaml_merge_key(node: Node | None, seen: set[int] | None = None) -> bool:
+    """Return whether a parsed YAML tree contains a `<<` merge key."""
+    if node is None:
+        return False
+    if seen is None:
+        seen = set()
+    if id(node) in seen:
+        return False
+    seen.add(id(node))
+
+    if isinstance(node, MappingNode):
+        for key, value in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                return True
+            if _has_yaml_merge_key(key, seen) or _has_yaml_merge_key(value, seen):
+                return True
+    elif isinstance(node, SequenceNode):
+        return any(_has_yaml_merge_key(value, seen) for value in node.value)
+    return False
+
+
+STANDARD_WORKFLOWS = {
     "review",
     "mention",
     "triage",
@@ -22,12 +45,17 @@ KNOWN_WORKFLOWS = {
     "weekly",
     "notifications",
     "review-runs",
+}
+KNOWN_WORKFLOWS = {
+    *STANDARD_WORKFLOWS,
     # install-test is opt-in via `tend init --with-install-test` but still
     # honors workflow_extra / jobs overrides from .config/tend.yaml.
     "install-test",
 }
 KNOWN_TOP_LEVEL = {
     "bot_name",
+    "enabled",
+    "memory_gist",
     "harness",
     "model",
     "effort",
@@ -51,7 +79,9 @@ BOT_TOKEN_SECRET = "TEND_BOT_TOKEN"
 CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"
 ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY"
 OPENAI_KEY_SECRET = "OPENAI_API_KEY"
+MEMORY_GIST_SECRET = "TEND_MEMORY_GIST_ID"
 OPERATIONAL_SECRETS = {
+    MEMORY_GIST_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
     ANTHROPIC_API_KEY_SECRET,
@@ -126,10 +156,10 @@ class SetupStep:
     Exactly one of `uses` or `run`, plus any of `with`, `env`, `name`,
     `id`, `shell`, `working-directory`, `continue-on-error`,
     `timeout-minutes`, `if`. In the workflows that pre-check whether the
-    agent needs to boot, the renderer injects that check as the step's `if:`
-    guard when the step declares none. For multi-step setup, add multiple
-    entries to the `setup:` list — or reference a local composite action
-    with `uses`.
+    agent needs to boot, the renderer adds that check to every step's `if:`.
+    A step's own condition narrows the check. For multi-step setup, add
+    multiple entries to the `setup:` list — or reference a local composite
+    action with `uses`.
     """
 
     fields: dict
@@ -184,6 +214,10 @@ class Config:
     effort: str
     setup: list[SetupStep]
     workflows: dict[str, WorkflowConfig]
+    # Runtime kill switch. Generated workflows stay installed and read this
+    # value from the default branch at the start of every operational job.
+    enabled: bool = True
+    config_path: str = ".config/tend.yaml"
     # Owner of the repo where workflows will run. Used to gate jobs that fail
     # noisily on forks (no access to bot/Claude secrets). Not user-configurable;
     # cli.init populates this via `gh repo view` so fork-based maintainer
@@ -200,6 +234,14 @@ class Config:
     sandbox_path: list[str] = field(default_factory=list)
     sandbox_env: dict[str, str] = field(default_factory=dict)
     sandbox_setup: list[str] = field(default_factory=list)
+    # Opt-in experiment that persists Claude Code's model-authored auto memory
+    # in a bot-owned secret Gist. The Gist ID stays in a fixed environment
+    # secret so a public repository does not publish the unlisted URL.
+    memory_gist: bool = False
+
+    def enabled_harnesses(self) -> set[str]:
+        """Harnesses used by the workflows a normal regeneration emits."""
+        return _enabled_harnesses(self.harness, self.workflows)
 
     def default_prompt(self, skill: str, args: str = "") -> str:
         """Default prompt invoking a tend-ci-runner skill in harness-native syntax.
@@ -228,8 +270,10 @@ class Config:
                     "and regenerates workflows in one step)."
                 )
             raise click.ClickException(f"Config not found: {path}")
-        with path.open(encoding="utf-8") as f:
-            raw = _YAML.load(f) or {}
+        text = path.read_text(encoding="utf-8")
+        if _has_yaml_merge_key(_YAML.compose(text)):
+            raise click.ClickException("YAML merge keys (<<) are not supported")
+        raw = _YAML.load(text) or {}
 
         if not isinstance(raw, dict):
             raise click.ClickException(
@@ -273,6 +317,14 @@ class Config:
             raise click.ClickException(
                 f"effort is only valid for harness = 'codex' (got harness = '{harness}')"
             )
+
+        memory_gist = raw.get("memory_gist", False)
+        if not isinstance(memory_gist, bool):
+            raise click.ClickException("memory_gist must be true or false")
+
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise click.ClickException("enabled must be true or false")
 
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
@@ -327,6 +379,27 @@ class Config:
             for k in DICT_STEP_FIELDS:
                 if k in entry and not isinstance(entry[k], dict):
                     raise click.ClickException(f"setup[{i}]: `{k}` must be a mapping")
+            if "if" in entry:
+                condition = entry["if"]
+                if not isinstance(condition, str) or not condition.strip():
+                    raise click.ClickException(
+                        f"setup[{i}]: `if` must be a non-empty string; quote "
+                        'it (`if: "false"`) so YAML does not read it as a '
+                        "boolean, number, or list"
+                    )
+                condition = condition.strip()
+                if condition.startswith("${{") and condition.endswith("}}"):
+                    condition = condition[3:-2].strip()
+                    if not condition:
+                        raise click.ClickException(
+                            f"setup[{i}]: `if` must contain an expression"
+                        )
+                if "${{" in condition or "}}" in condition:
+                    raise click.ClickException(
+                        f"setup[{i}]: `if` must be a plain expression or one "
+                        "whole `${{ ... }}` expression"
+                    )
+                entry = {**entry, "if": condition}
             setup.append(SetupStep(fields=dict(entry)))
 
         sandbox_path = raw.get("sandbox_path", []) or []
@@ -386,9 +459,11 @@ class Config:
                     f"sandbox_env value for '{name}' must be a scalar "
                     "(string, number, or boolean)"
                 )
-            # A newline would drop an un-indented continuation line into the
-            # rendered `|` block scalar, terminating it and producing a
-            # workflow GitHub Actions later refuses to load — fail at `init`.
+            # The action splits this input one NAME=VALUE pair per line, so a
+            # value carrying a newline would be read as a pair and a malformed
+            # line rather than one value — fail at `init` instead. (The block
+            # scalar itself is safe: `block_input` indents a continuation line
+            # like any other.)
             if "\n" in coerced:
                 raise click.ClickException(
                     f"sandbox_env value for '{name}' must be a single line"
@@ -514,9 +589,42 @@ class Config:
                         f"allowlist and likely won't apply to {wf_harness}. "
                         f"Set `workflows.{name}.model:` to a valid {wf_harness} model."
                     )
+                wf_prompt = wf_raw.get("prompt", "")
+                if wf_prompt is None:  # `prompt:` with nothing after it
+                    wf_prompt = ""
+                if not isinstance(wf_prompt, str):
+                    raise click.ClickException(
+                        f"workflows.{name}.prompt must be a string, "
+                        f"got {type(wf_prompt).__name__}"
+                    )
+                # `mention` builds its prompt from the triggering event —
+                # which of five comment shapes fired, the queue delay, the
+                # ids to read back — so there is no text an override could
+                # replace without breaking the dispatch. Refuse it rather
+                # than accept a key that renders nowhere.
+                if wf_prompt and name == "mention":
+                    raise click.ClickException(
+                        "workflows.mention.prompt is not supported: mention "
+                        "composes its prompt from the triggering event. Put "
+                        "standing guidance in the repo's `running-tend` skill "
+                        "overlay instead."
+                    )
+                # A whitespace-only prompt is truthy, so it beats the default
+                # and leaves the agent step with no instructions — which the
+                # Claude action fails on by name and the Codex action hands to
+                # `codex exec` and runs. `""` and a bare `prompt:` are falsy and
+                # fall through to the default instead, which is quieter but no
+                # more what the adopter wrote. All three are typos; refuse them
+                # here, where the key's presence still tells them apart from an
+                # absent one.
+                if "prompt" in wf_raw and not wf_prompt.strip():
+                    raise click.ClickException(
+                        f"workflows.{name}.prompt is blank. Drop the key to "
+                        f"use the default prompt."
+                    )
                 workflows[name] = WorkflowConfig(
                     enabled=wf_raw.get("enabled", True),
-                    prompt=wf_raw.get("prompt", ""),
+                    prompt=wf_prompt,
                     cron=wf_raw.get("cron", ""),
                     watched_workflows=watched,
                     branches=branches,
@@ -535,20 +643,23 @@ class Config:
         # render gate (macros.yaml.j2 emits them per effective harness): a
         # top-level `codex` with a per-workflow `claude` override does apply
         # them, so don't warn there.
-        if sandbox_path or sandbox_env or sandbox_setup:
-            effective_harnesses = {harness} | {
-                wf.harness
-                for wf in workflows.values()
-                if wf.enabled and wf.harness is not None
-            }
-            if "claude" not in effective_harnesses:
-                click.echo(
-                    "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
-                    "to the Claude harness (the proxy sandbox). The "
-                    "codex harness runs the agent on the runner, where the "
-                    "`setup:` section already reaches its environment.",
-                    err=True,
-                )
+        enabled_harnesses = _enabled_harnesses(harness, workflows)
+        if (
+            sandbox_path or sandbox_env or sandbox_setup
+        ) and "claude" not in enabled_harnesses:
+            click.echo(
+                "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
+                "to the Claude harness (the proxy sandbox). The "
+                "codex harness runs the agent on the runner, where the "
+                "`setup:` section already reaches its environment.",
+                err=True,
+            )
+
+        if memory_gist and "claude" not in enabled_harnesses:
+            raise click.ClickException(
+                "memory_gist is experimental and requires at least one enabled "
+                "workflow using the Claude harness"
+            )
 
         allowed = secrets.get("allowed", [])
         if not isinstance(allowed, list) or not all(
@@ -584,6 +695,21 @@ class Config:
             sandbox_path=sandbox_path,
             sandbox_env=sandbox_env,
             sandbox_setup=sandbox_setup,
+            memory_gist=memory_gist,
+            enabled=enabled,
             workflows=workflows,
             allowed_repo_secrets=allowed,
         )
+
+
+def _enabled_harnesses(harness: str, workflows: dict[str, WorkflowConfig]) -> set[str]:
+    """Effective harnesses of enabled, normally generated workflows."""
+    enabled = set()
+    for name in STANDARD_WORKFLOWS:
+        workflow = workflows.get(name, WorkflowConfig())
+        if not workflow.enabled:
+            continue
+        if name == "ci-fix" and workflow.watched_workflows is None:
+            continue
+        enabled.add(workflow.harness or harness)
+    return enabled

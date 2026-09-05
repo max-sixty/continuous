@@ -8,10 +8,12 @@ Reads (env): ``SANDBOX`` and ``AGENT_ENV_FILE`` (exported by
 ``proxy/setup-sandbox.sh`` via ``$GITHUB_ENV``), ``RUNNER_TEMP``,
 ``GITHUB_WORKSPACE``, ``GITHUB_OUTPUT``, ``TEND_MODEL``,
 ``TEND_ALLOWED_TOOLS``, ``TEND_SYSTEM_PROMPT``, ``TEND_PROMPT``,
-``TEND_TIMEOUT_SEC``, ``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``,
-``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB``, plus the ``GITHUB_*`` context from
-Actions. ``GITHUB_STEP_SUMMARY`` is read only when rendering the transcript.
-Publishes ``stream_json``. Used by the Claude harness action.
+``TEND_TIMEOUT_SEC``, ``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``, optional
+``TEND_AUTO_MEMORY_SETTINGS``, ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB``, plus the
+``GITHUB_*`` context from Actions. ``GITHUB_STEP_SUMMARY`` is read only when
+rendering the transcript.
+Publishes ``stream_json`` and, after supervision has stopped every sandbox
+process, ``sandbox_reaped``. Used by the Claude harness action.
 
 Decisions this module owns:
 
@@ -99,6 +101,7 @@ def launch_argv(
     bot_name: str,
     bot_id: str,
     ci: str,
+    settings_file: str = "",
 ) -> list[str]:
     """The command that launches the agent as the non-sudo sandbox user.
 
@@ -111,12 +114,23 @@ def launch_argv(
     ``settings.local.json`` already says so the mode survives an adopter
     overriding that file.
     """
-    return [
+    agent_env = _sandbox.launch_env(agent_env_file)
+    if settings_file:
+        # The explicit experimental config field wins over an adopter's general
+        # Claude setting. Leaving this variable in the launch env would make a
+        # successful restore silently inert even though the injected settings
+        # enable and redirect auto memory.
+        agent_env = [
+            entry
+            for entry in agent_env
+            if not entry.startswith("CLAUDE_CODE_DISABLE_AUTO_MEMORY=")
+        ]
+    argv = [
         "sudo",
         "-u",
         sandbox,
         "env",
-        *_sandbox.launch_env(agent_env_file),
+        *agent_env,
         f"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB={subprocess_env_scrub}",
         f"BOT_NAME={bot_name}",
         f"BOT_ID={bot_id}",
@@ -134,8 +148,11 @@ def launch_argv(
         "--output-format",
         "stream-json",
         "--verbose",
-        prompt,
     ]
+    if settings_file:
+        argv.extend(["--settings", settings_file])
+    argv.append(prompt)
+    return argv
 
 
 @dataclass(frozen=True)
@@ -495,19 +512,26 @@ def main() -> int:
         bot_name=env["BOT_NAME"],
         bot_id=env["BOT_ID"],
         ci=os.environ.get("CI") or "true",
+        settings_file=os.environ.get("TEND_AUTO_MEMORY_SETTINGS", ""),
     )
     # Published before the launch: the path does not depend on the run, and the
     # steps that read it — Token usage, the session-logs artifact — are
     # `if: always()`, so they must still find it when the launch itself blows up.
     _common.set_output("stream_json", str(stream_json))
 
-    run = supervise(
-        argv,
-        sandbox=sandbox,
-        timeout_sec=int(env["TEND_TIMEOUT_SEC"]),
-        stream_json=stream_json,
-        stderr_log=stderr_log,
-    )
+    try:
+        run = supervise(
+            argv,
+            sandbox=sandbox,
+            timeout_sec=int(env["TEND_TIMEOUT_SEC"]),
+            stream_json=stream_json,
+            stderr_log=stderr_log,
+        )
+    finally:
+        # supervise() kills and reaps the sandbox uid on every exit, including
+        # cancellation and launch failure. The memory save keys on this output
+        # so it never reads agent-owned files while a sandbox process survives.
+        _common.set_output("sandbox_reaped", "true")
     timed_out = run.exit_code is None
     print(
         f"Supervisor: status={'timeout' if timed_out else 'exited'} "

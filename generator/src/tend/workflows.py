@@ -15,12 +15,13 @@ from importlib.metadata import version
 import click
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from jinja2.runtime import Macro
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML, YAMLError
 
 from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     Config,
     WorkflowConfig,
@@ -118,6 +119,7 @@ _JINJA.globals["tend_environment"] = TEND_ENVIRONMENT
 _JINJA.globals["bot_token_secret"] = BOT_TOKEN_SECRET
 _JINJA.globals["claude_token_secret"] = CLAUDE_TOKEN_SECRET
 _JINJA.globals["anthropic_api_key_secret"] = ANTHROPIC_API_KEY_SECRET
+_JINJA.globals["memory_gist_secret"] = MEMORY_GIST_SECRET
 _JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
 # Labels tend puts on the issues it files about its own health. Workflows skip
 # issues carrying them, so the bot's own record-keeping cannot re-trigger it:
@@ -127,6 +129,17 @@ _JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
 # in one place.
 BOOKKEEPING_LABELS = ("tend-outage", "tend-rate-limit")
 _JINJA.globals["bookkeeping_labels"] = BOOKKEEPING_LABELS
+
+# Every operational job evaluates the current config on the repository's
+# default branch before it checks out code or reads an operational secret. The
+# Contents API defaults to that branch when `ref` is omitted.
+TEND_ENABLED_CONDITION = "steps.tend_enabled.outputs.enabled == 'true'"
+_JINJA.globals["tend_enabled_condition"] = TEND_ENABLED_CONDITION
+_JINJA.globals["check_enabled_script"] = (
+    (importlib.resources.files("tend") / "templates" / "check-enabled.rb")
+    .read_text(encoding="utf-8")
+    .rstrip("\n")
+)
 
 
 # Register every macro defined in `macros.yaml.j2` as a Jinja global so
@@ -162,9 +175,9 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     Returns empty string when no steps, or newline-prefixed block when present,
     so templates can write `<<setup>>` without extra blank lines.
 
-    When *condition* is set, steps without an explicit `if:` receive one so
-    they only run when the pre-check found work. Steps that already specify
-    `if:` are left alone (with a warning) — their condition wins.
+    When *condition* is set, every step is gated on it. A step's own `if:`
+    narrows that guard instead of replacing it. Both expressions are
+    parenthesized because a workflow guard may contain `||`.
     """
     if not cfg.setup:
         return ""
@@ -172,15 +185,8 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     for step in cfg.setup:
         fields = dict(step.fields)
         if condition:
-            if "if" in fields:
-                click.echo(
-                    "Warning: setup step has an explicit `if:`; the "
-                    "workflow's pre-check guard will not be added. "
-                    "The step runs based on your condition alone.",
-                    err=True,
-                )
-            else:
-                fields["if"] = condition
+            own = fields.get("if")
+            fields["if"] = f"({condition}) && ({own})" if own else condition
         ordered = {k: fields[k] for k in _STEP_FIELD_ORDER if k in fields}
         for k, v in fields.items():
             ordered.setdefault(k, v)
@@ -241,28 +247,6 @@ class GeneratedWorkflow:
 # ---------------------------------------------------------------------------
 
 
-def _escape_braces(prompt: str, placeholder: str) -> tuple[str, bool]:
-    """Escape literal braces in a prompt, preserving only {placeholder}.
-
-    Returns (escaped_prompt, needs_format). In the escaped prompt, {placeholder}
-    is replaced with {0} for use with GitHub Actions format(), and all other
-    braces are doubled to prevent format() from interpreting them.
-
-    A prompt with no {placeholder} is returned untouched. Doubling is only
-    correct on the way into `format()`, which collapses each pair back to one
-    brace; without the placeholder the caller emits a bare string literal
-    instead, and GitHub Actions does not collapse braces there — the pairs
-    would reach the agent verbatim.
-    """
-    sentinel = "\x00PLACEHOLDER\x00"
-    text = prompt.replace(f"{{{placeholder}}}", sentinel)
-    if sentinel not in text:
-        return prompt, False
-    # Double all remaining braces so format() treats them as literals
-    text = text.replace("{", "{{").replace("}", "}}")
-    return text.replace(sentinel, "{0}"), True
-
-
 def _effective_cfg(cfg: Config, wf: WorkflowConfig) -> Config:
     """Return cfg, or a shallow clone with workflow overrides applied.
 
@@ -288,19 +272,15 @@ _REVIEW_TMPL = _JINJA.get_template("review.yaml.j2")
 def generate_review(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("review", WorkflowConfig())
     eff = _effective_cfg(cfg, wf)
-    raw_prompt = wf.prompt or eff.default_prompt("review", "{pr_number}")
-    format_body, needs_format = _escape_braces(raw_prompt, "pr_number")
-    escaped = format_body.replace("'", "''")
-    if needs_format:
-        prompt_expr = f"format('{escaped}', github.event.pull_request.number)"
-    else:
-        prompt_expr = f"'{escaped}'"
+    prompt = (wf.prompt or eff.default_prompt("review", "{pr_number}")).replace(
+        "{pr_number}", "${{ github.event.pull_request.number }}"
+    )
 
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         local_actions=_restore_local_actions_run(eff),
-        prompt_expr=prompt_expr,
+        prompt=prompt,
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
 
@@ -322,7 +302,7 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
 
     content = _MENTION_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         local_actions=_restore_local_actions_run(eff),
         check_script=check_script.rstrip("\n"),
     )
@@ -344,7 +324,11 @@ def generate_triage(cfg: Config) -> GeneratedWorkflow:
         "{issue_number}", "${{ github.event.issue.number }}"
     )
 
-    content = _TRIAGE_TMPL.render(cfg=eff, setup=_setup_yaml(eff), prompt=prompt)
+    content = _TRIAGE_TMPL.render(
+        cfg=eff,
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
+        prompt=prompt,
+    )
     return GeneratedWorkflow(filename="tend-triage.yaml", content=content)
 
 
@@ -376,7 +360,7 @@ def generate_ci_fix(cfg: Config) -> GeneratedWorkflow:
         cfg=eff,
         watched=watched,
         branches=branches,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         prompt=prompt,
     )
     return GeneratedWorkflow(filename="tend-ci-fix.yaml", content=content)
@@ -409,7 +393,7 @@ def _generate_scheduled(cfg: Config, name: str) -> GeneratedWorkflow:
         cfg=eff,
         name=name,
         cron=cron,
-        setup=_setup_yaml(eff),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         prompt=prompt,
     )
     return GeneratedWorkflow(filename=f"tend-{name}.yaml", content=content)
@@ -426,11 +410,15 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
     prompt = (
         f"{prompt}\n\n"
         "Notification snapshot cutoff: "
-        "${{ steps.check.outputs.cutoff }}"
+        "${{ steps.check.outputs.cutoff }}\n"
+        "Possible conflicted bot PR count: "
+        "${{ steps.check.outputs.conflict_count }}"
     )
 
     skip_condition = (
-        "steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'"
+        "steps.check.outputs.count != '0' || "
+        "steps.check.outputs.conflict_count != '0' || "
+        "github.event_name == 'workflow_dispatch'"
     )
     check_script = (
         importlib.resources.files("tend") / "templates" / "notifications-check.sh"
@@ -440,7 +428,10 @@ def generate_notifications(cfg: Config) -> GeneratedWorkflow:
         cfg=eff,
         cron=cron,
         skip_condition=skip_condition,
-        setup=_setup_yaml(eff, condition=skip_condition),
+        setup=_setup_yaml(
+            eff,
+            condition=f"({TEND_ENABLED_CONDITION}) && ({skip_condition})",
+        ),
         prompt=prompt,
         check_script=check_script.rstrip("\n"),
     )
@@ -524,6 +515,10 @@ def generate_install_test(cfg: Config) -> GeneratedWorkflow:
     verifies them. Harness auth is exercised end-to-end by `tend-review`
     on the first post-merge PR.
     """
+    # The config is introduced by the install PR itself, so this one-shot job
+    # reads the PR head rather than the default branch used by operational jobs.
+    install_ref = "${{ github.event.pull_request.head.sha }}"
+    enabled_check = _MACROS.module.check_tend_enabled(cfg, install_ref)
     content = f"""\
 {HEADER}
 name: tend-install-test
@@ -543,9 +538,13 @@ jobs:
     permissions:
       contents: read
     steps:
+{enabled_check}
       - uses: actions/checkout@v7
+        if: {TEND_ENABLED_CONDITION}
       - uses: astral-sh/setup-uv@v10.0.1
+        if: {TEND_ENABLED_CONDITION}
       - name: Verify generator output matches committed files
+        if: {TEND_ENABLED_CONDITION}
         env:
           GH_TOKEN: ${{{{ github.token }}}}
         run: |
@@ -587,6 +586,118 @@ GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
     "notifications": generate_notifications,
     "review-runs": lambda cfg: _generate_scheduled(cfg, "review-runs"),
 }
+
+
+# ---------------------------------------------------------------------------
+# actionlint config
+# ---------------------------------------------------------------------------
+
+# `concurrency.queue` is valid GitHub Actions syntax that actionlint's schema
+# does not accept, so tend-review.yaml fails every actionlint run an adopter
+# makes — including the required checks on the nightly regen PR, which then
+# cannot merge. Suppressing it at the linter's invocation only covers that one
+# caller (pre-commit's hook args miss MegaLinter's own actionlint, and both
+# miss a direct CLI call); `.github/actionlint.yaml` is read by the binary
+# itself, so it holds however actionlint is run. `paths` needs actionlint
+# >= v1.7.5.
+ACTIONLINT_QUEUE_IGNORE = 'unexpected key "queue" for "concurrency" section'
+
+# Scoped to tend's generated workflow directory and filenames, so the same
+# schema error elsewhere still fails. The leading `**/` lets actionlint match
+# paths handed to it from the repository root or a subdirectory.
+ACTIONLINT_TEND_GLOB = "**/.github/workflows/tend-*.yaml"
+
+
+def actionlint_config(
+    existing: str | None, filename: str = "actionlint.yaml"
+) -> str | None:
+    """Return updated actionlint config content, or None to leave the file be.
+
+    Unlike the workflow files, this one is the adopter's: the ignore is merged
+    into whatever is already there and nothing else is touched. Returns None
+    when the ignore is already present, so the nightly regen produces no diff,
+    and when the file holds a shape this cannot merge into — a config the
+    generator does not understand is left for its owner rather than
+    overwritten.
+    """
+
+    def _bail(what: str) -> None:
+        click.echo(
+            f"Warning: .github/{filename} has {what} — "
+            f"leaving it unchanged. Add this ignore by hand or the generated "
+            f"workflows will fail actionlint:\n"
+            f"  paths:\n"
+            # Quoted because a bare `**` opens a YAML alias — an adopter
+            # pasting an unquoted key gets a scanner error, not a config.
+            f"    '{ACTIONLINT_TEND_GLOB}':\n"
+            f"      ignore:\n"
+            f"        - '{ACTIONLINT_QUEUE_IGNORE}'",
+            err=True,
+        )
+
+    if existing is None or not existing.strip():
+        data = _YAML_BLOCK.load(
+            "# `concurrency.queue` is valid GitHub Actions syntax that\n"
+            "# actionlint's schema rejects. tend writes this ignore so the\n"
+            "# generated workflows lint clean; the glob keeps a real schema\n"
+            "# error in your own workflows failing.\n"
+            "paths:\n"
+        )
+    else:
+        # A file that does not parse is the likeliest form of "a config the
+        # generator does not understand" — conflict markers mid-rebase, a tab
+        # indent. Warn like the shape mismatches below rather than raising out
+        # of `init`, which would leave the workflow files half-regenerated.
+        try:
+            data = _YAML_BLOCK.load(existing)
+        except YAMLError:
+            _bail("YAML the generator cannot parse")
+            return None
+        if data is None:
+            # A comments-only document has no YAML value. Parse it again with
+            # the mapping anchor appended so ruamel keeps the comments when it
+            # writes the new config entry.
+            try:
+                data = _YAML_BLOCK.load(f"{existing.rstrip()}\npaths:\n")
+            except YAMLError:
+                _bail("an unexpected top level")
+                return None
+
+    if not isinstance(data, dict):
+        _bail("an unexpected top level")
+        return None
+
+    paths = data.get("paths")
+    if paths is None:
+        paths = {}
+        data["paths"] = paths
+    if not isinstance(paths, dict):
+        _bail("an unexpected `paths` value")
+        return None
+
+    entry = paths.get(ACTIONLINT_TEND_GLOB)
+    if entry is None:
+        entry = {}
+        paths[ACTIONLINT_TEND_GLOB] = entry
+    if not isinstance(entry, dict):
+        _bail(f"an unexpected `paths` entry for {ACTIONLINT_TEND_GLOB}")
+        return None
+
+    ignores = entry.get("ignore")
+    if ignores is None:
+        ignores = []
+        entry["ignore"] = ignores
+    if not isinstance(ignores, list):
+        _bail(f"an unexpected `ignore` value for {ACTIONLINT_TEND_GLOB}")
+        return None
+
+    if ACTIONLINT_QUEUE_IGNORE in ignores:
+        return None
+    ignores.append(ACTIONLINT_QUEUE_IGNORE)
+
+    buf = io.StringIO()
+    _YAML_BLOCK.dump(data, buf)
+    return buf.getvalue()
 
 
 def generate_all(

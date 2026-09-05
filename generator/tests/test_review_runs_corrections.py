@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 SCRIPT = (
@@ -44,9 +45,17 @@ case "$*" in
     [ -n "${SEARCH_FAILS:-}" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     emit "$(cat "$CANDIDATES_JSON")" ;;
   "pr list"*)              emit "$(cat "$BOT_PRS_JSON")" ;;
-  *"/issues/comments"*)    emit "$(cat "$ISSUE_COMMENTS_JSON")" ;;
+  *"/issues/comments"*)
+    [ -n "${ISSUE_COMMENTS_FAILS:-}" ] && { echo "502 Bad Gateway" >&2; exit 1; }
+    emit "$(cat "$ISSUE_COMMENTS_JSON")" ;;
   *"/pulls/comments"*)     emit "$(cat "$PR_COMMENTS_JSON")" ;;
-  *"/pulls/"*"/reviews"*)  emit "$(cat "$REVIEWS_JSON")" ;;
+  # Unset, the placeholder matches no numeric PR path.
+  *"/pulls/"*"/reviews"*)
+    case "$*" in
+      *"/pulls/${REVIEWS_FAIL_FOR:-none}/reviews"*)
+        echo "502 Bad Gateway" >&2; exit 1 ;;
+    esac
+    emit "$(cat "$REVIEWS_JSON")" ;;
   *) exit 1 ;;
 esac
 """
@@ -80,7 +89,7 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True
+        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
     )
 
 
@@ -149,6 +158,39 @@ def test_a_failed_candidate_search_aborts_rather_than_reporting_no_reviews(
     the call most likely to fail — and inline in the `for` list its failure is
     invisible to `set -e`, leaving `reviews: []` to read as an all-clear."""
     env["SEARCH_FAILS"] = "1"
+
+    result = _run(env, SINCE)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_a_failed_comment_endpoint_aborts_rather_than_reporting_the_other_half(
+    env: dict[str, str],
+) -> None:
+    """Both comment endpoints are read in one loop inside a command substitution.
+
+    Bash applies `-e` there only under `inherit_errexit`, and `pipefail` sees
+    just the loop's final iteration — so a dropped `issues` page would leave
+    every conversation comment out of a report that still exits 0.
+    """
+    _write(env, "PR_COMMENTS_JSON", [_comment(IN_WINDOW)])
+    env["ISSUE_COMMENTS_FAILS"] = "1"
+
+    result = _run(env, SINCE)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_a_failed_review_fetch_aborts_rather_than_dropping_that_prs_reviews(
+    env: dict[str, str],
+) -> None:
+    """One `gh` call per candidate PR, in that same loop: a failure on any but
+    the last would drop that PR's reviews and report the rest as the window."""
+    _write(env, "CANDIDATES_JSON", [{"number": 1}, {"number": 2}])
+    _write(env, "REVIEWS_JSON", [_review(IN_WINDOW)])
+    env["REVIEWS_FAIL_FOR"] = "1"
 
     result = _run(env, SINCE)
 

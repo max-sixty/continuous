@@ -1,5 +1,3 @@
-{%- set prompt_body %}prompt: >-
-            ${{ <<prompt_expr>> }}{%- endset -%}
 {#- The base checkout exists to give `setup:` a reviewed tree, so it renders
     only alongside it. With no setup nothing runs between the checkouts, and a
     lone PR checkout into an empty workspace never reaches `clean` — the
@@ -26,13 +24,14 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
-<<react_eyes('issues/${{ github.event.pull_request.number }}')>>
+<<check_tend_enabled(cfg)>>
+<<react_eyes('issues/${{ github.event.pull_request.number }}', if_condition=tend_enabled_condition)>>
 
 {% if has_setup %}
       # Two checkouts: `setup:` runs against the base tree, and the PR's own
       # tree lands after it. Setup executes as the runner user, outside the
       # containment the harness builds for the contributor's code.
-<<checkout(cfg)>>
+<<checkout(cfg, if_condition=tend_enabled_condition)>>
 <<setup>>
 {% endif %}
       # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
@@ -42,6 +41,7 @@ jobs:
       # tree.
       - name: Resolve PR checkout ref
         id: pr_ref
+        if: <<tend_enabled_condition>>
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           PR: ${{ github.event.pull_request.number }}
@@ -52,8 +52,8 @@ jobs:
             echo "ref=refs/pull/$PR/head" >> "$GITHUB_OUTPUT"
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
-<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', allow_unsafe_pr_checkout=True, clean=not has_setup)>>
+<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', if_condition=tend_enabled_condition, allow_unsafe_pr_checkout=True, clean=not has_setup)>>
 
-<<agent_step(cfg, prompt_body)>><<restore_local_actions(local_actions)>>
+<<agent_step(cfg, block_input('prompt', prompt), if_condition=tend_enabled_condition)>><<restore_local_actions(local_actions, if_condition=tend_enabled_condition)>>
 
-<<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition='always()')>>
+<<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")")>>

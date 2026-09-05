@@ -123,9 +123,9 @@ its ephemeral `GITHUB_TOKEN`, at whatever permissions the file declares —
 bounded by the same rulesets (it cannot merge or tag), unable to read any
 secret value back through the API, and expiring with the job.
 
-*Operational secrets* — the bot PAT and the harness auth — live in the
-`tend` environment, whose policy names the default branch and any
-`protected_branches`. Every generated job that reads a secret carries
+*Operational secrets* — the bot PAT, harness auth, and optional auto-memory
+Gist ID — live in the `tend` environment, whose policy names the default branch
+and any `protected_branches`. Every generated job that reads a secret carries
 `environment: {name: tend, deployment: false}`; jobs that hold none
 (mention's relay, below) must not, since naming it would cost them the refs
 the policy excludes. `deployment: false` keeps GitHub from filing a
@@ -330,7 +330,8 @@ installs into its own directory, off `$PATH`, so the process holding both
 credentials starts from a known binary rather than whatever an adopter's
 `setup:` happened to leave on the runner. (`claude` is Node and ignores the
 system trust store, so it trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) Shared
-system and hosted-toolcache PATH entries remain available to the sandbox. A
+system and hosted-toolcache PATH entries remain available to the sandbox. Tend
+appends a pinned `uv` fallback after those paths before `sandbox_setup:` runs. A
 runner-home PATH entry may select an independently seeded directory already
 owned by the sandbox user; runner-home files themselves stay off the sandbox
 PATH except for checkout paths. Tend does not infer which files under the
@@ -424,6 +425,16 @@ A carefully crafted PR description or issue body could get Claude to approve a
 bad PR, post misleading comments, or dismiss legitimate review concerns. Fixed
 prompts and skill instructions reduce this risk but can't eliminate it —
 Claude ultimately reasons about attacker-controlled text.
+
+**Persistent auto memory.** The experimental `memory_gist: true` setting lets
+Claude carry model-authored notes into unrelated later runs. Those notes are
+context, not policy, and may preserve stale facts or the effect of an earlier
+prompt injection. The adapter accepts only a bot-owned secret Gist bound to the
+exact repository, signs its per-run baseline, rejects symlinks and nested paths,
+and skips the entire save when it observes a conflict. A secret Gist is readable
+to anyone who learns its URL, so the Gist ID stays out of committed public files
+and the experiment is refused for private repositories. It is not hidden from
+the session: the agent's proxied bot access can list the account's Gists.
 
 Deferred hardening options (Haiku pre-screening, read-only fork PRs, network
 isolation, workflow-dispatch isolation, GitHub App in place of PAT) live in

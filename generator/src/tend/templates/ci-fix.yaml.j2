@@ -1,8 +1,9 @@
-{%- set prompt_body %}prompt: |
-            <<prompt>>
-            - Run URL: ${{ github.event.workflow_run.html_url }}
-            - Commit: ${{ github.event.workflow_run.head_sha }}
-            - Commit message: ${{ github.event.workflow_run.head_commit.message }}{%- endset -%}
+{#- The failing run's coordinates, appended to whatever prompt is configured.
+    `block_input` indents the whole thing, so the prompt may span lines. #}
+{%- set full_prompt %}<<prompt>>
+- Run URL: ${{ github.event.workflow_run.html_url }}
+- Commit: ${{ github.event.workflow_run.head_sha }}
+- Commit message: ${{ github.event.workflow_run.head_commit.message }}{% endset -%}
 <<header>>
 name: tend-ci-fix
 on:
@@ -28,6 +29,7 @@ jobs:
     permissions:
 <<permissions(issues=False)>>
     steps:
-<<checkout(cfg, ref=cfg.default_branch)>>
+<<check_tend_enabled(cfg)>>
+<<checkout(cfg, ref=cfg.default_branch, if_condition=tend_enabled_condition)>>
 <<setup>>
-<<agent_step(cfg, prompt_body)>>
+<<agent_step(cfg, block_input('prompt', full_prompt), if_condition=tend_enabled_condition)>>

@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 import mark_notification_read
+import pytest
 from _fakes import FakeGh
 
 REPO = "owner/repo"

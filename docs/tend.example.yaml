@@ -11,6 +11,16 @@
 
 bot_name: my-project-bot
 
+# ## Runtime switch
+#
+# Every operational job reads this value from the repository's default branch
+# before checkout, setup, reactions, or the agent action. `false` leaves the
+# generated workflows installed, so changing it back to `true` (or removing
+# the key) resumes new jobs without regeneration. A job already running is not
+# interrupted.
+#
+# enabled: false
+
 # ## Harness
 #
 # Which agent runtime to use. Defaults to "claude" (the official `claude`
@@ -66,12 +76,17 @@ bot_name: my-project-bot
 #
 # The Claude action prefers the subscription token
 # (`CLAUDE_CODE_OAUTH_TOKEN`) over the API key when both are set.
+# `TEND_MEMORY_GIST_ID` is required only when the experimental `memory_gist`
+# setting is true. It keeps the secret Gist's unlisted URL out of a public
+# config file.
 #
 # Classic PAT scopes: `repo`, `workflow`, `notifications`, `write:discussion`,
 # `gist`, `user`. `workflow` is required to push commits that modify
-# `.github/workflows/` files. `gist` lets internal skills store structured
-# evidence in secret gists owned by the bot. `user` lets `install-tend` set
-# the bot's profile bio so contributors can see the authorization stance.
+# `.github/workflows/` files. `gist` covers two uses of secret gists owned by
+# the bot: internal skills store structured evidence in them, and the
+# experimental `memory_gist` setting persists Claude Code's auto memory across
+# runs. `user` lets `install-tend` set the bot's profile bio so contributors
+# can see the authorization stance.
 #
 # Fine-grained PAT permissions: `contents:write`, `pull-requests:write`,
 # `issues:write`, `actions:write`, `workflows:write`, `discussions:write`,
@@ -110,9 +125,11 @@ bot_name: my-project-bot
 # codex there is no such lever; the agent installs what it needs itself.
 #
 # `tend-notifications` decides up front whether the agent needs to boot and
-# injects an `if:` guard on every setup step so an empty-inbox run does no setup
-# either. A user-supplied `if:` is passed through unchanged (with a
-# generation-time warning) — your condition wins.
+# injects an `if:` guard on every setup step so a run with no unread
+# notifications or possible PR conflicts does no setup either. A user-supplied
+# `if:` narrows that guard; it cannot run setup after the pre-check declined the
+# job. Write it as a plain expression or one whole `${{ ... }}`; mixing the two
+# is rejected at `init`.
 #
 # Each form below shows the config and the YAML it produces inside the
 # `steps:` block. The guard is shown on the first example; it's added the same
@@ -125,7 +142,7 @@ bot_name: my-project-bot
 #
 #     # renders as (in tend-notifications):
 #     #   - uses: astral-sh/setup-uv@v10.0.1
-#     #     if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
+#     #     if: steps.check.outputs.count != '0' || steps.check.outputs.conflict_count != '0' || github.event_name == 'workflow_dispatch'
 #     #
 #     # in other workflows:
 #     #   - uses: astral-sh/setup-uv@v10.0.1
@@ -175,8 +192,9 @@ bot_name: my-project-bot
 # `sandbox_setup:` for home-scoped installs or version changes such as
 # `cargo install`, `pip install --user`, or `uv tool install`.
 #
-# Tend installs no language toolchain of its own. These keys make deliberate
-# additions inside the sandbox:
+# Tend appends a pinned `uv` fallback after the `setup:` PATH. It installs no
+# other language toolchain. These keys make deliberate additions inside the
+# sandbox:
 #
 # - `sandbox_path`: directories prepended to the sandbox PATH. A leading `~`
 #   expands to the sandbox home. Use it for a system directory the installer did
@@ -234,13 +252,42 @@ bot_name: my-project-bot
 # The codex harness runs the agent on the runner, so its `setup:` section
 # already reaches the agent env; these keys are inert (and warn) under codex.
 
+# ## Memory Gist (experimental, Claude harness)
+#
+# `memory_gist: true` restores Claude Code's model-authored auto memory from a
+# Gist before each Claude run and saves its changes afterwards. This setting is
+# experimental. The default is false, and the field is rejected when no enabled
+# workflow uses the Claude harness.
+#
+# The bot account must own a secret Gist containing `MEMORY.md`. Its description
+# must be exactly `tend auto memory: OWNER/REPO`. Store the Gist ID in the
+# `TEND_MEMORY_GIST_ID` secret of the repo's `tend` environment:
+#
+#     gh secret set TEND_MEMORY_GIST_ID --repo OWNER/REPO --env tend
+#
+# Secret Gists are unlisted, not private, so this experiment supports public
+# repositories only and memory must not contain credentials or private facts.
+# Recalled notes are untrusted context: they may be stale or influenced by text
+# Claude read in an earlier run. Gists are flat, so a nested memory directory
+# makes that run's save fail with a warning. If a file this run changed also
+# changed remotely, the run skips its entire save. GitHub's Gist API still
+# cannot make the final update atomic.
+#
+# memory_gist: true
+
 # ## Workflows
 #
-# All workflows are enabled by default except ci-fix (requires
+# All workflows are generated by default except ci-fix (requires
 # `watched_workflows`). Every workflow accepts these options:
 #
-# - `enabled` (bool)  — disable with `enabled: false`
-# - `prompt` (string) — override the default skill invocation
+# - `enabled` (bool)  — omit this workflow on the next regeneration
+# - `prompt` (string) — override the default skill invocation. May span lines.
+#   Three workflows substitute one placeholder into it: `{pr_number}` (review),
+#   `{issue_number}` (triage), `{run_id}` (ci-fix). Everything else is passed to
+#   the agent verbatim, braces and quotes included — but `${{ ... }}` is a
+#   GitHub Actions expression and is evaluated, so don't write one as prose.
+#   `mention` composes its prompt from the triggering event and takes no
+#   override; setting one there is an error.
 #
 # Scheduled workflows also accept `cron` to override their default schedule.
 # GitHub runs `schedule` triggers on a best-effort basis and drops ticks under
@@ -308,8 +355,8 @@ bot_name: my-project-bot
 
 # ### notifications
 #
-# Every 15 minutes. Keeps the bot watching the repository and drains unread
-# notifications as a recovery queue for issue and PR work.
+# Every 15 minutes. Keeps the bot watching the repository, drains unread
+# notifications as a recovery queue, and repairs conflicts on bot-authored PRs.
 
 # ### review-runs
 #

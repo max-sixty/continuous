@@ -20,7 +20,7 @@ from tend.checks import (
 )
 from tend.config import Config
 from tend.migrate import migrate_toml_to_yaml, render_toml_as_yaml
-from tend.workflows import generate_all
+from tend.workflows import actionlint_config, generate_all
 
 
 def _detect_default_branch_local() -> str:
@@ -31,6 +31,7 @@ def _detect_default_branch_local() -> str:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode == 0:
             # Returns "origin/main" or "origin/master" — strip the remote prefix
@@ -40,6 +41,44 @@ def _detect_default_branch_local() -> str:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return "main"
+
+
+def _runtime_config_path(path: Path) -> str:
+    """Return the config's repository-relative path for runtime checks."""
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError as error:
+        raise click.ClickException(
+            f"Config must be inside the repository so workflows can read it: {path}"
+        ) from error
+
+
+def _update_actionlint_config(dry_run: bool) -> None:
+    """Ensure `.github/actionlint.yaml` ignores the `concurrency.queue` schema
+    false positive, so an adopter's workflow lint stays green on regen.
+
+    actionlint reads `.yaml` in preference to `.yml`, so a new `.yaml` written
+    beside an adopter's `.yml` would silently disable their whole config —
+    update the file they already have.
+    """
+    github_dir = Path(".github")
+    for name in ("actionlint.yaml", "actionlint.yml"):
+        path = github_dir / name
+        if path.exists():
+            break
+    else:
+        path = github_dir / "actionlint.yaml"
+
+    existing = path.read_text(encoding="utf-8") if path.exists() else None
+    updated = actionlint_config(existing, path.name)
+    if updated is None:
+        return
+    if dry_run:
+        click.echo(f"  would update {path} (actionlint `concurrency.queue` ignore)")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+    click.echo(f"  wrote {path}")
 
 
 def _print_check_results(results: list[CheckResult]) -> None:
@@ -113,6 +152,9 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
             preview_path = Path(tmp) / "tend.yaml"
             preview_path.write_text(preview_yaml, encoding="utf-8")
             cfg = Config.load(preview_path)
+    cfg.config_path = _runtime_config_path(
+        config_path if config_path is not None else Path(".config/tend.yaml")
+    )
     cfg.default_branch = _detect_default_branch_local()
     cfg.repo_owner = detect_canonical_owner() or ""
     if not cfg.repo_owner:
@@ -141,6 +183,9 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
         path.write_text(wf.content, encoding="utf-8")
         click.echo(f"  wrote {path}")
 
+    if any(wf.filename == "tend-review.yaml" for wf in workflows):
+        _update_actionlint_config(dry_run)
+
     # Remove stale tend-*.yaml files the generator didn't produce this run.
     # Catches: install-test cleanup on regen, disabled workflows leaving
     # behind their YAML, and workflows renamed across generator versions.
@@ -165,7 +210,7 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 
     if not workflows:
         suffix = f" Removed {removed} stale tend-*.yaml file(s)." if removed else ""
-        click.echo(f"No workflows enabled in config.{suffix}")
+        click.echo(f"No workflows generated from config.{suffix}")
         return
 
     suffix = f" ({removed} removed)" if removed else ""
@@ -188,8 +233,10 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
     """Verify security prerequisites (branch protection, bot access, credentials)."""
     cfg = Config.load(config_path)
-    results = run_all_checks(cfg, repo)
+    if not cfg.enabled:
+        click.echo("Tend is disabled in config; new operational jobs will skip.")
 
+    results = run_all_checks(cfg, repo)
     click.echo("Security checks:")
     _print_check_results(results)
 

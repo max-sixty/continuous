@@ -16,10 +16,11 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
-<<react_eyes('issues/${{ github.event.issue.number }}')>>
+<<check_tend_enabled(cfg)>>
+<<react_eyes('issues/${{ github.event.issue.number }}', if_condition=tend_enabled_condition)>>
 
-<<checkout(cfg, ref=cfg.default_branch)>>
+<<checkout(cfg, ref=cfg.default_branch, if_condition=tend_enabled_condition)>>
 <<setup>>
-<<agent_step(cfg, block_prompt(prompt))>>
+<<agent_step(cfg, block_input('prompt', prompt), if_condition=tend_enabled_condition)>>
 
-<<unreact_eyes(cfg, 'issues/${{ github.event.issue.number }}', if_condition='always()')>>
+<<unreact_eyes(cfg, 'issues/${{ github.event.issue.number }}', if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")")>>

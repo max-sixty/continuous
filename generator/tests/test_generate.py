@@ -3,31 +3,42 @@
 from __future__ import annotations
 
 import importlib.resources
+import json
 import re
+import subprocess
 from pathlib import Path
 from textwrap import dedent
 
-import pytest
-from tests import ACTION_VERSION
-from tests import _yaml as yaml
 import click
+import pytest
 from click.testing import CliRunner
-
 from tend.cli import main
 from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
+    STANDARD_WORKFLOWS,
     Config,
 )
 from tend.workflows import (
-    _deep_merge,
     GENERATORS,
-    GeneratedWorkflow,
+    _deep_merge,
     generate_all,
     generate_install_test,
     generate_mention,
+)
+
+from tests import ACTION_VERSION, agent_prompt
+from tests import _yaml as yaml
+
+CHECK_ENABLED = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "tend"
+    / "templates"
+    / "check-enabled.rb"
 )
 
 
@@ -36,6 +47,10 @@ def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(f"bot_name: test-bot\n{extra}")
     return cfg
+
+
+def test_standard_workflow_registry_matches_the_generators() -> None:
+    assert STANDARD_WORKFLOWS == set(GENERATORS)
 
 
 def test_minimal_config_generates_seven_workflows(tmp_path: Path) -> None:
@@ -74,6 +89,129 @@ def test_disabled_workflow_not_generated(tmp_path: Path) -> None:
     assert len(workflows) == 6
 
 
+def test_top_level_disable_keeps_workflows_installed_and_gates_every_job(
+    tmp_path: Path,
+) -> None:
+    """The runtime switch can turn itself back on without regeneration."""
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                enabled: false
+                workflows:
+                  ci-fix:
+                    watched_workflows: ["ci"]
+            """),
+        )
+    )
+
+    assert cfg.enabled is False
+    workflows = generate_all(cfg, with_install_test=True)
+    assert len(workflows) == len(STANDARD_WORKFLOWS) + 1
+
+    condition = "steps.tend_enabled.outputs.enabled == 'true'"
+    for workflow in workflows:
+        jobs = yaml.safe_load(workflow.content)["jobs"]
+        for job_name, job in jobs.items():
+            steps = job["steps"]
+            gate = steps[0]
+            assert gate["id"] == "tend_enabled", (workflow.filename, job_name)
+            assert f"contents/{cfg.config_path}" in gate["run"]
+            assert "secrets." not in str(gate)
+            if workflow.filename == "tend-install-test.yaml":
+                assert "?ref=${{ github.event.pull_request.head.sha }}" in gate["run"]
+            for step in steps[1:]:
+                assert condition in str(step.get("if", "")), (
+                    workflow.filename,
+                    job_name,
+                    step,
+                )
+
+
+@pytest.mark.parametrize(
+    ("config", "enabled"),
+    [
+        ("bot_name: bot\n", "true"),
+        ("bot_name: bot\nenabled: true\n", "true"),
+        ("bot_name: bot\nenabled: false\n", "false"),
+        ("\ufeffbot_name: bot\nenabled: false\n", "false"),
+    ],
+)
+def test_runtime_enabled_check(tmp_path: Path, config: str, enabled: str) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(config)
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"enabled={enabled}\n"
+    assert ("Tend disabled" in result.stderr) is (enabled == "false")
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "bot_name: bot\nenabled: no\n",
+        'bot_name: bot\nenabled: "false"\n',
+        "bot_name: bot\nenabled:\n",
+        "bot_name: bot\nenabled: {}\n",
+        "bot_name: bot\nenabled: true\nenabled: false\n",
+    ],
+)
+def test_runtime_enabled_check_rejects_non_boolean_values(
+    tmp_path: Path, config: str
+) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(config)
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "enabled must" in result.stderr
+
+
+def test_runtime_enabled_check_rejects_multiple_documents(tmp_path: Path) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text("bot_name: bot\n---\nenabled: false\n")
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "exactly one YAML document" in result.stderr
+
+
+def test_runtime_enabled_check_rejects_yaml_merge_keys(tmp_path: Path) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(
+        "defaults: &defaults\n  enabled: false\n<<: *defaults\nbot_name: bot\n"
+    )
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "YAML merge keys" in result.stderr
+
+
 def test_setup_steps_rendered(tmp_path: Path) -> None:
     extra = dedent("""\
         setup:
@@ -110,8 +248,10 @@ def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
         (
             "review",
             "review",
-            lambda s: s.get("uses", "").startswith("actions/checkout")
-            and "ref" in s.get("with", {}),
+            lambda s: (
+                s.get("uses", "").startswith("actions/checkout")
+                and "ref" in s.get("with", {})
+            ),
         ),
         (
             "mention",
@@ -134,7 +274,8 @@ def test_local_setup_action_restored_for_post_cleanup(
     chain walks.
 
     `always()` covers a failed session so cleanup still sees the version the
-    runner loaded."""
+    runner loaded. The runtime switch still applies because a disabled job
+    never loaded the local action."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
@@ -146,7 +287,9 @@ def test_local_setup_action_restored_for_post_cleanup(
     assert condition.startswith("always()"), (
         f"{name}: the restore has to run even when the session fails"
     )
-    assert condition == "always()", f"{name}: restore has an extra gate"
+    assert condition.strip() == (
+        "always()\n&& (steps.tend_enabled.outputs.enabled == 'true')"
+    ), f"{name}: restore has an unexpected gate"
     switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
@@ -268,6 +411,53 @@ def test_sandbox_levers_absent_by_default(tmp_path: Path) -> None:
             assert not levers & inputs
 
 
+def test_memory_gist_is_an_explicit_experimental_claude_only_input(
+    tmp_path: Path,
+) -> None:
+    disabled = Config.load(_minimal_config(tmp_path))
+    for wf in generate_all(disabled):
+        for inputs in _agent_step_inputs(wf.content):
+            assert "memory_gist" not in inputs
+            assert "memory_gist_id" not in inputs
+
+    enabled = Config.load(_minimal_config(tmp_path, "memory_gist: true\n"))
+    for wf in generate_all(enabled):
+        data = yaml.safe_load(wf.content)
+        agent_steps = [
+            step
+            for job in data["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("max-sixty/tend/claude@")
+        ]
+        for step in agent_steps:
+            assert step["with"]["memory_gist"] == "true"
+            assert step["with"]["memory_gist_id"] == (
+                f"${{{{ secrets.{MEMORY_GIST_SECRET} }}}}"
+            )
+
+
+def test_memory_gist_follows_a_per_workflow_claude_override(
+    tmp_path: Path,
+) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+            harness: codex
+            model: gpt-5.5
+            memory_gist: true
+            workflows:
+              nightly:
+                harness: claude
+                model: opus
+        """),
+        )
+    )
+    workflows = {wf.filename: wf.content for wf in generate_all(cfg)}
+    assert "memory_gist:" in workflows["tend-nightly.yaml"]
+    assert "memory_gist:" not in workflows["tend-review.yaml"]
+
+
 def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
     """Codex runs on the runner (no proxy sandbox), so the sandbox_* inputs are
     not threaded — a codex adopter uses `setup:` instead."""
@@ -353,22 +543,20 @@ def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
     assert build["env"] == {"RUSTFLAGS": "-D warnings"}
 
 
-def test_setup_step_user_if_preserved_in_notifications(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(
+    "condition",
+    ["runner.os == 'Linux'", "${{ runner.os == 'Linux' }}"],
+)
+def test_setup_step_user_if_narrows_notifications_guard(
+    tmp_path: Path, condition: str
 ) -> None:
-    """User-supplied `if:` on a setup step is passed through; tend does not
-    add its own notifications guard on top. A warning is emitted so the user
-    knows they've opted out of the pre-check gating."""
-    extra = dedent("""\
+    extra = dedent(f"""\
         setup:
           - run: ./flaky.sh
-            if: "runner.os == 'Linux'"
+            if: "{condition}"
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    captured = capsys.readouterr()
-    assert "explicit `if:`" in captured.err
 
     notifications = workflows["tend-notifications.yaml"]
     data = yaml.safe_load(notifications.content)
@@ -377,7 +565,12 @@ def test_setup_step_user_if_preserved_in_notifications(
         for s in data["jobs"]["notifications"]["steps"]
         if s.get("run") == "./flaky.sh"
     )
-    assert step["if"] == "runner.os == 'Linux'"
+    assert step["if"] == (
+        "((steps.tend_enabled.outputs.enabled == 'true') && "
+        "(steps.check.outputs.count != '0' || "
+        "steps.check.outputs.conflict_count != '0' || "
+        "github.event_name == 'workflow_dispatch')) && (runner.os == 'Linux')"
+    )
 
 
 def test_setup_step_rejects_unknown_field(tmp_path: Path) -> None:
@@ -525,52 +718,145 @@ def test_custom_prompt(tmp_path: Path) -> None:
     assert "Custom triage:" in triage.content
 
 
-def _review_prompt(review: GeneratedWorkflow) -> str:
-    """The `prompt:` input the review job hands the harness action."""
-    steps = yaml.safe_load(review.content)["jobs"]["review"]["steps"]
-    step = next(
-        s for s in steps if s.get("uses", "").startswith("max-sixty/tend/claude@")
-    )
-    return step["with"]["prompt"]
+# Every workflow that takes a configurable `prompt:`, and the GitHub Actions
+# expression its placeholder resolves to. `mention` is the one omission: it
+# composes its prompt from the triggering event, and `Config.load` refuses an
+# override rather than accepting a key that renders nowhere.
+_PROMPT_WORKFLOWS = {
+    "review": ("{pr_number}", "${{ github.event.pull_request.number }}"),
+    "triage": ("{issue_number}", "${{ github.event.issue.number }}"),
+    "ci-fix": ("{run_id}", "${{ github.event.workflow_run.id }}"),
+    "nightly": ("", ""),
+    "weekly": ("", ""),
+    "review-runs": ("", ""),
+    "notifications": ("", ""),
+}
 
 
-def test_review_prompt_without_placeholder_keeps_literal_braces(
-    tmp_path: Path,
+def test_prompt_workflow_matrix_covers_every_generator() -> None:
+    """Pin the matrix below to the registry, so a new prompt-bearing workflow
+    cannot join `GENERATORS` and skip it — and so `mention`'s exclusion stays a
+    decision on the record rather than an omission."""
+    assert set(_PROMPT_WORKFLOWS) == set(GENERATORS) - {"mention"}
+
+
+def test_mention_rejects_a_prompt_override(tmp_path: Path) -> None:
+    """`mention` renders no adopter prompt, so accepting the key would drop it
+    silently — the config's own docs promise otherwise."""
+    extra = 'workflows:\n  mention:\n    prompt: "do something else"\n'
+    with pytest.raises(click.ClickException, match="mention composes its prompt"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
+def test_non_string_prompt_is_rejected(tmp_path: Path) -> None:
+    """Every other config field is type-checked; a bare `AttributeError`
+    traceback out of the renderer is not a usable error message."""
+    extra = "workflows:\n  triage:\n    prompt: 42\n"
+    with pytest.raises(click.ClickException, match="prompt must be a string"):
+        Config.load(_minimal_config(tmp_path, extra))
+
+
+@pytest.mark.parametrize(
+    "workflow,placeholder,expression",
+    [(name, *pair) for name, pair in sorted(_PROMPT_WORKFLOWS.items())],
+)
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_multi_line_prompt_generates_parseable_yaml(
+    tmp_path: Path, workflow: str, placeholder: str, expression: str, harness: str
 ) -> None:
-    """A review prompt with braces but no `{pr_number}` reaches the agent verbatim.
+    """A prompt spanning lines is a documented knob, and `init` never parses what
+    it writes — so nothing but this catches a prompt shape that can only hold
+    one line. Three shapes could not: review's was a `format('...')` expression,
+    where a newline ended the GitHub Actions string literal; ci-fix's was a
+    block scalar the template indented by hand, which only indented the first
+    line; and the shared block-scalar macro itself let YAML infer the block's
+    indent from the first line, so an indented first line made every later line
+    look like the end of the scalar. Each wrote a file GitHub rejects from a
+    config that is valid YAML in the adopter's hands, and the adopter found out
+    from GitHub.
 
-    The review prompt is the only one emitted inside a GHA expression. With the
-    placeholder it goes through `format()`, which needs every other brace
-    doubled; without it, it is a bare string literal that GHA never collapses,
-    so doubling there would ship `{{...}}` to the agent.
+    The braces double as a check that nothing escapes them any more: they are
+    the adopter's text, and only the workflow's own placeholder is substituted,
+    to the one expression that names this workflow's event.
     """
-    extra = dedent("""\
-        workflows:
-          review:
-            prompt: "Review this PR. Skip files matching {generated}."
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    prompt = _review_prompt(workflows["tend-review.yaml"])
-    assert "{generated}" in prompt
+    body = f"  Do the thing for {placeholder}.\n\nSkip files matching {{generated}}.\n"
+    # ci-fix is the one workflow that needs a key of its own to render at all,
+    # so it is always configured and gains the prompt when it is the subject.
+    extra = (
+        f'harness: {harness}\nworkflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
+    )
+    if workflow != "ci-fix":
+        extra += f"  {workflow}:\n"
+    extra += f"    prompt: {json.dumps(body)}\n"
+    content = {
+        wf.filename: wf.content
+        for wf in generate_all(Config.load(_minimal_config(tmp_path, extra)))
+    }[f"tend-{workflow}.yaml"]
+    prompt = agent_prompt(content)
+    assert prompt.startswith("  "), "the adopter's own leading indent was eaten"
+    assert "Skip files matching {generated}." in prompt
     assert "{{generated}}" not in prompt
     assert "format(" not in prompt
+    if placeholder:
+        assert placeholder not in prompt, f"{placeholder} was not substituted"
+        assert expression in prompt, f"{placeholder} resolved to the wrong event"
+    else:
+        assert "${{ github.event." not in prompt
 
 
-def test_review_prompt_with_placeholder_escapes_other_braces(tmp_path: Path) -> None:
-    """With `{pr_number}` present the prompt goes through `format()`, so the
-    placeholder becomes `{0}` and every other brace is doubled for it."""
-    extra = dedent("""\
-        workflows:
-          review:
-            prompt: "Review PR {pr_number}. Skip files matching {generated}."
-    """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    prompt = _review_prompt(workflows["tend-review.yaml"])
-    assert "format(" in prompt
-    assert "{0}" in prompt
-    assert "{{generated}}" in prompt
+@pytest.mark.parametrize("lever", ["sandbox_path", "sandbox_setup"])
+def test_sandbox_levers_survive_an_indented_first_line(
+    tmp_path: Path, lever: str
+) -> None:
+    """The `sandbox_*` inputs are adopter-supplied lists rendered into the same
+    block scalar as the prompt, and had the same bug: an entry whose first line
+    is indented made every later entry look like the end of the scalar. Only
+    `sandbox_env` is exempt, and only because it refuses a newline outright.
+    """
+    extra = f'{lever}:\n  - "  indented entry"\n  - second entry\n'
+    workflows = generate_all(Config.load(_minimal_config(tmp_path, extra)))
+    for wf in workflows:
+        step = next(
+            s
+            for job in yaml.safe_load(wf.content)["jobs"].values()
+            for s in job["steps"]
+            if lever in s.get("with", {})
+        )
+        assert step["with"][lever] == "  indented entry\nsecond entry\n"
+
+
+def test_multi_line_prompt_survives_the_override_round_trip(tmp_path: Path) -> None:
+    """A workflow carrying `workflow_extra`/`jobs` overrides is re-serialised by
+    ruamel rather than emitted by the template, so the block scalar is written a
+    second time by different code. The regtest for that path uses the one-line
+    default prompt, which cannot show an indent bug.
+    """
+    body = "  Review it.\n\nBe brief.\n"
+    extra = (
+        "workflows:\n  review:\n"
+        f"    prompt: {json.dumps(body)}\n"
+        "    jobs:\n      review:\n        timeout-minutes: 240\n"
+    )
+    workflows = {
+        wf.filename: wf.content
+        for wf in generate_all(Config.load(_minimal_config(tmp_path, extra)))
+    }
+    assert "timeout-minutes: 240" in workflows["tend-review.yaml"], "overrides skipped"
+    assert agent_prompt(workflows["tend-review.yaml"]) == body
+
+
+@pytest.mark.parametrize("blank", ["", '""', '"   \\n  \\n"'])
+def test_blank_prompt_is_rejected(tmp_path: Path, blank: str) -> None:
+    """The three blank shapes don't fail alike, which is why the config refuses
+    all three rather than leaving it to what happens next. A whitespace-only
+    value is truthy, so it beats the default and leaves the agent step with no
+    instructions — the Claude action fails on the empty input, the Codex action
+    runs `codex exec` with it. `""` and a bare `prompt:` are falsy and reach the
+    default instead, silently ignoring what the adopter wrote.
+    """
+    extra = f"workflows:\n  triage:\n    prompt: {blank}\n"
+    with pytest.raises(click.ClickException, match="prompt is blank"):
+        Config.load(_minimal_config(tmp_path, extra))
 
 
 def test_watched_workflows(tmp_path: Path) -> None:
@@ -764,17 +1050,17 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
 
     triage = yaml.safe_load(workflows["tend-triage.yaml"].content)
-    first = triage["jobs"]["triage"]["steps"][0]
-    assert "content=eyes" in first["run"]
-    assert first["env"]["TARGET"] == "issues/${{ github.event.issue.number }}"
-    # Every issues:opened event the job-level `if` admits is the bot's to take.
-    assert "if" not in first
+    react = _eyes_steps(triage["jobs"]["triage"]["steps"])[0]
+    assert react["env"]["TARGET"] == "issues/${{ github.event.issue.number }}"
+    # Every enabled issues:opened event the job-level `if` admits is the bot's
+    # to take.
+    assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
     react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
     assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
-    # Every admitted review run boots a session, so each one gets a reaction.
-    assert "if" not in react
+    # Every enabled review run boots a session, so each one gets a reaction.
+    assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
 
 @pytest.mark.parametrize(
@@ -1343,7 +1629,7 @@ def test_no_extras_output_unchanged(tmp_path: Path) -> None:
     """Without extras, generate_all() output matches direct generator output."""
     cfg = Config.load(_minimal_config(tmp_path))
     via_all = {wf.filename: wf.content for wf in generate_all(cfg)}
-    for name, gen_fn in GENERATORS.items():
+    for gen_fn in GENERATORS.values():
         try:
             wf = gen_fn(cfg)
         except click.ClickException:

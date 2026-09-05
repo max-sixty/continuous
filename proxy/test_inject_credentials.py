@@ -14,15 +14,14 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
-from mitmproxy.test import tflow, tutils
-from ruamel.yaml import YAML
-
 from inject_credentials import (
     ANTHROPIC_HOSTS,
     BASIC_HOSTS,
     TOKEN_HOSTS,
     CredentialInjector,
 )
+from mitmproxy.test import tflow, tutils
+from ruamel.yaml import YAML
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,6 +70,7 @@ def test_proxy_starts_and_finishes_its_empty_replay(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=10,
+        check=False,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr

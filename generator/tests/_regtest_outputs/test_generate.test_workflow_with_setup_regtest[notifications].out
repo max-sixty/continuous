@@ -27,22 +27,90 @@ jobs:
       actions: read
       issues: write
     steps:
-      - name: Check for unread notifications
+      - name: Check whether tend is enabled
+        id: tend_enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/.config/tend.yaml" \
+            > "$RUNNER_TEMP/tend.yaml"
+          ruby - "$RUNNER_TEMP/tend.yaml" <<'RUBY' >> "$GITHUB_OUTPUT"
+          # Inspect the parsed YAML node so the extra YAML 1.1 boolean words (yes/no/on/off)
+          # do not diverge from the YAML 1.2 parser used by `tend init`.
+          require "psych"
+
+          path = ARGV.fetch(0)
+          documents = Psych.parse_stream(File.read(path, mode: "r:bom|utf-8")).children
+          unless documents.length == 1
+            abort "tend config must contain exactly one YAML document"
+          end
+
+          mapping = documents.first.root
+          unless mapping.is_a?(Psych::Nodes::Mapping)
+            abort "tend config must contain a YAML mapping"
+          end
+
+          def has_yaml_merge_key?(node)
+            case node
+            when Psych::Nodes::Mapping
+              node.children.each_slice(2).any? do |key, value|
+                (key.is_a?(Psych::Nodes::Scalar) && key.plain && key.value == "<<") ||
+                  has_yaml_merge_key?(key) || has_yaml_merge_key?(value)
+              end
+            when Psych::Nodes::Sequence
+              node.children.any? { |value| has_yaml_merge_key?(value) }
+            else
+              false
+            end
+          end
+
+          if has_yaml_merge_key?(mapping)
+            abort "tend config: YAML merge keys (<<) are not supported"
+          end
+
+          matches = mapping.children.each_slice(2).select do |key, _value|
+            key.is_a?(Psych::Nodes::Scalar) && key.value == "enabled"
+          end
+          abort "tend config: enabled must appear at most once" if matches.length > 1
+
+          value = matches.dig(0, 1)
+          enabled = true
+          if value
+            bool_tag = value.respond_to?(:tag) && value.tag == "tag:yaml.org,2002:bool"
+            literal = value.value.downcase if value.is_a?(Psych::Nodes::Scalar)
+            unless value.is_a?(Psych::Nodes::Scalar) &&
+                (value.plain || bool_tag) &&
+                ["true", "false"].include?(literal)
+              abort "tend config: enabled must be true or false"
+            end
+            enabled = literal == "true"
+          end
+
+          puts "enabled=#{enabled}"
+
+          unless enabled
+            warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
+          end
+          RUBY
+      - name: Check for unread notifications and conflicted PRs
         id: check
+        if: steps.tend_enabled.outputs.enabled == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
         run: |
           # shellcheck shell=bash
-          # Establish the repository's notification recovery queue and decide whether the
+          # Establish the repository's frequent maintenance queue and decide whether the
           # agent needs to boot. Inlined into the generated workflow: env in,
           # GITHUB_OUTPUT out.
           #
           # env: GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_TOKEN
 
           # Activity newer than this belongs to an event workflow that may still be
-          # running. The same cutoff is passed to the agent and, once every older item has
-          # a semantic outcome, to GitHub's repository-level mark-read endpoint. Newer
-          # activity therefore cannot be acknowledged by this run.
+          # running. The cutoff bounds the snapshot below and is the value passed to the
+          # agent, which takes its own snapshot with it and acknowledges each thread it
+          # resolves individually ? so this run acknowledges only threads it examined.
           CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
           echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
 
@@ -68,14 +136,52 @@ jobs:
 
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 
-          if [ "$COUNT" = "0" ]; then
-            echo "No notification work before $CUTOFF ? skipping"
+          # GitHub computes mergeability lazily after the base moves. UNKNOWN therefore
+          # means "worth a synchronous local test", not "clean". This is only a cheap
+          # boot gate; the agent test-merges every candidate before changing a branch.
+          # Read the newest comments: a deferral is normally the PR's latest activity.
+          # An older marker can waste boots, but the resolver paginates before acting.
+          # shellcheck disable=SC2016  # $q is a GraphQL variable, not a shell variable.
+          if BOT_LOGIN=$(gh api user --jq .login 2>/dev/null) \
+            && PRS=$(gh api graphql -f query='
+              query($q: String!) {
+                search(query: $q, type: ISSUE, first: 100) {
+                  nodes { ... on PullRequest {
+                    mergeable headRefOid
+                    comments(last: 100) { nodes { author { login } body } }
+                  } }
+                }
+              }' -f q="repo:$GITHUB_REPOSITORY author:$BOT_LOGIN is:pr is:open" \
+              --jq '.data.search.nodes' 2>/dev/null) \
+            && CONFLICT_COUNT=$(jq -er --arg bot "$BOT_LOGIN" '
+              [.[]
+                | select(.mergeable != "MERGEABLE")
+                | . as $pr
+                | "<!-- tend-conflict-deferred head=\($pr.headRefOid) -->" as $marker
+                | select(any($pr.comments.nodes[]?;
+                    .author.login == $bot
+                    and (((.body // "") | sub("\\s+$"; "") | split("\n") | last) == $marker))
+                  | not)]
+              | length' <<<"$PRS"); then
+            :
           else
-            echo "$COUNT notification task(s) ? proceeding"
+            CONFLICT_COUNT=0
+            echo "::warning::bot PR conflict scan failed; retrying next cycle"
+          fi
+
+          echo "conflict_count=$CONFLICT_COUNT" >> "$GITHUB_OUTPUT"
+
+          if [ "$COUNT" = "0" ] && [ "$CONFLICT_COUNT" = "0" ]; then
+            echo "No notification or conflict work ? skipping"
+          else
+            [ "$COUNT" = "0" ] || \
+              echo "$COUNT notification task(s) ? proceeding"
+            [ "$CONFLICT_COUNT" = "0" ] || \
+              echo "$CONFLICT_COUNT possible conflicted bot PR(s) ? proceeding"
           fi
 
       - uses: actions/checkout@v7
-        if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
+        if: (steps.tend_enabled.outputs.enabled == 'true') && (steps.check.outputs.count != '0' || steps.check.outputs.conflict_count != '0' || github.event_name == 'workflow_dispatch')
         with:
           ref: main
           fetch-depth: 0
@@ -83,16 +189,17 @@ jobs:
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
       - uses: astral-sh/setup-uv@v6
-        if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
+        if: (steps.tend_enabled.outputs.enabled == 'true') && (steps.check.outputs.count != '0' || steps.check.outputs.conflict_count != '0' || github.event_name == 'workflow_dispatch')
       - uses: max-sixty/tend/claude@X.Y.Z
-        if: steps.check.outputs.count != '0' || github.event_name == 'workflow_dispatch'
+        if: (steps.tend_enabled.outputs.enabled == 'true') && (steps.check.outputs.count != '0' || steps.check.outputs.conflict_count != '0' || github.event_name == 'workflow_dispatch')
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot
           model: opus
-          prompt: |
+          prompt: |2
             /tend-ci-runner:notifications
 
             Notification snapshot cutoff: ${{ steps.check.outputs.cutoff }}
+            Possible conflicted bot PR count: ${{ steps.check.outputs.conflict_count }}

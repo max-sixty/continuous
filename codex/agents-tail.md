@@ -3,7 +3,7 @@
 The `tend-ci-runner` plugin is installed. Its skills (`review`,
 `code-review`, `triage`, `ci-fix`, `nightly`, `weekly`,
 `notifications`, `review-runs`, `running-in-ci`,
-`review-reviewers`) are invocable via `$<skill-name>` mentions in
+`review-reviewers`, `resolve-conflicts`) are invocable via `$<skill-name>` mentions in
 prompts.
 
 **Read each tend skill in full.** When you open a `tend-ci-runner`
@@ -25,5 +25,6 @@ you when to read them; read those in full too.
 
 - `gh` is authenticated as the bot via `$GH_TOKEN`. Use it to post
   comments, open PRs, push commits.
+- `uv` is on PATH for Python environments and one-shot tools.
 - The bot's user ID is available via `gh api users/${BOT_NAME} --jq .id`
   if you need it for `author.id` comparisons.

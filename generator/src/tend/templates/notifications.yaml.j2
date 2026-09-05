@@ -15,12 +15,14 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
-      - name: Check for unread notifications
+<<check_tend_enabled(cfg)>>
+      - name: Check for unread notifications and conflicted PRs
         id: check
+        if: <<tend_enabled_condition>>
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
         run: |
 <<check_script|indent(10, first=True)>>
 
-<<checkout(cfg, ref=cfg.default_branch, if_condition=skip_condition)>>
-<<setup>><<agent_step(cfg, block_prompt(prompt), if_condition=skip_condition)>>
+<<checkout(cfg, ref=cfg.default_branch, if_condition="(" ~ tend_enabled_condition ~ ") && (" ~ skip_condition ~ ")")>>
+<<setup>><<agent_step(cfg, block_input('prompt', prompt), if_condition="(" ~ tend_enabled_condition ~ ") && (" ~ skip_condition ~ ")")>>

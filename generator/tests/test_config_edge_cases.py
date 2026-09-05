@@ -6,11 +6,12 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
-from tests import _yaml as yaml
 from click import ClickException
-
 from tend.config import BOT_TOKEN_SECRET, Config
 from tend.workflows import generate_all
+
+from tests import _yaml as yaml
+from tests import agent_prompt as _agent_prompt
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -42,11 +43,76 @@ def test_bot_name_only(tmp_path: Path) -> None:
     path = _write_config(tmp_path, "bot_name: my-bot")
     cfg = Config.load(path)
     assert cfg.bot_name == "my-bot"
+    assert cfg.enabled is True
     assert cfg.model == "opus"
     assert cfg.protected_branches == []
     assert cfg.setup == []
     assert cfg.workflows == {}
     assert cfg.allowed_repo_secrets == []
+    assert cfg.memory_gist is False
+
+
+@pytest.mark.parametrize("value", ["yes", '"false"', "1", "null", "{}"])
+def test_enabled_requires_a_boolean(tmp_path: Path, value: str) -> None:
+    path = _write_config(tmp_path, f"bot_name: my-bot\nenabled: {value}\n")
+    with pytest.raises(ClickException, match="enabled must be true or false"):
+        Config.load(path)
+
+
+def test_yaml_merge_keys_are_rejected(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        "defaults: &defaults\n  enabled: false\n<<: *defaults\nbot_name: my-bot\n",
+    )
+
+    with pytest.raises(ClickException, match="YAML merge keys"):
+        Config.load(path)
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "{}"])
+def test_memory_gist_requires_a_boolean(tmp_path: Path, value: str) -> None:
+    path = _write_config(tmp_path, f"bot_name: my-bot\nmemory_gist: {value}\n")
+    with pytest.raises(ClickException, match="must be true or false"):
+        Config.load(path)
+
+
+def test_memory_gist_requires_a_claude_workflow(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        harness: codex
+        model: gpt-5.5
+        memory_gist: true
+    """),
+    )
+    with pytest.raises(ClickException, match="requires at least one enabled workflow"):
+        Config.load(path)
+
+
+def test_memory_gist_ignores_a_disabled_top_level_harness(
+    tmp_path: Path,
+) -> None:
+    disabled = "\n".join(
+        f"  {name}: false"
+        for name in (
+            "review",
+            "mention",
+            "triage",
+            "ci-fix",
+            "nightly",
+            "weekly",
+            "notifications",
+            "review-runs",
+        )
+    )
+    path = _write_config(
+        tmp_path,
+        f"bot_name: my-bot\nmemory_gist: true\nworkflows:\n{disabled}\n",
+    )
+
+    with pytest.raises(ClickException, match="requires at least one enabled workflow"):
+        Config.load(path)
 
 
 # ---------------------------------------------------------------------------
@@ -275,95 +341,39 @@ def test_bot_name_with_hyphens_valid(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Custom prompt with {0} pattern
+# 7. Custom prompt punctuation: braces and quotes
 # ---------------------------------------------------------------------------
 
 
-def test_prompt_with_zero_placeholder(tmp_path: Path) -> None:
-    """A prompt containing {0} — escaped so it doesn't collide with format()."""
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name: my-bot
-        workflows:
-          review:
-            prompt: "Fix {0} in {pr_number}"
-    """),
-    )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    review = workflows["tend-review.yaml"]
-    # User's {0} is escaped to {{0}}, while {pr_number} becomes {0}
-    assert "format(" in review.content
-    assert "Fix {{0}} in {0}" in review.content
+@pytest.mark.parametrize("workflow", ["review", "triage"])
+def test_prompt_punctuation_reaches_the_agent_verbatim(
+    tmp_path: Path, workflow: str
+) -> None:
+    """Braces and quotes in a prompt are the adopter's own text, not syntax.
 
-
-def test_prompt_with_numbered_placeholders(tmp_path: Path) -> None:
-    """Prompt with {1}, {2} and no {pr_number} — emitted verbatim, not escaped.
-
-    Escaping guards `format()`, which collapses each doubled pair back to one
-    brace. With no {pr_number} there is nothing to interpolate, so the prompt
-    is emitted as a bare GHA string literal instead — nothing collapses the
-    pairs there, and doubling would ship `{{1}}` to the agent.
+    Every prompt is a YAML block scalar, so the only substitution is the
+    workflow's own `{...}` placeholder. `{0}`, `{1}` and a stray apostrophe once
+    had to be escaped for review, whose prompt was a GitHub Actions
+    `format('...')` expression — and escaping was correct only when the
+    placeholder was present, so the same prompt shipped different text depending
+    on an unrelated part of itself.
     """
+    placeholder = "pr_number" if workflow == "review" else "issue_number"
     path = _write_config(
         tmp_path,
-        dedent("""\
+        dedent(f"""\
         bot_name: my-bot
         workflows:
-          review:
-            prompt: "Fix issue {1} and {2}"
+          {workflow}:
+            prompt: "Don't touch {{0}} or {{1}}; fix {{{placeholder}}}"
     """),
     )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    review = workflows["tend-review.yaml"]
-    assert "format(" not in review.content
-    assert "'Fix issue {1} and {2}'" in review.content
-
-
-# ---------------------------------------------------------------------------
-# 8. Custom prompt with single quotes
-# ---------------------------------------------------------------------------
-
-
-def test_prompt_with_single_quotes(tmp_path: Path) -> None:
-    """Prompt containing single quotes -- the review workflow uses
-    format('...') which needs '' escaping in GitHub Actions."""
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name: my-bot
-        workflows:
-          review:
-            prompt: "Don't break this"
-    """),
-    )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    review = workflows["tend-review.yaml"]
-    # The _escape() function doubles single quotes for GHA expressions
-    assert "Don''t" in review.content
-
-
-def test_prompt_with_single_quotes_triage(tmp_path: Path) -> None:
-    """Triage workflow does NOT use _escape() -- single quotes could break."""
-    path = _write_config(
-        tmp_path,
-        dedent("""\
-        bot_name: my-bot
-        workflows:
-          triage:
-            prompt: "Don't break {issue_number}"
-    """),
-    )
-    cfg = Config.load(path)
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    triage = workflows["tend-triage.yaml"]
-    # Triage uses YAML block scalar (prompt: |) so single quotes should be fine
-    assert "Don't break" in triage.content
-    data = yaml.safe_load(triage.content)
-    assert isinstance(data, dict)
+    workflows = {wf.filename: wf for wf in generate_all(Config.load(path))}
+    content = workflows[f"tend-{workflow}.yaml"].content
+    assert isinstance(yaml.safe_load(content), dict)
+    prompt = _agent_prompt(content)
+    assert "format(" not in prompt
+    assert prompt.startswith("Don't touch {0} or {1}; fix ${{ github.event.")
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +715,62 @@ def test_setup_steps_entry_both_keys(tmp_path: Path) -> None:
     """),
     )
     with pytest.raises(ClickException, match="setup\\[0\\] must have exactly one"):
+        Config.load(path)
+
+
+@pytest.mark.parametrize("value", ["false", "true", "0", "[]", "null", "''", "'   '"])
+def test_setup_step_if_requires_non_empty_string(tmp_path: Path, value: str) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f"""\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: {value}
+    """),
+    )
+
+    with pytest.raises(ClickException, match="`if` must be a non-empty string"):
+        Config.load(path)
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "${{ runner.os == 'Linux' }} && ${{ github.event_name == 'push' }}",
+        "runner.os == 'Linux' || ${{ github.event_name == 'push' }}",
+        "${{ runner.os == 'Linux' }} || github.event_name == 'push'",
+    ],
+)
+def test_setup_step_if_rejects_mixed_expression_wrappers(
+    tmp_path: Path, condition: str
+) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f'''\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: "{condition}"
+    '''),
+    )
+
+    with pytest.raises(ClickException, match="plain expression or one whole"):
+        Config.load(path)
+
+
+def test_setup_step_if_rejects_empty_expression_wrapper(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+        bot_name: my-bot
+        setup:
+          - run: echo hi
+            if: "${{ }}"
+    """),
+    )
+
+    with pytest.raises(ClickException, match="`if` must contain an expression"):
         Config.load(path)
 
 

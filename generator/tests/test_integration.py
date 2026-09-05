@@ -9,18 +9,20 @@ from __future__ import annotations
 
 import json
 import subprocess
+from itertools import takewhile
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
 
 import click.testing
 import pytest
-from tests import ACTION_VERSION, BASH, tool_path
-from tests import _yaml as yaml
 from click.testing import CliRunner
-
 from tend.checks import CheckResult
 from tend.cli import main
+from tend.workflows import ACTIONLINT_QUEUE_IGNORE, ACTIONLINT_TEND_GLOB
+
+from tests import ACTION_VERSION, BASH, tool_path
+from tests import _yaml as yaml
 
 
 def _write_config(tmp_path: Path, content: str) -> None:
@@ -201,6 +203,204 @@ def test_init_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 # ---------------------------------------------------------------------------
+# actionlint config
+# ---------------------------------------------------------------------------
+
+
+def _actionlint_path(tmp_path: Path) -> Path:
+    return tmp_path / ".github" / "actionlint.yaml"
+
+
+def test_init_writes_actionlint_queue_ignore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`concurrency.queue` is valid GitHub syntax actionlint's schema rejects,
+    so init ships the ignore that keeps an adopter's lint green — scoped to the
+    generated files so a real schema error elsewhere still fails."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    data = yaml.safe_load(_actionlint_path(tmp_path).read_text())
+    assert data["paths"]["**/.github/workflows/tend-*.yaml"]["ignore"] == [
+        ACTIONLINT_QUEUE_IGNORE
+    ]
+
+
+def test_init_skips_actionlint_config_without_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        dedent("""\
+            bot_name: test-bot
+            workflows:
+              review:
+                enabled: false
+            """),
+    )
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    original = "self-hosted-runner:\n  labels: [my-runner]\n"
+    existing.write_text(original)
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    assert existing.read_text() == original
+    assert (_workflow_dir(tmp_path) / "tend-mention.yaml").exists()
+
+
+def test_init_merges_actionlint_ignore_into_existing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An adopter's own actionlint config survives — the ignore is merged in,
+    not written over the top of it."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text(
+        dedent("""\
+            self-hosted-runner:
+              labels:
+                - my-runner
+            paths:
+              .github/workflows/release.yaml:
+                ignore:
+                  - 'some adopter pattern'
+            """)
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    data = yaml.safe_load(existing.read_text())
+    assert data["self-hosted-runner"]["labels"] == ["my-runner"]
+    assert data["paths"][".github/workflows/release.yaml"]["ignore"] == [
+        "some adopter pattern"
+    ]
+    assert data["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
+
+
+def test_init_preserves_comments_only_actionlint_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text("# adopter note\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    updated = existing.read_text()
+    assert updated.startswith("# adopter note\n")
+    assert yaml.safe_load(updated)["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [
+        ACTIONLINT_QUEUE_IGNORE
+    ]
+
+
+def test_init_leaves_actionlint_config_alone_once_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The nightly regen must not churn a file it already updated."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    monkeypatch.chdir(tmp_path)
+
+    _run_init()
+    first = _actionlint_path(tmp_path).read_text()
+    _run_init()
+
+    assert _actionlint_path(tmp_path).read_text() == first
+
+
+def test_init_updates_existing_actionlint_yml_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """actionlint reads `.yaml` in preference to `.yml`, so writing a new
+    `.yaml` beside an adopter's `.yml` would silently disable their config.
+    Update the file they have."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    yml = tmp_path / ".github" / "actionlint.yml"
+    yml.parent.mkdir(parents=True, exist_ok=True)
+    yml.write_text("self-hosted-runner:\n  labels:\n    - my-runner\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert _run_init().exit_code == 0
+
+    assert not _actionlint_path(tmp_path).exists()
+    data = yaml.safe_load(yml.read_text())
+    assert data["self-hosted-runner"]["labels"] == ["my-runner"]
+    assert data["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
+
+
+def test_init_dry_run_writes_no_actionlint_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--dry-run writes nothing."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init(["--dry-run"])
+
+    assert result.exit_code == 0
+    assert not _actionlint_path(tmp_path).exists()
+
+
+def test_init_leaves_unmergeable_actionlint_config_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config shape the generator can't merge into is the adopter's to fix:
+    warn and leave it byte-for-byte, rather than rewrite their linter config
+    into something they didn't ask for."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    original = "paths:\n  - .github/workflows/release.yaml\n"
+    existing.write_text(original)
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init()
+
+    assert result.exit_code == 0
+    assert existing.read_text() == original
+    assert "leaving it unchanged" in result.output
+    assert ACTIONLINT_QUEUE_IGNORE in result.output  # the by-hand snippet
+
+    # The snippet is meant to be pasted, so it has to parse: the glob opens
+    # with `**`, which YAML reads as an alias unless the key is quoted.
+    lines = result.output[result.output.index("  paths:") :].splitlines()
+    snippet = "\n".join(takewhile(lambda ln: ln.startswith("  "), lines))
+    assert yaml.safe_load(dedent(snippet))["paths"][ACTIONLINT_TEND_GLOB] == {
+        "ignore": [ACTIONLINT_QUEUE_IGNORE]
+    }
+
+
+def test_init_leaves_unparsable_actionlint_config_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that doesn't parse — conflict markers mid-rebase, a tab indent —
+    is the likeliest form of "a config the generator doesn't understand", so it
+    warns like the shape mismatches rather than raising a traceback out of
+    `init` with the workflow files already half-written."""
+    _write_config(tmp_path, "bot_name: test-bot")
+    existing = _actionlint_path(tmp_path)
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    original = "paths:\n  - a\n  b: c\n"
+    existing.write_text(original)
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init()
+
+    assert result.exit_code == 0
+    assert existing.read_text() == original
+    assert "leaving it unchanged" in result.output
+    # The whole run finishes: the workflow files land and the summary prints.
+    assert (_workflow_dir(tmp_path) / "tend-review.yaml").exists()
+
+
+# ---------------------------------------------------------------------------
 # Custom config path
 # ---------------------------------------------------------------------------
 
@@ -219,7 +419,25 @@ def test_init_custom_config_path(
     assert result.exit_code == 0
 
     for path in _workflow_dir(tmp_path).glob("tend-*.yaml"):
-        assert "custom-bot" in path.read_text(), f"{path.name} missing custom bot name"
+        content = path.read_text()
+        assert "custom-bot" in content, f"{path.name} missing custom bot name"
+        if path.name != "tend-install-test.yaml":
+            assert "contents/custom/my-tend.yaml" in content
+
+
+def test_init_rejects_a_config_outside_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    custom = tmp_path / "tend.yaml"
+    custom.write_text("bot_name: custom-bot")
+    monkeypatch.chdir(repo)
+
+    result = CliRunner().invoke(main, ["init", "-c", str(custom)])
+
+    assert result.exit_code == 1
+    assert "Config must be inside the repository" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +520,14 @@ def _make_completed(
     )
 
 
+def _url(args: tuple[str, ...]) -> str:
+    """The API path in a `_gh` call, wherever flags put it.
+
+    A `graphql` call carries no path, so it answers with its subcommand.
+    """
+    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
+
+
 def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[str]:
     """Simulate a gh CLI where all checks pass for owner/repo."""
     if "graphql" in args:
@@ -310,7 +536,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
         return _make_completed(
             json.dumps({"data": {"repository": {"object": {"entries": []}}}})
         )
-    url = next(a for a in args if a.startswith("repos/") or a.startswith("orgs/"))
+    url = _url(args)
     # Only the ref-gated environment exists, holding the operational secrets.
     if url.endswith("/environments"):
         return _make_completed("tend\n")
@@ -320,9 +546,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
             if url.endswith("tend/secrets")
             else []
         )
-        if any(a.startswith("[.secrets") for a in args):
-            return _make_completed(json.dumps(names))
-        return _make_completed("\n".join(names) + "\n")
+        return _make_completed("".join(f"{n}\n" for n in names))
     if url == "repos/owner/repo" and ".default_branch" in args:
         return _make_completed("main\n")
     if "rules/branches" in url:
@@ -384,7 +608,7 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
     # deliberately the only place the operational names appear, so a check
     # reading the wrong level cannot pass by accident.
     if "secrets" in url:
-        return _make_completed("[]\n")
+        return _make_completed("")
     return _make_completed(returncode=1)
 
 
@@ -419,7 +643,7 @@ def test_check_full_pipeline_branch_not_protected(
     def fake_gh_unprotected(
         *args: str, **kwargs: str
     ) -> subprocess.CompletedProcess[str]:
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo" and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -429,7 +653,7 @@ def test_check_full_pipeline_branch_not_protected(
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n')
+            return _make_completed("TEND_BOT_TOKEN\nCLAUDE_CODE_OAUTH_TOKEN\n")
         return _make_completed(returncode=1)
 
     with (
@@ -503,8 +727,7 @@ def test_init_mention_workflow_has_two_jobs(
 def test_init_notifications_has_precheck(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The notifications workflow checks for unread notifications before
-    invoking Claude, and skips all subsequent steps when count is 0."""
+    """The frequent poll boots only for notifications or possible conflicts."""
     _write_config(tmp_path, "bot_name: test-bot")
     monkeypatch.chdir(tmp_path)
     _run_init()
@@ -518,24 +741,27 @@ def test_init_notifications_has_precheck(
     }
     steps = data["jobs"]["notifications"]["steps"]
 
-    # First step is the pre-check
-    check_step = steps[0]
+    assert steps[0]["id"] == "tend_enabled"
+    check_index = next(i for i, step in enumerate(steps) if step.get("id") == "check")
+    check_step = steps[check_index]
     assert check_step["id"] == "check"
     assert "--paginate --slurp" in check_step["run"]
     assert "subscription" in check_step["run"]
     assert "notifications/threads/" not in check_step["run"]
 
-    # All subsequent steps are gated on the check output
-    for step in steps[1:]:
+    # Everything after the notification check is gated on its output.
+    for step in steps[check_index + 1 :]:
         assert "if" in step, (
             f"step {step.get('uses', step.get('name'))} missing if guard"
         )
         assert "steps.check.outputs.count" in step["if"]
+        assert "steps.check.outputs.conflict_count" in step["if"]
         # workflow_dispatch bypasses the pre-check
         assert "workflow_dispatch" in step["if"]
 
     agent_step = steps[-1]
     assert "steps.check.outputs.cutoff" in agent_step["with"]["prompt"]
+    assert "steps.check.outputs.conflict_count" in agent_step["with"]["prompt"]
 
 
 def test_notifications_precheck_tolerates_transient_non_json(
@@ -553,7 +779,11 @@ def test_notifications_precheck_tolerates_transient_non_json(
     data = yaml.safe_load(
         (_workflow_dir(tmp_path) / "tend-notifications.yaml").read_text()
     )
-    script = data["jobs"]["notifications"]["steps"][0]["run"]
+    script = next(
+        step["run"]
+        for step in data["jobs"]["notifications"]["steps"]
+        if step.get("id") == "check"
+    )
 
     # Fake `gh` accepts the idempotent repository-watch write, then mimics a
     # transient notifications blip: the endpoint returns a 200 with an HTML
@@ -580,10 +810,7 @@ def test_notifications_precheck_tolerates_transient_non_json(
         "GITHUB_REPOSITORY": "owner/repo",
     }
     result = subprocess.run(
-        [BASH, "-e", "-c", script],
-        env=env,
-        capture_output=True,
-        text=True,
+        [BASH, "-e", "-c", script], env=env, capture_output=True, text=True, check=False
     )
 
     assert result.returncode == 0, (
@@ -710,6 +937,7 @@ def test_init_removes_stale_files_when_no_workflows_enabled(
     result = _run_init()
     assert result.exit_code == 0
     assert not stale.exists()
+    assert "No workflows generated from config." in result.output
     assert "Removed 1 stale" in result.output
 
 
@@ -759,6 +987,11 @@ def test_install_test_workflow_shape(
     assert "head.repo.full_name == github.repository" in job["if"]
     assert job["permissions"] == {"contents": "read"}
     assert "secrets." not in content
+    steps = job["steps"]
+    assert steps[0]["id"] == "tend_enabled"
+    assert "?ref=${{ github.event.pull_request.head.sha }}" in steps[0]["run"]
+    for step in steps[1:]:
+        assert step["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
     # Generator-drift step regenerates with the same flag to keep output stable.
     # Version is pinned from the committed header (not `@latest`) so a release
