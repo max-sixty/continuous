@@ -27,9 +27,9 @@ git merge-tree --write-tree \
 ```
 
 Treat a failed query or fetch as unverified, not clean. Remove any prior
-conflict-deferral comment from a configured-bot PR that test-merges clean.
-When called from `notifications`, use every issue-comment page and skip a PR
-whose bot-authored marker names the live `headRefOid`. Nightly ignores the
+conflict-deferral comment from any PR this skill handles that test-merges
+clean. When called from `notifications`, use every issue-comment page and skip
+a PR whose bot-authored marker names the live `headRefOid`. Nightly ignores the
 marker and retries.
 
 When the caller requests dependency bots, include `app/dependabot` and
@@ -50,13 +50,13 @@ Read every commit author first — it decides the path.
 | `app/dependabot` | `dependabot[bot]` | Comment `@dependabot recreate`. |
 | `app/renovate` | `renovate[bot]` | In the PR body, check `<!-- rebase-check -->`. |
 
-A rebuild overwrites the branch, so it fits only a branch this bot never
-touched. `review` pushes fixes to dependency-bot PRs by design, and the owning
-bot stops resolving conflicts on a branch that has been altered — leaving a
-rebuild that would discard the fix as the only trigger, and the PR wedged at
-its first conflict. That same commit is what makes the branch this bot's to
-merge: resolve it under the exact head lease, as for a configured-bot PR. Never
-force-push over a commit from anyone else.
+A rebuild overwrites the branch, so it fits only row 1, where the owning bot is
+every commit's author. `review` pushes fixes to dependency-bot PRs by design,
+and the owning bot stops resolving conflicts on a branch that has been altered
+— leaving a rebuild that would discard the fix as the only trigger, and the PR
+wedged at its first conflict. That same commit is what makes the branch this
+bot's to merge: resolve it under the exact head lease, as for a configured-bot
+PR. Never force-push over a commit from anyone else.
 
 ## Configured-bot PRs
 
