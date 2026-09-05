@@ -46,15 +46,11 @@ default. `uvx tend@latest init` doesn't rewrite them either, so their
 ### Usage analysis
 
 Pass extra prefixes when running token reports or listing runs so these
-workflows are included. Both scripts live in the bundled `scripts/` directory —
-take its path from any absolute `.../scripts/...` path a loaded bundled skill
-renders. Under the Claude harness `${CLAUDE_PLUGIN_ROOT}` is text-substituted
-into bundled plugin skill markdown but is not set in the shell, so writing the
-literal in this repo-local skill would expand to nothing (under Codex the
-action exports it as a real variable, so there it would work).
+workflows are included:
 
 ```bash
-SCRIPTS=<bundled scripts/ dir>
+# Claude leaves this unset in the shell; Codex exports it.
+SCRIPTS="${CLAUDE_PLUGIN_ROOT:-/home/tend-sandbox/tend-marketplace/plugins/tend-ci-runner}/scripts"
 "$SCRIPTS/token-report.sh" "${HOURS:-24}" "review-"
 TARGET_REPO=max-sixty/tend "$SCRIPTS/list-recent-runs.sh" "tend-" "review-"
 ```
