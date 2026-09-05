@@ -121,6 +121,40 @@ def logs_dir(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def sudoless(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the consolidating copy's commands unprivileged, as themselves.
+
+    The copy runs as root on a runner because the source belongs to another
+    UID; under a test the source is the test's own, so dropping the `sudo`
+    prefix leaves each command doing exactly what it does in CI.
+    """
+    run_command = token_usage.best_effort
+
+    def run_without_sudo(*argv: str) -> None:
+        run_command(*(argv[1:] if argv[:1] == ("sudo",) else argv))
+
+    monkeypatch.setattr(token_usage, "best_effort", run_without_sudo)
+
+
+def _record_commands(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    """Capture what the consolidating copy would run instead of running it."""
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(token_usage, "best_effort", lambda *argv: commands.append(argv))
+    return commands
+
+
+def _aimed_inside(
+    commands: list[tuple[str, ...]], *paths: Path
+) -> list[tuple[str, ...]]:
+    """The captured commands naming any of *paths* — none, when a guard held."""
+    return [
+        argv
+        for argv in commands
+        if any(str(path) in arg for arg in argv for path in paths)
+    ]
+
+
 def test_reconstructs_a_cancelled_session(tmp_path: Path, logs_dir: Path) -> None:
     """A cancelled session must be accounted from its session JSONL.
 
@@ -336,6 +370,7 @@ def test_claude_main_publishes_the_record_three_ways(
     logs_dir: Path,
     github_files: GithubFiles,
     monkeypatch: pytest.MonkeyPatch,
+    sudoless: None,
 ) -> None:
     """End to end: consolidate the sandbox's logs, then report from them.
 
@@ -356,13 +391,6 @@ def test_claude_main_publishes_the_record_three_ways(
     monkeypatch.setenv("MODEL", "opus")
     monkeypatch.setenv("STREAM_JSON", str(_cancelled_stream(tmp_path)))
     monkeypatch.setattr(sys, "argv", ["token_usage.py", "--harness", "claude"])
-
-    run_command = token_usage.best_effort
-
-    def run_without_sudo(*argv: str) -> None:
-        run_command(*(argv[1:] if argv[:1] == ("sudo",) else argv))
-
-    monkeypatch.setattr(token_usage, "best_effort", run_without_sudo)
 
     assert token_usage.main() == 0
 
@@ -463,3 +491,138 @@ def test_cost_renders_to_the_cent_and_says_so_when_unknown() -> None:
     assert token_usage.cell(None, "cost_usd") == "unknown"
     assert token_usage.cell(0, "cost_usd") == "$0.00"
     assert token_usage.cell(1.2, "cost_usd") == "$1.20"
+
+
+def test_consolidation_refuses_a_symlinked_session_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cp -a` follows a symlinked argument, so the sandbox must not aim it.
+
+    The agent owns the parent of `.claude/projects`, so it chooses what the
+    runner's root-privileged copy reads. Pointing it at a tree of the agent's
+    choosing publishes that tree; refusing the link is the fix.
+    """
+    agent_home = tmp_path / "agent-home"
+    (agent_home / ".claude").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "ca-key.pem").write_text("PRIVATE KEY\n")
+    (agent_home / ".claude" / "projects").symlink_to(elsewhere)
+    monkeypatch.setenv("AGENT_HOME", str(agent_home))
+    commands = _record_commands(monkeypatch)
+
+    token_usage.consolidate_logs(tmp_path / "logs", tmp_path / "runner-temp")
+
+    assert _aimed_inside(commands, agent_home, elsewhere) == []
+    assert list((tmp_path / "logs").iterdir()) == []
+
+
+def test_consolidation_refuses_a_symlinked_dot_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dot-dir the session dir sits in is a boundary too.
+
+    Checking only `.claude/projects` leaves `.claude` itself free to be a link:
+    the session dir under it is then a real directory and passes, while the
+    privileged copy reads out of whatever tree the agent aimed the dot-dir at.
+    """
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "projects").mkdir(parents=True)
+    (elsewhere / "projects" / "session.jsonl").write_text("{}\n")
+    (agent_home / ".claude").symlink_to(elsewhere, target_is_directory=True)
+    monkeypatch.setenv("AGENT_HOME", str(agent_home))
+    commands = _record_commands(monkeypatch)
+
+    token_usage.consolidate_logs(tmp_path / "logs", tmp_path / "runner-temp")
+
+    assert _aimed_inside(commands, agent_home, elsewhere) == []
+    assert list((tmp_path / "logs").iterdir()) == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root is never denied the lstat")
+def test_consolidation_asks_root_about_a_path_it_cannot_stat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dot-dir the agent has closed must not answer the symlink check `False`.
+
+    The sandbox home is the agent's, so it can `chmod` `.claude` shut at will —
+    and `Path.is_symlink` reports an unreachable path as "not a symlink", which
+    waves the link straight past the check meant to catch it. The question goes
+    to root instead, which can always see.
+    """
+    agent_home = tmp_path / "agent-home"
+    (agent_home / ".claude").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    projects = agent_home / ".claude" / "projects"
+    projects.symlink_to(elsewhere, target_is_directory=True)
+    # `sudo test` is out of reach here, so root's answers are read off the
+    # link while the test can still see it, and served back from this table.
+    root_sees = {"-d": projects.is_dir(), "-L": projects.is_symlink()}
+    monkeypatch.setenv("AGENT_HOME", str(agent_home))
+    commands = _record_commands(monkeypatch)
+
+    asked: list[str] = []
+
+    def as_root(flag: str, path: Path) -> bool:
+        asked.append(flag)
+        assert path == projects
+        return root_sees[flag]
+
+    monkeypatch.setattr(token_usage, "root_test", as_root)
+
+    (agent_home / ".claude").chmod(0o600)
+    try:
+        token_usage.consolidate_logs(tmp_path / "logs", tmp_path / "runner-temp")
+    finally:
+        (agent_home / ".claude").chmod(0o700)
+
+    assert asked == ["-d", "-L"], "the unreadable boundary was never re-asked"
+    assert _aimed_inside(commands, agent_home, elsewhere) == []
+    assert list((tmp_path / "logs").iterdir()) == []
+
+
+def test_consolidation_copies_nothing_when_the_agent_never_wrote_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`AGENT_HOME` is unset when sandbox setup died before exporting it.
+
+    The placeholder home names nothing, and neither does a home whose agent
+    never opened a session — both read as nothing to copy, without a privileged
+    command run against a path that isn't there.
+    """
+    monkeypatch.delenv("AGENT_HOME", raising=False)
+    commands = _record_commands(monkeypatch)
+
+    token_usage.consolidate_logs(tmp_path / "logs", tmp_path / "runner-temp")
+
+    assert _aimed_inside(commands, Path("/nonexistent")) == []
+    assert list((tmp_path / "logs").iterdir()) == []
+
+
+def test_consolidation_drops_symlinks_from_the_uploaded_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sudoless: None
+) -> None:
+    """`cp -a` preserves links and upload-artifact resolves them as the runner.
+
+    A link the agent plants in its session dir would otherwise publish whatever
+    the runner can read — the proxy's CA private key, its own
+    `/proc/<pid>/environ` — into a downloadable artifact.
+    """
+    agent_home = tmp_path / "agent-home"
+    projects = agent_home / ".claude" / "projects" / "project"
+    projects.mkdir(parents=True)
+    (projects / "session.jsonl").write_text("{}\n")
+    secret = tmp_path / "ca-key.pem"
+    secret.write_text("PRIVATE KEY\n")
+    (projects / "leak.pem").symlink_to(secret)
+    monkeypatch.setenv("AGENT_HOME", str(agent_home))
+
+    logs_dir = tmp_path / "logs"
+    token_usage.consolidate_logs(logs_dir, tmp_path / "runner-temp")
+
+    assert (logs_dir / "project" / "session.jsonl").is_file()
+    assert not (logs_dir / "project" / "leak.pem").exists()
+    assert secret.read_text() == "PRIVATE KEY\n"
