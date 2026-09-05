@@ -436,7 +436,15 @@ When an answer rests on deeper research — citations across several files, a re
 
 Always use markdown links for files, issues, PRs, and docs. **Any link containing `#L` must use a commit SHA, never `blob/main/...#L42`** — line numbers shift silently, so the link stays valid but starts pointing at different code than the comment describes. Get the SHA with `git rev-parse HEAD` before composing the link.
 
-**GitHub URLs — read `$GITHUB_REPOSITORY` from the environment, don't hand-type the owner.** The model reliably guesses wrong — past comments have shipped with the wrong owner (e.g. `anthropics/<repo>` on a repo not owned by Anthropic). Before posting, scan the composed body for `github.com/`: confirm every owner matches `$GITHUB_REPOSITORY`, **and** every URL with a `#L<n>` anchor is SHA-pinned. A `blob/main/...#L<n>` hit is the link-rot shape — replace `main` with `$(git rev-parse HEAD)` for that link and re-scan. This catches both the wrong-owner typo and the un-pinned line-link slip in one pre-post pass.
+**Check the body's links before posting it.** Run this over every composed body — comment, PR body, issue body — as part of the pre-post pass, and fix what it names:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/check-body-links.sh /tmp/comment-body.md
+```
+
+It resolves every 40-hex SHA in the body against the API and reports any `#L` anchor pinned to a branch or an abbreviation. Resolving is the part a scan by eye cannot do: a hand-typed OID is well-formed whether or not the commit exists, so a fabricated SHA — the model extending an abbreviation it saw in `git log` instead of running `git rev-parse HEAD` — reads as correctly pinned and ships a permalink that 404s. Run it after the push when the body cites a commit from this session; before the push that commit is unreachable and reports as dead, correctly.
+
+**Owners it cannot check — read `$GITHUB_REPOSITORY` from the environment, don't hand-type the owner.** The model reliably guesses wrong — past comments have shipped with the wrong owner (e.g. `anthropics/<repo>` on a repo not owned by Anthropic). The script catches a wrong owner on a SHA-pinned link, because that URL does not resolve either; on every other link, scan the body's `github.com/` hits and confirm each owner is either `$GITHUB_REPOSITORY` or a repo the text genuinely means.
 
 **Authoring fenced bodies with backticks.** When a body contains a fenced code block, the model often defensively escapes the inner fence (`` \`\`\`bash ``) "to prevent it from closing the outer fence early"; the same instinct can produce `` \`foo\` `` for inline spans. Those backslashes survive into the rendered body as literal `\` characters. Author with bare backticks. For nested fenced blocks, use a **longer outer fence** — four or five backticks outside, three inside — so the inner three-backtick fence renders intact without escaping. The Write tool preserves data verbatim, so the same authoring rule applies whether you compose with the Write tool or inline; Write just removes shell-quoting from the equation.
 
