@@ -242,7 +242,7 @@ Every review POST below passes its `gh api` command to the preflight after `--`.
 
 **Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what step 1 reports as `last_review_sha`: pinned to the head you re-targeted onto, the queued run finds that head already reviewed and finishes without posting a second review of the same code.
 
-**Before APPROVE specifically**, re-read live HEAD and require it to still equal `/tmp/reviewed-head`. The rollup below is the live head's, so once they differ it is not the pinned commit's rollup and the red-check gate is reading the wrong commit; post findings if you have them, otherwise finish and leave the approval to the queued run. Then peek that rollup: if any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal. Re-check the author-readiness gate on the same pass — a comment withholding merge readiness can land after the review began, and the conversation you read in step 1 is by now stale.
+**Before APPROVE specifically**, run the snapshot below and require its `head_sha` to equal `/tmp/reviewed-head`. The rollup is pinned to `/tmp/reviewed-head`; a head mismatch means it does not cover the live head, so post findings if you have them, otherwise finish and leave the approval to the queued run. Then inspect that rollup: if any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal. Re-check the author-readiness gate on the same pass — a comment withholding merge readiness can land after the review began, and the conversation you read in step 1 is by now stale.
 
 An approval you post at a re-targeted head is yours to stand behind: the queued run reads that head as reviewed and finishes, so no successor session dismisses the approval if a check goes red. Step 7's poll is the whole net — run it to terminal before ending the session.
 
@@ -254,8 +254,11 @@ uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/poll_pr_checks.py" \
 ```
 
 The JSON reports `head_sha`, `pending`, and `failed` for the pinned commit after
-dropping this run, this workflow, and superseded check runs. Re-run the snapshot
-after any poll; no shell state survives between calls.
+dropping this run, this workflow, and superseded check runs. When those filters
+leave no external contexts, both lists are empty; that is the clean `failed`
+empty branch for this pre-approval snapshot, not evidence that the repository
+registered a gating check. Re-run the snapshot after any poll; no shell state
+survives between calls.
 
 **Don't treat a mid-flight rollup as settled.** A `FAILURE` co-existing with a non-empty `pending` list is often a *stale cancellation-cascade* artifact, not a real failure: when several events fire near-simultaneously (e.g. Dependabot opening a PR), the `tests` concurrency group cancels all but the latest, and a cancelled contributor makes an `if: always()` merge-gate omnibus (like PRQL's `check-ok-to-merge`) resolve to conclusion `FAILURE` — *not* `cancelled`, so it slips past the post-approve cancellation awareness below and reads as red. A fresh replacement run is already in flight and will re-register the omnibus. So decide on the **settled** rollup:
 

@@ -26,6 +26,16 @@ case "$1 $2" in
     emit '[{"name":"tend-review.yaml"}]' ;;
   "api repos/a/new/contents/.config/tend.yaml")
     emit '{"content":"Ym90X25hbWU6IG5ldy1ib3QK"}' ;;
+  "api repos/w/config-missing/contents/.github/workflows")
+    emit '[{"name":"tend-review.yaml"}]' ;;
+  "api repos/w/config-missing/contents/.config/tend.yaml")
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+    ;;
+  "api repos/x/missing/contents/.github/workflows")
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+    ;;
   "api repos/y/removed/contents/.github/workflows")
     emit '[{"name":"ci.yaml"}]' ;;
   "api repos/z/retained/contents/.github/workflows")
@@ -64,6 +74,8 @@ def test_refresh_unions_search_with_the_index_and_confirms_removals(
     consumers.write_text(
         json.dumps(
             [
+                {"repo": "w/config-missing", "bot_name": "old-bot"},
+                {"repo": "x/missing", "bot_name": "old-bot"},
                 {"repo": "y/removed", "bot_name": "old-bot"},
                 {"repo": "z/retained", "bot_name": "stale-name"},
             ],
@@ -96,7 +108,7 @@ def test_refresh_unions_search_with_the_index_and_confirms_removals(
         "changed": True,
         "discovered": 1,
         "consumers": 2,
-        "removed": ["y/removed"],
+        "removed": ["w/config-missing", "x/missing", "y/removed"],
     }
     assert json.loads(consumers.read_text()) == [
         {"repo": "a/new", "bot_name": "new-bot"},
@@ -107,6 +119,8 @@ def test_refresh_unions_search_with_the_index_and_confirms_removals(
         "search code max-sixty/tend --extension yaml --limit 100 --json repository,path"
     ) in calls
     assert "irrelevant/repo" not in calls
+    assert "repos/w/config-missing/contents/.config/tend.yaml" in calls
+    assert "repos/x/missing/contents/.config/tend.yaml" not in calls
     assert "repos/y/removed/contents/.config/tend.yaml" not in calls
 
 

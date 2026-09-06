@@ -58,7 +58,11 @@ def _dig(value: Any, *keys: str) -> Any:
 
 
 def reduce_rollup(
-    nodes: list[dict[str, Any]], *, run_id: str, workflow: str
+    nodes: list[dict[str, Any]],
+    *,
+    run_id: str,
+    workflow: str,
+    allow_filtered_empty: bool = False,
 ) -> dict[str, list[str]] | None:
     """Filter and collapse raw contexts to pending and failed check names."""
     contexts: list[dict[str, str]] = []
@@ -96,7 +100,7 @@ def reduce_rollup(
         contexts.append(context)
 
     if not contexts:
-        return None
+        return {"pending": [], "failed": []} if allow_filtered_empty else None
 
     groups: dict[tuple[str, str], list[dict[str, str]]] = {}
     for context in contexts:
@@ -124,7 +128,12 @@ def reduce_rollup(
 
 
 def fetch_rollup(
-    *, repo: str, sha: str, run_id: str, workflow: str
+    *,
+    repo: str,
+    sha: str,
+    run_id: str,
+    workflow: str,
+    allow_filtered_empty: bool = False,
 ) -> dict[str, list[str]] | None:
     """Fetch every rollup page; return ``None`` when no complete view exists."""
     owner, name = repo.split("/", 1)
@@ -172,7 +181,12 @@ def fetch_rollup(
                 return None
         except (subprocess.CalledProcessError, ValueError, KeyError, TypeError):
             return None
-    return reduce_rollup(nodes, run_id=run_id, workflow=workflow)
+    return reduce_rollup(
+        nodes,
+        run_id=run_id,
+        workflow=workflow,
+        allow_filtered_empty=allow_filtered_empty,
+    )
 
 
 def head_note(*, pr: str, repo: str, sha: str) -> None:
@@ -206,6 +220,7 @@ def snapshot(pr: str, sha: str) -> int:
         sha=sha,
         run_id=os.environ.get("GITHUB_RUN_ID", ""),
         workflow=os.environ.get("GITHUB_WORKFLOW", ""),
+        allow_filtered_empty=True,
     )
     if rollup is None:
         print(f"could not read a complete check rollup for {sha}", file=sys.stderr)

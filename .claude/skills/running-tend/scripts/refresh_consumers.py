@@ -28,7 +28,7 @@ CONSUMERS_PATH = Path("data/consumers.json")
 WORKFLOW_PREFIX = ".github/workflows/tend-"
 
 
-def github_json(*args: str) -> Any:
+def github_json(*args: str, allow_missing: bool = False) -> Any:
     """Run an authenticated GitHub CLI read and parse its JSON response."""
     env = os.environ.copy()
     env.update(NO_COLOR="1", CLICOLOR_FORCE="0")
@@ -40,9 +40,16 @@ def github_json(*args: str) -> Any:
         check=False,
     )
     if result.returncode:
+        if allow_missing and "HTTP 404" in result.stderr:
+            return None
         if result.stderr:
             sys.stderr.write(result.stderr)
-        raise subprocess.CalledProcessError(result.returncode, result.args)
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
     return json.loads(result.stdout)
 
 
@@ -102,7 +109,13 @@ def discover_repositories() -> set[str]:
 
 def read_consumer(repository: str) -> dict[str, str] | None:
     """Return one installed consumer, or ``None`` when no Tend workflow remains."""
-    workflows = github_json("api", f"repos/{repository}/contents/.github/workflows")
+    workflows = github_json(
+        "api",
+        f"repos/{repository}/contents/.github/workflows",
+        allow_missing=True,
+    )
+    if workflows is None:
+        return None
     if not isinstance(workflows, list):
         raise TypeError(f"workflow listing for {repository} was not an array")
     if not any(
@@ -113,7 +126,13 @@ def read_consumer(repository: str) -> dict[str, str] | None:
     ):
         return None
 
-    config = github_json("api", f"repos/{repository}/contents/.config/tend.yaml")
+    config = github_json(
+        "api",
+        f"repos/{repository}/contents/.config/tend.yaml",
+        allow_missing=True,
+    )
+    if config is None:
+        return None
     if not isinstance(config, dict) or not isinstance(config.get("content"), str):
         raise TypeError(f"Tend config response for {repository} was invalid")
 

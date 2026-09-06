@@ -239,6 +239,28 @@ def test_snapshot_prints_the_pinned_rollup_and_live_head(env: dict[str, str]) ->
     }
 
 
+def test_snapshot_treats_filtered_empty_as_a_clean_preapproval_view(
+    env: dict[str, str],
+) -> None:
+    _serve(
+        env,
+        _resp(
+            _check_run("own", status="IN_PROGRESS", workflow="other", run_id=555),
+            _check_run("review", status="IN_PROGRESS", workflow="tend-review"),
+        ),
+    )
+
+    result = _snapshot(env)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "sha": HEAD_SHA,
+        "head_sha": HEAD_SHA,
+        "pending": [],
+        "failed": [],
+    }
+
+
 def test_red_names_the_failing_check_with_its_url(env: dict[str, str]) -> None:
     _serve(env, _resp(_check_run("tests"), _check_run("lint", conclusion="FAILURE")))
 
