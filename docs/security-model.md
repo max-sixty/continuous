@@ -326,8 +326,9 @@ repository the bot account can access; credential isolation protects the PAT
 itself rather than restricting those operations to the triggering repository.
 Claude's Anthropic credential (OAuth token or API key) uses the same proxy and
 is injected only for `api.anthropic.com`. Codex's OpenAI key is instead read
-from stdin by OpenAI's hardened Responses API proxy, which exposes only
-`POST /v1/responses` on loopback. The agent holds only a dummy PAT and the local
+from stdin by OpenAI's hardened Responses API proxy. It forwards only
+`POST /v1/responses` upstream and answers `GET /shutdown` on loopback so Tend
+can stop it during teardown. The agent holds only a dummy PAT and the local
 inference endpoint, so it can't read the real secrets: a different UID with no
 sudo can't read either proxy's
 `/proc/<pid>/environ`, the credential `actions/checkout` persists in

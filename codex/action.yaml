@@ -225,9 +225,9 @@ runs:
             --no-python-downloads --python /usr/bin/python3 --script \
             "${{ github.action_path }}/../proxy/setup_sandbox.py"
 
-    # OpenAI's proxy accepts only POST /v1/responses, reads the key from stdin,
-    # removes it from its process environment, and hardens the memory that
-    # retains it. Codex receives only the loopback endpoint.
+    # OpenAI's proxy forwards only POST /v1/responses upstream, reads the key
+    # from stdin, removes it from its process environment, and hardens the
+    # memory that retains it. Its loopback GET /shutdown exists for teardown.
     - name: Start OpenAI Responses proxy
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
