@@ -1,0 +1,26 @@
+<<header>>
+name: tend-codex-auth-refresh
+on:
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+# Only this workflow may rotate the refresh-token chain. Consumer jobs share
+# the access token concurrently; a second refresher must never race this one.
+concurrency:
+  group: tend-codex-auth-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+<<fork_guard_if(cfg)>>
+<<environment()>>
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: max-sixty/tend/codex/refresh@<<tend_version>>
+        with:
+          codex_auth_json: ${{ secrets.<<codex_auth_secret>> }}
+          codex_refresh_auth_json: ${{ secrets.<<codex_refresh_auth_secret>> }}
+          refresh_pat: ${{ secrets.<<codex_refresh_pat_secret>> }}

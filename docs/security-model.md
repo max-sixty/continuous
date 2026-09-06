@@ -29,8 +29,8 @@ Three things an attacker wants, roughly in order of severity:
    controls the repo. Everything else is damage limitation compared to this.
 
 2. **Exfiltrate tokens.** The bot token grants write access to the repo
-   (branches, PRs, comments). The Claude OAuth token grants billed API access.
-   With a long-lived PAT, the attacker keeps access indefinitely.
+   (branches, PRs, comments). Harness auth grants billed model access. With a
+   long-lived PAT or refresh token, the attacker keeps access indefinitely.
 
 3. **Hijack a single session.** Even without stealing tokens, an attacker who
    controls what Claude does in one run can push malicious branches, post
@@ -123,9 +123,10 @@ its ephemeral `GITHUB_TOKEN`, at whatever permissions the file declares —
 bounded by the same rulesets (it cannot merge or tag), unable to read any
 secret value back through the API, and expiring with the job.
 
-*Operational secrets* — the bot PAT, harness auth, and optional auto-memory
-Gist ID — live in the `tend` environment, whose policy names the default branch
-and any `protected_branches`. Every generated job that reads a secret carries
+*Operational secrets* — the bot PAT, harness auth, the Codex subscription
+refresher's credential, and optional auto-memory Gist ID — live in the `tend`
+environment, whose policy names the default branch and any
+`protected_branches`. Every generated job that reads a secret carries
 `environment: {name: tend, deployment: false}`; jobs that hold none
 (mention's relay, below) must not, since naming it would cost them the refs
 the policy excludes. `deployment: false` keeps GitHub from filing a
@@ -355,8 +356,12 @@ agent. Every entry that is not a regular file or a directory is deleted before
 `upload-artifact` reads it: a symlink it would otherwise resolve as the runner,
 a FIFO it would block on until the job times out.
 
-The Codex harness (`codex/action.yaml`) still passes both the PAT and the model
-auth directly to the agent. The merge restriction and the environment gate
+The Codex harness (`codex/action.yaml`) still passes both the PAT and its model
+auth (an API key or access-only ChatGPT bearer bundle) directly to the agent.
+The weekly subscription refresh job is different: it checks out no adopter
+code and gives Codex only Tend's fixed refresh prompt. Codex receives the full
+refresh bundle, while the environment-write PAT appears only in the separate
+publish step after Codex exits. The merge restriction and the environment gate
 remain the load-bearing boundaries regardless of harness.
 
 **Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
@@ -423,8 +428,10 @@ encoding tricks that bypass the log filter; on GitHub-hosted runners there's
 no way to restrict outbound network access. On the Claude harnesses the
 credential isolation above keeps both real tokens out of the agent's reach,
 so they are not among what a hijacked session can send. The Codex harness
-passes its model auth (an OpenAI key) and the PAT directly, so there the
-channel carries both.
+passes its model auth (an OpenAI key or access-only ChatGPT token) and the PAT
+directly, so there the channel carries both. Subscription consumer jobs never
+receive the rotating refresh token or the PAT that can rewrite environment
+secrets.
 
 **Long-lived PAT exposure.** A classic PAT is valid until revoked and grants
 access to every repo the bot account can reach. A single successful

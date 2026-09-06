@@ -113,6 +113,17 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
     )
 
 
+def test_codex_actions_pin_the_same_cli_version() -> None:
+    versions = {
+        action: YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())[
+            "inputs"
+        ]["codex_version"]["default"]
+        for action in ("codex/action.yaml", "codex/refresh/action.yaml")
+    }
+
+    assert len(set(versions.values())) == 1, f"Codex CLI pins differ: {versions}"
+
+
 # Every `${{ github.action_path }}/…` reference in the two composite actions.
 # Nothing else reads them: the pre-commit actionlint hook is pinned to
 # ^.github/workflows/, so neither action.yaml is linted at all, and no workflow
@@ -122,25 +133,33 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
 ACTION_PATH_REF = re.compile(r"\$\{\{\s*github\.action_path\s*\}\}/?([^\s\"')]*)")
 
 
-@pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_action_path_references_resolve(harness: str) -> None:
-    body = (REPO_ROOT / harness / "action.yaml").read_text()
+COMPOSITE_ACTIONS = (
+    "claude/action.yaml",
+    "codex/action.yaml",
+    "codex/refresh/action.yaml",
+)
+
+
+@pytest.mark.parametrize("action", COMPOSITE_ACTIONS)
+def test_action_path_references_resolve(action: str) -> None:
+    action_path = REPO_ROOT / action
+    body = action_path.read_text()
     matched = ACTION_PATH_REF.findall(body)
 
-    assert matched, f"{harness}/action.yaml: no github.action_path references"
+    assert matched, f"{action}: no github.action_path references"
     missing = [
         ref
         for ref in sorted(set(matched))
-        if not (REPO_ROOT / harness / ref).resolve().exists()
+        if not (action_path.parent / ref).resolve().exists()
     ]
-    assert not missing, f"{harness}/action.yaml references nothing at: {missing}"
+    assert not missing, f"{action} references nothing at: {missing}"
 
 
 # Inline `run:` bodies in the composite actions. Nothing else lints them:
 # actionlint only reads workflow files (it parses an action.yaml as a malformed
 # workflow — "jobs section is missing"), and the shellcheck hook's `files:`
 # regex covers the standalone step scripts, not `claude/` or `codex/`.
-ACTIONS = ("claude/action.yaml", "codex/action.yaml")
+ACTIONS = COMPOSITE_ACTIONS
 
 # Replace `${{ … }}` with an opaque shell variable before checking composite
 # bodies. A literal placeholder would make shellcheck report on the replacement
@@ -216,3 +235,29 @@ def test_inputs_reach_run_bodies_through_env(action: str) -> None:
         f"{action}: pass these through the step's `env:` instead of `${{{{ }}}}` "
         f"in the body: {inlined}"
     )
+
+
+def test_codex_subscription_auth_takes_precedence_over_api_key() -> None:
+    doc = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "action.yaml").read_text()
+    )
+    run = next(step for step in doc["runs"]["steps"] if step.get("name") == "Run Codex")
+
+    assert run["env"]["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
+    assert 'if [ "$AUTH_MODE" = subscription ]' in run["run"]
+    assert "unset OPENAI_API_KEY" in run["run"]
+
+
+def test_codex_refresher_keeps_the_secret_writer_pat_out_of_the_model_step() -> None:
+    doc = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "refresh" / "action.yaml").read_text()
+    )
+    steps = {step["name"]: step for step in doc["runs"]["steps"]}
+
+    run = steps["Run Codex refresh"]
+    assert run["continue-on-error"] is True
+    assert set(run["env"]) == {"CODEX_HOME"}
+    publish = steps["Publish refreshed auth"]
+    assert publish["if"].startswith("always()")
+    assert publish["env"]["GH_TOKEN"] == "${{ inputs.refresh_pat }}"
+    assert publish["env"]["CODEX_OUTCOME"] == "${{ steps.codex.outcome }}"

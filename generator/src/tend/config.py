@@ -72,13 +72,17 @@ KNOWN_SECRETS_KEYS = {"allowed"}
 
 # The operational secrets, by fixed name. Claude reads the OAuth token
 # (subscription) or the API key (console.anthropic.com) — adopters set one;
-# Codex reads the OpenAI key. Not configurable: `install-tend` creates the
+# Codex reads either the OpenAI key or an access-only ChatGPT auth bundle.
+# Not configurable: `install-tend` creates the
 # `tend` environment and fills it from scratch, so there is no pre-existing
 # secret whose name an adopter would want to keep.
 BOT_TOKEN_SECRET = "TEND_BOT_TOKEN"
 CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"
 ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY"
 OPENAI_KEY_SECRET = "OPENAI_API_KEY"
+CODEX_AUTH_SECRET = "CODEX_AUTH_JSON"
+CODEX_REFRESH_AUTH_SECRET = "CODEX_REFRESH_AUTH_JSON"
+CODEX_REFRESH_PAT_SECRET = "CODEX_REFRESH_PAT"
 MEMORY_GIST_SECRET = "TEND_MEMORY_GIST_ID"
 OPERATIONAL_SECRETS = {
     MEMORY_GIST_SECRET,
@@ -86,6 +90,9 @@ OPERATIONAL_SECRETS = {
     CLAUDE_TOKEN_SECRET,
     ANTHROPIC_API_KEY_SECRET,
     OPENAI_KEY_SECRET,
+    CODEX_AUTH_SECRET,
+    CODEX_REFRESH_AUTH_SECRET,
+    CODEX_REFRESH_PAT_SECRET,
 }
 # Keys that once renamed those secrets. A leftover one is refused rather
 # than warned past: ignoring it would generate workflows reading the fixed

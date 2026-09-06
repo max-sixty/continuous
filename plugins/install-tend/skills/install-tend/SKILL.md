@@ -91,10 +91,11 @@ itself the go-ahead.
    - **Claude — API key** — a console.anthropic.com key, billed per token.
      Fits when there's no subscription to draw on, or the user wants a
      dedicated billing surface and per-key revocation.
-   - **Codex — OpenAI API key** — pay-per-token. The `auth.json`
-     subscription path is incompatible with tend's concurrent workflows
-     (per-call refresh-token invalidation) and is being removed. Detail in
+   - **Codex — Plus/Pro subscription** — experimental. Concurrent jobs receive
+     an access-only token; one serialized weekly workflow owns renewal.
+     OpenAI does not support this path for public CI; detail in
      ${CLAUDE_SKILL_DIR}/references/security-model.md.
+   - **Codex — OpenAI API key** — supported pay-per-token path.
 2. **Bot name** — the available candidates, recommended first. "Other"
    takes a custom name; check its availability before using it. The tool
    needs 2–4 options, so generate more candidates whenever fewer than two
@@ -747,19 +748,68 @@ gh secret set ANTHROPIC_API_KEY --repo "$REPO" --env tend
 
 ### 7b. Harness = codex
 
-Codex uses `OPENAI_API_KEY` (pay-per-token). The subscription `auth.json`
-path is not supported — Codex rotates that refresh token on every
-API call and invalidates the prior one, so tend's concurrent
-workflows (review/mention/triage/nightly/…) would break each other's
-auth mid-run. See ${CLAUDE_SKILL_DIR}/references/security-model.md.
+Use the auth mode selected at kickoff. If an existing install has one complete
+mode, keep it rather than prompting again:
 
 ```bash
-gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' | grep -q OPENAI_API_KEY && echo "SET" || echo "NOT SET"
+gh secret list --repo "$REPO" --env tend --json name --jq '.[].name'
 ```
 
-If not set, the user takes a key from
-`https://platform.openai.com/api-keys` and runs this themselves,
-substituted, pasting the key at the prompt:
+For **Plus/Pro subscription**, first repeat the unsupported-path warning from
+${CLAUDE_SKILL_DIR}/references/security-model.md. Use an isolated Codex login:
+the weekly workflow will rotate its refresh-token chain, so copying the user's
+ordinary `~/.codex/auth.json` would eventually break their local Codex login.
+
+Run `codex login --device-auth` with a fresh temporary `CODEX_HOME`, then verify
+that it produced a normal refreshable ChatGPT bundle without displaying it:
+
+```bash
+TEND_CODEX_HOME=$(mktemp -d)
+CODEX_HOME="$TEND_CODEX_HOME" codex \
+  -c 'cli_auth_credentials_store="file"' login --device-auth
+jq -e '
+  .auth_mode == "chatgpt" and
+  ([.tokens.access_token, .tokens.refresh_token, .tokens.id_token, .tokens.account_id]
+   | all(type == "string" and length > 0))
+' "$TEND_CODEX_HOME/auth.json" >/dev/null
+```
+
+If `codex` is not installed, use `npx -y @openai/codex@latest -c
+'cli_auth_credentials_store="file"' login --device-auth` with the same
+`CODEX_HOME` assignment.
+
+Store the full bundle first, then its access-only projection:
+
+```bash
+gh secret set CODEX_REFRESH_AUTH_JSON --repo "$REPO" --env tend < "$TEND_CODEX_HOME/auth.json"
+jq -c '
+  .auth_mode = "chatgptAuthTokens" |
+  .OPENAI_API_KEY = null |
+  .tokens.refresh_token = ""
+' "$TEND_CODEX_HOME/auth.json" |
+  gh secret set CODEX_AUTH_JSON --repo "$REPO" --env tend
+```
+
+The user creates a fine-grained PAT scoped only to `$REPO`, with repository
+permission **Environments: Read and write**, then runs this themselves and
+pastes it at the prompt. It lets the scheduled workflow replace the two
+environment secrets; `GITHUB_TOKEN` cannot do that.
+
+```bash
+gh secret set CODEX_REFRESH_PAT --repo "$REPO" --env tend
+```
+
+After all three secret names appear in the listing, tell the user the temporary
+directory printed by the following command still contains the refresh token
+and should be deleted when they no longer need it locally:
+
+```bash
+printf '%s\n' "$TEND_CODEX_HOME"
+```
+
+For **API key**, the user takes a key from
+`https://platform.openai.com/api-keys` and runs this themselves, pasting it at
+the prompt:
 
 ```bash
 gh secret set OPENAI_API_KEY --repo "$REPO" --env tend
@@ -1001,7 +1051,7 @@ line picks the row that matches the chosen harness):
 - [ ] Badge: added to README (unless skipped, or no README)
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Harness auth (claude): `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret set
-- [ ] Harness auth (codex): `OPENAI_API_KEY` secret set
+- [ ] Harness auth (codex): `OPENAI_API_KEY`, or all of `CODEX_AUTH_JSON` + `CODEX_REFRESH_AUTH_JSON` + `CODEX_REFRESH_PAT`
 - [ ] Bot token: `TEND_BOT_TOKEN` set with `repo`+`workflow`+`notifications`+`write:discussion`+`gist`+`user` scopes
 - [ ] Bot access: repo collaborator with write access, invitation accepted
 - [ ] Bot notifications: watching the repository

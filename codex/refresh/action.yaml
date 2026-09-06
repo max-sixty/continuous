@@ -1,0 +1,57 @@
+name: Refresh Tend Codex subscription auth
+description: Rotate the full auth bundle and publish its access-only consumer view.
+
+inputs:
+  codex_auth_json:
+    required: false
+    default: ""
+    description: Current access-only consumer bundle, or empty in API-key mode
+  codex_refresh_auth_json:
+    required: false
+    default: ""
+    description: Full refreshable ChatGPT auth bundle held only by this workflow
+  refresh_pat:
+    required: false
+    default: ""
+    description: GitHub PAT allowed to update secrets in the tend environment
+  codex_version:
+    default: "0.151.0"
+    description: Pinned @openai/codex npm version that performs the refresh
+
+runs:
+  using: composite
+  steps:
+    - name: Stage refreshable auth
+      id: auth
+      shell: bash
+      env:
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+        CODEX_REFRESH_AUTH_JSON: ${{ inputs.codex_refresh_auth_json }}
+        CODEX_REFRESH_PAT: ${{ inputs.refresh_pat }}
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../../shared/steps/codex_subscription_auth.py" stage-refresh "$RUNNER_TEMP/tend-codex-refresh/auth.json"
+
+    - name: Install Codex CLI
+      if: steps.auth.outputs.configured == 'true'
+      shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs.codex_version }}
+      run: |
+        npm install -g "@openai/codex@$CODEX_VERSION"
+        codex --version
+
+    - name: Run Codex refresh
+      id: codex
+      if: steps.auth.outputs.configured == 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        CODEX_HOME: ${{ runner.temp }}/tend-codex-refresh
+      run: codex exec --json --skip-git-repo-check --config 'cli_auth_credentials_store="file"' "Reply with the single word OK without using tools." >/dev/null
+
+    - name: Publish refreshed auth
+      if: always() && steps.auth.outputs.configured == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.refresh_pat }}
+        CODEX_OUTCOME: ${{ steps.codex.outcome }}
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../../shared/steps/codex_subscription_auth.py" publish-refresh "$RUNNER_TEMP/tend-codex-refresh/auth.json"
