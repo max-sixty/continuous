@@ -46,6 +46,11 @@ inputs:
     description: >-
       Reasoning effort — low, medium, high, or xhigh. Empty means leave
       at Codex CLI default (medium for gpt-5.5).
+  args:
+    default: ""
+    description: >-
+      Additional Codex CLI arguments, one exact argument per line. They are
+      passed before Tend's managed arguments; Codex validates conflicts.
   sandbox:
     # danger-full-access by default: this action only ever runs inside an
     # ephemeral single-use GitHub Actions runner VM, which is itself the
@@ -211,6 +216,7 @@ runs:
         PROMPT: ${{ inputs.prompt }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
+        EXTRA_ARGS: ${{ inputs.args }}
         SANDBOX: ${{ inputs.sandbox }}
         AUTH_MODE: ${{ steps.codex_auth.outputs.mode }}
       # runner.py preserves the final message even when codex exits non-zero.

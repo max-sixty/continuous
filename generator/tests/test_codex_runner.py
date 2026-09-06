@@ -107,6 +107,9 @@ def test_run_exports_the_final_message_on_failure(
     monkeypatch.setenv("MODEL", "gpt-test")
     monkeypatch.setenv("SANDBOX", "workspace-write")
     monkeypatch.setenv("EFFORT", "high")
+    monkeypatch.setenv(
+        "EXTRA_ARGS", "--skip-git-repo-check\n--config\nproject_doc_max_bytes=8192"
+    )
     monkeypatch.setenv("PROMPT", "Review this")
     monkeypatch.setenv("AUTH_MODE", "subscription")
     monkeypatch.setenv("OPENAI_API_KEY", "also-configured")
@@ -127,6 +130,9 @@ def test_run_exports_the_final_message_on_failure(
     assert args == [
         "codex",
         "exec",
+        "--skip-git-repo-check",
+        "--config",
+        "project_doc_max_bytes=8192",
         "--model",
         "gpt-test",
         "--sandbox",

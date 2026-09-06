@@ -38,13 +38,26 @@ bot_name: my-project-bot
 #
 # model: opus
 
-# ## Effort (codex only)
+# ## Effort
 #
-# Reasoning effort for the Codex model. Valid values: low, medium, high,
-# xhigh. Empty (default) leaves the choice to the Codex CLI default
-# (medium for gpt-5.5).
+# Reasoning effort for the selected model. Codex and Claude's Opus and Sonnet
+# models accept low, medium, high, and xhigh; Claude's also accept max. Haiku
+# does not support effort. Empty (default) leaves the choice to the harness CLI
+# (high for Claude's default Opus model, medium for Codex's default gpt-5.5).
 #
 # effort: medium
+
+# ## Additional harness arguments
+#
+# Exact arguments passed to `claude` or `codex exec`, before Tend's managed
+# arguments. Each list item is one argv element, so values containing spaces
+# stay intact. The selected CLI validates incompatible or repeated options.
+#
+# args: [--max-turns, "40"]  # Claude example
+#
+# `harness`, `model`, `effort`, and `args` can instead live under one
+# `workflows.<name>` entry. That workflow then overrides the top-level value;
+# `args: []` clears inherited arguments.
 
 # ## Protected branches
 #
