@@ -325,8 +325,8 @@ bot_name: my-project-bot
 
 # ### ci-fix
 #
-# Triggers when a watched CI workflow fails on the default branch. Reads failure
-# logs, identifies root cause, opens a fix PR.
+# Triggers when a watched CI workflow fails or is cancelled on the default
+# branch. Diagnoses the run and opens a fix PR when needed.
 #
 # workflows:
 #   ci-fix:

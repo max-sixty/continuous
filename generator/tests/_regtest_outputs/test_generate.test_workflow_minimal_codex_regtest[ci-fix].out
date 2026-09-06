@@ -119,5 +119,6 @@ jobs:
           prompt: |2
             $ci-fix ${{ github.event.workflow_run.id }}
             - Run URL: ${{ github.event.workflow_run.html_url }}
+            - Conclusion: ${{ github.event.workflow_run.conclusion }}
             - Commit: ${{ github.event.workflow_run.head_sha }}
             - Commit message: ${{ github.event.workflow_run.head_commit.message }}

@@ -1160,14 +1160,15 @@ def test_run_all_checks_no_repo() -> None:
 _BRANCH_HAS_UPDATE_RULE = _make_branch_rules("update")
 
 
-def test_check_immutable_releases_enabled() -> None:
+@pytest.mark.parametrize(("enabled", "expected"), [(True, True), (False, False)])
+def test_check_immutable_releases_reads_setting(enabled: bool, expected: bool) -> None:
     with patch(
         "tend.checks._gh",
-        return_value=_make_completed(json.dumps({"enabled": True})),
+        return_value=_make_completed(json.dumps({"enabled": enabled})),
     ) as gh:
         result = check_immutable_releases("owner/repo")
 
-    assert result.passed is True
+    assert result.passed is expected
     assert gh.call_args.args == (
         "api",
         "-H",
@@ -1176,15 +1177,15 @@ def test_check_immutable_releases_enabled() -> None:
     )
 
 
-def test_check_immutable_releases_disabled_is_github_404() -> None:
+def test_check_immutable_releases_404_is_unverified() -> None:
     with patch(
         "tend.checks._gh",
         return_value=_make_completed(returncode=1, stderr="gh: Not Found (HTTP 404)"),
     ):
         result = check_immutable_releases("owner/repo")
 
-    assert result.passed is False
-    assert "--fix" in result.message
+    assert result.passed is None
+    assert "admin" in result.message
 
 
 def test_check_immutable_releases_other_api_error_is_unknown() -> None:

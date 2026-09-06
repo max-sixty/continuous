@@ -317,8 +317,8 @@ timestamp and job start) into the prompt — over ~40 s indicates the job was
 queued behind another run, making conversation drift more likely.
 Notifications stay unread until a poll records an outcome, so the newest
 pending run covers a replaced poll. ci-fix keeps the default too, and wants
-it: while a session works a red branch, the newest failure carries that
-branch's current state, so replacing the pending run loses nothing.
+it: while a session works a red branch, the newest unsuccessful run carries
+that branch's current state, so replacing the pending run loses nothing.
 
 ## Skill design: bundled for everyone, overlay for one
 

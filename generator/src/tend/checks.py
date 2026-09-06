@@ -171,14 +171,12 @@ def check_immutable_releases(repo: str) -> CheckResult:
     if result is None:
         return CheckResult("immutable-releases", None, "gh CLI not found")
     if result.returncode != 0:
-        # GitHub represents the disabled state as 404 rather than a JSON body.
         if "HTTP 404" in result.stderr:
             return CheckResult(
                 "immutable-releases",
-                False,
-                "Immutable releases are disabled. A write-access bot can "
-                "rewrite a published release's assets or notes. Run "
-                "`tend check --fix`.",
+                None,
+                "Could not read the immutable-releases setting. Repository "
+                "admin access is required to verify it.",
             )
         return CheckResult(
             "immutable-releases", None, f"API error: {result.stderr.strip()}"

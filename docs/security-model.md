@@ -11,11 +11,10 @@ repositories other than the one that started the run.
 Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
 `.claude/skills/running-tend/SKILL.md`, the adopter-owned overlay the rest of
-the docs name. Not a `docs/agent-notes.md` of its own: fork-PR instruction
+the docs name. Not a `docs/agent-notes.md` of its own: PR instruction
 pinning covers `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` at
-any depth under both harnesses (`shared/steps/restore-sensitive-config.sh` for
-Claude, `shared/steps/pin-instruction-files.sh` for Codex), so notes parked
-outside those paths are read from the fork's own tree.
+any depth under both harnesses (`shared/steps/restore-sensitive-config.sh`), so
+notes parked outside those paths are read from the PR's own tree.
 
 ## Threats
 
@@ -44,10 +43,10 @@ each.
 
 | Workflow | Injection surface | Attacker control | Specific mitigations |
 |----------|-------------------|-------------------|-------------|
-| **review** | PR diff content, review body on bot PRs | Full (any PR) / Medium (reviewers) | CLAUDE.md pinning (fork PRs) |
+| **review** | PR diff content, review body on bot PRs | Full (any PR) / Medium (reviewers) | Base-branch config restoration |
 | **triage** | Issue body | Partial (structured skill) | Structured skill |
 | **mention** | Comment body on any issue/PR | Full | Engagement verification; review events re-entered via a secretless relay |
-| **ci-fix** | Failed CI logs | Minimal (must break CI on default branch) | Automatic trigger |
+| **ci-fix** | Unsuccessful CI logs | Minimal (must disrupt CI on default branch) | Automatic trigger |
 | **weekly** | None | None | Scheduled trigger |
 
 ## What we do

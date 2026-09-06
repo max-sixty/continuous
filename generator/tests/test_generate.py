@@ -888,14 +888,16 @@ def test_ci_fix_custom_branches(tmp_path: Path) -> None:
 
 def test_ci_fix_runs_for_failures_and_cancellations(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path, _extra_for("ci-fix")))
-    workflow = yaml.safe_load(
-        next(
-            wf for wf in generate_all(cfg) if wf.filename == "tend-ci-fix.yaml"
-        ).content
+    generated = next(
+        wf for wf in generate_all(cfg) if wf.filename == "tend-ci-fix.yaml"
     )
+    workflow = yaml.safe_load(generated.content)
     assert workflow["jobs"]["fix-ci"]["if"] == (
         'contains(fromJSON(\'["failure", "cancelled"]\'), '
         "github.event.workflow_run.conclusion)"
+    )
+    assert "- Conclusion: ${{ github.event.workflow_run.conclusion }}" in agent_prompt(
+        generated.content
     )
 
 
