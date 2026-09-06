@@ -113,12 +113,16 @@ def run_codex() -> int:
         os.environ.get("SANDBOX", ""),
         "--output-last-message",
         str(output_file),
+        "--config",
+        'cli_auth_credentials_store="file"',
     ]
     effort = os.environ.get("EFFORT", "")
     if effort:
         args.extend(["--config", f'model_reasoning_effort="{effort}"'])
     args.append(os.environ.get("PROMPT", ""))
     env = os.environ.copy()
+    if env.get("AUTH_MODE") == "subscription":
+        env.pop("OPENAI_API_KEY", None)
     env["PATH"] = env.get("PATH", "") + os.pathsep + str(runner_temp / "tend-agent-uv")
     result = _run(args, check=False, env=env)
 

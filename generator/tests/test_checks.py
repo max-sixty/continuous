@@ -37,6 +37,9 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    CODEX_AUTH_SECRET,
+    CODEX_REFRESH_AUTH_SECRET,
+    CODEX_REFRESH_PAT_SECRET,
     MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     STANDARD_WORKFLOWS,
@@ -1424,6 +1427,44 @@ def test_codex_engine_passes_with_openai_key() -> None:
     assert len(codex_check) == 1
     assert codex_check[0].passed is True
     assert OPENAI_KEY_SECRET in codex_check[0].message
+
+
+def test_codex_engine_passes_with_complete_subscription_auth() -> None:
+    subscription = (
+        BOT_TOKEN_SECRET,
+        CODEX_AUTH_SECRET,
+        CODEX_REFRESH_AUTH_SECRET,
+        CODEX_REFRESH_PAT_SECRET,
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch(
+            "tend.checks._gh",
+            side_effect=_gh_all_pass(environment_secrets=subscription),
+        ),
+    ):
+        results = run_all_checks(_config(harness="codex"), repo="owner/repo")
+
+    codex = next(result for result in results if result.name == "codex-auth")
+    assert codex.passed is True
+    assert CODEX_AUTH_SECRET in codex.message
+
+
+def test_codex_engine_rejects_partial_subscription_auth_even_with_api_key() -> None:
+    partial = (BOT_TOKEN_SECRET, OPENAI_KEY_SECRET, CODEX_AUTH_SECRET)
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch(
+            "tend.checks._gh",
+            side_effect=_gh_all_pass(environment_secrets=partial),
+        ),
+    ):
+        results = run_all_checks(_config(harness="codex"), repo="owner/repo")
+
+    codex = next(result for result in results if result.name == "codex-auth")
+    assert codex.passed is False
+    assert CODEX_REFRESH_AUTH_SECRET in codex.message
+    assert CODEX_REFRESH_PAT_SECRET in codex.message
 
 
 def test_codex_engine_fails_when_no_auth() -> None:

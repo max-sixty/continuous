@@ -111,6 +111,8 @@ def test_run_exports_the_final_message_on_failure(
         "EXTRA_ARGS", "--skip-git-repo-check\n--config\nproject_doc_max_bytes=8192"
     )
     monkeypatch.setenv("PROMPT", "Review this")
+    monkeypatch.setenv("AUTH_MODE", "subscription")
+    monkeypatch.setenv("OPENAI_API_KEY", "also-configured")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def run(args: list[str], **kwargs: object):
@@ -138,8 +140,30 @@ def test_run_exports_the_final_message_on_failure(
         "--output-last-message",
         str(tmp_path / "codex-final-message.md"),
         "--config",
+        'cli_auth_credentials_store="file"',
+        "--config",
         'model_reasoning_effort="high"',
         "Review this",
     ]
     assert kwargs["check"] is False
     assert kwargs["env"]["PATH"] == f"/usr/bin:{tmp_path}/tend-agent-uv"
+    assert "OPENAI_API_KEY" not in kwargs["env"]
+
+
+def test_run_preserves_api_key_for_api_key_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("AUTH_MODE", "api-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "configured-key")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(args: list[str], **kwargs: object):
+        calls.append((args, kwargs))
+        return _result(args)
+
+    monkeypatch.setattr(codex_runner, "_run", run)
+
+    assert codex_runner.run_codex() == 0
+    assert calls[0][1]["env"]["OPENAI_API_KEY"] == "configured-key"

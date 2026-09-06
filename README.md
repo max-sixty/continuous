@@ -23,9 +23,8 @@ To use Tend, a project needs:
 - A GitHub account for the agent (for example this project's is **[@tend-agent](https://www.github.com/tend-agent))**
 - One of:
   - A Claude Max subscription (harness = "claude")
-  - An OpenAI API key (harness = "codex"). A ChatGPT subscription via
-    a Codex `auth.json` is **not** compatible with tend's concurrent
-    workflows — see [Codex (alternative)](#codex-alternative).
+  - A ChatGPT Plus or Pro subscription (experimental), or an OpenAI API key
+    (harness = "codex") — see [Codex (alternative)](#codex-alternative).
 
 Tend offers the default code & guidance for the agent. Specifically that means:
 
@@ -79,6 +78,7 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **weekly**        | Weekly                     | Reviews dependency PRs, approves safe patch and minor updates (the bot never merges — a merge restriction is the security boundary).                        |
 | **notifications** | Every 15 minutes           | Drains unread notifications as a recovery queue and repairs conflicts on bot-authored PRs.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
+| **codex-auth-refresh** | Weekly                 | When any workflow uses Codex, renews experimental Plus/Pro auth through its single-writer credential; no-ops for API-key installs.                           |
 
 The bot reacts 👀 while a session is working: on an issue when it opens, on a
 PR whenever a review starts, and on a comment that mentions the bot. The
@@ -205,14 +205,13 @@ it; `tend check` verifies it), depend on the harness:
 | Harness    | Required secrets                                                                                                         |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `claude`   | `TEND_BOT_TOKEN` + one of `CLAUDE_CODE_OAUTH_TOKEN` (subscription) or `ANTHROPIC_API_KEY` (API-billed)                   |
-| `codex`    | `TEND_BOT_TOKEN` + `OPENAI_API_KEY` (pay-per-token).                                                                    |
+| `codex`    | `TEND_BOT_TOKEN` + either `OPENAI_API_KEY`, or the subscription trio `CODEX_AUTH_JSON`, `CODEX_REFRESH_AUTH_JSON`, and `CODEX_REFRESH_PAT` |
 
 `TEND_BOT_TOKEN` is the bot account's PAT — see
 [example config](docs/tend.example.yaml) for scopes.
-`CLAUDE_CODE_OAUTH_TOKEN` is from `claude setup-token`. The other two
-are standard API keys from console.anthropic.com and
-platform.openai.com. See [Codex (alternative)](#codex-alternative) for
-why the Codex subscription `auth.json` path isn't supported;
+`CLAUDE_CODE_OAUTH_TOKEN` is from `claude setup-token`. The API keys are
+from console.anthropic.com and platform.openai.com. See
+[Codex (alternative)](#codex-alternative) for the subscription trio;
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
 
@@ -259,16 +258,24 @@ Installs `@openai/codex` on the runner and invokes `codex exec` against a
 bundled `AGENTS.md` that teaches it to resolve tend's slash commands to
 skill markdown.
 
-Use `OPENAI_API_KEY` (a standard OpenAI API key, pay-per-token, from
-platform.openai.com). Works for any repo, public or private.
+Two auth modes:
 
-> **Subscription `auth.json` is not supported.** Codex rotates that
-> refresh token on every API call and invalidates the prior token; tend
-> runs multiple workflows concurrently (review, mention, triage,
-> nightly, …), so each call would invalidate the credential the other
-> in-flight jobs are using. A scheduled refresher works around the
-> ~8-day rotation but not the per-call invalidation between concurrent
-> jobs. Use `OPENAI_API_KEY` instead.
+- **ChatGPT Plus or Pro (experimental):** concurrent jobs receive
+  `CODEX_AUTH_JSON`, an access-only bundle that Codex cannot refresh. A single
+  serialized weekly workflow holds `CODEX_REFRESH_AUTH_JSON`, rotates it, then
+  publishes the next access-only bundle using `CODEX_REFRESH_PAT`.
+- **API:** `OPENAI_API_KEY` is a standard pay-per-token key from
+  platform.openai.com.
+
+The split fixes the old race: no consumer receives the rotating refresh token,
+so concurrent jobs cannot invalidate one another's refresh state. This is
+still an unsupported consumer integration because it uses Codex's internal
+`chatgptAuthTokens` mode. The weekly job follows OpenAI's official
+[CI/CD guidance](https://learn.chatgpt.com/docs/auth/ci-cd-auth): it runs
+Codex's built-in refresh and persists the updated full bundle. The same guide
+says not to use ChatGPT-account auth in public or open-source repositories.
+Tend pins and tests the Codex version, but an OpenAI change can still break the
+weekly refresh until Tend updates.
 
 ## Badge
 

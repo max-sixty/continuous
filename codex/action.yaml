@@ -1,20 +1,27 @@
 name: Tend (Codex)
 description: >-
   Tend's Codex harness: an autonomous junior maintainer for GitHub repos
-  powered by OpenAI Codex. Authenticate via OPENAI_API_KEY.
+  powered by OpenAI Codex. Authenticate via an OpenAI API key or an
+  access-only ChatGPT subscription bundle.
 
 inputs:
   github_token:
     required: true
     description: GitHub token for API access and pushing commits
   openai_api_key:
-    required: true
+    required: false
+    default: ""
     description: >-
-      OpenAI API key for the Responses API, billed per token. The
-      subscription `auth.json` path is not supported — Codex rotates
-      that refresh token on every API call and invalidates the prior
-      one, so concurrent jobs (review/mention/triage/nightly/…) would
-      break each other's auth mid-run.
+      OpenAI API key for the Responses API, billed per token. One of
+      openai_api_key or codex_auth_json must be set; codex_auth_json takes
+      precedence when both are present.
+  codex_auth_json:
+    required: false
+    default: ""
+    description: >-
+      Access-only auth.json derived by Tend's weekly refresh workflow from a
+      Plus or Pro login. It must use auth_mode chatgptAuthTokens and contain
+      no refresh token, so concurrent jobs cannot rotate shared auth state.
   bot_name:
     required: true
     description: |
@@ -116,21 +123,19 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
-    # The key arrives through `env:`, not `${{ }}` in the body. GitHub
+    # Credentials arrive through `env:`, not `${{ }}` in the body. GitHub
     # substitutes an expression into the script *text* before bash parses it,
     # so a secret carrying a quote or a `$(…)` — a mistyped value is the
     # realistic path — is executed as script rather than compared as a string,
     # under the runner user that holds the real PAT. The Claude harness already
     # passes all three of its credentials this way.
-    - name: Validate auth configured
+    - name: Configure Codex auth
+      id: codex_auth
       shell: bash
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
-      run: |
-        if [ -z "$OPENAI_API_KEY" ]; then
-          echo "::error::OPENAI_API_KEY is unset. Set the OPENAI_API_KEY repo secret."
-          exit 1
-        fi
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/codex_subscription_auth.py" prepare "$HOME/.codex/auth.json"
 
     - name: Install agent uv fallback
       shell: bash
@@ -213,6 +218,7 @@ runs:
         EFFORT: ${{ inputs.effort }}
         EXTRA_ARGS: ${{ inputs.args }}
         SANDBOX: ${{ inputs.sandbox }}
+        AUTH_MODE: ${{ steps.codex_auth.outputs.mode }}
       # runner.py preserves the final message even when codex exits non-zero.
       # Base64 keeps arbitrary agent output in one GITHUB_OUTPUT line; consumers
       # decode it with `base64 -d`.
