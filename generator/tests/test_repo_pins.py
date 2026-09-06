@@ -55,8 +55,8 @@ def test_claude_transcript_summary_is_opt_in() -> None:
     assert action["inputs"]["show_full_output"]["default"] == "false"
 
 
-def test_codex_agent_step_receives_only_proxy_dummies() -> None:
-    """Real credentials stop in their runner-owned proxy setup steps."""
+def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
+    """Long-lived credentials stop in runner-owned auth and proxy steps."""
     action = YAML(typ="safe", pure=True).load(
         (REPO_ROOT / "codex" / "action.yaml").read_text()
     )
@@ -69,7 +69,13 @@ def test_codex_agent_step_receives_only_proxy_dummies() -> None:
     assert setup_env["TEND_GITHUB_ONLY"] == "1"
     assert "TEND_OPENAI_API_KEY" not in setup_env
     assert 'TEND_GITHUB_ONLY="$TEND_GITHUB_ONLY"' in setup_run
+    auth = steps["Configure Codex auth"]
+    assert auth["env"]["OPENAI_API_KEY"] == "${{ inputs.openai_api_key }}"
+    assert auth["env"]["CODEX_AUTH_JSON"] == "${{ inputs.codex_auth_json }}"
+    assert "/usr/bin/env -i" in auth["run"]
+    assert "tend-codex-auth.json" in auth["run"]
     openai_proxy = steps["Start OpenAI Responses proxy"]
+    assert openai_proxy["if"] == "steps.codex_auth.outputs.mode == 'api-key'"
     assert openai_proxy["env"]["PROXY_API_KEY"] == "${{ inputs.openai_api_key }}"
     assert openai_proxy["env"]["BASH_ENV"] == ""
     assert openai_proxy["env"]["BASHOPTS"] == ""
@@ -88,11 +94,24 @@ def test_codex_agent_step_receives_only_proxy_dummies() -> None:
         name
         for name, step in steps.items()
         if "${{ inputs.openai_api_key }}" in str(step)
-    ] == ["Start OpenAI Responses proxy"]
+    ] == ["Configure Codex auth", "Start OpenAI Responses proxy"]
+    assert [
+        name
+        for name, step in steps.items()
+        if "${{ inputs.codex_auth_json }}" in str(step)
+    ] == ["Configure Codex auth"]
+    subscription = steps["Stage subscription auth (sandbox)"]
+    assert subscription["if"] == "steps.codex_auth.outputs.mode == 'subscription'"
+    assert '"$AGENT_HOME/.codex/auth.json"' in subscription["run"]
+    assert 'rm -f -- "$RUNNER_TEMP/tend-codex-auth.json"' in subscription["run"]
     run_env = steps["Run Codex"]["env"]
-    assert not ({"OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"} & run_env.keys())
+    assert not (
+        {"OPENAI_API_KEY", "CODEX_AUTH_JSON", "GH_TOKEN", "GITHUB_TOKEN"}
+        & run_env.keys()
+    )
     assert steps["Run Codex"]["run"].endswith('runner.py" run')
     assert run_env["CODEX_SANDBOX_MODE"] == "${{ inputs.sandbox }}"
+    assert run_env["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
     runner = (REPO_ROOT / "codex" / "runner.py").read_text()
     assert "_sandbox.launch_env" in runner
     assert 'model_provider="tend-openai"' in runner
@@ -196,7 +215,18 @@ def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration(
     assert "--no-python-downloads --python /usr/bin/python3 --script" in run
 
 
-# Every `${{ github.action_path }}/…` reference in the two composite actions.
+def test_codex_actions_pin_the_same_cli_version() -> None:
+    versions = {
+        action: YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())[
+            "inputs"
+        ]["codex_version"]["default"]
+        for action in ("codex/action.yaml", "codex/refresh/action.yaml")
+    }
+
+    assert len(set(versions.values())) == 1, f"Codex CLI pins differ: {versions}"
+
+
+# Every `${{ github.action_path }}/…` reference in the composite actions.
 # Nothing else reads them: the pre-commit actionlint hook is pinned to
 # ^.github/workflows/, so neither action.yaml is linted at all, and no workflow
 # here consumes the actions with `uses: ./` — they pin a released ref, so an
@@ -205,33 +235,39 @@ def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration(
 ACTION_PATH_REF = re.compile(r"\$\{\{\s*github\.action_path\s*\}\}/?([^\s\"')]*)")
 
 
-@pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_action_path_references_resolve(harness: str) -> None:
-    body = (REPO_ROOT / harness / "action.yaml").read_text()
+COMPOSITE_ACTIONS = (
+    "claude/action.yaml",
+    "codex/action.yaml",
+    "codex/refresh/action.yaml",
+)
+
+
+@pytest.mark.parametrize("action", COMPOSITE_ACTIONS)
+def test_action_path_references_resolve(action: str) -> None:
+    action_path = REPO_ROOT / action
+    body = action_path.read_text()
     matched = ACTION_PATH_REF.findall(body)
 
-    assert matched, f"{harness}/action.yaml: no github.action_path references"
+    assert matched, f"{action}: no github.action_path references"
     missing = [
         ref
         for ref in sorted(set(matched))
-        if not (REPO_ROOT / harness / ref).resolve().exists()
+        if not (action_path.parent / ref).resolve().exists()
     ]
-    assert not missing, f"{harness}/action.yaml references nothing at: {missing}"
+    assert not missing, f"{action} references nothing at: {missing}"
 
 
 # Inline `run:` bodies in the composite actions. Nothing else lints them:
 # actionlint only reads workflow files (it parses an action.yaml as a malformed
 # workflow — "jobs section is missing"), and the shellcheck hook's `files:`
 # regex covers the standalone step scripts, not `claude/` or `codex/`.
-ACTIONS = ("claude/action.yaml", "codex/action.yaml")
-
 # Replace `${{ … }}` with an opaque shell variable before checking composite
 # bodies. A literal placeholder would make shellcheck report on the replacement
 # instead of the code (`[ -z "literal" ]` → SC2157 "always false").
 GHA_EXPR = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
 
 
-@pytest.mark.parametrize("action", ACTIONS)
+@pytest.mark.parametrize("action", COMPOSITE_ACTIONS)
 def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
     """Hold inline step bodies to the same shellcheck the step scripts get.
 
@@ -272,7 +308,7 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
 INPUT_REF = re.compile(r"inputs\.([A-Za-z0-9_]+)")
 
 
-@pytest.mark.parametrize("action", ACTIONS)
+@pytest.mark.parametrize("action", COMPOSITE_ACTIONS)
 def test_inputs_reach_run_bodies_through_env(action: str) -> None:
     """An input must not be interpolated into an inline `run:` body.
 
@@ -284,7 +320,7 @@ def test_inputs_reach_run_bodies_through_env(action: str) -> None:
     placeholder the sibling test substitutes in, and actionlint does not read
     action.yaml at all.
 
-    Every input in both actions already arrives this way, so the rule is a flat
+    Every input already arrives this way, so the rule is a flat
     ban rather than a list of which values are secret enough to deserve it.
     """
     doc = YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())
@@ -299,3 +335,28 @@ def test_inputs_reach_run_bodies_through_env(action: str) -> None:
         f"{action}: pass these through the step's `env:` instead of `${{{{ }}}}` "
         f"in the body: {inlined}"
     )
+
+
+def test_codex_action_passes_selected_auth_mode_to_runner() -> None:
+    doc = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "action.yaml").read_text()
+    )
+    run = next(step for step in doc["runs"]["steps"] if step.get("name") == "Run Codex")
+
+    assert run["env"]["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
+    assert run["run"].endswith('/runner.py" run')
+
+
+def test_codex_refresher_keeps_the_secret_writer_pat_out_of_the_model_step() -> None:
+    doc = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "refresh" / "action.yaml").read_text()
+    )
+    steps = {step["name"]: step for step in doc["runs"]["steps"]}
+
+    run = steps["Run Codex refresh"]
+    assert run["continue-on-error"] is True
+    assert set(run["env"]) == {"CODEX_HOME"}
+    publish = steps["Publish refreshed auth"]
+    assert publish["if"].startswith("always()")
+    assert publish["env"]["GH_TOKEN"] == "${{ inputs.refresh_pat }}"
+    assert publish["env"]["CODEX_OUTCOME"] == "${{ steps.codex.outcome }}"

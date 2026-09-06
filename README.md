@@ -23,9 +23,9 @@ To use Tend, a project needs:
 - A GitHub account for the agent (for example this project's is **[@tend-agent](https://www.github.com/tend-agent))**
 - One of:
   - A Claude Max subscription (harness = "claude")
-  - An OpenAI API key (harness = "codex"). A ChatGPT subscription via
-    a Codex `auth.json` is **not** compatible with tend's concurrent
-    workflows — see [Codex (experimental alternative)](#codex-experimental-alternative).
+  - A ChatGPT Plus or Pro subscription (experimental), or an OpenAI API key
+    (harness = "codex") — see
+    [Codex (experimental alternative)](#codex-experimental-alternative).
 
 Tend offers the default code & guidance for the agent. Specifically that means:
 
@@ -62,8 +62,9 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
     for free from
     Anthropic](https://claude.com/contact-sales/claude-for-oss).
 - A compromise of the runner or credential proxy could expose the bot PAT or
-  model credential. The agent cannot read them during normal operation, and
-  the merge restriction, environment gate, and immutable releases limit what a
+  long-lived model credential. The agent cannot read those during normal
+  operation; subscription-mode Codex receives only an expiring access token.
+  The merge restriction, environment gate, and immutable releases limit what a
   stolen bot credential can do.
 
 ## Workflows
@@ -78,6 +79,7 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **weekly**        | Weekly                     | Reviews dependency PRs, approves safe patch and minor updates (the bot never merges — a merge restriction is the security boundary).                        |
 | **notifications** | Every 15 minutes           | Drains unread notifications as a recovery queue and repairs conflicts on bot-authored PRs.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
+| **codex-auth-refresh** | Weekly                 | When any workflow uses Codex, renews experimental Plus/Pro auth through its single-writer credential; no-ops for API-key installs.                           |
 
 The bot reacts 👀 while a session is working: on an issue when it opens, on a
 PR whenever a review starts, and on a comment that mentions the bot. The
@@ -120,7 +122,8 @@ resolve bot identity. They differ in how the agent runs:
   command (`/tend-ci-runner:review`) that loads the matching skill.
 - **Codex harness** — installs the `@openai/codex` CLI, then runs
   `codex exec` as the same non-sudo sandbox user. GitHub calls use Tend's
-  exact-host proxy; model calls use OpenAI's narrow Responses API proxy.
+  exact-host proxy. API-key model calls use OpenAI's narrow Responses API
+  proxy; subscription sessions receive only an expiring access token.
   An AGENTS.md staged into `$CODEX_HOME` teaches Codex to resolve
   `/tend-ci-runner:NAME` references to the bundled skill markdown.
 
@@ -162,11 +165,12 @@ secrets into it stays manual — their values can't be read back.
 
 **Credential isolation** — both harnesses run the agent as a separate non-sudo
 user. Tend's exact-host proxy holds the bot token; Claude model auth uses the
-same mechanism, while Codex model auth uses OpenAI's proxy that accepts only
-Responses API calls. The proxies authenticate the agent without placing the
-real credentials in its environment. GitHub authentication applies to any
-repository the bot account can access, including repositories other than the
-one that started the run.
+same mechanism, while API-key Codex auth uses OpenAI's proxy that forwards only
+Responses API calls upstream. The proxies authenticate the agent without
+placing the PAT or API credentials in its environment. Subscription-mode Codex
+instead receives an expiring access-only token, never the rotating refresh
+token. GitHub authentication applies to any repository the bot account can
+access, including repositories other than the one that started the run.
 
 **Config pinning** — the action restores `.mcp.json`, `.claude.json`,
 `.gitmodules`, `.ripgreprc`, `.husky`, and every `CLAUDE.md`, `CLAUDE.local.md`,
@@ -211,14 +215,14 @@ it; `tend check` verifies it), depend on the harness:
 | Harness    | Required secrets                                                                                                         |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `claude`   | `TEND_BOT_TOKEN` + one of `CLAUDE_CODE_OAUTH_TOKEN` (subscription) or `ANTHROPIC_API_KEY` (API-billed)                   |
-| `codex`    | `TEND_BOT_TOKEN` + `OPENAI_API_KEY` (pay-per-token).                                                                    |
+| `codex`    | `TEND_BOT_TOKEN` + either `OPENAI_API_KEY`, or the subscription trio `CODEX_AUTH_JSON`, `CODEX_REFRESH_AUTH_JSON`, and `CODEX_REFRESH_PAT` |
 
 `TEND_BOT_TOKEN` is the bot account's PAT — see
 [example config](docs/tend.example.yaml) for scopes.
-`CLAUDE_CODE_OAUTH_TOKEN` is from `claude setup-token`. The other two
-are standard API keys from console.anthropic.com and
-platform.openai.com. See [Codex (experimental alternative)](#codex-experimental-alternative) for
-why the Codex subscription `auth.json` path isn't supported;
+`CLAUDE_CODE_OAUTH_TOKEN` is from `claude setup-token`. The API keys are
+from console.anthropic.com and platform.openai.com. See
+[Codex (experimental alternative)](#codex-experimental-alternative) for the
+subscription trio.
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
 
@@ -262,26 +266,34 @@ agent itself only ever holds a dummy.
 ### Codex (experimental alternative)
 
 Installs `@openai/codex` and invokes `codex exec` as the non-sudo sandbox user.
-GitHub access goes through Tend's exact-host proxy; the OpenAI key is read from
-stdin by OpenAI's narrow Responses API proxy and is never placed in the agent's
-environment. A bundled `AGENTS.md` teaches Codex to resolve tend's slash
-commands to skill markdown.
+GitHub access goes through Tend's exact-host proxy. Under API auth, the OpenAI
+key is read from stdin by OpenAI's narrow Responses API proxy and is never
+placed in the agent's environment. Under subscription auth, the sandbox gets
+an expiring access-only `auth.json`, never the rotating refresh token. A bundled
+`AGENTS.md` teaches Codex to resolve tend's slash commands to skill markdown.
 
 Codex currently runs with `danger-full-access` inside the ephemeral runner.
 Its restricted Linux modes cannot initialize bubblewrap's loopback network on
 the standard GitHub-hosted Ubuntu 24.04 runner; the separate UID and credential
 proxies remain the credential boundary.
 
-Use `OPENAI_API_KEY` (a standard OpenAI API key, pay-per-token, from
-platform.openai.com). Works for any repo, public or private.
+Two auth modes:
 
-> **Subscription `auth.json` is not supported.** Codex rotates that
-> refresh token on every API call and invalidates the prior token; tend
-> runs multiple workflows concurrently (review, mention, triage,
-> nightly, …), so each call would invalidate the credential the other
-> in-flight jobs are using. A scheduled refresher works around the
-> ~8-day rotation but not the per-call invalidation between concurrent
-> jobs. Use `OPENAI_API_KEY` instead.
+- **ChatGPT Plus or Pro (experimental):** concurrent jobs receive
+  `CODEX_AUTH_JSON`, an access-only bundle that Codex cannot refresh. A single
+  serialized weekly workflow holds `CODEX_REFRESH_AUTH_JSON`, rotates it, then
+  publishes the next access-only bundle using `CODEX_REFRESH_PAT`.
+- **API:** `OPENAI_API_KEY` is a standard pay-per-token key from
+  platform.openai.com.
+
+The split fixes the old race: no consumer receives the rotating refresh token,
+so concurrent jobs cannot invalidate one another's refresh state. This is
+experimental because it uses Codex's internal `chatgptAuthTokens` mode. The
+weekly job follows OpenAI's
+[CI/CD guidance](https://learn.chatgpt.com/docs/auth/ci-cd-auth): it runs
+Codex's built-in refresh and persists the updated full bundle. Tend pins and
+tests the Codex version, but an OpenAI change can still break the weekly refresh
+until Tend updates.
 
 ## Badge
 

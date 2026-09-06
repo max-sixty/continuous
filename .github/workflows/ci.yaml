@@ -109,26 +109,10 @@ jobs:
         if: always()
         run: bash proxy/test-setup-sandbox.sh cleanup
 
-  # The weekly rule that governed `codex_version` asked for a confirmation
-  # nothing here could produce ("bump only to a release confirmed to run under
-  # `codex exec`"): no OPENAI_API_KEY reaches this repo's runs and no workflow
-  # sets `harness: codex`, so the pin drifted by default rather than by
-  # decision. This is the half of that confirmation which needs no credential,
-  # so it can gate every bump PR.
-  #
-  # It covers where a silent break actually lands: `codex exec` dropping or
-  # renaming a flag the action passes, and `codex plugin add` no longer
-  # printing the `Installed plugin root: ` prefix the action parses to set
-  # CLAUDE_PLUGIN_ROOT. Either one fails every adopter's Codex run at the
-  # first step. It guards the other direction too — a change to
-  # .agents/plugins/marketplace.json or the plugin manifest that Codex can no
-  # longer install fails here rather than in an adopter's job.
-  #
-  # It does not cover an agent session: model selection and whether the final
-  # message reaches --output-last-message need a real key. Nor does it promise
-  # a restricted Linux sandbox: bubblewrap's loopback setup is denied on the
-  # standard GitHub-hosted Ubuntu 24.04 runner, so the action defaults to
-  # danger-full-access.
+  # Gate Codex version bumps on the credential-free parts of the action's CLI
+  # and Responses-proxy contracts. Live model behavior needs an authenticated
+  # integration test; restricted Linux modes do not run on GitHub's hosted
+  # Ubuntu runner, so that behavior is documented rather than probed here.
   test-codex-surface:
     runs-on: ubuntu-24.04
     steps:
@@ -136,9 +120,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
-      # `yq -e` exits non-zero if the input is ever renamed, rather than
-      # yielding "null" and failing later as an unresolvable npm version.
-      - name: Smoke the pinned Codex CLI surface
+      - name: Install the pinned Codex CLI
         run: |
           v=$(yq -e '.inputs.codex_version.default' codex/action.yaml)
           npm install -g \
@@ -146,53 +128,8 @@ jobs:
             "@openai/codex-responses-api-proxy@$v"
           codex --version
           codex-responses-api-proxy --help >/dev/null
-
-          # Every flag the action's `Run Codex` step passes. Matching on
-          # `--flag <` pins the option to one that still takes a value, so a
-          # release that keeps the name but drops the argument fails here.
-          help=$(codex exec --help)
-          for flag in --model --sandbox --output-last-message --config; do
-            grep -qF -- "$flag <" <<<"$help" || {
-              echo "::error::codex exec no longer accepts $flag <VALUE> in $v"
-              exit 1
-            }
-          done
-
-          # The action registers the marketplace from the repo root and reads
-          # the install path back out of the install output.
-          codex plugin marketplace add "$PWD"
-          out=$(codex plugin add tend-ci-runner@tend)
-          echo "$out"
-          root=$(awk -F': ' '/^Installed plugin root: /{print $2}' <<<"$out")
-          if [ -z "$root" ] || [ ! -d "$root" ]; then
-            echo "::error::codex $v no longer prints a parseable 'Installed plugin root: <path>'"
-            exit 1
-          fi
-          # Both trees skills reach for through CLAUDE_PLUGIN_ROOT. Only
-          # `skills/` is declared in plugin.json, so `scripts/` materializing
-          # is a packaging side effect that a release could stop honouring —
-          # and every skill shelling out to ${CLAUDE_PLUGIN_ROOT}/scripts/
-          # would break with the job still green.
-          test -f "$root/skills/triage/SKILL.md"
-          test -f "$root/scripts/list_recent_runs.py"
-
-          # `model_reasoning_effort` is passed as a `-c` override, so a rename
-          # would be silently ignored rather than rejected — `--help` can't see
-          # it. `--strict-config` does validate `-c` keys, and both probes stop
-          # at the trusted-directory check before any network call, so this
-          # stays offline and fast. Run from a non-repo dir to hit that check.
-          probedir=$(mktemp -d)
-          probe() { (cd "$probedir" && codex exec --strict-config -c "$1" x </dev/null 2>&1); }
-          # Negative control: if this stops erroring, --strict-config no longer
-          # validates -c keys and the positive check below proves nothing.
-          if ! probe 'model_reasoning_effortZZZ="low"' | grep -q 'unknown configuration field'; then
-            echo "::error::codex $v no longer rejects unknown -c keys under --strict-config; the check below is void"
-            exit 1
-          fi
-          if probe 'model_reasoning_effort="low"' | grep -q 'unknown configuration field'; then
-            echo "::error::codex $v no longer accepts the model_reasoning_effort config key"
-            exit 1
-          fi
+      - name: Verify the pinned Codex CLI surface
+        run: /usr/bin/python3 -E -s shared/steps/codex_surface.py
 
   # Node 22 to match worker-deploy.yaml, which had to move off 20 because
   # Wrangler refuses to run there ("Wrangler requires at least Node.js

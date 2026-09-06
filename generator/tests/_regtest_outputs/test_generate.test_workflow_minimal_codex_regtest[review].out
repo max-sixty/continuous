@@ -140,6 +140,7 @@ jobs:
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
           bot_name: test-bot
           model: gpt-5.5
           prompt: |2

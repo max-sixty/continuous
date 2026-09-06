@@ -11,9 +11,9 @@
    Claude emits both `claude_code_oauth_token` and `anthropic_api_key`
    unconditionally; the action validates at least one is set and routes the
    active credential through its credential proxy (OAuth wins when both are
-   present), treating empty as absent. Codex takes a single `openai_api_key` —
-   the subscription `auth.json` path is incompatible with tend's concurrent
-   workflows and is not exposed. #}
+   present), treating empty as absent. Codex likewise emits both paths; the
+   action prefers the access-only subscription bundle when present. Its weekly
+   refresh workflow is the only process that receives the rotating token. #}
 {% macro agent_step(cfg, prompt_body, if_condition='') %}
 {% if cfg.harness == 'claude' %}
       - uses: max-sixty/tend/claude@<<tend_version>>
@@ -34,6 +34,7 @@
 {% endif %}
 {% else %}
           openai_api_key: ${{ secrets.<<openai_key_secret>> }}
+          codex_auth_json: ${{ secrets.<<codex_auth_secret>> }}
 {% endif %}
           bot_name: <<cfg.bot_name>>
           model: <<cfg.model>>

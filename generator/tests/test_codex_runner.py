@@ -194,6 +194,7 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     monkeypatch.setenv("PROMPT", "Review this")
     monkeypatch.setenv("BOT_NAME", "tend-bot")
     monkeypatch.setenv("BOT_ID", "123")
+    monkeypatch.setenv("AUTH_MODE", "api-key")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def run(args: list[str], **kwargs: object):
@@ -242,6 +243,8 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
         "--config",
         'model_provider="tend-openai"',
         "--config",
+        'cli_auth_credentials_store="file"',
+        "--config",
         'model_reasoning_effort="high"',
         "Review this",
     ]
@@ -253,4 +256,48 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
         "/usr/bin/base64",
         "-w0",
         str(run_dir / "codex-final-message.md"),
+    ]
+
+
+def test_run_uses_staged_subscription_auth_without_responses_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, agent_home, _ = _set_sandbox_env(tmp_path, monkeypatch)
+    run_dir = agent_home / "run"
+    run_dir.mkdir()
+    monkeypatch.setenv("TEND_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("MODEL", "gpt-test")
+    monkeypatch.setenv("CODEX_SANDBOX_MODE", "danger-full-access")
+    monkeypatch.setenv("PROMPT", "Review this")
+    monkeypatch.setenv("AUTH_MODE", "subscription")
+    monkeypatch.setenv("OPENAI_API_KEY", "also-configured")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(args: list[str], **kwargs: object):
+        calls.append((args, kwargs))
+        if "/usr/bin/test" in args:
+            return _result(args, returncode=1)
+        return _result(args)
+
+    monkeypatch.setattr(codex_runner, "_run", run)
+
+    assert codex_runner.main(["run"]) == 0
+    launch, kwargs = next(
+        (args, options) for args, options in calls if "/opt/codex/bin/codex" in args
+    )
+    assert kwargs["check"] is False
+    assert all(not item.startswith("OPENAI_API_KEY=") for item in launch)
+    codex_at = launch.index("/opt/codex/bin/codex")
+    assert launch[codex_at:] == [
+        "/opt/codex/bin/codex",
+        "exec",
+        "--model",
+        "gpt-test",
+        "--sandbox",
+        "danger-full-access",
+        "--output-last-message",
+        str(run_dir / "codex-final-message.md"),
+        "--config",
+        'cli_auth_credentials_store="file"',
+        "Review this",
     ]

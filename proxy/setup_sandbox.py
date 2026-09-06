@@ -62,6 +62,9 @@ RESERVED_SANDBOX_ENV = {
     "ANTHROPIC_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_AUTH_JSON",
+    "CODEX_HOME",
 }
 BLOCKED_COMMAND = """#!/bin/sh
 printf "tend: %s came from the runner home and is unavailable; install it into ~/.local/bin with sandbox_setup, or point sandbox_path at a copy outside the runner home\n" "${0##*/}" >&2

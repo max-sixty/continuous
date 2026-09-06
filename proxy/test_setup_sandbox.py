@@ -116,6 +116,9 @@ def test_github_only_agent_environment_has_no_model_credential() -> None:
         for line in assignments
     )
     assert "OPENAI_API_KEY" in setup_sandbox.RESERVED_SANDBOX_ENV
+    assert "CODEX_API_KEY" in setup_sandbox.RESERVED_SANDBOX_ENV
+    assert "CODEX_AUTH_JSON" in setup_sandbox.RESERVED_SANDBOX_ENV
+    assert "CODEX_HOME" in setup_sandbox.RESERVED_SANDBOX_ENV
 
 
 def test_proxy_uvx_isolated_from_adopter_python_and_uv_configuration(

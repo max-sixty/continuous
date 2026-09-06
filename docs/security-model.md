@@ -3,10 +3,10 @@
 Tend gives an AI agent write access to a repository and runs it on
 attacker-controlled input (PR diffs, issue bodies, comments, CI logs). The
 agent uses authenticated GitHub and model connections to push commits, post
-reviews, and create PRs. The security model keeps the real credentials outside
-the agent process and requires a human to land code. The agent is expected to
-use the GitHub API for any repository the bot account can access, including
-repositories other than the one that started the run.
+reviews, and create PRs. The security model keeps the PAT and long-lived model
+credentials outside the agent process and requires a human to land code. The
+agent is expected to use the GitHub API for any repository the bot account can
+access, including repositories other than the one that started the run.
 
 Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
@@ -23,10 +23,11 @@ Three things an attacker wants, roughly in order of severity:
 1. **Merge malicious code to the default branch.** Game over — the attacker
    controls the repo. Everything else is damage limitation compared to this.
 
-2. **Exfiltrate tokens.** The agent does not receive the real credentials, so
-   code running inside the agent must cross the UID boundary or compromise a
-   runner-owned proxy to steal them. If stolen, the bot PAT grants persistent
-   GitHub access and the model credential grants billed API access.
+2. **Exfiltrate tokens.** Code running inside the agent must cross the UID
+   boundary or compromise a runner-owned proxy to steal the bot PAT or API
+   credentials. Subscription consumers do receive an expiring access token,
+   but never its rotating refresh token. A stolen PAT grants persistent GitHub
+   access; stolen model auth grants billed model access.
 
 3. **Hijack a single session.** An attacker who controls what the agent does
    in one run can push malicious branches, post misleading reviews, or create
@@ -122,9 +123,10 @@ its ephemeral `GITHUB_TOKEN`, at whatever permissions the file declares —
 bounded by the same rulesets (it cannot merge or tag), unable to read any
 secret value back through the API, and expiring with the job.
 
-*Operational secrets* — the bot PAT, harness auth, and optional auto-memory
-Gist ID — live in the `tend` environment, whose policy names the default branch
-and any `protected_branches`. Every generated job that reads a secret carries
+*Operational secrets* — the bot PAT, harness auth, the Codex subscription
+refresher's credential, and optional auto-memory Gist ID — live in the `tend`
+environment, whose policy names the default branch and any
+`protected_branches`. Every generated job that reads a secret carries
 `environment: {name: tend, deployment: false}`; jobs that hold none
 (mention's relay, below) must not, since naming it would cost them the refs
 the policy excludes. `deployment: false` keeps GitHub from filing a
@@ -325,18 +327,19 @@ and tunnels everything else. This authenticates API and git operations for any
 repository the bot account can access; credential isolation protects the PAT
 itself rather than restricting those operations to the triggering repository.
 Claude's Anthropic credential (OAuth token or API key) uses the same proxy and
-is injected only for `api.anthropic.com`. Codex's OpenAI key is instead read
-from stdin by OpenAI's hardened Responses API proxy. It forwards only
-`POST /v1/responses` upstream and answers `GET /shutdown` on loopback so Tend
-can stop it during teardown. The agent holds only a dummy PAT and the local
-inference endpoint, so it can't read the real secrets: a different UID with no
-sudo can't read either proxy's
+is injected only for `api.anthropic.com`. Under API auth, Codex's OpenAI key is
+instead read from stdin by OpenAI's hardened Responses API proxy. It forwards
+only `POST /v1/responses` upstream and answers `GET /shutdown` on loopback so
+Tend can stop it during teardown. The agent holds only a dummy PAT and the
+local inference endpoint. Under subscription auth, it additionally receives an
+expiring access-only `auth.json`, but not the rotating refresh token. A
+different UID with no sudo cannot read either proxy's
 `/proc/<pid>/environ`, the credential `actions/checkout` persists in
-`.git/config` is stripped before the workspace is handed over, and the model
-auth is never written to the agent's env or disk. The injection allowlist is
-exact-match on the connection's real destination, so a request to a lookalike
-host gets no token. The GitHub proxy is launched by a pinned `uv` that tend
-installs into its own directory, off `$PATH`, so the process holding the PAT
+`.git/config` is stripped before the workspace is handed over, and the PAT and
+API credentials are never written to the agent's env or disk. The injection
+allowlist is exact-match on the connection's real destination, so a request to
+a lookalike host gets no token. The GitHub proxy is launched by a pinned `uv`
+that Tend installs into its own directory, off `$PATH`, so the process holding the PAT
 starts from a known binary rather than whatever an adopter's
 `setup:` happened to leave on the runner. (`claude` is Node and ignores the
 system trust store, so it trusts the proxy CA via `NODE_EXTRA_CA_CERTS`.) Shared
@@ -364,6 +367,11 @@ since deleting an entry needs write on its parent and those modes came from the
 agent. Every entry that is not a regular file or a directory is deleted before
 `upload-artifact` reads it: a symlink it would otherwise resolve as the runner,
 a FIFO it would block on until the job times out.
+
+The weekly subscription refresh job checks out no adopter code and gives Codex
+only Tend's fixed refresh prompt. Codex receives the full refresh bundle there;
+the environment-write PAT appears only in the separate publish step after
+Codex exits.
 
 **Rate limiting.** Burst detection (10 PRs or issues per 20 minutes) and
 spike detection (today's volume vs 6-day baseline, scaled per repo) abort
@@ -401,7 +409,9 @@ base64-encoded or embedded in JSON, the redaction misses it.
 When an agent runs tests or build commands on a fork PR, it executes code the
 attacker wrote. A `Makefile`, `package.json` postinstall hook, or
 `conftest.py` can do anything the sandbox user can and send data over the
-network. It cannot read the real credentials. Config pinning prevents
+network. It cannot read the PAT or API credentials; subscription mode's
+expiring access token is the deliberate exception described below. Config
+pinning prevents
 *Claude Code's own* startup hooks from being hijacked, but it can't prevent
 an agent from voluntarily running `make test` on a repo where `make test` has
 been weaponized. The experimental Codex harness currently defaults to
@@ -409,8 +419,8 @@ been weaponized. The experimental Codex harness currently defaults to
 runner, Codex's restricted Linux sandbox cannot initialize bubblewrap's
 loopback network, so those modes do not currently run in Tend's default
 environment. The ephemeral runner VM contains local execution, and the
-separate UID plus credential proxy keeps the real credentials outside the
-agent process.
+separate UID plus credential proxy keeps the PAT and API credentials outside
+the agent process.
 
 **Write access still starts workflows.** With the operational secrets
 environment-gated, a write-scoped actor can no longer read them out of a
@@ -423,16 +433,19 @@ GitHub holds rather than to the payload.
 **Data exfiltration via side channels.** An attacker who gets code execution
 can exfiltrate repository contents and agent-visible context via DNS queries,
 HTTP requests to an external server, or workflow logs; on GitHub-hosted
-runners there's no way to restrict outbound network access. On both harnesses
-the credential isolation above keeps the real tokens out of the agent's reach,
-so they are not among what a hijacked session can send.
+runners there's no way to restrict outbound network access. Credential
+isolation keeps the PAT and API credentials out of what a hijacked session can
+send. A Codex subscription session can send its expiring access token, but it
+never receives the rotating refresh token or the PAT that rewrites environment
+secrets.
 
 **Credential theft.** Isolation minimizes the chance that a hijacked session
-can steal the real tokens, but it does not protect against compromise of the
-runner-owned proxy or the runner itself. A stolen classic PAT remains valid
+can steal the long-lived tokens, but it does not protect against compromise of
+the runner-owned proxy or the runner itself. A stolen classic PAT remains valid
 until revoked and grants access to every repository both its scope and the bot
-account can reach. The merge restriction, environment gate, and immutable
-releases limit what the stolen credential can do.
+account can reach. A stolen subscription access token remains valid until it
+expires. The merge restriction, environment gate, and immutable releases limit
+what the stolen GitHub credential can do.
 
 **Prompt injection without code execution.** Even without hijacking the
 tools, an attacker who controls what Claude reads can influence its behavior.

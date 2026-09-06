@@ -1,20 +1,27 @@
 name: Tend (Codex, experimental)
 description: >-
   Experimental Codex harness for Tend, an autonomous junior maintainer for
-  GitHub repos. Authenticate via OPENAI_API_KEY.
+  GitHub repos, powered by OpenAI Codex. Authenticate via an OpenAI API key
+  or an access-only ChatGPT subscription bundle.
 
 inputs:
   github_token:
     required: true
     description: GitHub token for API access and pushing commits
   openai_api_key:
-    required: true
+    required: false
+    default: ""
     description: >-
-      OpenAI API key for the Responses API, billed per token. The
-      subscription `auth.json` path is not supported — Codex rotates
-      that refresh token on every API call and invalidates the prior
-      one, so concurrent jobs (review/mention/triage/nightly/…) would
-      break each other's auth mid-run.
+      OpenAI API key for the Responses API, billed per token. One of
+      openai_api_key or codex_auth_json must be set; codex_auth_json takes
+      precedence when both are present.
+  codex_auth_json:
+    required: false
+    default: ""
+    description: >-
+      Access-only auth.json derived by Tend's weekly refresh workflow from a
+      Plus or Pro login. It must use auth_mode chatgptAuthTokens and contain
+      no refresh token, so concurrent jobs cannot rotate shared auth state.
   bot_name:
     required: true
     description: |
@@ -131,6 +138,32 @@ runs:
         BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
 
+    # Credentials arrive through `env:`, not `${{ }}` in the body. GitHub
+    # substitutes an expression into the script *text* before bash parses it,
+    # so a secret carrying a quote or a `$(…)` — a mistyped value is the
+    # realistic path — is executed as script rather than data.
+    - name: Configure Codex auth
+      id: codex_auth
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+      run: |
+        set +x
+        /usr/bin/env -i \
+          PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+          HOME="$RUNNER_TEMP" \
+          GITHUB_OUTPUT="$GITHUB_OUTPUT" \
+          OPENAI_API_KEY="$OPENAI_API_KEY" \
+          CODEX_AUTH_JSON="$CODEX_AUTH_JSON" \
+          /usr/bin/python3 -E -s \
+            "${{ github.action_path }}/../shared/steps/codex_subscription_auth.py" \
+            prepare "$RUNNER_TEMP/tend-codex-auth.json"
+
     - name: Install proxy uv
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
@@ -229,6 +262,7 @@ runs:
     # from stdin, removes it from its process environment, and hardens the
     # memory that retains it. Its loopback GET /shutdown exists for teardown.
     - name: Start OpenAI Responses proxy
+      if: steps.codex_auth.outputs.mode == 'api-key'
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
         BASH_ENV: ""
@@ -269,6 +303,17 @@ runs:
         sudo chmod 444 "$SERVER_INFO_FILE"
         sudo chown root:root "$SERVER_INFO_FILE"
         echo "CODEX_PROXY_URL=http://127.0.0.1:$PROXY_PORT" >> "$GITHUB_ENV"
+
+    # Subscription consumers intentionally receive an expiring access token,
+    # never the rotating refresh token. Stage it only after the sandbox exists.
+    - name: Stage subscription auth (sandbox)
+      if: steps.codex_auth.outputs.mode == 'subscription'
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        sudo -u "$SANDBOX" mkdir -p "$AGENT_HOME/.codex"
+        sudo install -o "$SANDBOX" -g "$SANDBOX" -m 600 \
+          "$RUNNER_TEMP/tend-codex-auth.json" "$AGENT_HOME/.codex/auth.json"
+        rm -f -- "$RUNNER_TEMP/tend-codex-auth.json"
 
     - name: Verify codex is reachable from the sandbox
       shell: bash
@@ -330,6 +375,7 @@ runs:
         EFFORT: ${{ inputs.effort }}
         EXTRA_ARGS: ${{ inputs.args }}
         CODEX_SANDBOX_MODE: ${{ inputs.sandbox }}
+        AUTH_MODE: ${{ steps.codex_auth.outputs.mode }}
       # runner.py preserves the final message even when codex exits non-zero.
       # Base64 keeps arbitrary agent output in one GITHUB_OUTPUT line; consumers
       # decode it with `base64 -d`.

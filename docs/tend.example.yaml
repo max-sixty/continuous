@@ -76,16 +76,18 @@ bot_name: my-project-bot
 # | Harness    | Required                                                                  |
 # |------------|---------------------------------------------------------------------------|
 # | `claude`   | `TEND_BOT_TOKEN` + one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
-# | `codex`    | `TEND_BOT_TOKEN` + `OPENAI_API_KEY`                                        |
+# | `codex`    | `TEND_BOT_TOKEN` + `OPENAI_API_KEY`, or the three subscription secrets below |
 #
 # `TEND_BOT_TOKEN` is the bot account's PAT (scopes below).
 # `CLAUDE_CODE_OAUTH_TOKEN` is from `claude setup-token` (PKCE).
 # `ANTHROPIC_API_KEY` is a console.anthropic.com API key.
-# `OPENAI_API_KEY` is a standard OpenAI API key. The Codex
-# subscription `auth.json` path is not supported — Codex rotates that
-# refresh token on every call, so concurrent jobs
-# (review/mention/triage/nightly/…) would invalidate each other's auth
-# mid-run.
+# `OPENAI_API_KEY` is a standard OpenAI API key. Experimental Plus/Pro auth
+# instead uses `CODEX_AUTH_JSON` (access-only consumers),
+# `CODEX_REFRESH_AUTH_JSON` (the full rotating bundle, refresh job only), and
+# `CODEX_REFRESH_PAT` (a repo-scoped GitHub PAT with Environments: write). A
+# generated serialized workflow refreshes the pair weekly. This relies on
+# internal Codex auth behavior and may break when that behavior changes; see
+# README.md and the install-tend security model before selecting it.
 #
 # The Claude action prefers the subscription token
 # (`CLAUDE_CODE_OAUTH_TOKEN`) over the API key when both are set.
@@ -224,8 +226,9 @@ bot_name: my-project-bot
 #   - proxy routing — `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `http_proxy`,
 #     `https_proxy`, `no_proxy`
 #   - CA trust — `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`
-#   - credential variables — `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`,
-#     `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`
+#   - credential and Codex configuration variables — `GH_TOKEN`,
+#     `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+#     `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_AUTH_JSON`, `CODEX_HOME`
 #   - prompt suppression — `CLAUDE_CODE_REMOTE`
 #   - the sandbox's own locations — `HOME`, `PATH`, `XDG_CONFIG_HOME`,
 #     `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`

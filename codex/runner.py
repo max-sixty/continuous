@@ -177,9 +177,25 @@ def run_codex() -> int:
     if not sandbox:
         raise ValueError("SANDBOX is unset")
     codex = str(_required_path("CODEX_BIN"))
-    proxy_url = os.environ.get("CODEX_PROXY_URL", "")
-    if not proxy_url:
-        raise ValueError("CODEX_PROXY_URL is unset")
+    auth_mode = os.environ.get("AUTH_MODE", "")
+    auth_args: list[str]
+    if auth_mode == "api-key":
+        proxy_url = os.environ.get("CODEX_PROXY_URL", "")
+        if not proxy_url:
+            raise ValueError("CODEX_PROXY_URL is unset")
+        auth_args = [
+            "--config",
+            (
+                "model_providers.tend-openai={ name = 'Tend OpenAI proxy', "
+                f"base_url = '{proxy_url}/v1', wire_api = 'responses' }}"
+            ),
+            "--config",
+            'model_provider="tend-openai"',
+        ]
+    elif auth_mode == "subscription":
+        auth_args = []
+    else:
+        raise ValueError(f"unknown AUTH_MODE: {auth_mode or '<unset>'}")
     output_file = _required_path("TEND_RUN_DIR") / "codex-final-message.md"
     _run(["/usr/bin/sudo", "-u", sandbox, "/usr/bin/rm", "-f", "--", str(output_file)])
     args = [
@@ -192,13 +208,9 @@ def run_codex() -> int:
         os.environ.get("CODEX_SANDBOX_MODE", ""),
         "--output-last-message",
         str(output_file),
+        *auth_args,
         "--config",
-        (
-            "model_providers.tend-openai={ name = 'Tend OpenAI proxy', "
-            f"base_url = '{proxy_url}/v1', wire_api = 'responses' }}"
-        ),
-        "--config",
-        'model_provider="tend-openai"',
+        'cli_auth_credentials_store="file"',
     ]
     effort = os.environ.get("EFFORT", "")
     if effort:

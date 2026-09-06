@@ -21,6 +21,9 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    CODEX_AUTH_SECRET,
+    CODEX_REFRESH_AUTH_SECRET,
+    CODEX_REFRESH_PAT_SECRET,
     MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     Config,
@@ -131,6 +134,9 @@ _JINJA.globals["claude_token_secret"] = CLAUDE_TOKEN_SECRET
 _JINJA.globals["anthropic_api_key_secret"] = ANTHROPIC_API_KEY_SECRET
 _JINJA.globals["memory_gist_secret"] = MEMORY_GIST_SECRET
 _JINJA.globals["openai_key_secret"] = OPENAI_KEY_SECRET
+_JINJA.globals["codex_auth_secret"] = CODEX_AUTH_SECRET
+_JINJA.globals["codex_refresh_auth_secret"] = CODEX_REFRESH_AUTH_SECRET
+_JINJA.globals["codex_refresh_pat_secret"] = CODEX_REFRESH_PAT_SECRET
 # Labels tend puts on the issues it files about its own health. Workflows skip
 # issues carrying them, so the bot's own record-keeping cannot re-trigger it:
 # each row the rate-limit preflight appends is a comment, which would fire
@@ -607,6 +613,15 @@ GENERATORS: dict[str, Callable[[Config], GeneratedWorkflow]] = {
 }
 
 
+_CODEX_AUTH_REFRESH_TMPL = _JINJA.get_template("codex-auth-refresh.yaml.j2")
+
+
+def generate_codex_auth_refresh(cfg: Config) -> GeneratedWorkflow:
+    """Weekly single-writer rotation for subscription-backed Codex auth."""
+    content = _CODEX_AUTH_REFRESH_TMPL.render(cfg=cfg)
+    return GeneratedWorkflow(filename="tend-codex-auth-refresh.yaml", content=content)
+
+
 # ---------------------------------------------------------------------------
 # actionlint config
 # ---------------------------------------------------------------------------
@@ -747,6 +762,11 @@ def generate_all(
         wf = gen_fn(cfg)
         wf = _apply_extras(wf, wf_cfg)
         results.append(wf)
+    if "codex" in cfg.enabled_harnesses():
+        wf_cfg = cfg.workflows.get("codex-auth-refresh", WorkflowConfig())
+        if wf_cfg.enabled:
+            wf = generate_codex_auth_refresh(cfg)
+            results.append(_apply_extras(wf, wf_cfg))
     if with_install_test:
         wf = generate_install_test(cfg)
         wf_cfg = cfg.workflows.get("install-test", WorkflowConfig())

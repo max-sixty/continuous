@@ -35,6 +35,9 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    CODEX_AUTH_SECRET,
+    CODEX_REFRESH_AUTH_SECRET,
+    CODEX_REFRESH_PAT_SECRET,
     MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     Config,
@@ -1915,21 +1918,39 @@ def check_claude_auth(repo: str) -> CheckResult:
 
 
 def check_codex_auth(repo: str) -> CheckResult:
-    """Codex needs OPENAI_API_KEY — absence is the failure mode. The
-    subscription auth.json path is not supported.
-    """
+    """Codex needs an API key or the complete subscription secret set."""
     names, err = _env_secret_names(repo)
     if names is None:
         return CheckResult("codex-auth", None, err)
-    if OPENAI_KEY_SECRET in names:
+    subscription = {
+        CODEX_AUTH_SECRET,
+        CODEX_REFRESH_AUTH_SECRET,
+        CODEX_REFRESH_PAT_SECRET,
+    }
+    configured = subscription & names
+    if configured == subscription:
         return CheckResult(
             "codex-auth",
             True,
-            f"Codex auth secret present: {OPENAI_KEY_SECRET}",
+            "Codex subscription auth secrets present: "
+            f"{', '.join(sorted(subscription))}",
+        )
+    if configured:
+        missing = subscription - names
+        return CheckResult(
+            "codex-auth",
+            False,
+            "Codex subscription auth is partially configured; missing from "
+            f"the '{TEND_ENVIRONMENT}' environment: {', '.join(sorted(missing))}.",
+        )
+    if OPENAI_KEY_SECRET in names:
+        return CheckResult(
+            "codex-auth", True, f"Codex auth secret present: {OPENAI_KEY_SECRET}"
         )
     return CheckResult(
         "codex-auth",
         False,
-        f"Codex harness selected but {OPENAI_KEY_SECRET} "
-        f"is not set in the '{TEND_ENVIRONMENT}' environment.",
+        f"Codex harness selected but neither {OPENAI_KEY_SECRET} nor the "
+        f"subscription set ({', '.join(sorted(subscription))}) is configured "
+        f"in the '{TEND_ENVIRONMENT}' environment.",
     )
