@@ -605,19 +605,17 @@ class Config:
                         f"allowlist and likely won't apply to {wf_harness}. "
                         f"Set `workflows.{name}.model:` to a valid {wf_harness} model."
                     )
-                if (
-                    wf_harness is not None
-                    or wf_model is not None
-                    or wf_effort is not None
+                if wf_effort is None and (
+                    wf_harness is not None or wf_model is not None
                 ):
                     eff_harness = wf_harness or harness
                     eff_model = wf_model or model
-                    eff_effort = effort if wf_effort is None else wf_effort
                     _parse_effort(
-                        eff_effort,
+                        effort,
                         eff_harness,
                         eff_model,
-                        f"workflows.{name}.effort",
+                        "effort",
+                        inherited_by=f"workflows.{name}",
                     )
                 wf_prompt = wf_raw.get("prompt", "")
                 if wf_prompt is None:  # `prompt:` with nothing after it
@@ -753,15 +751,29 @@ def _parse_args(raw: object, key: str) -> list[str]:
     return list(raw)
 
 
-def _parse_effort(raw: object, harness: str, model: str, key: str) -> str:
+def _parse_effort(
+    raw: object,
+    harness: str,
+    model: str,
+    key: str,
+    *,
+    inherited_by: str | None = None,
+) -> str:
     """Validate an effort value against the CLI and model selected for it."""
+    source = key if inherited_by is None else f"{key} (inherited by {inherited_by})"
     known = KNOWN_EFFORTS_BY_HARNESS[harness]
     if not isinstance(raw, str) or raw not in known:
         raise click.ClickException(
-            f"{key} '{raw}' is not recognized for harness '{harness}' "
+            f"{source} '{raw}' is not recognized for harness '{harness}' "
             f"(known: {', '.join(sorted(e for e in known if e))})"
         )
     if raw and harness == "claude" and model == "haiku":
+        if inherited_by is not None:
+            raise click.ClickException(
+                f"{source} is not supported for Claude model 'haiku'; "
+                f'set `{inherited_by}.effort: ""` to use that model\'s default '
+                "or drop the top-level `effort:`"
+            )
         raise click.ClickException(
             f"{key} is not supported for Claude model 'haiku'; "
             "drop the key to use that model"

@@ -2155,23 +2155,30 @@ def test_effort_rejected_when_unsupported_or_malformed(
 
 
 @pytest.mark.parametrize(
-    "config",
+    ("config", "match"),
     [
-        "model: haiku\neffort: low",
-        dedent("""\
-            effort: high
-            workflows:
-              nightly:
-                model: haiku
-        """),
+        (
+            "model: haiku\neffort: low",
+            "effort is not supported for Claude model 'haiku'",
+        ),
+        (
+            dedent("""\
+                effort: high
+                workflows:
+                  nightly:
+                    model: haiku
+            """),
+            (
+                r"effort \(inherited by workflows\.nightly\) is not supported .* "
+                r"set `workflows\.nightly\.effort: \"\"`"
+            ),
+        ),
     ],
 )
 def test_effort_rejected_for_claude_models_without_effort(
-    tmp_path: Path, config: str
+    tmp_path: Path, config: str, match: str
 ) -> None:
-    with pytest.raises(
-        click.ClickException, match="effort is not supported for Claude model 'haiku'"
-    ):
+    with pytest.raises(click.ClickException, match=match):
         Config.load(_minimal_config(tmp_path, config))
 
 
@@ -2220,7 +2227,8 @@ def test_per_workflow_effort_and_args_override_the_top_level(tmp_path: Path) -> 
 def test_cross_harness_workflow_validates_inherited_effort(tmp_path: Path) -> None:
     with pytest.raises(
         click.ClickException,
-        match="workflows.nightly.effort 'max' is not recognized for harness 'codex'",
+        match=r"effort \(inherited by workflows\.nightly\) 'max' is not recognized "
+        r"for harness 'codex'",
     ):
         Config.load(
             _minimal_config(
