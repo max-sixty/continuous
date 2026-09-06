@@ -228,7 +228,7 @@ if [ -n "$OLD_VER" ] && [ -n "$NEW_VER" ] && [ "$OLD_VER" != "$NEW_VER" ]; then
   TITLE="chore: update tend workflows ($OLD_VER → $NEW_VER)"
   # The real "what changed": squash-merge subjects between the two release
   # tags. First line of each upstream commit; empty if the call fails, in
-  # which case the body carries only the version line.
+  # which case the body keeps the version line and compare link.
   gh api "repos/max-sixty/tend/compare/$OLD_VER...$NEW_VER" \
     --jq '.commits[].commit.message | split("\n")[0]' \
     > "/tmp/tend-upstream-commits.txt" 2>/dev/null || true
@@ -237,11 +237,7 @@ printf '%s\n' "$TITLE" > "/tmp/tend-pr-title"
 echo "OLD=$OLD_VER NEW=$NEW_VER  compare: https://github.com/max-sixty/tend/compare/$OLD_VER...$NEW_VER"
 ```
 
-Compose the PR body with the Write tool at `/tmp/tend-update-body.md` — describe the upgrade, **don't paste a file list** (the diff is just mechanical action-ref bumps):
-
-- Open by noting this is the automated nightly regeneration of tend's workflow files — phrase it per-run, or fold it into the version summary.
-- **Version bumped**: add a `**tend version:** OLD → NEW` line, then a short **Notable changes** list — 3–5 bullets summarizing the entries in `/tmp/tend-upstream-commits.txt`. Rewrite each `(#NNN)` ref as `max-sixty/tend#NNN` — a bare `#NNN` auto-links to this repo's own issues, not tend's. Filter to **consumer-relevant** changes only — harness/action behavior, skill updates (review, ci-fix, triage, nightly, etc.), generator output that changes the adopter's workflow files, CI-monitoring guidance. **Exclude** pure mechanics (`chore: regenerate workflows`, `chore: release`, action-pin and lockfile bumps) and **tend-internal items** that affect only tend's own development or release (e.g. release-publishing workflow, marketing site, integration-test fixtures, internal refactors with no adopter-visible effect). Close with the compare link printed above. If the commits file is empty (the compare call failed), keep just the version line and the compare link.
-- **No version bump** (same-version regen): one sentence on what the regen changed (a generator template tweak the committed workflows were lagging). No version line, no commit list.
+Compose the PR body with the Write tool at `/tmp/tend-update-body.md`. Its reader is deciding whether to adopt the regenerated workflows, so explain the consumer-visible effect of the upgrade rather than inventorying changed files or commits. When the version changed, state the old and new versions, synthesize the entries in `/tmp/tend-upstream-commits.txt` into the behavior adopters will notice, and link the comparison as support. Rewrite each `(#NNN)` reference as `max-sixty/tend#NNN` — a bare `#NNN` auto-links to this repo's own issues, not tend's. Filter out release mechanics, action-pin and lockfile bumps, and tend-internal work with no adopter-visible effect. If the commits file is empty, the comparison call failed: include only the version line and compare link, and do not infer upstream behavior. For a same-version regeneration, explain the generator behavior that made the committed workflows stale. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`.
 
 Then ship it:
 

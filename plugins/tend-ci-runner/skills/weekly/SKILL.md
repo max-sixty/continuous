@@ -48,9 +48,10 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    ```
 
    **If that printed `skipping`, this PR is done — move to the next one.**
-   Otherwise compose `/tmp/review-body.md` with the Write tool: one line naming
-   the package, bump type, and what you checked, e.g. "ruff 0.13 → 0.14 (patch),
-   CI green, no API changes". A file rather than an inline `--body` because a
+   Otherwise compose `/tmp/review-body.md` with the Write tool. Give the
+   reviewer the context for the approval: the upgrade's scope and the evidence
+   relevant to its safety. Keep it concise and omit the inspection chronology.
+   Use a file rather than an inline `--body` because a
    package name written as inline code puts a backtick in a double-quoted
    argument, and bash runs the span as a command. Then post, re-reading the sha
    from disk, since shell state didn't survive the Write:
