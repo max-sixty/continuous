@@ -7,8 +7,9 @@ the step's exit code and ``::error::`` annotation.
 Reads (env): ``SANDBOX`` and ``AGENT_ENV_FILE`` (exported by
 ``proxy/setup-sandbox.sh`` via ``$GITHUB_ENV``), ``RUNNER_TEMP``,
 ``GITHUB_WORKSPACE``, ``GITHUB_OUTPUT``, ``TEND_MODEL``,
-``TEND_ALLOWED_TOOLS``, ``TEND_SYSTEM_PROMPT``, ``TEND_PROMPT``,
-``TEND_TIMEOUT_SEC``, ``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``, optional
+``TEND_EFFORT``, ``TEND_ARGS``, ``TEND_ALLOWED_TOOLS``,
+``TEND_SYSTEM_PROMPT``, ``TEND_PROMPT``, ``TEND_TIMEOUT_SEC``,
+``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``, optional
 ``TEND_AUTO_MEMORY_SETTINGS``, ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB``, plus the
 ``GITHUB_*`` context from Actions. ``GITHUB_STEP_SUMMARY`` is read only when
 rendering the transcript.
@@ -96,6 +97,8 @@ def launch_argv(
     sandbox: str,
     agent_env_file: str,
     model: str,
+    effort: str = "",
+    extra_args: str = "",
     allowed_tools: str,
     system_prompt: str,
     prompt: str,
@@ -139,6 +142,7 @@ def launch_argv(
         f"CI={ci}",
         "claude",
         "-p",
+        *(arg for arg in extra_args.split("\n") if arg),
         "--model",
         model,
         "--permission-mode",
@@ -151,6 +155,8 @@ def launch_argv(
         "stream-json",
         "--verbose",
     ]
+    if effort:
+        argv.extend(["--effort", effort])
     if settings_file:
         argv.extend(["--settings", settings_file])
     argv.append(prompt)
@@ -507,6 +513,8 @@ def main() -> int:
         sandbox=sandbox,
         agent_env_file=env["AGENT_ENV_FILE"],
         model=env["TEND_MODEL"],
+        effort=os.environ.get("TEND_EFFORT", ""),
+        extra_args=os.environ.get("TEND_ARGS", ""),
         allowed_tools=env["TEND_ALLOWED_TOOLS"],
         system_prompt=env["TEND_SYSTEM_PROMPT"],
         prompt=env["TEND_PROMPT"],

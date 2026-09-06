@@ -250,19 +250,28 @@ class GeneratedWorkflow:
 def _effective_cfg(cfg: Config, wf: WorkflowConfig) -> Config:
     """Return cfg, or a shallow clone with workflow overrides applied.
 
-    Per-workflow `harness` and `model` let an adopter trial a different
-    harness on one workflow (e.g. codex on nightly only)
-    without flipping the whole bot. Validation (model compatibility,
-    known-harness check) happens in `Config.load`; this helper just
-    produces the effective config the renderer sees.
+    Per-workflow `harness`, `model`, `effort`, and `args` let an adopter trial
+    a different harness on one workflow (e.g. codex on nightly only) without
+    flipping the whole bot. Validation (model compatibility, known-harness
+    check) happens in `Config.load`; this helper just produces the effective
+    config the renderer sees.
     """
-    if wf.harness is None and wf.model is None:
+    if (
+        wf.harness is None
+        and wf.model is None
+        and wf.effort is None
+        and wf.args is None
+    ):
         return cfg
     updates = {}
     if wf.harness is not None:
         updates["harness"] = wf.harness
     if wf.model is not None:
         updates["model"] = wf.model
+    if wf.effort is not None:
+        updates["effort"] = wf.effort
+    if wf.args is not None:
+        updates["args"] = wf.args
     return dataclasses.replace(cfg, **updates)
 
 

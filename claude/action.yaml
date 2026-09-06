@@ -39,6 +39,16 @@ inputs:
   model:
     default: "opus"
     description: Claude model to use
+  effort:
+    default: ""
+    description: >-
+      Claude effort level — low, medium, high, xhigh, or max. Empty leaves
+      effort at the model's Claude Code default.
+  args:
+    default: ""
+    description: >-
+      Additional Claude CLI arguments, one exact argument per line. They are
+      passed before Tend's managed arguments; Claude validates conflicts.
   allowed_tools:
     default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill"
     description: Comma-separated list of allowed tools
@@ -389,6 +399,8 @@ runs:
         BOT_NAME: ${{ steps.bot.outputs.login }}
         BOT_ID: ${{ steps.bot.outputs.id }}
         TEND_MODEL: ${{ inputs.model }}
+        TEND_EFFORT: ${{ inputs.effort }}
+        TEND_ARGS: ${{ inputs.args }}
         TEND_ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
         TEND_SYSTEM_PROMPT: ${{ steps.prompt.outputs.value }}
         TEND_PROMPT: ${{ inputs.prompt }}

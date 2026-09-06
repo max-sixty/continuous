@@ -474,6 +474,8 @@ def launch(
             "RUNNER_TEMP": str(runner_temp),
             "GITHUB_WORKSPACE": str(workspace),
             "TEND_MODEL": "opus",
+            "TEND_EFFORT": "",
+            "TEND_ARGS": "",
             "TEND_ALLOWED_TOOLS": "Bash, Read",
             "TEND_SYSTEM_PROMPT": "tend directives",
             "TEND_PROMPT": "review the PR",
@@ -546,6 +548,30 @@ def test_launch_steers_the_agent_entirely_through_argv(launch: Launcher) -> None
         "--verbose",
         "review the PR",
     ]
+
+
+def test_launch_passes_extra_args_before_tend_managed_args(launch: Launcher) -> None:
+    argv = (
+        launch(
+            stream=_ev_result(),
+            TEND_ARGS="--max-turns\n40\n--plugin-dir\n/path with spaces",
+            TEND_EFFORT="xhigh",
+        )
+        .command("claude")
+        .argv
+    )
+
+    assert argv[argv.index("claude") : argv.index("--permission-mode")] == [
+        "claude",
+        "-p",
+        "--max-turns",
+        "40",
+        "--plugin-dir",
+        "/path with spaces",
+        "--model",
+        "opus",
+    ]
+    assert argv[-3:] == ["--effort", "xhigh", "review the PR"]
 
 
 def test_launch_adds_the_restored_auto_memory_settings(launch: Launcher) -> None:
