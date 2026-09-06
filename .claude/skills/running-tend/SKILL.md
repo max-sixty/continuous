@@ -128,49 +128,14 @@ currently-tending dot, activity feed, and stat strip. Needs no opt-in
 because the workflow files are public.
 
 ```bash
-# 1. Discover consumer repos via code search. Generated workflows pin a
-#    version tag (`max-sixty/tend/claude@X.Y.Z`, or `/codex@X.Y.Z`), so
-#    search the bare `max-sixty/tend` token (version-agnostic; GitHub code
-#    search does not index `@` or `/`, so this matches both the Claude and
-#    Codex refs).
-#    `--extension yaml` is required: without it, README/CLAUDE.md/TODO.md
-#    hits on `max-sixty/tend` itself crowd out tend's own workflow files
-#    past the 100-result cap, dropping tend from its own consumers.json.
-#    The `.github/workflows/tend-` path filter below bounds precision.
-mapfile -t DISCOVERED < <(
-  gh search code 'max-sixty/tend' --extension yaml --limit 100 --json repository,path \
-    | jq -r '.[] | select(.path | startswith(".github/workflows/tend-")) | .repository.nameWithOwner' \
-    | sort -u
-)
-
-# 2. Union with the repos already listed. Code search recall is partial — a
-#    repo carrying a full set of tend-*.yaml files can return zero hits — so
-#    rebuilding from the search alone deletes live consumers from the file the
-#    website renders. The search finds *new* consumers; step 3 decides who stays.
-mapfile -t REPOS < <(
-  { printf '%s\n' "${DISCOVERED[@]}"
-    jq -r '.[].repo' data/consumers.json 2>/dev/null; } | sort -u
-)
-
-# 3. Keep a repo while it still has generated tend workflows, and resolve
-#    bot_name from its .config/tend.yaml. An uninstall drops out here rather
-#    than by going missing from a search — but so does a repo whose `gh api`
-#    call hit a 403 or a 5xx, and nothing re-adds a repo the code index can't
-#    see. Never land a removal without re-checking that repo by hand.
-mkdir -p data
-{
-  for repo in "${REPOS[@]}"; do
-    workflows=$(gh api "repos/$repo/contents/.github/workflows" \
-      --jq '[.[] | select(.name | startswith("tend-"))] | length' 2>/dev/null) || workflows=0
-    [ "${workflows:-0}" -gt 0 ] || continue
-    bot=$(gh api "repos/$repo/contents/.config/tend.yaml" --jq '.content' 2>/dev/null \
-      | base64 -d 2>/dev/null \
-      | yq '.bot_name // ""' 2>/dev/null)
-    [ -n "$bot" ] || continue
-    jq -nc --arg repo "$repo" --arg bot "$bot" '{repo: $repo, bot_name: $bot}'
-  done
-} | jq -s . > data/consumers.json
+uv run --script \
+  .claude/skills/running-tend/scripts/refresh_consumers.py
 ```
+
+The command unions code-search results with the current index, verifies each
+repository, and leaves the existing file untouched if a GitHub read fails.
+Confirm every repository listed under `removed` no longer has generated Tend
+workflows before publishing the change.
 
 Open a PR titled `chore: refresh consumers.json` if the file changed. Skip
 the PR (no diff to land) when `git status --porcelain data/consumers.json`
