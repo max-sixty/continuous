@@ -18,7 +18,7 @@ tool, warming a cache, generating a file).
 
 Inputs (env): ``TEND_SANDBOX_SETUP`` (the commands; empty → the report only),
 ``SANDBOX``, ``AGENT_ENV_FILE``, ``AGENT_PATH`` and ``TEND_BLOCKED_PATH``
-(exported by ``proxy/setup-sandbox.sh`` via ``$GITHUB_ENV``), plus the
+(exported by ``proxy/setup_sandbox.py`` via ``$GITHUB_ENV``), plus the
 ``GITHUB_*`` context from Actions. Used by the Claude harness action.
 """
 

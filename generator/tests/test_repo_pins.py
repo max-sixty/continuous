@@ -18,6 +18,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 from ruamel.yaml import YAML
+from tend.workflows import UV_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -113,6 +114,36 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
     )
 
 
+def test_generated_workflow_uv_uses_the_action_pin() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+
+    assert UV_VERSION == action["inputs"]["uv_version"]["default"]
+
+
+def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+    step = next(
+        step
+        for step in action["runs"]["steps"]
+        if step.get("name") == "Set up credential-isolation sandbox"
+    )
+    run = step["run"]
+
+    assert step["env"]["BASH_ENV"] == ""
+    assert step["env"]["BASHOPTS"] == ""
+    assert step["env"]["SHELLOPTS"] == ""
+    assert step["env"]["PS4"] == ""
+    assert run.startswith("set +x\n")
+    assert "/usr/bin/env -i" in run
+    assert "UV_NO_CONFIG=1" in run
+    assert "PYTHONNOUSERSITE=1" in run
+    assert "--no-python-downloads --python /usr/bin/python3 --script" in run
+
+
 def test_codex_actions_pin_the_same_cli_version() -> None:
     versions = {
         action: YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())[
@@ -124,7 +155,7 @@ def test_codex_actions_pin_the_same_cli_version() -> None:
     assert len(set(versions.values())) == 1, f"Codex CLI pins differ: {versions}"
 
 
-# Every `${{ github.action_path }}/…` reference in the two composite actions.
+# Every `${{ github.action_path }}/…` reference in the composite actions.
 # Nothing else reads them: the pre-commit actionlint hook is pinned to
 # ^.github/workflows/, so neither action.yaml is linted at all, and no workflow
 # here consumes the actions with `uses: ./` — they pin a released ref, so an
@@ -159,15 +190,13 @@ def test_action_path_references_resolve(action: str) -> None:
 # actionlint only reads workflow files (it parses an action.yaml as a malformed
 # workflow — "jobs section is missing"), and the shellcheck hook's `files:`
 # regex covers the standalone step scripts, not `claude/` or `codex/`.
-ACTIONS = COMPOSITE_ACTIONS
-
 # Replace `${{ … }}` with an opaque shell variable before checking composite
 # bodies. A literal placeholder would make shellcheck report on the replacement
 # instead of the code (`[ -z "literal" ]` → SC2157 "always false").
 GHA_EXPR = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
 
 
-@pytest.mark.parametrize("action", ACTIONS)
+@pytest.mark.parametrize("action", COMPOSITE_ACTIONS)
 def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
     """Hold inline step bodies to the same shellcheck the step scripts get.
 
@@ -208,7 +237,7 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
 INPUT_REF = re.compile(r"inputs\.([A-Za-z0-9_]+)")
 
 
-@pytest.mark.parametrize("action", ACTIONS)
+@pytest.mark.parametrize("action", COMPOSITE_ACTIONS)
 def test_inputs_reach_run_bodies_through_env(action: str) -> None:
     """An input must not be interpolated into an inline `run:` body.
 
@@ -220,7 +249,7 @@ def test_inputs_reach_run_bodies_through_env(action: str) -> None:
     placeholder the sibling test substitutes in, and actionlint does not read
     action.yaml at all.
 
-    Every input in both actions already arrives this way, so the rule is a flat
+    Every input already arrives this way, so the rule is a flat
     ban rather than a list of which values are secret enough to deserve it.
     """
     doc = YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())
@@ -237,15 +266,14 @@ def test_inputs_reach_run_bodies_through_env(action: str) -> None:
     )
 
 
-def test_codex_subscription_auth_takes_precedence_over_api_key() -> None:
+def test_codex_action_passes_selected_auth_mode_to_runner() -> None:
     doc = YAML(typ="safe", pure=True).load(
         (REPO_ROOT / "codex" / "action.yaml").read_text()
     )
     run = next(step for step in doc["runs"]["steps"] if step.get("name") == "Run Codex")
 
     assert run["env"]["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
-    assert 'if [ "$AUTH_MODE" = subscription ]' in run["run"]
-    assert "unset OPENAI_API_KEY" in run["run"]
+    assert run["run"].endswith('/runner.py" run')
 
 
 def test_codex_refresher_keeps_the_secret_writer_pat_out_of_the_model_step() -> None:

@@ -10,7 +10,7 @@ Reads (env):
   STREAM_JSON       - claude: the headless run's stream-json (NDJSON of SDK
                       message events); may be empty or name a missing file
   AGENT_HOME        - claude: the sandbox user's home, exported by
-                      setup-sandbox.sh via ``$GITHUB_ENV``. Unset when setup
+                      setup_sandbox.py via ``$GITHUB_ENV``. Unset when setup
                       died early, which is why consolidation tolerates it
   RUNNER_TEMP       - claude: parent of the consolidated log dir, and where
                       the agent's stderr log was written
@@ -26,7 +26,7 @@ Writes ``token-usage.json`` into the consolidated log dir (uploaded as the
 session-log artifact), the ``usage`` step output (compact JSON), and a
 ``## Token Usage`` table in the job summary. The record's shape mirrors the
 interactive harness so downstream consumers (review-reviewers' evidence gist,
-token-report.sh, dashboards) don't branch on harness.
+token_report.py, dashboards) don't branch on harness.
 
 Every record also names the run it came from, so spend can be grouped by
 subject; see :func:`run_context`. The job summary stays counts-only, because

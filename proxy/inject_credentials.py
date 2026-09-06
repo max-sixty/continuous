@@ -51,7 +51,7 @@ from mitmproxy import http
 # download; that host stays an untouched tunnel.
 #
 # These frozensets are the credential boundary. The proxy's --allow-hosts regex
-# in setup-sandbox.sh scopes TLS interception and must list the same hosts —
+# in setup_sandbox.py scopes TLS interception and must list the same hosts —
 # keep the two in sync (a host here but not in the regex is never intercepted,
 # so its dummy is never swapped and auth 401s). The
 # `test_allow_hosts_regex_*` tests in test_inject_credentials.py read that

@@ -1,30 +1,44 @@
-"""Tests for plugins/tend-ci-runner/scripts/list-recent-runs.sh.
+"""Tests for plugins/tend-ci-runner/scripts/list_recent_runs.py.
 
 The window logic is the behaviour under test: the completion window resumes
 at the previous successful run's start, clamps at 6h with a stderr WARNING,
-and falls back to a plain 1h window outside Actions. The fake `gh` runs the
-script's own `--jq` expressions against fixtures with real jq — the anchor
-query's self-exclusion filter is load-bearing, so a pre-filtered fake would
-assert nothing. `date` is faked with a fixed clock (macOS ships BSD date,
-which lacks `-d`; the fixed clock also keeps the window edges deterministic).
+and falls back to a plain 1h window outside Actions. The fake `gh` serves API
+fixtures, while an injected clock keeps the window edges deterministic.
 """
 
 from __future__ import annotations
 
+import contextlib
+import importlib
+import io
 import json
+import os
 import subprocess
-from datetime import UTC
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "list-recent-runs.sh"
+SCRIPTS = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts"
+SCRIPT = SCRIPTS / "list_recent_runs.py"
+sys.path.insert(0, str(SCRIPTS))
+github_cli = importlib.import_module("github_cli")
+list_recent_runs = importlib.import_module("list_recent_runs")
 
 # The fixed clock: 2023-11-14T22:13:20Z.
 NOW = 1700000000
+
+
+def test_shared_json_output_preserves_unicode(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    github_cli.dump({"name": "café"})
+
+    assert '"café"' in capsys.readouterr().out
 
 
 def _iso(epoch: int) -> str:
@@ -60,31 +74,6 @@ esac
 """
 )
 
-# GNU-date stand-in with a fixed clock. The three forms the script uses:
-#   date -u +%s                  -> $FAKE_NOW
-#   date -u -d "@<epoch>" +<fmt> -> the epoch itself (+%s) or "iso(<epoch>)"
-#   date -u -d "<iso>" +%s       -> looked up in $DATE_TABLE (iso=epoch lines)
-FAKE_DATE = r"""#!/usr/bin/env bash
-arg_d=""
-fmt=""
-prev=""
-for a in "$@"; do
-  case "$a" in
-    +*) fmt="$a" ;;
-  esac
-  [ "$prev" = "-d" ] && arg_d="$a"
-  prev="$a"
-done
-if [ -z "$arg_d" ]; then
-  echo "$FAKE_NOW"
-elif [ "${arg_d#@}" != "$arg_d" ]; then
-  epoch="${arg_d#@}"
-  if [ "$fmt" = "+%s" ]; then echo "$epoch"; else echo "iso($epoch)"; fi
-else
-  grep -F "$arg_d=" "$DATE_TABLE" | head -1 | cut -d= -f2
-fi
-"""
-
 
 def _run_entry(run_id: int, *, updated: int, conclusion: str = "success") -> dict:
     return {
@@ -97,22 +86,18 @@ def _run_entry(run_id: int, *, updated: int, conclusion: str = "success") -> dic
 
 @pytest.fixture
 def env(tmp_path: Path) -> dict[str, str]:
-    """Fake gh/date on PATH plus the Actions env the script reads."""
-    bindir = fake_bin(tmp_path, gh=FAKE_GH, date=FAKE_DATE)
+    """Fake gh on PATH plus the Actions env the script reads."""
+    bindir = fake_bin(tmp_path, gh=FAKE_GH)
 
     (tmp_path / "wf.json").write_text(json.dumps([{"name": "tend-review"}]))
     (tmp_path / "anchor.json").write_text("[]")
     (tmp_path / "runs.json").write_text("[]")
-    (tmp_path / "date-table").write_text("")
-
     return {
         "PATH": tool_path(bindir),
         "GH_CALLS": str(tmp_path / "gh-calls.log"),
         "WF_JSON": str(tmp_path / "wf.json"),
         "ANCHOR_JSON": str(tmp_path / "anchor.json"),
         "RUNS_JSON": str(tmp_path / "runs.json"),
-        "DATE_TABLE": str(tmp_path / "date-table"),
-        "FAKE_NOW": str(NOW),
         "GITHUB_REPOSITORY": "owner/repo",
         "GITHUB_WORKFLOW": "review-reviewers",
         "GITHUB_RUN_ID": "999",
@@ -120,14 +105,11 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 
 def _anchor(env: dict[str, str], *entries: tuple[int, int]) -> None:
-    """Anchor candidates as (databaseId, createdAt-epoch); table their ISOs."""
+    """Write anchor candidates as ``(databaseId, createdAt epoch)`` pairs."""
     Path(env["ANCHOR_JSON"]).write_text(
         json.dumps(
             [{"databaseId": i, "createdAt": _iso(start)} for i, start in entries]
         )
-    )
-    Path(env["DATE_TABLE"]).write_text(
-        "".join(f"{_iso(start)}={start}\n" for _, start in entries)
     )
 
 
@@ -136,8 +118,19 @@ def _runs(env: dict[str, str], *entries: dict) -> None:
 
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(os, "environ", env.copy())
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                returncode = list_recent_runs.main(
+                    ["review-reviewers", *args],
+                    now=datetime.fromtimestamp(NOW, tz=UTC),
+                )
+            except subprocess.CalledProcessError as error:
+                returncode = error.returncode
+    return subprocess.CompletedProcess(
+        list(args), returncode, stdout.getvalue(), stderr.getvalue()
     )
 
 
@@ -295,3 +288,24 @@ def test_overlapping_prefixes_do_not_double_count(env: dict[str, str]) -> None:
 
     assert result.returncode == 0, result.stderr
     assert _ids(result) == [1], "one workflow's runs were counted once per prefix"
+
+
+def test_review_runs_profile_persists_its_wider_completion_window(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    since_file = tmp_path / "since"
+    env["REVIEW_RUNS_SINCE_FILE"] = str(since_file)
+    _anchor(env, (555, NOW - 28 * 3600))
+    _runs(env, _run_entry(1, updated=NOW - 26 * 3600))
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(os, "environ", env.copy())
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = list_recent_runs.main(
+                ["review-runs"], now=datetime.fromtimestamp(NOW, tz=UTC)
+            )
+
+    assert result == 0, stderr.getvalue()
+    assert [row["databaseId"] for row in json.loads(stdout.getvalue())] == [1]
+    assert since_file.read_text() == f"{_iso(NOW - 28 * 3600)}\n"

@@ -117,7 +117,7 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # redirect the agent's traffic off the injecting proxy or clobber the dummy
 # credentials the proxy swaps for the real secrets. `PATH` is reserved too:
 # use `sandbox_path` (which prepends to the fixed base) instead of replacing it.
-# Kept in sync with the `case "$name"` guard in proxy/setup-sandbox.sh — the
+# Kept in sync with RESERVED_SANDBOX_ENV in proxy/setup_sandbox.py — the
 # `sandbox-env-reserved-parity` pre-commit hook fails the commit on drift.
 RESERVED_SANDBOX_ENV = {
     "HOME",

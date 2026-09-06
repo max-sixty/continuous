@@ -113,12 +113,10 @@ def _probe_plugin(codex: str, repository: Path, env: dict[str, str]) -> None:
     root = Path(match.group(1))
     required = (
         root / "skills" / "triage" / "SKILL.md",
-        root / "scripts" / "list-recent-runs.sh",
+        root / "scripts" / "list_recent_runs.py",
     )
     if not root.is_dir() or not all(path.is_file() for path in required):
         raise SurfaceError("the installed tend-ci-runner plugin is incomplete")
-    if not os.access(required[1], os.X_OK):
-        raise SurfaceError("the installed list-recent-runs.sh is not executable")
 
 
 def _probe_strict_config(codex: str, env: dict[str, str]) -> None:

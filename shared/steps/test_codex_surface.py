@@ -14,9 +14,8 @@ def fake_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (plugin / "skills" / "triage").mkdir(parents=True)
     (plugin / "skills" / "triage" / "SKILL.md").write_text("# Triage\n")
     (plugin / "scripts").mkdir()
-    script = plugin / "scripts" / "list-recent-runs.sh"
-    script.write_text("#!/bin/sh\n")
-    script.chmod(0o755)
+    script = plugin / "scripts" / "list_recent_runs.py"
+    script.write_text("#!/usr/bin/env python3\n")
 
     executable = tmp_path / "codex"
     executable.write_text(
