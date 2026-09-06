@@ -6,7 +6,7 @@
 # here). Used by the Claude harness action.
 #
 # Inputs (env): CLAUDE_VERSION (claude binary version), SANDBOX and AGENT_HOME
-# (exported by setup-sandbox.sh via $GITHUB_ENV).
+# (exported by setup_sandbox.py via $GITHUB_ENV).
 set -eo pipefail
 
 # XDG_* pinned under the sandbox home: the runner exports

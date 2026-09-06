@@ -110,11 +110,12 @@ tend/
 │   └── action.yaml       # Claude harness composite action (default, headless)
 ├── codex/
 │   ├── action.yaml       # Codex harness composite action
+│   ├── runner.py         # Codex harness commands (plugin, prompt, execution)
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
 ├── shared/
 │   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
 │   └── system-prompt.md  # Harness-neutral system prompt base
-├── proxy/                # Credential-injection proxy (setup-sandbox.sh, addon)
+├── proxy/                # Credential-injection proxy (setup_sandbox.py, addon)
 ├── generator/            # Python package (uvx tend@latest), uv_build backend
 │   ├── src/tend/
 │   │   ├── config.py     # Reads .config/tend.yaml

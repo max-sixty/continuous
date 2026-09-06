@@ -158,7 +158,7 @@ runs:
         } >> "$GITHUB_ENV"
 
     # Restore PR-authored startup config before the credential handoff. This
-    # needs the git credential actions/checkout persisted; setup-sandbox.sh
+    # needs the git credential actions/checkout persisted; setup_sandbox.py
     # removes it from disk.
     - name: Restore sensitive config from base branch (PRs)
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
@@ -189,7 +189,7 @@ runs:
         UV_CACHE_DIR: ${{ runner.temp }}/tend-mitmproxy-uv
         TEND_SANDBOX_PATH: ${{ inputs.sandbox_path }}
         TEND_SANDBOX_ENV: ${{ inputs.sandbox_env }}
-      run: /usr/bin/env TEND_RUNNER_TOOL_PATH="$PATH" PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
+      run: /usr/bin/env TEND_RUNNER_TOOL_PATH="$PATH" PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../proxy/setup_sandbox.py"
 
     # OpenAI's proxy accepts only POST /v1/responses, reads the key from stdin,
     # removes it from its process environment, and hardens the memory that
@@ -256,41 +256,16 @@ runs:
     # One variable name across harnesses — skills stay harness-agnostic.
     - name: Install tend-ci-runner plugin (sandbox)
       shell: bash
-      run: |
-        MARKETPLACE_SRC="$(realpath "${{ github.action_path }}/..")"
-        SANDBOX_MKT="$AGENT_HOME/tend-marketplace"
-        sudo rm -rf -- "$SANDBOX_MKT"
-        sudo mkdir -p "$SANDBOX_MKT"
-        sudo cp -a "$MARKETPLACE_SRC/.agents" "$MARKETPLACE_SRC/plugins" "$SANDBOX_MKT/"
-        sudo chown -R "${SANDBOX}:${SANDBOX}" "$SANDBOX_MKT"
-        mapfile -t AGENT_ENV < "$AGENT_ENV_FILE"
-        INSTALL_OUTPUT=$(sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" \
-          bash -c 'set -euo pipefail; codex plugin marketplace add "$1"; codex plugin add tend-ci-runner@tend; codex plugin list 2>/dev/null || true' \
-          _ "$SANDBOX_MKT")
-        echo "$INSTALL_OUTPUT"
-        PLUGIN_ROOT=$(awk -F': ' '/^Installed plugin root: /{print $2; exit}' <<<"$INSTALL_OUTPUT")
-        case "$PLUGIN_ROOT" in
-          "$AGENT_HOME"/*) ;;
-          *) echo "::error::codex reported an invalid plugin root: '$PLUGIN_ROOT'"; exit 1 ;;
-        esac
-        sudo -u "$SANDBOX" test -d "$PLUGIN_ROOT"
-        echo "CLAUDE_PLUGIN_ROOT=$PLUGIN_ROOT" >> "$AGENT_ENV_FILE"
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" install-plugin
 
     - name: Stage AGENTS.md (sandbox)
       shell: bash
       env:
+        ACTION_PATH: ${{ github.action_path }}
         BOT_NAME: ${{ steps.bot.outputs.login }}
-      run: |
-        STAGED="$RUNNER_TEMP/tend-agents.md"
-        {
-          echo "# Tend CI guidance (Codex harness)"
-          echo
-          envsubst '$BOT_NAME' < "${{ github.action_path }}/../shared/system-prompt.md"
-          echo
-          envsubst '$BOT_NAME' < "${{ github.action_path }}/agents-tail.md"
-        } > "$STAGED"
-        sudo -u "$SANDBOX" mkdir -p "$AGENT_HOME/.codex"
-        sudo -u "$SANDBOX" tee "$AGENT_HOME/.codex/AGENTS.md" < "$STAGED" >/dev/null
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" stage-agents
 
     - name: Run adopter sandbox setup
       shell: bash
@@ -308,47 +283,10 @@ runs:
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
         CODEX_SANDBOX_MODE: ${{ inputs.sandbox }}
-      run: |
-        OUTPUT_FILE="$TEND_RUN_DIR/codex-final-message.md"
-        ARGS=(
-          --model "$MODEL"
-          --sandbox "$CODEX_SANDBOX_MODE"
-          --output-last-message "$OUTPUT_FILE"
-          --config "model_providers.tend-openai={ name = 'Tend OpenAI proxy', base_url = '${CODEX_PROXY_URL}/v1', wire_api = 'responses' }"
-          --config 'model_provider="tend-openai"'
-        )
-        if [ -n "$EFFORT" ]; then
-          ARGS+=(--config "model_reasoning_effort=\"$EFFORT\"")
-        fi
-        sudo -u "$SANDBOX" rm -f -- "$OUTPUT_FILE"
-        mapfile -t AGENT_ENV < "$AGENT_ENV_FILE"
-        GHA_VARS=()
-        while IFS= read -r name; do
-          case "$name" in
-            GITHUB_TOKEN|GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY) continue ;;
-          esac
-          GHA_VARS+=("$name=${!name}")
-        done < <(compgen -e | grep '^GITHUB_')
-        set +e
-        sudo -u "$SANDBOX" env \
-          "${AGENT_ENV[@]}" \
-          BOT_NAME="$BOT_NAME" BOT_ID="$BOT_ID" CI="${CI:-true}" \
-          "${GHA_VARS[@]}" \
-          "$CODEX_BIN" exec "${ARGS[@]}" "$PROMPT"
-        EXIT=$?
-        set -e
-
-        # Surface the final message as a step output even if codex
-        # exited non-zero — downstream steps may still want to post it.
-        # base64 -w0 → single-line key=value, no heredoc. Agent output is
-        # arbitrary content; a $GITHUB_OUTPUT heredoc fails if it lacks a
-        # trailing newline (codex writes the file without one) or contains
-        # the delimiter. Encoding sidesteps both. Consumers decode with
-        # `base64 -d`.
-        if sudo -u "$SANDBOX" test -f "$OUTPUT_FILE"; then
-          echo "final_message=$(sudo -u "$SANDBOX" base64 -w0 "$OUTPUT_FILE")" >> "$GITHUB_OUTPUT"
-        fi
-        exit $EXIT
+      # runner.py preserves the final message even when codex exits non-zero.
+      # Base64 keeps arbitrary agent output in one GITHUB_OUTPUT line; consumers
+      # decode it with `base64 -d`.
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" run
 
     # Stop every process owned by the sandbox before any runner-owned step
     # reads agent-controlled paths, then restore checkout ownership.

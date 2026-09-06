@@ -429,9 +429,9 @@ so they are not among what a hijacked session can send.
 **Credential theft.** Isolation minimizes the chance that a hijacked session
 can steal the real tokens, but it does not protect against compromise of the
 runner-owned proxy or the runner itself. A stolen classic PAT remains valid
-until revoked and grants access to every public repository the bot account can
-reach. The merge restriction, environment gate, and immutable releases limit
-what the stolen credential can do.
+until revoked and grants access to every repository both its scope and the bot
+account can reach. The merge restriction, environment gate, and immutable
+releases limit what the stolen credential can do.
 
 **Prompt injection without code execution.** Even without hijacking the
 tools, an attacker who controls what Claude reads can influence its behavior.

@@ -16,13 +16,20 @@ jobs:
 <<permissions()>>
     steps:
 <<check_tend_enabled(cfg)>>
+      - uses: astral-sh/setup-uv@v10.0.1
+        if: <<tend_enabled_condition>>
+        with:
+          version: "<<uv_version>>"
+          ignore-empty-workdir: true
       - name: Check for unread notifications and conflicted PRs
         id: check
         if: <<tend_enabled_condition>>
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
         run: |
+          uv run --script - <<heredoc>>'TEND_PY'
 <<check_script|indent(10, first=True)>>
+          TEND_PY
 
 <<checkout(cfg, ref=cfg.default_branch, if_condition="(" ~ tend_enabled_condition ~ ") && (" ~ skip_condition ~ ")")>>
 <<setup>><<agent_step(cfg, block_input('prompt', prompt), if_condition="(" ~ tend_enabled_condition ~ ") && (" ~ skip_condition ~ ")")>>

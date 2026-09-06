@@ -12,7 +12,7 @@
 #
 # Inputs (env): MARKETPLACE_ROOT (dir containing .claude-plugin/ and plugins/;
 # differs per action by checkout depth), SANDBOX, AGENT_HOME, AGENT_ENV_FILE
-# (exported by setup-sandbox.sh via $GITHUB_ENV).
+# (exported by setup_sandbox.py via $GITHUB_ENV).
 set -eo pipefail
 
 MARKETPLACE_SRC="$(realpath "$MARKETPLACE_ROOT")"

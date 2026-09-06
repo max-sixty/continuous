@@ -25,6 +25,7 @@ from tend.config import (
 from tend.workflows import (
     GENERATORS,
     _deep_merge,
+    _inline_script,
     generate_all,
     generate_install_test,
     generate_mention,
@@ -596,7 +597,23 @@ def test_setup_step_env_must_be_table(tmp_path: Path) -> None:
 def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path))
     for wf in generate_all(cfg):
-        assert "\n\n\n" not in wf.content, f"{wf.filename} has triple blank lines"
+        # Python formatters require two blank lines between top-level
+        # definitions. Ignore the inlined script while retaining this guard
+        # against empty setup macros adding whitespace to the workflow itself.
+        structural = re.sub(
+            r"(?ms)^ {10}# /// script\n.*?^ {10}TEND_PY\n",
+            "",
+            wf.content,
+        )
+        assert "\n\n\n" not in structural, f"{wf.filename} has triple blank lines"
+
+
+def test_inline_script_preserves_python_source() -> None:
+    source = (
+        importlib.resources.files("tend") / "templates" / "mention_verify.py"
+    ).read_text()
+
+    assert _inline_script("mention_verify.py") == source.rstrip("\n")
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -1262,13 +1279,13 @@ def test_mention_verify_wires_every_variable_the_gate_reads(tmp_path: Path) -> N
     # And the mapping is complete: every name the script reads without first
     # assigning it is either wired above or supplied by the runner.
     source = (
-        importlib.resources.files("tend") / "templates" / "mention-verify.sh"
+        importlib.resources.files("tend") / "templates" / "mention_verify.py"
     ).read_text()
-    read = set(re.findall(r"\$\{?([A-Z][A-Z0-9_]*)\}?", source))
-    assigned = set(re.findall(r"\b([A-Z][A-Z0-9_]*)=", source))
+    read = set(re.findall(r'env\.get\("([A-Z][A-Z0-9_]*)"', source))
+    read |= set(re.findall(r'os\.environ\["([A-Z][A-Z0-9_]*)"\]', source))
     supplied = set(check_step["env"]) | {"GITHUB_OUTPUT", "GITHUB_REPOSITORY"}
-    assert read - assigned <= supplied, (
-        f"the gate reads {sorted(read - assigned - supplied)}, which nothing sets"
+    assert read <= supplied, (
+        f"the gate reads {sorted(read - supplied)}, which nothing sets"
     )
 
 

@@ -21,7 +21,7 @@ from tend.checks import CheckResult
 from tend.cli import main
 from tend.workflows import ACTIONLINT_QUEUE_IGNORE, ACTIONLINT_TEND_GLOB
 
-from tests import ACTION_VERSION, BASH, tool_path
+from tests import ACTION_VERSION, BASH, UV, tool_path
 from tests import _yaml as yaml
 
 
@@ -745,9 +745,13 @@ def test_init_notifications_has_precheck(
     check_index = next(i for i, step in enumerate(steps) if step.get("id") == "check")
     check_step = steps[check_index]
     assert check_step["id"] == "check"
-    assert "--paginate --slurp" in check_step["run"]
+    assert "uv run --script -" in check_step["run"]
+    assert '"--paginate"' in check_step["run"]
     assert "subscription" in check_step["run"]
     assert "notifications/threads/" not in check_step["run"]
+    assert any(
+        step.get("uses") == "astral-sh/setup-uv@v10.0.1" for step in steps[:check_index]
+    )
 
     # Everything after the notification check is gated on its output.
     for step in steps[check_index + 1 :]:
@@ -798,16 +802,14 @@ def test_notifications_precheck_tolerates_transient_non_json(
         "exit 0\n"
     )
     gh.chmod(0o755)
-    date = bindir / "date"
-    date.write_text("#!/usr/bin/env bash\necho 2026-01-02T11:50:00Z\n")
-    date.chmod(0o755)
-
     output_file = tmp_path / "gh_output"
     output_file.write_text("")
     env = {
-        "PATH": tool_path(bindir),
+        "PATH": tool_path(bindir, Path(UV).parent),
+        "HOME": str(tmp_path),
         "GITHUB_OUTPUT": str(output_file),
         "GITHUB_REPOSITORY": "owner/repo",
+        "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
     }
     result = subprocess.run(
         [BASH, "-e", "-c", script], env=env, capture_output=True, text=True, check=False

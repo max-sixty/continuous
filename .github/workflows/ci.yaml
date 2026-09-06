@@ -35,16 +35,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
-      # mitmdump starts the way setup-sandbox.sh starts it, so a release that
+      # mitmdump starts the way setup_sandbox.py starts it, so a release that
       # drops a flag, moves the CA file, or breaks the addon's import fails
       # here rather than on every adopter's next run. It goes through the
       # pinned uv, which nothing else in CI installs. The --allow-hosts value
-      # is a throwaway: setup-sandbox.sh owns the real regex, which must track
+      # is a throwaway: setup_sandbox.py owns the real regex, which must track
       # the allowlists in inject_credentials.py.
       #
       # It installs uv by running install-uv.sh rather than repeating it,
       # which also gives that script its only CI coverage, then warms the uvx
-      # cache as setup-sandbox.sh does. An empty replay lets mitmdump reach its
+      # cache as setup_sandbox.py does. An empty replay lets mitmdump reach its
       # running lifecycle hook, then its own KeepServing addon shuts it down.
       # The foreground process exits non-zero on startup failure and is reaped
       # by the shell; port 0 gives the fixture a listener it owns.
@@ -74,7 +74,7 @@ jobs:
           grep -qF 'HTTP(S) proxy listening at 127.0.0.1:' "$log"
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
-  # setup-sandbox.sh and sandbox_setup.py need a second uid, sudo, and a runner
+  # setup_sandbox.py and sandbox_setup.py need a second uid, sudo, and a runner
   # PATH to derive from, so no Python test reaches them. Running them for real
   # leaves the runner changed — checkout's persisted git credential deleted,
   # o+x along the workspace's ancestors, the proxy CA in the system trust store,
@@ -83,10 +83,10 @@ jobs:
   # real, against the new boundary: shared paths cross, runner-home paths do
   # not, same-name system fallbacks are blocked, Tend preserves a shared uv,
   # and sandbox_setup can install a required home-scoped tool explicitly. It
-  # then runs the agent launch
-  # itself against a stub `claude`, which is the only place shared/steps/
-  # run_claude.py crosses the uid boundary at all — the unit tests replace
-  # subprocess.run, and an adopter first runs the launch after a release.
+  # then runs both harness launchers against stub agents. Those are the only
+  # places run_claude.py and codex/runner.py cross the uid boundary at all —
+  # the unit tests replace subprocess.run, and an adopter otherwise first runs
+  # either crossing after a release.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
@@ -99,6 +99,8 @@ jobs:
         run: bash proxy/test-setup-sandbox.sh install-agent-uv
       - name: Verify the boundary and sandbox_setup
         run: bash proxy/test-setup-sandbox.sh verify
+      - name: Verify the Codex credential crossing
+        run: bash proxy/test-setup-sandbox.sh verify-codex-launch
       - name: Launch, supervise and tear down the agent
         run: bash proxy/test-setup-sandbox.sh verify-launch
       - name: Refuse unsafe sandbox configuration
@@ -116,8 +118,8 @@ jobs:
   #
   # It covers where a silent break actually lands: `codex exec` dropping or
   # renaming a flag the action passes, and `codex plugin add` no longer
-  # printing the `Installed plugin root: ` prefix the action parses with awk to
-  # set CLAUDE_PLUGIN_ROOT. Either one fails every adopter's Codex run at the
+  # printing the `Installed plugin root: ` prefix the action parses to set
+  # CLAUDE_PLUGIN_ROOT. Either one fails every adopter's Codex run at the
   # first step. It guards the other direction too — a change to
   # .agents/plugins/marketplace.json or the plugin manifest that Codex can no
   # longer install fails here rather than in an adopter's job.
@@ -172,7 +174,7 @@ jobs:
           # and every skill shelling out to ${CLAUDE_PLUGIN_ROOT}/scripts/
           # would break with the job still green.
           test -f "$root/skills/triage/SKILL.md"
-          test -x "$root/scripts/list-recent-runs.sh"
+          test -f "$root/scripts/list_recent_runs.py"
 
           # `model_reasoning_effort` is passed as a `-c` override, so a rename
           # would be silently ignored rather than rejected — `--help` can't see

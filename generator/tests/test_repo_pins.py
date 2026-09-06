@@ -18,6 +18,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 from ruamel.yaml import YAML
+from tend.workflows import UV_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -77,8 +78,11 @@ def test_codex_agent_step_receives_only_proxy_dummies() -> None:
     ] == ["Start OpenAI Responses proxy"]
     run_env = steps["Run Codex"]["env"]
     assert not ({"OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"} & run_env.keys())
-    assert 'mapfile -t AGENT_ENV < "$AGENT_ENV_FILE"' in steps["Run Codex"]["run"]
-    assert 'model_provider="tend-openai"' in steps["Run Codex"]["run"]
+    assert steps["Run Codex"]["run"].endswith('runner.py" run')
+    assert run_env["CODEX_SANDBOX_MODE"] == "${{ inputs.sandbox }}"
+    runner = (REPO_ROOT / "codex" / "runner.py").read_text()
+    assert "_sandbox.launch_env" in runner
+    assert 'model_provider="tend-openai"' in runner
     reap = steps["Reap sandbox and restore workspace ownership"]
     assert reap["id"] == "sandbox_reap"
     assert 'echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"' in reap["run"]
@@ -144,6 +148,36 @@ def test_uv_build_range_admits_the_pinned_uv() -> None:
         f"uv this repo pins ({uv_version}); `uv build` warns and the wheel is "
         "built by a backend a release older than the uv building it"
     )
+
+
+def test_generated_workflow_uv_uses_the_action_pin() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+
+    assert UV_VERSION == action["inputs"]["uv_version"]["default"]
+
+
+def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+    step = next(
+        step
+        for step in action["runs"]["steps"]
+        if step.get("name") == "Set up credential-isolation sandbox"
+    )
+    run = step["run"]
+
+    assert step["env"]["BASH_ENV"] == ""
+    assert step["env"]["BASHOPTS"] == ""
+    assert step["env"]["SHELLOPTS"] == ""
+    assert step["env"]["PS4"] == ""
+    assert run.startswith("set +x\n")
+    assert "/usr/bin/env -i" in run
+    assert "UV_NO_CONFIG=1" in run
+    assert "PYTHONNOUSERSITE=1" in run
+    assert "--no-python-downloads --python /usr/bin/python3 --script" in run
 
 
 # Every `${{ github.action_path }}/…` reference in the two composite actions.
