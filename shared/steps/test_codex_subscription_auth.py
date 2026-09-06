@@ -91,6 +91,7 @@ def test_stage_refresh_forces_codex_to_use_its_built_in_rotation(
     tmp_path: Path,
 ) -> None:
     destination = tmp_path / "codex-home" / "auth.json"
+    original = json.loads(json.dumps(FULL_AUTH))
 
     configured = codex_subscription_auth.stage_refresh(
         codex_auth_json=json.dumps(codex_subscription_auth.consumer_auth(FULL_AUTH)),
@@ -102,9 +103,14 @@ def test_stage_refresh_forces_codex_to_use_its_built_in_rotation(
     assert configured is True
     assert json.loads(destination.read_text()) == {
         **FULL_AUTH,
+        "tokens": {
+            **FULL_AUTH["tokens"],
+            "access_token": codex_subscription_auth.FORCED_REFRESH_ACCESS_TOKEN,
+        },
         "last_refresh": codex_subscription_auth.FORCED_STALE_REFRESH,
     }
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert FULL_AUTH == original
 
 
 def test_stage_refresh_cli_publishes_whether_subscription_auth_is_configured(
@@ -205,11 +211,15 @@ def test_publish_refresh_persists_rotation_before_reporting_codex_failure(
     ]
 
 
-def test_publish_refresh_refuses_the_staged_unrotated_file(
+def test_publish_refresh_refuses_the_staged_access_token(
     tmp_path: Path, fake_gh: FakeGh
 ) -> None:
     auth_file = tmp_path / "auth.json"
-    stale = {**FULL_AUTH, "last_refresh": codex_subscription_auth.FORCED_STALE_REFRESH}
+    stale = json.loads(json.dumps(FULL_AUTH))
+    stale["tokens"]["access_token"] = (
+        codex_subscription_auth.FORCED_REFRESH_ACCESS_TOKEN
+    )
+    stale["last_refresh"] = "2026-09-06T12:00:00Z"
     auth_file.write_text(json.dumps(stale))
 
     with pytest.raises(

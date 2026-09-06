@@ -265,11 +265,11 @@ proxy together, so move uv and mitmproxy in one PR.
 For `codex_version`, CI's `test-codex-surface` job installs whatever is pinned
 and asserts the credential-free CLI surface the action depends on. Before a
 bump, use an isolated Plus/Pro login to run the refresh action and require both
-the full and access-only credentials to rotate. Inspect `needs_refresh` in
-Codex's auth manager too: the weekly action forces `last_refresh` stale, so do
-not bump if the access token's JWT expiry bypasses that field. Skim the codex
-CHANGELOG across the bump for model availability, sandbox behavior, and
-`--output-last-message`, and note what you find in the PR.
+the full and access-only credentials to rotate. Inspect Codex's auth manager
+too: an unparsable access token must fall through to the stale `last_refresh`,
+and that refresh must use the refresh token without requiring the old access
+token. Skim the codex CHANGELOG across the bump for model availability, sandbox
+behavior, and `--output-last-message`, and note what you find in the PR.
 
 ### `uses:` refs
 

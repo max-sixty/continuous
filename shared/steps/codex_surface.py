@@ -139,21 +139,23 @@ def _probe_strict_config(codex: str, env: dict[str, str]) -> None:
             raise SurfaceError(
                 "codex --strict-config no longer rejects unknown -c keys"
             )
-        known = _run(
-            codex,
-            "exec",
-            "--strict-config",
-            "-c",
+        for key in (
             'model_reasoning_effort="low"',
-            "x",
-            cwd=cwd,
-            env=env,
-            check=False,
-        ).stdout
-        if UNKNOWN_CONFIG_ERROR in known:
-            raise SurfaceError(
-                "codex no longer accepts the model_reasoning_effort config key"
-            )
+            'cli_auth_credentials_store="file"',
+        ):
+            known = _run(
+                codex,
+                "exec",
+                "--strict-config",
+                "-c",
+                key,
+                "x",
+                cwd=cwd,
+                env=env,
+                check=False,
+            ).stdout
+            if UNKNOWN_CONFIG_ERROR in known:
+                raise SurfaceError(f"codex no longer accepts the {key} config key")
 
 
 def verify(repository: Path, codex: str = "codex") -> None:

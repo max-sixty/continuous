@@ -27,6 +27,7 @@ CONSUMER_AUTH_SECRET = "CODEX_AUTH_JSON"
 REFRESH_PAT_SECRET = "CODEX_REFRESH_PAT"
 TEND_ENVIRONMENT = "tend"
 FORCED_STALE_REFRESH = "1970-01-01T00:00:00Z"
+FORCED_REFRESH_ACCESS_TOKEN = "tend-forces-refresh"
 
 
 class SubscriptionAuthError(ValueError):
@@ -162,6 +163,10 @@ def stage_refresh(
     _validate_full(full)
 
     staged = copy.deepcopy(full)
+    # Codex 0.151 checks a JWT access token's expiry before last_refresh. An
+    # unparsable token reaches the stale fallback; the refresh exchange itself
+    # uses the untouched refresh token. This changes only the runner's copy.
+    staged["tokens"]["access_token"] = FORCED_REFRESH_ACCESS_TOKEN
     staged["last_refresh"] = FORCED_STALE_REFRESH
     _write_auth(staged, destination)
     return True
@@ -178,7 +183,7 @@ def publish_refresh(
             f"Codex auth refresh did not leave a readable auth.json: {exc}"
         ) from exc
     _validate_full(refreshed)
-    if refreshed.get("last_refresh") == FORCED_STALE_REFRESH:
+    if refreshed["tokens"]["access_token"] == FORCED_REFRESH_ACCESS_TOKEN:
         raise SubscriptionAuthError("Codex did not refresh the staged auth.json")
 
     # Rotating refresh tokens make order part of the durability contract. Once
