@@ -48,7 +48,7 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
         # Stop between runs instead, so every posted section keeps its fences
         # and its marker; the runs that fall off here carry no marker and are
         # enriched by a later, smaller batch. A run's own section is bounded
-        # above (30 lines x 500 characters per job, at most ~15 KB of jobs),
+        # above (30 lines x 500 bytes per job, at most ~15 KB of jobs),
         # so the finished body cannot exceed roughly 60 KB.
         if [ "$(wc -c < /tmp/enrich-batch.md)" -gt 30000 ]; then
           printf '_Truncated; the remaining runs are enriched by a later batch._\n' \
@@ -71,11 +71,11 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
             break
           fi
           # A linter annotates per finding, so bound the message the same way
-          # the log tail below is bounded: 30 lines of at most 500 characters.
+          # the log tail below is bounded: 30 lines of at most 500 bytes.
           MSG=$(gh api "repos/$REPO/check-runs/$JOB_ID/annotations" \
             --jq '[.[] | select(.annotation_level == "failure") | .message
                   | select(test("^Process completed") | not)] | join("\n\n")' \
-            2>/dev/null | head -n 30 | cut -c -500 || true)
+            2>/dev/null | head -n 30 | cut -b -500 || true)
           [ -n "$MSG" ] && printf '#### %s\n\n```\n%s\n```\n\n' "$JOB_NAME" "$MSG" \
             >> /tmp/enrich-errors.md
         done <<< "$JOBS"
@@ -105,7 +105,7 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
               sed -n "${START},${END}p" /tmp/enrich-log.txt \
                 | cut -f3- \
                 | sed 's/^\xef\xbb\xbf//; s/^[0-9T:.Z-]*Z //; s/\^\[\[[0-9;]*[A-Za-z]//g' \
-                | cut -c -500
+                | cut -b -500
               printf '````\n\n'
             } >> /tmp/enrich-errors.md
           fi
