@@ -49,10 +49,10 @@ Four pieces:
 
 1. **Plugins** — `install-tend` (user-facing setup) and `tend-ci-runner` (CI
    skills). Both ship from the same marketplace.
-2. **Composite action(s)** — the stable interface, pinned to an immutable
-   release tag (`max-sixty/tend/<harness>@X.Y.Z`, the generator's own version
-   — no floating `v1`). Every harness lives under a harness-named path; there
-   is no bare-root default. One per harness:
+2. **Composite actions** — the stable interface, pinned to an immutable
+   release tag (`max-sixty/tend/<action-path>@X.Y.Z`, the generator's own version
+   — no floating `v1`). Every action lives under a harness-named path; there
+   is no bare-root default. The two harness runners are:
    - `max-sixty/tend/claude@X.Y.Z` (Claude) — runs the official `claude`
      binary headless (`claude -p`) as a non-sudo sandbox user behind the
      credential-injecting proxy; completion is the process exit code.
@@ -63,9 +63,14 @@ Four pieces:
      `/tend-ci-runner:NAME` slash commands. Inputs in `codex/action.yaml`.
      Shares the cross-harness preflight/teardown scripts under `shared/steps/`.
 
-   All actions resolve the bot's numeric ID at runtime, run security and
-   rate-limit preflight, and upload session logs. The actions don't know
-   or care about triggers, checkout, or project setup.
+   Both harness runners resolve the bot's numeric ID at runtime, run security
+   and rate-limit preflight, and upload session logs. They don't know or care
+   about triggers, checkout, or project setup.
+
+   `max-sixty/tend/codex/refresh@X.Y.Z` is the Codex support action. A generated
+   serialized workflow runs it weekly to rotate Plus/Pro credentials and
+   publish the full and access-only bundles. It holds no bot token and does not
+   inspect adopter code. Inputs in `codex/refresh/action.yaml`.
 
    Removed: `claude-interactive`, a PTY-supervised variant of the same binary
    that existed only to dodge the 2026-06-15 Agent SDK metering (which covered
@@ -110,6 +115,8 @@ tend/
 │   └── action.yaml       # Claude harness composite action (default, headless)
 ├── codex/
 │   ├── action.yaml       # Codex harness composite action
+│   ├── refresh/
+│   │   └── action.yaml   # Serialized Plus/Pro credential refresh action
 │   ├── runner.py         # Codex harness commands (plugin, prompt, execution)
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
 ├── shared/

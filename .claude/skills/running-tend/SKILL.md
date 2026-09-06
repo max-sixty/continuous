@@ -153,7 +153,7 @@ it here.
 ```bash
 # Composite-action inputs
 yq -r '.inputs | to_entries[] | select(.key | test("_version$"))
-  | "\(filename) \(.key) = \(.value.default)"' */action.yaml
+  | "\(filename) \(.key) = \(.value.default)"' */action.yaml */*/action.yaml
 
 # Python: `==` and upper bounds freeze a version. Floors (`click>=8.0`) state
 # compatibility instead and stay put — raising one only narrows adopter support.
