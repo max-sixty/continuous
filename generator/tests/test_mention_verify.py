@@ -1,4 +1,4 @@
-"""Tests for mention-verify.sh — tend-mention's engagement gate.
+"""Tests for mention_verify.py — tend-mention's engagement gate.
 
 The gate decides whether a comment or review summons an agent session, so
 every case here is an outward behaviour: a false negative leaves someone
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path, uv_script
 
 MENTION_VERIFY = (
     Path(__file__).resolve().parents[2]
@@ -23,7 +23,7 @@ MENTION_VERIFY = (
     / "src"
     / "tend"
     / "templates"
-    / "mention-verify.sh"
+    / "mention_verify.py"
 )
 
 BOT = "test-bot"
@@ -132,9 +132,8 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 
 def _run(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    # `bash -e` mirrors the shell GitHub Actions gives a `run:` block.
     return subprocess.run(
-        [BASH, "-e", str(MENTION_VERIFY)],
+        uv_script(MENTION_VERIFY),
         env=env,
         capture_output=True,
         text=True,
@@ -289,6 +288,14 @@ def test_a_pending_review_writes_an_empty_timestamp(env: dict[str, str]) -> None
     _verdict(env)
 
     assert _outputs(env)["ts"] == ""
+
+
+def test_a_deleted_review_author_can_still_mention_the_bot(
+    env: dict[str, str],
+) -> None:
+    _review(env, user=None, body=f"@{BOT} please look")
+
+    assert _verdict(env) == ("true", "mention")
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +584,21 @@ def test_a_pr_comment_with_no_engagement_is_dropped(env: dict[str, str]) -> None
     assert _verdict(env) == ("false", "")
 
 
+def test_deleted_participants_do_not_break_the_engagement_scan(
+    env: dict[str, str],
+) -> None:
+    _issue_comment(
+        env,
+        COMMENT_BODY="two humans talking",
+        PR_URL="https://api.github.com/repos/owner/repo/pulls/7",
+    )
+    _write(env, "PR_AUTHOR_JSON", {"author": None})
+    _write(env, "PR_REVIEWS_JSON", [{"user": None, "id": 5}])
+    _write(env, "ISSUE_COMMENTS_JSON", [{"user": None, "id": 6}])
+
+    assert _verdict(env) == ("false", "")
+
+
 def test_engagement_survives_a_paginated_lookup(env: dict[str, str]) -> None:
     """`gh api --paginate` applies `--jq` once per page. A reducing filter
     (`| length`) would leave `100\\n7` in the variable, a numeric test on it
@@ -592,23 +614,3 @@ def test_engagement_survives_a_paginated_lookup(env: dict[str, str]) -> None:
     _write(env, "ISSUE_COMMENTS_JSON", [{"user": {"login": BOT}, "id": 6}])
 
     assert _verdict(env) == ("true", "participation")
-
-
-def test_paginated_lookups_never_reduce_inside_jq() -> None:
-    """The hazard above is textual: with the `-n` guard in place both filter
-    shapes answer the same on a two-page fixture, so only the source pins it.
-    Reducing through a pipe (`| wc -l`) is no escape either — it moves the
-    substitution's exit status off `gh`, so under `bash -e` a failed API call
-    reads as "no engagement" on a green job."""
-    source = MENTION_VERIFY.read_text()
-
-    for line in source.replace("\\\n", " ").splitlines():
-        if "--paginate" not in line or "--jq" not in line:
-            continue
-        assert "| length" not in line, (
-            f"reduction inside a --paginate'd --jq runs per page: {line.strip()}"
-        )
-    assert source.count('| .id"') == 3, (
-        "the three engagement lookups (issue comments, PR reviews, PR comments) "
-        "must capture the raw stream, so a failing `gh api` still trips errexit"
-    )

@@ -1,4 +1,4 @@
-"""Tests for plugins/tend-ci-runner/scripts/token-report.sh.
+"""Tests for plugins/tend-ci-runner/scripts/token_report.py.
 
 The report exists to answer "what did the spend go to?", so what is pinned
 here is the grouping and the ranking: subjects come off the record each run
@@ -21,15 +21,16 @@ from typing import Any
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path, uv_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "token-report.sh"
+SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "token_report.py"
 
 FAKE_GH = (
     GH_PREAMBLE
     + r"""case "$1 $2" in
   "workflow list")
+    [ -n "${WORKFLOW_LIST_FAILS:-}" ] && { echo "workflows unavailable" >&2; exit 42; }
     emit "$(cat "$WF_JSON")"
     ;;
   "run list")
@@ -60,9 +61,6 @@ FAKE_GH = (
 esac
 """
 )
-
-# The window is a fixed string; nothing here depends on the real clock.
-FAKE_DATE = "#!/usr/bin/env bash\necho 2026-08-22T00:00:00Z\n"
 
 
 def _record(**over: Any) -> dict[str, Any]:
@@ -96,20 +94,27 @@ class Report:
         self._usage_dir = tmp_path / "usage"
         self._usage_dir.mkdir()
         self._env = {
-            "PATH": tool_path(fake_bin(tmp_path, gh=FAKE_GH, date=FAKE_DATE)),
+            "PATH": tool_path(fake_bin(tmp_path, gh=FAKE_GH)),
             "GH_CALLS": str(tmp_path / "gh-calls.log"),
             "WF_JSON": str(tmp_path / "wf.json"),
             "RUNS_JSON": str(tmp_path / "runs.json"),
             "USAGE_DIR": str(self._usage_dir),
         }
 
-    def add(self, run_id: int, *, workflow: str = "tend-review", **over: Any) -> Report:
+    def add(
+        self,
+        run_id: int,
+        *,
+        workflow: str = "tend-review",
+        created_at: str | None = None,
+        **over: Any,
+    ) -> Report:
         """A completed run and the artifact it uploaded."""
         self._runs.append(
             {
                 "databaseId": run_id,
                 "conclusion": "success",
-                "createdAt": f"2026-08-2{run_id % 10}T12:00:00Z",
+                "createdAt": created_at or f"2026-08-2{run_id % 10}T12:00:00Z",
                 "name": workflow,
             }
         )
@@ -135,6 +140,20 @@ class Report:
         )
         return self
 
+    def invoke(self, *prefixes: str) -> subprocess.CompletedProcess[str]:
+        workflows = sorted({run["name"] for run in self._runs})
+        Path(self._env["WF_JSON"]).write_text(
+            json.dumps([{"name": name} for name in workflows])
+        )
+        Path(self._env["RUNS_JSON"]).write_text(json.dumps(self._runs))
+        return subprocess.run(
+            uv_script(SCRIPT, "168", *prefixes),
+            env=self._env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def run(self, *prefixes: str) -> tuple[dict[str, Any], list[list[str]]]:
         """The JSON on stdout, and the stderr summary split into cells.
 
@@ -142,18 +161,7 @@ class Report:
         are separated by blank lines, and ``blocks`` keeps that structure so a
         test can address one table without a footnote sentence running into it.
         """
-        workflows = sorted({run["name"] for run in self._runs})
-        Path(self._env["WF_JSON"]).write_text(
-            json.dumps([{"name": name} for name in workflows])
-        )
-        Path(self._env["RUNS_JSON"]).write_text(json.dumps(self._runs))
-        result = subprocess.run(
-            [BASH, str(SCRIPT), "168", *prefixes],
-            env=self._env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = self.invoke(*prefixes)
         assert result.returncode == 0, result.stderr
         self.stderr = result.stderr
         self.blocks = [
@@ -212,6 +220,15 @@ def test_repeat_runs_on_one_subject_collapse_into_one_row(report: Report) -> Non
     ]
 
 
+def test_equal_timestamps_keep_discovery_order(report: Report) -> None:
+    created_at = "2026-08-25T12:00:00Z"
+    report.add(1, created_at=created_at).add(2, created_at=created_at)
+
+    output, _ = report.run()
+
+    assert [run["run_id"] for run in output["runs"]] == [1, 2]
+
+
 def test_tables_are_ranked_by_cost_not_by_token_count(report: Report) -> None:
     """Cache reads dominate the count and not the bill, so ranking by tokens
     ranks the cheapest work first.
@@ -224,9 +241,10 @@ def test_tables_are_ranked_by_cost_not_by_token_count(report: Report) -> None:
     report.run()
 
     workflows = [row[0] for row in _table(report, "WORKFLOW")]
-    assert workflows == ["tend-review", "tend-nightly"], (
-        "the costliest workflow leads; ranking by cache reads inverts this"
-    )
+    assert workflows == [
+        "tend-review",
+        "tend-nightly",
+    ], "the costliest workflow leads; ranking by cache reads inverts this"
     assert _table(report, "WORKFLOW")[0][2] == "$9.00", "cost is the second column"
 
 
@@ -361,6 +379,15 @@ def test_a_matrix_runs_row_agrees_with_its_rollup_to_the_cent(report: Report) ->
     assert _table(report, "WORKFLOW")[0][2] == "$28.17"
 
 
+def test_half_cent_costs_round_up_consistently(report: Report) -> None:
+    report.add(1, cost_usd=1.005)
+
+    output, _ = report.run()
+
+    assert output["totals"]["cost_usd"] == 1.01
+    assert _table(report, "RUN")[0][3] == "$1.01"
+
+
 def test_a_workflow_name_with_a_space_keeps_its_own_column(report: Report) -> None:
     """The summary pads its own columns, so a cell may contain spaces.
 
@@ -378,6 +405,26 @@ def test_a_workflow_name_with_a_space_keeps_its_own_column(report: Report) -> No
         "the run count must sit under RUNS; a summary that split rows on "
         "whitespace would put `reviewers` there and shift every column right"
     )
+
+
+@pytest.mark.parametrize("prefix", ['review "', "review \\"])
+def test_workflow_prefix_is_passed_to_jq_as_data(report: Report, prefix: str) -> None:
+    report.add(1, workflow=f"{prefix}special")
+
+    output, _ = report.run(prefix)
+
+    assert [run["run_id"] for run in output["runs"]] == [1]
+
+
+def test_a_failed_workflow_listing_aborts_instead_of_reporting_zero(
+    report: Report,
+) -> None:
+    report._env["WORKFLOW_LIST_FAILS"] = "1"
+
+    result = report.invoke()
+
+    assert result.returncode != 0
+    assert result.stdout == ""
 
 
 def test_runs_with_no_artifact_are_counted_not_dropped(report: Report) -> None:

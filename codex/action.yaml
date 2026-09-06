@@ -165,18 +165,9 @@ runs:
     # One variable name across harnesses — skills stay harness-agnostic.
     - name: Install tend-ci-runner plugin
       shell: bash
-      run: |
-        MARKETPLACE_ROOT="$(realpath "${{ github.action_path }}/..")"
-        codex plugin marketplace add "$MARKETPLACE_ROOT"
-        INSTALL_OUTPUT=$(codex plugin add tend-ci-runner@tend)
-        echo "$INSTALL_OUTPUT"
-        PLUGIN_ROOT=$(awk -F': ' '/^Installed plugin root: /{print $2}' <<<"$INSTALL_OUTPUT")
-        if [ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT" ]; then
-          echo "::error::Failed to parse 'Installed plugin root: <path>' from codex plugin add output"
-          exit 1
-        fi
-        echo "CLAUDE_PLUGIN_ROOT=$PLUGIN_ROOT" >> "$GITHUB_ENV"
-        codex plugin list 2>/dev/null || true
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" install-plugin
 
     # Stage AGENTS.md into ~/.codex so it loads alongside any AGENTS.md
     # the adopter already has in their repo. Adopters' files are not
@@ -188,19 +179,9 @@ runs:
     - name: Stage AGENTS.md
       shell: bash
       env:
+        ACTION_PATH: ${{ github.action_path }}
         BOT_NAME: ${{ steps.bot.outputs.login }}
-      run: |
-        SHARED="${{ github.action_path }}/../shared/system-prompt.md"
-        TAIL="${{ github.action_path }}/agents-tail.md"
-        AGENTS="$HOME/.codex/AGENTS.md"
-        {
-          echo "# Tend CI guidance (Codex harness)"
-          echo
-          envsubst '$BOT_NAME' < "$SHARED"
-          echo
-          envsubst '$BOT_NAME' < "$TAIL"
-        } > "$AGENTS"
-        echo "Staged AGENTS.md at $AGENTS ($(wc -l < "$AGENTS") lines)"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" stage-agents
 
     # Mirror claude-code-action's fork-PR CLAUDE.md pinning so adopters who
     # also rely on CLAUDE.md for prompt-injection defenses aren't worse off
@@ -226,32 +207,10 @@ runs:
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
         SANDBOX: ${{ inputs.sandbox }}
-      run: |
-        OUTPUT_FILE="$RUNNER_TEMP/codex-final-message.md"
-        ARGS=(
-          --model "$MODEL"
-          --sandbox "$SANDBOX"
-          --output-last-message "$OUTPUT_FILE"
-        )
-        if [ -n "$EFFORT" ]; then
-          ARGS+=(--config "model_reasoning_effort=\"$EFFORT\"")
-        fi
-        set +e
-        PATH="$PATH:$RUNNER_TEMP/tend-agent-uv" codex exec "${ARGS[@]}" "$PROMPT"
-        EXIT=$?
-        set -e
-
-        # Surface the final message as a step output even if codex
-        # exited non-zero — downstream steps may still want to post it.
-        # base64 -w0 → single-line key=value, no heredoc. Agent output is
-        # arbitrary content; a $GITHUB_OUTPUT heredoc fails if it lacks a
-        # trailing newline (codex writes the file without one) or contains
-        # the delimiter. Encoding sidesteps both. Consumers decode with
-        # `base64 -d`.
-        if [ -f "$OUTPUT_FILE" ]; then
-          echo "final_message=$(base64 -w0 "$OUTPUT_FILE")" >> "$GITHUB_OUTPUT"
-        fi
-        exit $EXIT
+      # runner.py preserves the final message even when codex exits non-zero.
+      # Base64 keeps arbitrary agent output in one GITHUB_OUTPUT line; consumers
+      # decode it with `base64 -d`.
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" run
 
     # Codex writes rollouts to ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
     # Each event includes a token_count field (input/output/cached). Sum

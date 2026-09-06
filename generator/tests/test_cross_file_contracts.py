@@ -63,7 +63,7 @@ def test_frequent_poll_and_nightly_share_conflict_resolution() -> None:
     resolver = _read(
         "plugins", "tend-ci-runner", "skills", "resolve-conflicts", "SKILL.md"
     )
-    check = _read("generator", "src", "tend", "templates", "notifications-check.sh")
+    check = _read("generator", "src", "tend", "templates", "notifications_check.py")
 
     for caller in (notifications, nightly):
         assert "/tend-ci-runner:resolve-conflicts" in caller
@@ -80,9 +80,9 @@ def test_frequent_poll_and_nightly_share_conflict_resolution() -> None:
     assert "headRefOid" in resolver
     assert '--force-with-lease="refs/heads/<headRefName>:<headRefOid>"' in resolver
     assert "<!-- tend-conflict-deferred head=<head SHA> -->" in resolver
-    assert r"<!-- tend-conflict-deferred head=\($pr.headRefOid) -->" in check
+    assert "<!-- tend-conflict-deferred head={pr.get('headRefOid', '')} -->" in check
     assert "comments(last: 100)" in check
-    assert r'split("\n") | last' in check
+    assert '.rstrip().split("\\n")[-1] == marker' in check
     assert "origin/main" not in resolver
 
 
@@ -128,13 +128,12 @@ def test_unreadable_notification_subjects_are_terminal() -> None:
 
 def test_installation_and_each_poll_enable_repository_watching() -> None:
     install = _read("plugins", "install-tend", "skills", "install-tend", "SKILL.md")
-    precheck = _read("generator", "src", "tend", "templates", "notifications-check.sh")
+    precheck = _read("generator", "src", "tend", "templates", "notifications_check.py")
 
     for content in (install, precheck):
-        assert "repos/$REPO/subscription" in content or (
-            "repos/$GITHUB_REPOSITORY/subscription" in content
-        )
-        assert "-F subscribed=true -F ignored=false" in content
+        assert "subscription" in content
+        assert "subscribed=true" in content
+        assert "ignored=false" in content
 
 
 def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None:
@@ -149,21 +148,35 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     posting, and shell state does not survive a tool call.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
-    preflight = _read("plugins", "tend-ci-runner", "scripts", "review-preflight.sh")
+    preflight = _read("plugins", "tend-ci-runner", "scripts", "review_preflight.py")
 
     assert "HEAD moved — leaving" not in skill
 
-    # Written where the head is read, and rewritten where it moves.
-    assert 'echo "$HEAD_SHA" > /tmp/reviewed-head' in skill
-    assert 'PIN_FILE="${REVIEWED_HEAD_FILE:-/tmp/reviewed-head}"' in preflight
+    # Written by the initial snapshot and rewritten where the head moves.
+    assert '"start"' in preflight
+    assert (
+        'Path(os.environ.get("REVIEWED_HEAD_FILE", "/tmp/reviewed-head"))' in preflight
+    )
+    assert '"REVIEWED_HEAD_FILE", "/tmp/reviewed-head"' in preflight
     # Read back by both posting recipes, and read *before* the POST: inlined as
     # `$(cat ...)` a missing file substitutes the empty string and the request
     # still goes out, which is the unpinned review the pin exists to prevent.
     assert skill.count("REVIEWED=$(cat /tmp/reviewed-head) || exit 0") == 2
     assert '-f commit_id="$REVIEWED"' in skill
     assert '--arg sha "$REVIEWED"' in skill
-    assert skill.count("review-preflight.sh <number> --") == 3
-    assert '--edit-review "$ORPHAN_ID" --' in skill
+    assert skill.count('review_preflight.py" post <number> --') == 3
+    direct_launches = re.findall(
+        r"/usr/bin/python3 -E -s\s+(?:\\\n\s*)?"
+        r'"\$\{CLAUDE_PLUGIN_ROOT\}/scripts/review_preflight\.py"',
+        skill,
+    )
+    assert len(direct_launches) == 6
+    assert (
+        'uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py"'
+        not in skill
+    )
+    assert "--edit-review <orphan-id> --" in skill
+    assert "shell variables do not\nsurvive between agent tool calls" in skill
 
     # Both logs reach the session in one stream, so the skill names both halves.
     assert "**Read both halves of the delta file as a pair.**" in skill
@@ -183,12 +196,14 @@ def test_weekly_approval_pins_the_commit_it_checked() -> None:
     carries the sha the same way review does, and for the same reason: the
     body is composed with the Write tool in between."""
     weekly = _read("plugins", "tend-ci-runner", "skills", "weekly", "SKILL.md")
+    state_script = _read("plugins", "tend-ci-runner", "scripts", "bot_review_state.py")
 
     # Per-PR and cleared up front: step 2 loops over every dependency PR, so a
     # shared name hands the next PR this one's sha, and the already-approved
     # branch must not leave a readable file behind.
-    assert "rm -f /tmp/checked-head-<number>" in weekly
-    assert 'echo "$HEAD_SHA" > /tmp/checked-head-<number>' in weekly
+    assert "prepare-approval <number>" in weekly
+    assert "pin.unlink(missing_ok=True)" in state_script
+    assert 'pin.write_text(f"{head_sha}\\n")' in state_script
     assert "CHECKED=$(cat /tmp/checked-head-<number>) || exit 0" in weekly
     assert '-f commit_id="$CHECKED"' in weekly
 
@@ -261,6 +276,38 @@ def _bash_blocks(markdown: str) -> list[str]:
     return [block.split("```", 1)[0] for block in markdown.split("```bash\n")[1:]]
 
 
+def test_runner_helper_directory_is_python_only() -> None:
+    """Substantial runner behavior belongs in tested Python, not shell helpers."""
+    scripts = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts"
+
+    assert not sorted(scripts.glob("*.sh"))
+
+
+def test_codex_harness_delegates_stateful_phases_to_its_runner() -> None:
+    """Keep CLI parsing and cross-step files out of action-inline Bash."""
+    action = _read("codex", "action.yaml")
+
+    for command in ("install-plugin", "stage-agents", "run"):
+        assert f'runner.py" {command}' in action
+    assert "awk" not in action
+
+
+def test_every_documented_run_listing_selects_a_profile() -> None:
+    callers = [
+        _read("plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md"),
+        _read("plugins", "tend-ci-runner", "skills", "review-reviewers", "SKILL.md"),
+        _read(".claude", "skills", "running-tend", "SKILL.md"),
+    ]
+
+    for caller in callers:
+        invocations = [
+            block for block in _bash_blocks(caller) if "list_recent_runs.py" in block
+        ]
+        assert invocations
+        for invocation in invocations:
+            assert re.search(r"\breview-(?:runs|reviewers)\b", invocation)
+
+
 def test_nightly_regen_pins_its_poll_to_the_commit_it_pushed() -> None:
     """Step 7 must stash the pushed OID before it removes the regen worktree.
 
@@ -273,41 +320,13 @@ def test_nightly_regen_pins_its_poll_to_the_commit_it_pushed() -> None:
     abbreviated OID retyped out of `git commit`'s output.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
+    script = _read("plugins", "tend-ci-runner", "scripts", "nightly_workflow_update.py")
 
-    ship = [
-        block
-        for block in _bash_blocks(skill)
-        if "gh pr create" in block and "git worktree remove" in block
-    ]
-    assert len(ship) == 1, "Step 7 no longer ships the regen PR from one block"
-    block = ship[0]
-
-    capture = [
-        line
-        for line in block.splitlines()
-        if line.startswith("git rev-parse HEAD > ") and "/tmp/" in line
-    ]
-    assert capture, (
-        "Step 7 pushes from the /tmp worktree and then removes it without "
-        "recording the pushed OID; the poll that follows has no correct local "
-        "source for it."
-    )
-    assert block.index("git commit") < block.index(capture[0]), (
-        "the OID must be captured after the commit it names"
-    )
-    assert block.index(capture[0]) < block.index("git worktree remove"), (
-        "the OID must be captured while the worktree still exists"
-    )
-
-    stash = capture[0].split(">", 1)[1].strip().strip('"')
-    poll = [
-        line
-        for line in skill.splitlines()
-        if "poll-pr-checks.sh" in line and f"cat {stash}" in line
-    ]
-    assert poll, (
-        f"Step 7 stashes the pushed OID at {stash} but never points the poll at it"
-    )
+    commit = script.index('"git", "commit"')
+    capture = script.index('sha_path.write_text(f"{sha}\\n")')
+    cleanup = script.index('"git", "worktree", "remove"', capture)
+    assert commit < capture < cleanup
+    assert 'poll <pr-number> "$(cat /tmp/tend-update-sha)"' in skill
 
 
 def test_nightly_regen_stages_every_path_init_writes(
@@ -321,21 +340,21 @@ def test_nightly_regen_stages_every_path_init_writes(
     without it, leaving adopters who lint workflows red and re-creating the
     file untracked every night.
     """
-    skill = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
-
-    pathspecs = re.findall(r"^git add -A (.+)$", skill, re.MULTILINE)
-    assert pathspecs, "Step 7 no longer stages the regenerated files"
-    assert len(set(pathspecs)) == 1, f"Step 7 stages inconsistent sets: {pathspecs}"
-    staged = pathspecs[0].split()
+    script = _read("plugins", "tend-ci-runner", "scripts", "nightly_workflow_update.py")
+    normalized = re.sub(r"\s+", " ", script)
+    staged = [".github", ".config"]
+    assert script.count('"git", "add", "-A", ".github", ".config"') == 2
 
     # The stamp-only skip and the `git status` inspection both read the staged
     # set: a file `init` newly created is invisible to a plain `git diff`, so a
     # release whose only change is a new output path would skip the PR as a
     # no-op. They must name the same paths the `git add -A` lines stage —
     # widening only the staging leaves the no-op check blind to the new path.
-    specs = " ".join(staged)
-    assert f"git status --porcelain {specs}" in skill
-    assert f"git diff --cached --no-color {specs}" in skill
+    assert '"git", "status", "--porcelain", ".github", ".config"' in normalized
+    assert (
+        '"git", "diff", "--cached", "--no-color", "--", ".github", ".config"'
+        in normalized
+    )
 
     config = tmp_path / ".config" / "tend.yaml"
     config.parent.mkdir(parents=True)
