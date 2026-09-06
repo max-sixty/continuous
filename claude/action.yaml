@@ -54,7 +54,7 @@ inputs:
     default: "false"
     description: Include the rendered Claude transcript in the workflow step summary.
   claude_version:
-    default: "2.1.251"
+    default: "2.1.263"
     description: >-
       Version of the `claude` binary to install via
       `https://claude.ai/install.sh`, pinned to a specific
@@ -357,13 +357,15 @@ runs:
     # sentinel. The step body is shared/steps/run_claude.py; keeping it out of
     # this file is what lets the suite drive it (nothing lints or runs an inline
     # `run:` block in a composite action).
-    #   - settings.local.json sets `permissions.defaultMode: bypassPermissions`
-    #     plus skipDangerousModePermissionPrompt. bypassPermissions lets the bot
-    #     write Claude Code's protected paths (.devcontainer/, .github/, .husky/,
-    #     .cargo/, dotfiles) that every other mode hard-denies — which blocked
-    #     autonomous fixes. Safe here: the run is sandboxed and can only land via
-    #     reviewed PRs. No Stop/StopFailure hooks — headless completion is the
-    #     process exit.
+    #   - `--permission-mode bypassPermissions` on argv sets the mode.
+    #     settings.local.json restates it alongside
+    #     skipDangerousModePermissionPrompt, but only the flag is load-bearing:
+    #     Claude Code 2.1.257 ignores `defaultMode: bypassPermissions` in a
+    #     project settings file. That mode lets the bot write Claude Code's
+    #     protected paths (.devcontainer/, .github/, .husky/, .cargo/, dotfiles)
+    #     that every other mode hard-denies — which blocked autonomous fixes.
+    #     Safe here: the run is sandboxed and can only land via reviewed PRs.
+    #     No Stop/StopFailure hooks — headless completion is the process exit.
     #     TODO: research a more hawkish posture that keeps this write capability —
     #     e.g. an auto-mode classifier, or scoped overrides of specific protected
     #     paths — without reintroducing hard blocks.
