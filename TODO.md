@@ -3,6 +3,29 @@
 Deferred work and unimplemented options. Each entry should justify the cost
 of building it if revisited.
 
+## Re-evaluate reader-focused public prose after release
+
+The bundled skills now give the model the reader's context and decision goal,
+while keeping a small number of output shapes as optional examples. After a
+release has accumulated a sample comparable to the baseline below, review PR
+descriptions, top-level reviews, and issue replies separately. Visible word
+counts and long paragraphs are useful alerts, but the judgment is whether the
+visible text states the conclusion, consequence, and required action without
+replaying the investigation, and whether optional examples have become de
+facto templates again.
+
+PR baseline (2026-09-01 through 2026-09-06, six consumers on 0.1.24): 93 PRs
+had a median 243 visible words; 40% had at least 300 visible words, and 39% had
+a visible paragraph of at least 100 words. Comment baseline (2026-08-20 through
+2026-09-06, seven active consumers): 629 review bodies had a median 1,984
+characters, 500 general PR comments had a median 1,734, and 164 issue, triage,
+and mention comments had a median 2,179. The comment sample excludes run
+trackers and enrichment payloads.
+
+If the new guidance improves synthesis without dropping useful context, keep
+the examples. If it does not, use the observed failures to remove an example
+or sharpen the goal rather than adding a hard length limit.
+
 ## Cut tend over to harness = "codex" (post-release)
 
 The Codex harness landed but tend itself still runs on Claude. The cutover

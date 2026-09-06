@@ -68,7 +68,7 @@ inputs:
       first set; stable carries it now, so this tracks `latest`. CI's
       `test-codex-surface` job confirms whichever version is pinned.
   uv_version:
-    default: "0.12.7"
+    default: "0.12.10"
     description: >-
       Pinned fallback `uv` version. The agent PATH appends it after any
       adopter-provided version.

@@ -38,7 +38,8 @@
 #   at_head             {id, state, at, draft_mode} — newest substantive bot
 #                       review anchored at head and submitted after the newest
 #                       rewrite, else null. `draft_mode` identifies Tend's
-#                       framed draft COMMENT so a later full pass may replace it.
+#                       marker-bearing draft COMMENT (or its temporary legacy
+#                       prose form) so a later full pass may replace it.
 #   orphan_id           id of the newest body-bearing bot review anchored at
 #                       head post-rewrite, else null. A partially-failed review
 #                       POST persists the body and drops the inline comments;
@@ -104,8 +105,11 @@ gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
           | last
           | if . == null then null else
               {id, state, at: .submitted_at,
+               # TODO(2026-12-01): Drop the prose-prefix fallback after draft
+               # reviews created by pre-marker releases have aged out.
                draft_mode: (.state == "COMMENTED"
-                            and ((.body // "") | startswith("Reviewing as a draft —")))}
+                            and (((.body // "") | contains("<!-- tend:draft-review -->"))
+                                 or ((.body // "") | startswith("Reviewing as a draft —"))))}
             end),
         orphan_id: ($subs
           | map(select(.commit_id == $head and (.body | length) > 0

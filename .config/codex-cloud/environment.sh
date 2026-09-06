@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKTRUNK_VERSION=0.75.0
+WORKTRUNK_VERSION=0.76.0
 if ! command -v wt >/dev/null 2>&1 ||
   [[ "$(wt --version)" != "wt v${WORKTRUNK_VERSION}" ]]; then
   curl --proto '=https' --tlsv1.2 -LsSf \
