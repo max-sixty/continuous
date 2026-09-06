@@ -161,9 +161,10 @@ README.md "Harnesses" for the comparison.
 
 ```yaml
 bot_name: <bot-name>
-# For Codex, also:
+# For Codex:
 # harness: codex
-# effort: medium   # optional: low | medium | high | xhigh
+# Both harnesses optionally accept:
+# effort: medium   # low | medium | high | xhigh; Claude Opus/Sonnet also accept max
 ```
 
 List the secrets the repo already holds:

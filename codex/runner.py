@@ -185,6 +185,7 @@ def run_codex() -> int:
     args = [
         codex,
         "exec",
+        *(arg for arg in os.environ.get("EXTRA_ARGS", "").splitlines() if arg),
         "--model",
         os.environ.get("MODEL", ""),
         "--sandbox",

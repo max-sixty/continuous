@@ -188,6 +188,9 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     monkeypatch.setenv("MODEL", "gpt-test")
     monkeypatch.setenv("CODEX_SANDBOX_MODE", "danger-full-access")
     monkeypatch.setenv("EFFORT", "high")
+    monkeypatch.setenv(
+        "EXTRA_ARGS", "--skip-git-repo-check\n--config\nproject_doc_max_bytes=8192"
+    )
     monkeypatch.setenv("PROMPT", "Review this")
     monkeypatch.setenv("BOT_NAME", "tend-bot")
     monkeypatch.setenv("BOT_ID", "123")
@@ -222,6 +225,9 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     assert launch[codex_at:] == [
         "/opt/codex/bin/codex",
         "exec",
+        "--skip-git-repo-check",
+        "--config",
+        "project_doc_max_bytes=8192",
         "--model",
         "gpt-test",
         "--sandbox",

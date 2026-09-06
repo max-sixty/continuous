@@ -1930,19 +1930,57 @@ def test_codex_workflows_use_openai_secrets_not_claude(tmp_path: Path) -> None:
         )
 
 
-def test_codex_effort_only_when_set(tmp_path: Path) -> None:
-    """effort: renders only when configured."""
-    cfg_default = Config.load(_minimal_config(tmp_path, "harness: codex"))
-    for wf in generate_all(cfg_default):
-        assert "effort:" not in wf.content, (
-            f"{wf.filename} should omit effort when unset"
-        )
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ("effort: max", "max"),
+        ("harness: codex\neffort: high", "high"),
+    ],
+    ids=["claude", "codex"],
+)
+def test_effort_renders_for_both_harnesses(
+    tmp_path: Path, config: str, expected: str
+) -> None:
+    cfg = Config.load(_minimal_config(tmp_path, config))
+    for wf in generate_all(cfg):
+        inputs = [
+            step["with"]
+            for job in yaml.safe_load(wf.content)["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("max-sixty/tend/")
+        ]
+        for action_inputs in inputs:
+            assert action_inputs["effort"] == expected
 
-    cfg_with_effort = Config.load(
-        _minimal_config(tmp_path, "harness: codex\neffort: high")
+
+def test_effort_is_omitted_at_the_harness_default(tmp_path: Path) -> None:
+    for harness in ("claude", "codex"):
+        cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}"))
+        for wf in generate_all(cfg):
+            assert "effort:" not in wf.content
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_args_render_as_exact_action_arguments(tmp_path: Path, harness: str) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent(f"""\
+                harness: {harness}
+                args:
+                  - --max-turns
+                  - "40"
+                  - argument with spaces
+            """),
+        )
     )
-    for wf in generate_all(cfg_with_effort):
-        assert "effort: high" in wf.content, f"{wf.filename} missing effort: high"
+    for wf in generate_all(cfg):
+        for job in yaml.safe_load(wf.content)["jobs"].values():
+            for step in job.get("steps", []):
+                if step.get("uses", "").startswith("max-sixty/tend/"):
+                    assert step["with"]["args"] == (
+                        "--max-turns\n40\nargument with spaces\n"
+                    )
 
 
 def test_codex_default_model(tmp_path: Path) -> None:
@@ -2119,14 +2157,102 @@ def test_unknown_claude_model_rejected(tmp_path: Path) -> None:
         Config.load(_minimal_config(tmp_path, "model: opus-3"))
 
 
-def test_effort_rejected_for_claude(tmp_path: Path) -> None:
-    """effort is Codex-only — Claude has no reasoning-effort knob."""
+@pytest.mark.parametrize(
+    "config",
+    ["effort: turbo", "harness: codex\neffort: max", "effort: [high]"],
+)
+def test_effort_rejected_when_unsupported_or_malformed(
+    tmp_path: Path, config: str
+) -> None:
+    with pytest.raises(click.ClickException, match="effort .* is not recognized"):
+        Config.load(_minimal_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    ("config", "match"),
+    [
+        (
+            "model: haiku\neffort: low",
+            "effort is not supported for Claude model 'haiku'",
+        ),
+        (
+            dedent("""\
+                effort: high
+                workflows:
+                  nightly:
+                    model: haiku
+            """),
+            (
+                r"effort \(inherited by workflows\.nightly\) is not supported .* "
+                r"set `workflows\.nightly\.effort: \"\"`"
+            ),
+        ),
+    ],
+)
+def test_effort_rejected_for_claude_models_without_effort(
+    tmp_path: Path, config: str, match: str
+) -> None:
+    with pytest.raises(click.ClickException, match=match):
+        Config.load(_minimal_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        'args: "--max-turns 40"',
+        'args: ["--max-turns", ""]',
+        "args: [--max-turns, 40]",
+    ],
+)
+def test_args_rejected_unless_each_list_item_is_one_argument(
+    tmp_path: Path, config: str
+) -> None:
+    with pytest.raises(click.ClickException, match="args must be a list"):
+        Config.load(_minimal_config(tmp_path, config))
+
+
+def test_per_workflow_effort_and_args_override_the_top_level(tmp_path: Path) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                effort: high
+                args: [--max-turns, "40"]
+                workflows:
+                  nightly:
+                    effort: max
+                    args: []
+            """),
+        )
+    )
+    workflows = {wf.filename: yaml.safe_load(wf.content) for wf in generate_all(cfg)}
+
+    nightly_steps = workflows["tend-nightly.yaml"]["jobs"]["nightly"]["steps"]
+    nightly = next(step for step in nightly_steps if "/claude@" in step.get("uses", ""))
+    assert nightly["with"]["effort"] == "max"
+    assert "args" not in nightly["with"]
+
+    weekly_steps = workflows["tend-weekly.yaml"]["jobs"]["weekly"]["steps"]
+    weekly = next(step for step in weekly_steps if "/claude@" in step.get("uses", ""))
+    assert weekly["with"]["effort"] == "high"
+    assert weekly["with"]["args"] == "--max-turns\n40\n"
+
+
+def test_cross_harness_workflow_validates_inherited_effort(tmp_path: Path) -> None:
     with pytest.raises(
-        click.ClickException, match="effort is only valid for harness = 'codex'"
+        click.ClickException,
+        match=r"effort \(inherited by workflows\.nightly\) 'max' is not recognized "
+        r"for harness 'codex'",
     ):
-        Config.load(_minimal_config(tmp_path, "effort: high"))
-
-
-def test_unknown_effort_rejected(tmp_path: Path) -> None:
-    with pytest.raises(click.ClickException, match="effort 'turbo' is not recognized"):
-        Config.load(_minimal_config(tmp_path, "harness: codex\neffort: turbo"))
+        Config.load(
+            _minimal_config(
+                tmp_path,
+                dedent("""\
+                    effort: max
+                    workflows:
+                      nightly:
+                        harness: codex
+                        model: gpt-5.5
+                """),
+            )
+        )

@@ -197,7 +197,8 @@ bot_name: my-project-bot
 
 # Optional — defaults to "claude"
 # harness: codex
-# effort: medium   # codex only: low | medium | high | xhigh
+# effort: medium   # low | medium | high | xhigh; Claude Opus/Sonnet also support max
+# args: [--max-turns, "40"]   # exact additional CLI arguments
 ```
 
 Top-level `enabled: false` pauses tend from the default branch without removing

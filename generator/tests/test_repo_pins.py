@@ -64,13 +64,26 @@ def test_codex_agent_step_receives_only_proxy_dummies() -> None:
 
     assert "experimental" in action["name"].lower()
     setup_env = steps["Set up credential-isolation sandbox"]["env"]
+    setup_run = steps["Set up credential-isolation sandbox"]["run"]
     assert setup_env["TEND_GH_TOKEN"] == "${{ inputs.github_token }}"
     assert setup_env["TEND_GITHUB_ONLY"] == "1"
     assert "TEND_OPENAI_API_KEY" not in setup_env
+    assert 'TEND_GITHUB_ONLY="$TEND_GITHUB_ONLY"' in setup_run
     openai_proxy = steps["Start OpenAI Responses proxy"]
     assert openai_proxy["env"]["PROXY_API_KEY"] == "${{ inputs.openai_api_key }}"
-    assert "env -u PROXY_API_KEY" in openai_proxy["run"]
+    assert openai_proxy["env"]["BASH_ENV"] == ""
+    assert openai_proxy["env"]["BASHOPTS"] == ""
+    assert openai_proxy["env"]["SHELLOPTS"] == ""
+    assert openai_proxy["env"]["PS4"] == ""
+    assert openai_proxy["run"].startswith(
+        "set +x\nPATH=/usr/sbin:/usr/bin:/sbin:/bin\n"
+    )
+    assert "exec /usr/bin/env -i" in openai_proxy["run"]
+    assert '"$NODE_BIN" "$CODEX_PROXY_BIN"' in openai_proxy["run"]
     assert '<<< "$PROXY_API_KEY"' in openai_proxy["run"]
+    assert '> "$PROXY_LOG_FILE" 2>&1 &' in openai_proxy["run"]
+    assert 'cat "$PROXY_LOG_FILE" >&2' in openai_proxy["run"]
+    assert "OPENAI_API_KEY is unset" in openai_proxy["run"]
     assert [
         name
         for name, step in steps.items()
@@ -158,9 +171,12 @@ def test_generated_workflow_uv_uses_the_action_pin() -> None:
     assert UV_VERSION == action["inputs"]["uv_version"]["default"]
 
 
-def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration() -> None:
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_privileged_sandbox_launch_scrubs_adopter_runtime_configuration(
+    harness: str,
+) -> None:
     action = YAML(typ="safe", pure=True).load(
-        (REPO_ROOT / "claude" / "action.yaml").read_text()
+        (REPO_ROOT / harness / "action.yaml").read_text()
     )
     step = next(
         step

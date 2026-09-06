@@ -39,6 +39,11 @@ inputs:
     description: >-
       Reasoning effort — low, medium, high, or xhigh. Empty means leave
       at Codex CLI default (medium for gpt-5.5).
+  args:
+    default: ""
+    description: >-
+      Additional Codex CLI arguments, one exact argument per line. They are
+      passed before Tend's managed arguments; Codex validates conflicts.
   sandbox:
     # Restricted modes cannot currently initialize bubblewrap's loopback
     # network on the standard GitHub-hosted Ubuntu 24.04 runner. Tend defaults
@@ -149,10 +154,12 @@ runs:
         npm install -g \
           "@openai/codex@$CODEX_VERSION" \
           "@openai/codex-responses-api-proxy@$CODEX_VERSION"
+        NODE_BIN=$(command -v node)
         CODEX_BIN=$(command -v codex)
         CODEX_PROXY_BIN=$(command -v codex-responses-api-proxy)
         "$CODEX_BIN" --version
         {
+          echo "NODE_BIN=$NODE_BIN"
           echo "CODEX_BIN=$CODEX_BIN"
           echo "CODEX_PROXY_BIN=$CODEX_PROXY_BIN"
         } >> "$GITHUB_ENV"
@@ -178,9 +185,14 @@ runs:
     # only for exact GitHub hosts. OpenAI authentication gets its own narrower
     # upstream proxy in the next step.
     - name: Set up credential-isolation sandbox
+      # Resolve the interpreter and credential holder outside the adopter's
+      # environment: this step is the only one that receives the real PAT.
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
         BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
         TEND_GH_TOKEN: ${{ inputs.github_token }}
         TEND_GITHUB_ONLY: "1"
         ACTION_PATH: ${{ github.action_path }}/..
@@ -189,7 +201,29 @@ runs:
         UV_CACHE_DIR: ${{ runner.temp }}/tend-mitmproxy-uv
         TEND_SANDBOX_PATH: ${{ inputs.sandbox_path }}
         TEND_SANDBOX_ENV: ${{ inputs.sandbox_env }}
-      run: /usr/bin/env TEND_RUNNER_TOOL_PATH="$PATH" PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../proxy/setup_sandbox.py"
+      run: |
+        set +x
+        /usr/bin/env -i \
+          TEND_RUNNER_TOOL_PATH="$PATH" \
+          PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+          HOME="$RUNNER_TEMP" \
+          LANG=C.UTF-8 \
+          GITHUB_ENV="$GITHUB_ENV" \
+          GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+          RUNNER_TEMP="$RUNNER_TEMP" \
+          TEND_GH_TOKEN="$TEND_GH_TOKEN" \
+          TEND_GITHUB_ONLY="$TEND_GITHUB_ONLY" \
+          ACTION_PATH="$ACTION_PATH" \
+          MITMPROXY_VERSION="$MITMPROXY_VERSION" \
+          TEND_UV_DIR="$TEND_UV_DIR" \
+          UV_CACHE_DIR="$UV_CACHE_DIR" \
+          UV_NO_CONFIG=1 \
+          PYTHONNOUSERSITE=1 \
+          TEND_SANDBOX_PATH="$TEND_SANDBOX_PATH" \
+          TEND_SANDBOX_ENV="$TEND_SANDBOX_ENV" \
+          "${TEND_UV_DIR}/uv" run --no-cache --no-config \
+            --no-python-downloads --python /usr/bin/python3 --script \
+            "${{ github.action_path }}/../proxy/setup_sandbox.py"
 
     # OpenAI's proxy accepts only POST /v1/responses, reads the key from stdin,
     # removes it from its process environment, and hardens the memory that
@@ -198,22 +232,34 @@ runs:
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
         BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
         PROXY_API_KEY: ${{ inputs.openai_api_key }}
       run: |
+        set +x
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
         SERVER_INFO_FILE="$RUNNER_TEMP/tend-codex-proxy.json"
-        rm -f -- "$SERVER_INFO_FILE"
+        PROXY_LOG_FILE="$RUNNER_TEMP/tend-codex-proxy.log"
+        rm -f -- "$SERVER_INFO_FILE" "$PROXY_LOG_FILE"
+        if [ -z "$PROXY_API_KEY" ]; then
+          echo "::error::OPENAI_API_KEY is unset. Set the OPENAI_API_KEY repo secret."
+          exit 1
+        fi
         (
-          exec env -u PROXY_API_KEY -u NODE_OPTIONS \
+          exec /usr/bin/env -i \
+            PATH=/usr/sbin:/usr/bin:/sbin:/bin \
             NODE_OPTIONS=--disable-sigusr1 \
-            "$CODEX_PROXY_BIN" \
+            "$NODE_BIN" "$CODEX_PROXY_BIN" \
             --http-shutdown \
             --server-info "$SERVER_INFO_FILE" <<< "$PROXY_API_KEY"
-        ) &
+        ) > "$PROXY_LOG_FILE" 2>&1 &
         for _ in {1..10}; do
           [ -s "$SERVER_INFO_FILE" ] && break
           sleep 1
         done
         if [ ! -s "$SERVER_INFO_FILE" ]; then
+          cat "$PROXY_LOG_FILE" >&2 || true
           echo "::error::OpenAI Responses proxy did not start"
           exit 1
         fi
@@ -282,6 +328,7 @@ runs:
         PROMPT: ${{ inputs.prompt }}
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
+        EXTRA_ARGS: ${{ inputs.args }}
         CODEX_SANDBOX_MODE: ${{ inputs.sandbox }}
       # runner.py preserves the final message even when codex exits non-zero.
       # Base64 keeps arbitrary agent output in one GITHUB_OUTPUT line; consumers
@@ -343,8 +390,8 @@ runs:
     # Gate on the job being red, not on the agent step specifically — see the
     # matching note in claude/action.yaml, including why the security preflight
     # is excluded. Every step ahead of `codex` (the rate-limit preflight, bot-ID
-    # resolution, auth validation, the CLI and plugin installs, the AGENTS.md
-    # staging, the PR config restoration) strands the same work when it fails, and
+    # resolution, the CLI and proxy installs, the sandbox handoff, the AGENTS.md
+    # staging, and PR config restoration) strands the same work when it fails, and
     # keying on `steps.codex.outcome` kept all of them out of the outage
     # tracker.
     - name: Report failure

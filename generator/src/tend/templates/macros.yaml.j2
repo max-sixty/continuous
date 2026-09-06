@@ -34,12 +34,15 @@
 {% endif %}
 {% else %}
           openai_api_key: ${{ secrets.<<openai_key_secret>> }}
-{% if cfg.effort %}
-          effort: <<cfg.effort>>
-{% endif %}
 {% endif %}
           bot_name: <<cfg.bot_name>>
           model: <<cfg.model>>
+{% if cfg.effort %}
+          effort: <<cfg.effort>>
+{% endif %}
+{% if cfg.args %}
+          <<block_input('args', cfg.args|join('\n'))>>
+{% endif %}
 {% if cfg.sandbox_path %}
           <<block_input('sandbox_path', cfg.sandbox_path|join('\n'))>>
 {% endif %}
