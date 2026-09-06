@@ -40,13 +40,14 @@ inputs:
       Reasoning effort — low, medium, high, or xhigh. Empty means leave
       at Codex CLI default (medium for gpt-5.5).
   sandbox:
-    # The inner Codex sandbox is available on Linux: current Codex packages a
-    # bubblewrap fallback when the host has none. Tend still defaults to full
-    # local execution because the GitHub runner is ephemeral and several agent
-    # workflows need unrestricted writes across the checkout. The separate UID
-    # and credential proxies below remain the credential boundary either way.
+    # Restricted modes cannot currently initialize bubblewrap's loopback
+    # network on the standard GitHub-hosted Ubuntu 24.04 runner. Tend defaults
+    # to full local execution inside that ephemeral runner; the separate UID
+    # and credential proxies below remain the credential boundary.
     default: danger-full-access
-    description: Codex sandbox mode (workspace-write, read-only, danger-full-access)
+    description: >-
+      Codex sandbox mode. Restricted modes require a compatible Linux runner;
+      GitHub-hosted Ubuntu 24.04 currently requires danger-full-access.
   codex_version:
     default: "0.151.0"
     description: >-

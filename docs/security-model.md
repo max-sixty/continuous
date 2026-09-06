@@ -404,12 +404,12 @@ network. It cannot read the real credentials. Config pinning prevents
 *Claude Code's own* startup hooks from being hijacked, but it can't prevent
 an agent from voluntarily running `make test` on a repo where `make test` has
 been weaponized. The experimental Codex harness currently defaults to
-`sandbox: danger-full-access`. Current Codex bundles a bubblewrap fallback on
-Linux, and CI exercises that sandbox primitive; lack of bubblewrap is not the
-reason for the default. Tend has not yet validated its full workflow under the
-more restrictive modes. The ephemeral runner VM contains local execution, and
-the separate UID plus credential proxy keeps the real credentials outside the
-agent process either way.
+`sandbox: danger-full-access`. On the standard GitHub-hosted Ubuntu 24.04
+runner, Codex's restricted Linux sandbox cannot initialize bubblewrap's
+loopback network, so those modes do not currently run in Tend's default
+environment. The ephemeral runner VM contains local execution, and the
+separate UID plus credential proxy keeps the real credentials outside the
+agent process.
 
 **Write access still starts workflows.** With the operational secrets
 environment-gated, a write-scoped actor can no longer read them out of a

@@ -266,6 +266,11 @@ stdin by OpenAI's narrow Responses API proxy and is never placed in the agent's
 environment. A bundled `AGENTS.md` teaches Codex to resolve tend's slash
 commands to skill markdown.
 
+Codex currently runs with `danger-full-access` inside the ephemeral runner.
+Its restricted Linux modes cannot initialize bubblewrap's loopback network on
+the standard GitHub-hosted Ubuntu 24.04 runner; the separate UID and credential
+proxies remain the credential boundary.
+
 Use `OPENAI_API_KEY` (a standard OpenAI API key, pay-per-token, from
 platform.openai.com). Works for any repo, public or private.
 

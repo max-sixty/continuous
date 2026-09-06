@@ -122,9 +122,11 @@ jobs:
   # .agents/plugins/marketplace.json or the plugin manifest that Codex can no
   # longer install fails here rather than in an adopter's job.
   #
-  # It does not cover an agent session: model selection, sandbox behavior
-  # under a live model, and whether the final message reaches
-  # --output-last-message all need a real key.
+  # It does not cover an agent session: model selection and whether the final
+  # message reaches --output-last-message need a real key. Nor does it promise
+  # a restricted Linux sandbox: bubblewrap's loopback setup is denied on the
+  # standard GitHub-hosted Ubuntu 24.04 runner, so the action defaults to
+  # danger-full-access.
   test-codex-surface:
     runs-on: ubuntu-24.04
     steps:
@@ -142,10 +144,6 @@ jobs:
             "@openai/codex-responses-api-proxy@$v"
           codex --version
           codex-responses-api-proxy --help >/dev/null
-          # Current Codex bundles a bubblewrap fallback on Linux. Exercise the
-          # primitive rather than repeating the stale assumption that hosted
-          # runners cannot use the inner sandbox.
-          codex sandbox linux -- /bin/true
 
           # Every flag the action's `Run Codex` step passes. Matching on
           # `--flag <` pins the option to one that still takes a value, so a
