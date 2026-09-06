@@ -77,13 +77,6 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
     openai_proxy = steps["Start OpenAI Responses proxy"]
     assert openai_proxy["if"] == "steps.codex_auth.outputs.mode == 'api-key'"
     assert openai_proxy["env"]["PROXY_API_KEY"] == "${{ inputs.openai_api_key }}"
-    assert openai_proxy["env"]["BASH_ENV"] == ""
-    assert openai_proxy["env"]["BASHOPTS"] == ""
-    assert openai_proxy["env"]["SHELLOPTS"] == ""
-    assert openai_proxy["env"]["PS4"] == ""
-    assert openai_proxy["run"].startswith(
-        "set +x\nPATH=/usr/sbin:/usr/bin:/sbin:/bin\n"
-    )
     assert "exec /usr/bin/env -i" in openai_proxy["run"]
     assert '"$NODE_BIN" "$CODEX_PROXY_BIN"' in openai_proxy["run"]
     assert '<<< "$PROXY_API_KEY"' in openai_proxy["run"]
@@ -108,7 +101,6 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
         "SHELLOPTS": "",
         "PS4": "",
     }
-    assert subscription["run"].startswith("set +x\n")
     assert '"$AGENT_HOME/.codex/auth.json"' in subscription["run"]
     assert 'rm -f -- "$RUNNER_TEMP/tend-codex-auth.json"' in subscription["run"]
     run_env = steps["Run Codex"]["env"]
@@ -128,6 +120,34 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
     assert steps["Token usage"]["env"]["SANDBOX_REAPED"] == (
         "${{ steps.sandbox_reap.outputs.sandbox_reaped }}"
     )
+
+
+def test_codex_hardened_shells_scrub_startup_and_pin_command_resolution() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "action.yaml").read_text()
+    )
+    safe_path = "PATH=/usr/sbin:/usr/bin:/sbin:/bin"
+
+    for step in action["runs"]["steps"]:
+        if "--noprofile" not in step.get("shell", ""):
+            continue
+
+        env = step.get("env", {})
+        assert env["BASH_ENV"] == "", step["name"]
+        lines = step["run"].splitlines()
+        if len(lines) == 1:
+            assert lines[0].startswith(f"{safe_path} /usr/bin/"), step["name"]
+            continue
+
+        assert {name: env[name] for name in ("BASHOPTS", "SHELLOPTS", "PS4")} == {
+            "BASHOPTS": "",
+            "SHELLOPTS": "",
+            "PS4": "",
+        }, step["name"]
+        assert lines[0] == "set +x", step["name"]
+        assert lines[1] == safe_path or lines[1].startswith("/usr/bin/env -i"), step[
+            "name"
+        ]
 
 
 def test_experimental_memory_gist_sync_cannot_replace_the_agent_verdict() -> None:

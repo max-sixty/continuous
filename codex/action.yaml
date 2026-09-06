@@ -316,6 +316,7 @@ runs:
         PS4: ""
       run: |
         set +x
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
         sudo -u "$SANDBOX" mkdir -p "$AGENT_HOME/.codex"
         sudo install -o "$SANDBOX" -g "$SANDBOX" -m 600 \
           "$RUNNER_TEMP/tend-codex-auth.json" "$AGENT_HOME/.codex/auth.json"
