@@ -188,7 +188,15 @@ Note the PR number for the comment.
 
 **Recheck before posting** per **Recheck Before Posting** in `/tend-ci-runner:running-in-ci` — triage can take minutes, so re-fetch the issue and skip any point a new human comment or a sibling tend workflow already covered.
 
-Always comment via `gh issue comment`. Write for the issue author: lead with the current disposition, then give the causal finding and the action taken or the one concrete input or decision still needed. Link any fix, reproduction, or duplicate. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`; do not restate the report or narrate the investigation. Acknowledge the reporter when the situation calls for it, but do not use thanks or maintainer deferrals as fixed openers and closers. Do not present the bot's judgment as a maintainer decision.
+Always comment via `gh issue comment`. Write for the issue author: lead with the current disposition, then give the causal finding and the action taken or the one concrete input or decision still needed. Link any fix, reproduction, or duplicate. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`; do not restate the report or narrate the investigation. Never claim the issue is fully resolved by automation alone — an opened fix still needs maintainer review and landing. Acknowledge the reporter when the situation calls for it, but do not use thanks or maintainer deferrals as fixed openers and closers. Do not present the bot's judgment as a maintainer decision.
+
+Read the reporter's relationship to the repository before composing the reply:
+
+```bash
+gh api "repos/$GITHUB_REPOSITORY/issues/$ARGUMENTS" --jq '.author_association'
+```
+
+Omit a maintainer-deferral closer when `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`; deferring to a maintainer reads as absurd when the reporter is one. For other reporters, a natural boundary can signal that the bot's action is not authoritative. This is a role distinction, not prescribed wording.
 
 **Stay within what you verified.** State facts you found in the codebase — don't characterize something as "known" unless you find prior issues or documentation about it. Don't speculate beyond the code you read.
 
@@ -214,7 +222,7 @@ Good:
 
 **Fix ready**
 
-> Thanks for the clear report. The second retry was dropping the resolved workspace root. #123 keeps it across attempts and adds a regression test.
+> Thanks for the clear report. The second retry was dropping the resolved workspace root. #123 keeps it across attempts and adds a regression test; it still needs maintainer review before it lands.
 
 **Reproduction only**
 

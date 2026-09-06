@@ -228,7 +228,7 @@ if [ -n "$OLD_VER" ] && [ -n "$NEW_VER" ] && [ "$OLD_VER" != "$NEW_VER" ]; then
   TITLE="chore: update tend workflows ($OLD_VER → $NEW_VER)"
   # The real "what changed": squash-merge subjects between the two release
   # tags. First line of each upstream commit; empty if the call fails, in
-  # which case the body carries only the version line.
+  # which case the body keeps the version line and compare link.
   gh api "repos/max-sixty/tend/compare/$OLD_VER...$NEW_VER" \
     --jq '.commits[].commit.message | split("\n")[0]' \
     > "/tmp/tend-upstream-commits.txt" 2>/dev/null || true
@@ -237,7 +237,7 @@ printf '%s\n' "$TITLE" > "/tmp/tend-pr-title"
 echo "OLD=$OLD_VER NEW=$NEW_VER  compare: https://github.com/max-sixty/tend/compare/$OLD_VER...$NEW_VER"
 ```
 
-Compose the PR body with the Write tool at `/tmp/tend-update-body.md`. Its reader is deciding whether to adopt the regenerated workflows, so explain the consumer-visible effect of the upgrade rather than inventorying changed files or commits. When the version changed, state the old and new versions, synthesize related upstream changes into the behavior adopters will notice, and link the comparison as support. Rewrite each `(#NNN)` reference as `max-sixty/tend#NNN` — a bare `#NNN` auto-links to this repo's own issues, not tend's. Filter out release mechanics, action-pin and lockfile bumps, and tend-internal work with no adopter-visible effect. If the comparison is unavailable, state only what the available evidence supports. For a same-version regeneration, explain the generator behavior that made the committed workflows stale. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`.
+Compose the PR body with the Write tool at `/tmp/tend-update-body.md`. Its reader is deciding whether to adopt the regenerated workflows, so explain the consumer-visible effect of the upgrade rather than inventorying changed files or commits. When the version changed, state the old and new versions, synthesize the entries in `/tmp/tend-upstream-commits.txt` into the behavior adopters will notice, and link the comparison as support. Rewrite each `(#NNN)` reference as `max-sixty/tend#NNN` — a bare `#NNN` auto-links to this repo's own issues, not tend's. Filter out release mechanics, action-pin and lockfile bumps, and tend-internal work with no adopter-visible effect. If the commits file is empty, the comparison call failed: include only the version line and compare link, and do not infer upstream behavior. For a same-version regeneration, explain the generator behavior that made the committed workflows stale. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`.
 
 Then ship it:
 

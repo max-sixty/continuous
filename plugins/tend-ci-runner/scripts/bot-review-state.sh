@@ -38,7 +38,8 @@
 #   at_head             {id, state, at, draft_mode} — newest substantive bot
 #                       review anchored at head and submitted after the newest
 #                       rewrite, else null. `draft_mode` identifies Tend's
-#                       framed draft COMMENT so a later full pass may replace it.
+#                       marker-bearing draft COMMENT (or its temporary legacy
+#                       prose form) so a later full pass may replace it.
 #   orphan_id           id of the newest body-bearing bot review anchored at
 #                       head post-rewrite, else null. A partially-failed review
 #                       POST persists the body and drops the inline comments;

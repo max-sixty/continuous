@@ -126,7 +126,7 @@ If `IS_DRAFT == "true"`, run a lighter review:
 - Skip the duplication scan in step 4 — the author is still shaping the design.
 - Submit as **COMMENT only**, never APPROVE. GitHub blocks approving drafts, and the author hasn't asked for a verdict yet.
 - Make the review's context clear: this is feedback on work in progress, not a merge verdict, and the author can mark it ready to request the full review.
-- Include the exact hidden marker `<!-- tend:draft-review -->` anywhere in the review body. Posting mechanics uses it to replace this COMMENT with a full verdict when the PR becomes ready; it is not part of the reader-facing prose.
+- Include the exact hidden marker `<!-- tend:draft-review -->` anywhere in the review body. Posting mechanics uses it to replace this COMMENT with a full verdict when the PR becomes ready; it is not part of the reader-facing prose. Carry it through any body you recompose — re-targeting after a mid-review push and the 422 body-only retry both rewrite the body, and dropping the marker there forfeits the replacement silently.
 - Skip step 7 (CI monitoring) — drafts churn; CI failures are the author's to chase.
 - Skip step 9 (push fixes) — never push to a WIP branch.
 
@@ -281,7 +281,7 @@ Before composing the final payload, run the preflight without a command. It chec
 ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number>
 ```
 
-On `skip`, post nothing and finish. A re-targeted result also prints `delta: <path>` and updates `/tmp/reviewed-head`. Read that entire file in chunks, update the review, then run the preflight again. Do not post from the re-targeting pass.
+On `skip`, post nothing and finish. A re-targeted result also prints `delta: <path>` and updates `/tmp/reviewed-head`. Read that entire file in chunks, update the review without dropping the draft marker when one is present, then run the preflight again. Do not post from the re-targeting pass.
 
 A non-zero exit from this commandless check means nothing was decided. Fix the
 error and re-run it. In command mode below, `post:` means the outward command
@@ -373,7 +373,7 @@ cat > /tmp/review-payload.json << 'ENDJSON'
 }
 ENDJSON
 
-BODY=$(cat /tmp/review-body.md)
+BODY=$(cat /tmp/review-body.md) || exit 0
 REVIEWED=$(cat /tmp/reviewed-head) || exit 0
 jq --arg body "$BODY" --arg sha "$REVIEWED" \
   '.body = $body | .commit_id = $sha' /tmp/review-payload.json > /tmp/review-final.json
@@ -416,7 +416,7 @@ ORPHAN_ID=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> \
   | jq -r '.orphan_id // empty')
 ```
 
-Then, in either case, **move the failed inline comments into the review body** as fenced code blocks with file paths, and:
+Then, in either case, **move the failed inline comments into the review body** as fenced code blocks with file paths, preserving the hidden marker when this is a draft review, and:
 
 - **If `ORPHAN_ID` is non-empty (case a)**: edit the existing review instead of creating a duplicate.
   ```bash
