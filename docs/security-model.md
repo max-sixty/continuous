@@ -2,15 +2,9 @@
 
 Tend gives an AI agent write access to a repository and runs it on
 attacker-controlled input (PR diffs, issue bodies, comments, CI logs). The
-agent needs enough access to be useful (push commits, post reviews, create
-PRs) but every capability is a capability an attacker inherits if they can
-hijack the session.
-
-A determined attacker with time and skill will eventually get the tokens —
-they're in memory during every workflow run, and Claude executes arbitrary
-code. The goal isn't to make exfiltration impossible. It's to make the
-tokens less valuable when leaked, limit what a hijacked session can do, and
-make unsophisticated attacks fail outright.
+agent uses authenticated GitHub and model connections to push commits, post
+reviews, and create PRs. The security model keeps the real credentials outside
+the agent process and requires a human to land code.
 
 Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
@@ -23,18 +17,14 @@ outside those paths are read from the fork's own tree.
 
 ## Threats
 
-Three things an attacker wants, roughly in order of severity:
+Two things an attacker wants, roughly in order of severity:
 
 1. **Merge malicious code to the default branch.** Game over — the attacker
    controls the repo. Everything else is damage limitation compared to this.
 
-2. **Exfiltrate tokens.** The bot token grants write access to the repo
-   (branches, PRs, comments). The Claude OAuth token grants billed API access.
-   With a long-lived PAT, the attacker keeps access indefinitely.
-
-3. **Hijack a single session.** Even without stealing tokens, an attacker who
-   controls what Claude does in one run can push malicious branches, post
-   misleading reviews, or create spam PRs.
+2. **Hijack a single session.** An attacker who controls what the agent does
+   in one run can push malicious branches, post misleading reviews, or create
+   spam PRs.
 
 The attack surface varies by workflow. `tend-review` is the most exposed —
 the attacker controls the entire PR diff, which Claude reads and reasons
@@ -401,9 +391,7 @@ base64-encoded or embedded in JSON, the redaction misses it.
 When an agent runs tests or build commands on a fork PR, it executes code the
 attacker wrote. A `Makefile`, `package.json` postinstall hook, or
 `conftest.py` can do anything the sandbox user can and send data over the
-network. It cannot read the real credentials, but it can use the GitHub proxy
-as the bot for the lifetime of the run and use the model proxy for inference.
-Config pinning prevents
+network. It cannot read the real credentials. Config pinning prevents
 *Claude Code's own* startup hooks from being hijacked, but it can't prevent
 an agent from voluntarily running `make test` on a repo where `make test` has
 been weaponized. The experimental Codex harness currently defaults to
@@ -420,9 +408,7 @@ workflow it pushes; what it keeps is invocation. It can post the comments
 and reviews that wake the bot, and it can forge the `repository_dispatch`
 that tend-mention's relay uses — both start only the default branch's
 reviewed workflow files, with the engagement checks applied to the record
-GitHub holds rather than to the payload. The secrets are also still in
-memory during every legitimate run, so an attacker who gets code execution
-inside one retains everything the side-channel entry below describes.
+GitHub holds rather than to the payload.
 
 **Data exfiltration via side channels.** An attacker who gets code execution
 can exfiltrate repository contents and agent-visible context via DNS queries,
@@ -430,13 +416,6 @@ HTTP requests to an external server, or workflow logs; on GitHub-hosted
 runners there's no way to restrict outbound network access. On both harnesses
 the credential isolation above keeps the real tokens out of the agent's reach,
 so they are not among what a hijacked session can send.
-
-**Long-lived PAT authority.** A classic PAT is valid until revoked and grants
-access to every public repo the bot account can reach. Credential isolation
-prevents the agent from carrying that authority away after the run, but a
-hijacked session can still use it through the live proxy to push unprotected
-branches, create PRs, close issues, and post comments. The merge restriction,
-environment gate, and immutable releases bound the higher-impact operations.
 
 **Prompt injection without code execution.** Even without hijacking the
 tools, an attacker who controls what Claude reads can influence its behavior.
@@ -455,6 +434,5 @@ to anyone who learns its URL, so the Gist ID stays out of committed public files
 and the experiment is refused for private repositories. It is not hidden from
 the session: the agent's proxied bot access can list the account's Gists.
 
-Deferred hardening options (Haiku pre-screening, read-only fork PRs, network
-isolation, workflow-dispatch isolation, GitHub App in place of PAT) live in
-`TODO.md`.
+Deferred hardening options (Haiku pre-screening, read-only fork PRs, and
+network isolation) live in `TODO.md`.

@@ -61,11 +61,6 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
   - Maintainers of sizeable OSS projects [get a 20x Claude Max subscription
     for free from
     Anthropic](https://claude.com/contact-sales/claude-for-oss).
-- A hijacked agent can use the bot's proxied GitHub authority while that run
-  is alive and spend model tokens. The agent cannot read the credentials
-  themselves, but the live proxies are still capabilities it can invoke.
-  - They specifically _cannot_ merge to the default branch. Releases published
-    after installation are immutable, including their tag and assets.
 
 ## Workflows
 
@@ -164,8 +159,8 @@ secrets into it stays manual — their values can't be read back.
 **Credential isolation** — both harnesses run the agent as a separate non-sudo
 user. Tend's exact-host proxy holds the bot token; Claude model auth uses the
 same mechanism, while Codex model auth uses OpenAI's proxy that accepts only
-Responses API calls. Code running in the session can invoke those live
-capabilities but cannot read the real credentials.
+Responses API calls. The proxies authenticate the agent without placing the
+real credentials in its environment.
 
 **Config pinning** — the action restores `.mcp.json`, `.claude.json`,
 `.gitmodules`, `.ripgreprc`, `.husky`, and every `CLAUDE.md`, `CLAUDE.local.md`,

@@ -100,7 +100,6 @@ in depth.
 | Token | Lifetime | If leaked, attacker can... | ...but cannot |
 |-------|----------|----------------------------|---------------|
 | Bot token (PAT) | Long-lived | Push to unprotected branches, create PRs, impersonate the bot, indefinitely | Merge PRs (merge restriction), push to the default branch, read any environment-gated secret — operational or release — from a workflow it pushes |
-| Bot token (App) | ~1 hour | Same as PAT, until the token expires | Same, plus auto-expiry |
 | Claude OAuth | Long-lived | Run Claude sessions billed to the account | Access GitHub |
 | `OPENAI_API_KEY` | Until revoked | Run Codex/OpenAI calls billed to the account | Access GitHub |
 
@@ -129,13 +128,13 @@ workflow.
 Use a single bot token across all workflows for consistent identity. The
 merge restriction caps blast radius regardless of which token is used.
 
-Two tokens are needed: the bot's PAT (or GitHub App) credential, plus a
-harness-auth credential whose form depends on `harness` in
+Two tokens are needed: the bot's PAT, plus a harness-auth credential whose
+form depends on `harness` in
 `.config/tend.yaml`.
 
 | Token | Purpose |
 |-------|---------|
-| Bot token (PAT or App) | GitHub API and git operations. Consistent bot identity. |
+| Bot token (PAT) | GitHub API and git operations. Consistent bot identity. |
 | Harness auth (one of, per harness) | Authenticates the agent runtime. |
 | ↳ Claude OAuth token | `harness: claude`: authenticates Claude Code to the Anthropic API. |
 | ↳ `OPENAI_API_KEY` | `harness: codex`: standard OpenAI API key, per-token billing. The subscription `auth.json` path is not supported (see above). |
