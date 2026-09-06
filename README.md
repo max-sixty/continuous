@@ -289,11 +289,9 @@ Two auth modes:
 The split fixes the old race: no consumer receives the rotating refresh token,
 so concurrent jobs cannot invalidate one another's refresh state. This is
 experimental because it uses Codex's internal `chatgptAuthTokens` mode. The
-weekly job follows OpenAI's
-[CI/CD guidance](https://learn.chatgpt.com/docs/auth/ci-cd-auth): it runs
-Codex's built-in refresh and persists the updated full bundle. Tend pins and
-tests the Codex version, but an OpenAI change can still break the weekly refresh
-until Tend updates.
+weekly job runs Codex's built-in refresh and persists the updated full bundle.
+Tend pins and tests the Codex version, but an OpenAI change can still break the
+weekly refresh until Tend updates.
 
 ## Badge
 

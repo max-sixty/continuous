@@ -126,10 +126,9 @@ with `Environments: write`; the workflow needs it because `GITHUB_TOKEN` cannot
 rewrite Actions environment secrets. It is never passed to an agent session.
 
 The consumer path is experimental and may break when OpenAI changes Codex
-because it depends on an internal auth mode. The serialized weekly job follows
-OpenAI's [CI/CD auth guide](https://learn.chatgpt.com/docs/auth/ci-cd-auth) by
-running Codex's built-in refresh and persisting its updated `auth.json`. Use a
-dedicated ChatGPT account so the workflow's token rotation is independent of a
+because it depends on an internal auth mode. The serialized weekly job runs
+Codex's built-in refresh and persists its updated `auth.json`. Use a dedicated
+ChatGPT account so the workflow's token rotation is independent of a
 maintainer's local Codex login.
 
 ## Token assignment
