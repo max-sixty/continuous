@@ -32,8 +32,11 @@ inputs:
     default: gpt-5.5
     description: >-
       Codex model to use. Current visible models per Codex's model cache:
-      gpt-5.5 (default, top tier), gpt-5.4, gpt-5.4-mini, gpt-5.3-codex,
-      gpt-5.2.
+      gpt-6-astra, gpt-5.5 (this input's default), gpt-5.4, gpt-5.4-mini,
+      gpt-5.3-codex, gpt-5.2. Codex 0.153.4 made gpt-6-astra the bundled
+      default when no model is configured; the action always passes
+      `--model`, so that default never applies here — moving to it is a
+      deliberate change to this value.
   effort:
     default: ""
     description: >-
@@ -53,7 +56,7 @@ inputs:
     default: danger-full-access
     description: Codex sandbox mode (workspace-write, read-only, danger-full-access)
   codex_version:
-    default: "0.151.0"
+    default: "0.153.4"
     description: >-
       `@openai/codex` npm version to install. Must ship
       the `codex plugin add` subcommand (PR #21396, first released in
