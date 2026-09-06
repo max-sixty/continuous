@@ -66,17 +66,17 @@ def _probe_consumer_auth(codex: str, codex_home: Path, env: dict[str, str]) -> N
         .decode()
         .rstrip("=")
     )
-    consumer = {
-        "OPENAI_API_KEY": None,
-        "auth_mode": "chatgptAuthTokens",
-        "tokens": {
-            "access_token": "access-only-probe",
-            "refresh_token": "",
-            "id_token": f"e30.{payload}.c2ln",
-            "account_id": "probe-account",
-        },
-        "last_refresh": "2026-09-06T12:00:00Z",
-    }
+    consumer = codex_subscription_auth.consumer_auth(
+        {
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": "access-only-probe",
+                "refresh_token": "probe-refresh",
+                "id_token": f"e30.{payload}.c2ln",
+                "account_id": "probe-account",
+            },
+        }
+    )
     auth_file = codex_home / "auth.json"
     codex_subscription_auth.prepare(
         codex_auth_json=json.dumps(consumer),

@@ -1380,6 +1380,7 @@ def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
 # once Actions is enabled there. Without the guard, the `tend` action step fails
 # noisily because the bot/Claude secrets are empty in the fork's secret store.
 _GUARDED_WORKFLOWS = [
+    "tend-codex-auth-refresh.yaml",
     "tend-ci-fix.yaml",
     "tend-nightly.yaml",
     "tend-weekly.yaml",
@@ -1431,7 +1432,9 @@ def test_fork_guard_absent_for_unguarded(tmp_path: Path, filename: str) -> None:
 def test_fork_guard_omitted_when_repo_owner_empty(tmp_path: Path) -> None:
     """When auto-detection fails (non-github remote, no remote, etc.), no
     guard is rendered and workflows behave as they did pre-change."""
-    cfg = Config.load(_minimal_config(tmp_path, _extra_for("ci-fix")))
+    cfg = Config.load(
+        _minimal_config(tmp_path, _extra_for("ci-fix") + "harness: codex\n")
+    )
     # cfg.repo_owner is "" by default — Config.load does not auto-detect.
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     for filename in _GUARDED_WORKFLOWS:
@@ -1748,6 +1751,8 @@ def test_unknown_job_warns(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
 def _extra_for(name: str) -> str:
     """Return extra config needed for a specific generator (e.g. ci-fix)."""
+    if name == "codex-auth-refresh":
+        return "harness: codex\n"
     if name == "ci-fix":
         return 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
     return ""
@@ -1931,6 +1936,39 @@ def test_codex_generates_one_serialized_weekly_auth_refresher(tmp_path: Path) ->
         "codex_auth_json": "${{ secrets.CODEX_AUTH_JSON }}",
         "codex_refresh_auth_json": "${{ secrets.CODEX_REFRESH_AUTH_JSON }}",
         "refresh_pat": "${{ secrets.CODEX_REFRESH_PAT }}",
+    }
+
+
+def test_codex_auth_refresher_honors_workflow_config(tmp_path: Path) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                harness: codex
+                workflows:
+                  codex-auth-refresh:
+                    jobs:
+                      refresh:
+                        runs-on: ubuntu-22.04
+            """),
+        )
+    )
+
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    refresh = yaml.safe_load(workflows["tend-codex-auth-refresh.yaml"].content)
+    assert refresh["jobs"]["refresh"]["runs-on"] == "ubuntu-22.04"
+
+
+def test_codex_auth_refresher_can_be_disabled(tmp_path: Path) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            "harness: codex\nworkflows:\n  codex-auth-refresh:\n    enabled: false\n",
+        )
+    )
+
+    assert "tend-codex-auth-refresh.yaml" not in {
+        wf.filename for wf in generate_all(cfg)
     }
 
 

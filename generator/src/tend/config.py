@@ -48,6 +48,9 @@ STANDARD_WORKFLOWS = {
 }
 KNOWN_WORKFLOWS = {
     *STANDARD_WORKFLOWS,
+    # Generated whenever at least one workflow uses Codex. It still honors
+    # the common workflow enabled/override contract.
+    "codex-auth-refresh",
     # install-test is opt-in via `tend init --with-install-test` but still
     # honors workflow_extra / jobs overrides from .config/tend.yaml.
     "install-test",

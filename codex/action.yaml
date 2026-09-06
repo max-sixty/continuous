@@ -244,6 +244,7 @@ runs:
           --model "$MODEL"
           --sandbox "$SANDBOX"
           --output-last-message "$OUTPUT_FILE"
+          --config 'cli_auth_credentials_store="file"'
         )
         if [ -n "$EFFORT" ]; then
           ARGS+=(--config "model_reasoning_effort=\"$EFFORT\"")

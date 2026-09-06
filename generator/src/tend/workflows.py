@@ -744,7 +744,10 @@ def generate_all(
         wf = _apply_extras(wf, wf_cfg)
         results.append(wf)
     if "codex" in cfg.enabled_harnesses():
-        results.append(generate_codex_auth_refresh(cfg))
+        wf_cfg = cfg.workflows.get("codex-auth-refresh", WorkflowConfig())
+        if wf_cfg.enabled:
+            wf = generate_codex_auth_refresh(cfg)
+            results.append(_apply_extras(wf, wf_cfg))
     if with_install_test:
         wf = generate_install_test(cfg)
         wf_cfg = cfg.workflows.get("install-test", WorkflowConfig())

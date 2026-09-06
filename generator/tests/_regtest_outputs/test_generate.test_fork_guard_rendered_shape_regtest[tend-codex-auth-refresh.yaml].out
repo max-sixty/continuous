@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   refresh:
+    if: github.repository_owner == 'test-owner'
     environment:
       name: tend
       deployment: false

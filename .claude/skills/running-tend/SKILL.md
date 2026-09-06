@@ -245,7 +245,7 @@ swamped run finishes nothing.
 | `claude_version` | `claude/action.yaml` | npm's `latest` dist-tag, not `stable` |
 | `mitmproxy_version` | `claude/action.yaml` | move the root `pyproject.toml` `==` pin with it and `uv lock` |
 | `uv_version` | both harness `action.yaml` files | move both defaults together, with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml`, `codex/refresh/action.yaml` | move both defaults to `latest`; `alpha` only for a fix not yet released |
+| `codex_version` | `codex/action.yaml`, `codex/refresh/action.yaml` | move both defaults together; `alpha` only for a fix not yet released |
 | `uv_build` | `generator/pyproject.toml` | its range must contain the uv doing the build; a stale one only warns during `uv build`, so only this sweep catches it |
 | `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh` and that `wt config approvals add --yes` still records approvals without a TTY |
 
@@ -263,11 +263,13 @@ also supplies the agent fallback in both harnesses. CI smokes the installer and
 proxy together, so move uv and mitmproxy in one PR.
 
 For `codex_version`, CI's `test-codex-surface` job installs whatever is pinned
-and asserts the CLI surface the action depends on, so a bump that breaks it
-fails on its own PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live
-agent session stays unverified — skim the codex CHANGELOG across the bump for
-model availability, sandbox behavior, and `--output-last-message`, and note what
-you find in the PR.
+and asserts the credential-free CLI surface the action depends on. Before a
+bump, use an isolated Plus/Pro login to run the refresh action and require both
+the full and access-only credentials to rotate. Inspect `needs_refresh` in
+Codex's auth manager too: the weekly action forces `last_refresh` stale, so do
+not bump if the access token's JWT expiry bypasses that field. Skim the codex
+CHANGELOG across the bump for model availability, sandbox behavior, and
+`--output-last-message`, and note what you find in the PR.
 
 ### `uses:` refs
 

@@ -13,8 +13,7 @@ concurrency:
 
 jobs:
   refresh:
-<<fork_guard_if(cfg)>>
-<<environment()>>
+<<fork_guard_if(cfg)>><<environment()>>
     runs-on: ubuntu-24.04
     permissions:
       contents: read
