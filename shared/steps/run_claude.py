@@ -66,10 +66,12 @@ def settings(allowed_tools: str) -> dict[str, Any]:
     """``.claude/settings.local.json`` for the run.
 
     ``permissions.allow`` is built from the comma-separated ``allowed_tools``
-    input. With ``defaultMode: bypassPermissions`` the allow list is largely
-    moot (every tool is permitted), but it is retained so the listed tools stay
-    granted via the layered settings if an adopter overrides ``defaultMode`` to
-    a stricter mode.
+    input. The mode itself comes from ``--permission-mode`` on argv, not from
+    here: Claude Code 2.1.257 ignores ``defaultMode: bypassPermissions`` in a
+    project ``settings.json``/``settings.local.json`` and names the flag as the
+    way to set it. The key is left in place as the declaration of intent that
+    the flag carries out; the allow list is what a user- or managed-settings
+    layer would still narrow against.
 
     ``skipDangerousModePermissionPrompt`` pre-accepts the one-time bypass-mode
     "I accept the risks" disclaimer — the key the dialog's accept button writes,
@@ -110,9 +112,9 @@ def launch_argv(
     assignments are the caller-appended names that docstring allows for.
 
     The model, tools and prompts are argv rather than environment: nothing on
-    the far side reads them, and ``--permission-mode`` restates what
-    ``settings.local.json`` already says so the mode survives an adopter
-    overriding that file.
+    the far side reads them, and ``--permission-mode`` is what actually sets
+    the mode — a project ``settings.local.json`` cannot, since Claude Code
+    2.1.257 ignores ``defaultMode: bypassPermissions`` there.
     """
     agent_env = _sandbox.launch_env(agent_env_file)
     if settings_file:

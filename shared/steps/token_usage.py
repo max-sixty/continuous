@@ -9,13 +9,13 @@ Reads (env):
   MODEL             - model name, copied through to the record; may be empty
   STREAM_JSON       - claude: the headless run's stream-json (NDJSON of SDK
                       message events); may be empty or name a missing file
-  AGENT_HOME        - claude: the sandbox user's home, exported by
+  AGENT_HOME        - the sandbox user's home, exported by
                       setup-sandbox.sh via ``$GITHUB_ENV``. Unset when setup
                       died early, which is why consolidation tolerates it
-  RUNNER_TEMP       - claude: parent of the consolidated log dir, and where
-                      the agent's stderr log was written
-  HOME              - codex: parent of ``.codex/sessions`` and
-                      ``.codex/projects``
+  RUNNER_TEMP       - parent of the consolidated log dir, and where Claude's
+                      stderr log was written
+  SANDBOX_REAPED    - ``true`` after the harness has stopped every sandbox
+                      process; agent-owned session trees are copied only then
   GITHUB_REPOSITORY - the record's ``repo``; on claude it also gates the raw
                       stream-json copy to tend's own repo
   GITHUB_WORKFLOW, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_EVENT_NAME,
@@ -39,9 +39,9 @@ Claude's accounting has three paths, tried in order:
    ``usage.*`` and ``num_turns`` are per-event while ``total_cost_usd`` is
    cumulative, so the per-event fields are summed and cost taken from the last.
 2. No result event: the session JSONL this step has just consolidated. A
-   cancelled session never emits a result, and ``tend-review`` runs with
+   cancelled session never emits a result, and ``tend-triage`` runs with
    ``cancel-in-progress: true``, so this is routine rather than exotic — the
-   run may have done dozens of turns and already posted its review.
+   run may have done dozens of turns and already posted its comment.
 3. Neither: the agent never ran (a preflight failure, say). That run genuinely
    cost nothing, so it reports a real zero rather than flagging an unknown.
 
@@ -79,6 +79,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import subprocess
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
@@ -197,7 +198,8 @@ def codex_step(model: str) -> tuple[dict[str, Any], Path]:
     logs_dir = runner_temp / "tend-codex-logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     agent_home = Path(os.environ.get("AGENT_HOME") or "/nonexistent")
-    copy_agent_tree(agent_home / ".codex" / "sessions", logs_dir / "sessions")
+    if os.environ.get("SANDBOX_REAPED") == "true":
+        copy_agent_tree(agent_home / ".codex" / "sessions", logs_dir / "sessions")
     rollouts = sorted((logs_dir / "sessions").rglob("rollout-*.jsonl"))
     return codex_usage(read_all(rollouts), model), logs_dir
 
@@ -205,24 +207,55 @@ def codex_step(model: str) -> tuple[dict[str, Any], Path]:
 def consolidate_logs(logs_dir: Path, runner_temp: Path) -> None:
     """Copy the agent's session JSONL and stderr log into a runner-owned dir.
 
-    The session JSONL is written under the sandbox home with restrictive perms,
-    so the runner needs a chmod first — of the session dir only, not the whole
-    plugin tree. ``AGENT_HOME`` is unset when sandbox setup died before
-    exporting it; the placeholder keeps every command below well-formed and
-    failing, which is the same nothing-to-copy outcome.
+    The copy waits on ``SANDBOX_REAPED``, the supervisor's record that every
+    sandbox process is dead. :func:`copy_agent_tree` checks the tree it is about
+    to read, and a surviving agent could swap a session dir for a symlink
+    between that check and the root copy that follows. The memory save keys on
+    the same output for the same reason, and that read is unprivileged where
+    this one runs as root.
+
+    It is set from a ``finally``, so only a supervisor killed outright — a
+    second signal during an escalating cancel — leaves it unset. That run
+    reports its usage from the stream-json and uploads no session logs.
+
+    ``AGENT_HOME`` is unset when sandbox setup died before exporting it; the
+    placeholder names nothing, which :func:`copy_agent_tree` reads as the same
+    nothing-to-copy outcome as a run whose agent never started.
     """
     logs_dir.mkdir(parents=True, exist_ok=True)
     agent_home = Path(os.environ.get("AGENT_HOME") or "/nonexistent")
-    copy_agent_tree(agent_home / ".claude" / "projects", logs_dir)
+    if os.environ.get("SANDBOX_REAPED") == "true":
+        copy_agent_tree(agent_home / ".claude" / "projects", logs_dir)
     best_effort("cp", "-a", str(runner_temp / "tend-claude-stderr.log"), f"{logs_dir}/")
 
 
 def copy_agent_tree(source: Path, destination: Path) -> None:
-    """Copy a reaped agent's files without letting symlinks cross the UID boundary.
+    """Copy a reaped agent's session dir out of the sandbox home, as root.
 
-    The runner is privileged and the source is agent-owned. Refuse a symlink at
-    either source boundary, copy nested links without dereferencing them, then
-    delete those links before the runner or upload-artifact reads the result.
+    The sandbox user owns ``source`` and its parent, so the agent picks what a
+    privileged command here lands on. Three things close that:
+
+    - **Copy, don't grant.** Reading the tree as root and chowning the copy to
+      the runner needs no permission change on the agent's side. The
+      ``chmod -R a+rX`` this replaces was an escalation primitive: aimed
+      through a symlink it opened up any tree the agent named.
+    - **No symlink at either boundary.** ``cp -a`` follows a symlinked
+      *argument*, so the session dir and the dot-dir holding it are both
+      checked; see :func:`safe_agent_directory`.
+    - **Only regular files inside.** ``cp -a`` reproduces a nested symlink or
+      FIFO as one, and both are removed before anything reads the copy; see
+      :func:`drop_non_regular_files`.
+      ``cp -a`` also preserves the agent's directory modes and ``chown`` leaves
+      them alone, so the modes are normalised too: unlinking needs write on the
+      parent, and a ``0555`` directory would keep what it holds (and raise), a
+      ``0000`` one hide it. That chmod is nothing like the one this replaces —
+      it lands on a destination the runner made and now owns, so there is
+      nothing for the agent to aim it at.
+
+    A boundary that fails the check copies nothing: an empty artifact, the same
+    thing a run whose agent never started leaves behind. Telling the two apart
+    is not worth failing an ``if: always()`` step over a directory the runner
+    may simply be unable to see.
     """
     for boundary in (source.parent, source):
         if not safe_agent_directory(boundary):
@@ -230,19 +263,33 @@ def copy_agent_tree(source: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     best_effort("sudo", "cp", "-a", f"{source}/.", f"{destination}/")
     best_effort("sudo", "chown", "-R", f"{os.getuid()}:{os.getgid()}", str(destination))
-    best_effort("find", str(destination), "-type", "l", "-delete")
+    best_effort("sudo", "chmod", "-R", "u+rwX", str(destination))
+    drop_non_regular_files(destination)
 
 
 def safe_agent_directory(path: Path) -> bool:
-    """Whether *path* is an actual directory, checked without dereferencing it."""
+    """Whether *path* is a real directory rather than a symlink or absent.
+
+    The runner cannot always stat inside the sandbox home — the agent may
+    ``chmod`` its own dot-dir shut — and ``Path.is_symlink`` answers ``False``
+    for a path it cannot reach, which waves a symlink through the check meant
+    to catch it. So the ``lstat`` is raw, and the one question the runner
+    cannot answer is re-asked as root, which can always see. An unreachable
+    answer, root included, reads as unsafe.
+    """
     try:
-        if path.exists() or path.is_symlink():
-            return path.is_dir() and not path.is_symlink()
-    except PermissionError:
-        pass
-    is_dir = (
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return root_test("-d", path) and not root_test("-L", path)
+
+
+def root_test(flag: str, path: Path) -> bool:
+    """``test <flag> <path>`` as root, for a path the runner cannot stat."""
+    return (
         subprocess.run(
-            ["sudo", "test", "-d", str(path)],
+            ["sudo", "test", flag, str(path)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -250,24 +297,30 @@ def safe_agent_directory(path: Path) -> bool:
         ).returncode
         == 0
     )
-    is_link = (
-        subprocess.run(
-            ["sudo", "test", "-L", str(path)],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        ).returncode
-        == 0
-    )
-    return is_dir and not is_link
+
+
+def drop_non_regular_files(logs_dir: Path) -> None:
+    """Remove everything but files and directories from the dir to be uploaded.
+
+    The agent writes only regular files here, so anything else is it reaching
+    for something other than its own session log, and ``cp -a`` reproduces
+    whatever it finds. A symlink stays a symlink, and ``upload-artifact``
+    resolves it as the runner — which can read the proxy's CA private key and
+    its own ``/proc/<pid>/environ``. A FIFO stays a FIFO, and the upload
+    streams every entry that isn't a directory, so opening one with no writer
+    blocks until the job times out. One test on the mode covers both.
+    """
+    for path in list(logs_dir.rglob("*")):
+        mode = path.lstat().st_mode
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+            path.unlink()
 
 
 def best_effort(*argv: str) -> None:
     """Run ``argv``, discarding its output and its failure.
 
-    Everything this runs is a chmod or a copy that enriches the uploaded
-    artifact. None of it is worth failing an ``if: always()`` accounting step
+    Everything this runs is a copy, a chown, or a chmod that enriches the
+    uploaded artifact. None of it is worth failing an ``if: always()`` step
     for, and a partial copy still beats no artifact. ``stdin`` is closed so a
     ``sudo`` without a tty fails instead of waiting for a password.
     """

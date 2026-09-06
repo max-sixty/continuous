@@ -79,6 +79,12 @@ def test_codex_agent_step_receives_only_proxy_dummies() -> None:
     assert not ({"OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN"} & run_env.keys())
     assert 'mapfile -t AGENT_ENV < "$AGENT_ENV_FILE"' in steps["Run Codex"]["run"]
     assert 'model_provider="tend-openai"' in steps["Run Codex"]["run"]
+    reap = steps["Reap sandbox and restore workspace ownership"]
+    assert reap["id"] == "sandbox_reap"
+    assert 'echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"' in reap["run"]
+    assert steps["Token usage"]["env"]["SANDBOX_REAPED"] == (
+        "${{ steps.sandbox_reap.outputs.sandbox_reaped }}"
+    )
 
 
 def test_experimental_memory_gist_sync_cannot_replace_the_agent_verdict() -> None:

@@ -60,7 +60,7 @@ inputs:
     description: >-
       Pinned mitmproxy version for the credential-injection proxy.
   uv_version:
-    default: "0.12.7"
+    default: "0.12.10"
     description: >-
       Pinned fallback `uv` version. The agent PATH appends it after any
       adopter-provided version.
@@ -353,6 +353,7 @@ runs:
     # reads agent-controlled paths, then restore checkout ownership.
     - name: Reap sandbox and restore workspace ownership
       if: always()
+      id: sandbox_reap
       shell: bash
       run: |
         if [ -n "${SANDBOX:-}" ]; then
@@ -362,6 +363,7 @@ runs:
         if [ -n "${CODEX_PROXY_URL:-}" ]; then
           curl --fail --silent --show-error "$CODEX_PROXY_URL/shutdown" || true
         fi
+        echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"
 
     - name: Append skill step summary
       if: always()
@@ -388,6 +390,7 @@ runs:
       shell: bash
       env:
         MODEL: ${{ inputs.model }}
+        SANDBOX_REAPED: ${{ steps.sandbox_reap.outputs.sandbox_reaped }}
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/token_usage.py" --harness codex
 
     - name: Mark event notification read

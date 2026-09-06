@@ -727,7 +727,7 @@ def test_supervise_reaps_the_sandbox_uid_when_the_runner_cancels_the_job(
 
     SIGTERM's default disposition ends this process where it stands, so the
     reap would be skipped and the agent would run on as an orphan — still
-    writing to the workspace — while the runner tore the job down. `tend-review`
+    writing to the workspace — while the runner tore the job down. `tend-triage`
     runs with `cancel-in-progress: true`, so this is a routine exit, not an
     exotic one.
     """

@@ -278,7 +278,8 @@ Concurrency groups:
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
 | triage | `workflow-issue#` | yes — latest comment wins |
 | notifications | `tend-notifications` | **no** — one poll drains notifications and repairs bot PRs at a time |
-| ci-fix / nightly / weekly | none | rare overlap or cron-serialized |
+| ci-fix | `workflow-<watched workflow>-<branch>` | **no** — a session mid-fix may already have pushed a branch or opened a PR |
+| nightly / weekly | none | cron-serialized |
 
 **Fork guard.** Workflows whose triggers can fire from a fork's own
 Actions (`schedule`, `workflow_dispatch`, `workflow_run`, `issues`) carry
@@ -290,6 +291,14 @@ the generated workflow. `tend-review` uses `pull_request_target` (base
 repo only) and `tend-mention`'s review-event paths already filter forks
 via `head.repo.full_name == github.repository`, so neither needs the
 guard.
+
+**Red branches.** A red default branch fails every push that follows it, each
+on its own commit, so ci-fix keys its group on the branch — a commit-keyed
+group collapses nothing, since the burst is distinct commits rather than one
+commit retried. The watched workflow is in the key too, so a red
+`publish-site` isn't starved behind a stream of red `ci`. ci-fix's group is
+job-level, not workflow-level: most `workflow_run` events are green runs the
+job's `if` skips, and a skipped job never enters the group.
 
 **GHA queue depth.** Review sets `queue: max`, so pending PR events within
 GitHub's queue limit wait and a later push cannot replace `ready_for_review`.
@@ -304,7 +313,9 @@ first). The workflow injects the queue-to-run time delta (seconds between event
 timestamp and job start) into the prompt — over ~40 s indicates the job was
 queued behind another run, making conversation drift more likely.
 Notifications stay unread until a poll records an outcome, so the newest
-pending run covers a replaced poll.
+pending run covers a replaced poll. ci-fix keeps the default too, and wants
+it: while a session works a red branch, the newest failure carries that
+branch's current state, so replacing the pending run loses nothing.
 
 ## Skill design: bundled for everyone, overlay for one
 
