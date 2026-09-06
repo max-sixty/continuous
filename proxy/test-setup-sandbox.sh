@@ -251,7 +251,8 @@ verify_codex_launch() {
   sudo -u "$SANDBOX" chmod +x "$stub"
   rm -f "$github_output"
 
-  CODEX_BIN="$stub" CODEX_PROXY_URL=http://127.0.0.1:1234 \
+  CODEX_BIN="$stub" AUTH_MODE=api-key \
+    CODEX_PROXY_URL=http://127.0.0.1:1234 \
     CODEX_SANDBOX_MODE=danger-full-access MODEL=stub-model EFFORT=high \
     PROMPT='stub prompt' BOT_NAME=stub-bot BOT_ID=123 \
     GITHUB_TOKEN=runner-token-must-not-cross \
