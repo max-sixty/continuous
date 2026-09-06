@@ -267,13 +267,8 @@ A bot `APPROVED` keeps deciding the PR until a dismissal or a `CHANGES_REQUESTED
 Keying the dismissal to a post is what leaves it standing: **Recheck Before Posting** rightly suppresses a second deferral comment when one already stands, and a dismissal that rides on that comment is suppressed with it. Dismiss on the conclusion, then say so in the summary — where this session does post a review carrying that conclusion, dismiss after the post lands, so a failed post doesn't leave the PR with neither a verdict nor findings.
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-# "" once a dismissal or a later CHANGES_REQUESTED has cleared it, so a second
-# session over the same PR dismisses nothing.
-STANDING=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> | jq -r '.standing_approval_id')
-# PUT, not POST — the dismiss endpoint requires it.
-[ -z "$STANDING" ] || gh api "repos/$REPO/pulls/<number>/reviews/$STANDING/dismissals" \
-  -X PUT -f message="<what invalidated the approval>"
+uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
+  dismiss <number> "<what invalidated the approval>"
 ```
 
 The test is the merge, not tidiness: a finding you'd have left as a review comment is no reason to withdraw a verdict the code still earns, and neither is a branch that merely can't merge yet — a conflicting PR whose code the approval still covers keeps it. Dismiss when merging the PR, once it could merge, would be the wrong outcome.
@@ -297,7 +292,8 @@ PINNED_SHA=$(git rev-parse HEAD)
 # When the push happened in a /tmp worktree the recipe then removes, capture
 # the OID there — `git rev-parse HEAD > /tmp/<name>-sha` — before the removal.
 # Back in the main checkout HEAD is the default branch, not what you pushed.
-${CLAUDE_PLUGIN_ROOT}/scripts/poll-pr-checks.sh <number> "$PINNED_SHA"
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/poll_pr_checks.py" poll <number> "$PINNED_SHA"
 ```
 
 Invoke this Bash call in the foreground (no `run_in_background`) with `timeout: 600000` (10 min) — the poll runs up to ~9.5 minutes, and the default 2-min Bash timeout would kill it early.
@@ -326,7 +322,8 @@ Poll your checks to terminal, do the follow-up you were gated on, and exit; name
 To rerun a run's failed jobs and wait for the outcome, use the bundled script — it reruns, finds the new attempt's jobs (the parent run's `.status` and the commit rollup stay pending on unrelated siblings, so neither is a usable signal), and polls them to terminal:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/rerun-failed-jobs.sh <run-id>
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/rerun_failed_jobs.py" <run-id>
 ```
 
 Same foreground invocation and 10-min `timeout` as above. Exit 0 prints each job's conclusion — `completed` is not `success`; the follow-up turns on the conclusions. Any other exit means the rerun never took or the jobs are still running at the cap: report them as unverified rather than re-entering.
@@ -467,7 +464,8 @@ Always use markdown links for files, issues, PRs, and docs. **Any link containin
 **Check the body's links before posting it.** Run this over every composed body — comment, PR body, issue body — as part of the pre-post pass, and fix what it names:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/check-body-links.sh /tmp/comment-body.md
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/check_body_links.py" /tmp/comment-body.md
 ```
 
 It resolves every 40-hex SHA in the body against the API and reports any `#L` anchor pinned to a branch or an abbreviation. Resolving is the part a scan by eye cannot do: a hand-typed OID is well-formed whether or not the commit exists, so a fabricated SHA — the model extending an abbreviation it saw in `git log` instead of running `git rev-parse HEAD` — reads as correctly pinned and ships a permalink that 404s. Run it after the push when the body cites a commit from this session; before the push that commit is unreachable and reports as dead, correctly.
@@ -492,7 +490,7 @@ gh api repos/{owner}/{repo}/pulls/{number} -X PATCH \
   -f title="new title" -F body=@/tmp/updated-body.md
 ```
 
-**A description describes the whole PR, not the increment this run reviewed.** It presents the current result coherently; prior attempts and review rounds stay in the thread unless they remain relevant to the merge decision. Scope every behavior claim in it to the PR's merge base — not `LAST_REVIEW_SHA`, and not whatever range this run happened to diff:
+**A description describes the whole PR, not the increment this run reviewed.** It presents the current result coherently; prior attempts and review rounds stay in the thread unless they remain relevant to the merge decision. Scope every behavior claim in it to the PR's merge base — not `last_review_sha`, and not whatever range this run happened to diff:
 
 ```bash
 gh pr diff <number>   # merge-base→head, whatever this session has checked out

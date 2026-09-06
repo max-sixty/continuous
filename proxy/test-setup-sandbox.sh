@@ -46,7 +46,7 @@ plant() {
   printf '#!/bin/sh\necho shared\n' | sudo tee "$shared/tend-shared" >/dev/null
   printf '#!/bin/sh\necho adopter-uv\n' | sudo tee "$shared/uv" >/dev/null
   sudo chmod +x "$shared/tend-shared" "$shared/uv"
-  # setup-sandbox must capture this PATH entry as tool data without resolving
+  # setup_sandbox.py must capture this PATH entry as tool data without resolving
   # its privileged utilities through an adopter-controlled directory.
   printf '#!/bin/sh\nexit 99\n' >"$bin/sudo"
   chmod +x "$bin/sudo"
@@ -58,7 +58,7 @@ plant() {
 }
 
 setup() {
-  local action_run agent_path path_entry
+  local action_run agent_path hostile_python hostile_site path_entry
   set_inputs
   # The workspace path leads; a literal `~` exercises expansion against the
   # sandbox home. The configured directory may be populated later.
@@ -68,19 +68,38 @@ setup() {
   # context, so this entry is accepted and lands in $AGENT_ENV_FILE. That the
   # real workflow name then beats it is _sandbox.py's
   # postcondition, unit-tested there; what this adds is the whole path — a
-  # config value threaded through setup-sandbox.sh into the file, composed by
+  # config value threaded through setup_sandbox.py into the file, composed by
   # the lib, landing in a real sandbox under a real uid.
   export TEND_SANDBOX_ENV="GITHUB_WORKFLOW=spoofed-by-sandbox-env"
   MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
   export MITMPROXY_VERSION
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml) \
     UV_INSTALL_DIR="$TEND_UV_DIR" bash shared/steps/install-uv.sh
+  # The setup step receives both real credentials. Repository-controlled
+  # Python and uv environment variables must not execute code before the
+  # runner-owned script has established the sandbox boundary.
+  hostile_python="$RUNNER_TEMP/tend-hostile-python"
+  hostile_site="$RUNNER_TEMP/tend-hostile-site"
+  mkdir -p "$hostile_site"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    "touch '$RUNNER_TEMP/uv-python-used'" \
+    'exec /usr/bin/python3 "$@"' >"$hostile_python"
+  chmod +x "$hostile_python"
+  printf '%s\n' \
+    'from pathlib import Path' \
+    "Path('$RUNNER_TEMP/pythonpath-used').touch()" \
+    >"$hostile_site/sitecustomize.py"
+  export UV_PYTHON="$hostile_python"
+  export PYTHONPATH="$hostile_site"
   # Exercise the composite action's entrypoint rather than calling the setup
   # script directly. The boundary depends on the PATH the action passes in.
   action_run=$(yq -er '.runs.steps[] | select(.name == "Set up credential-isolation sandbox") | .run' claude/action.yaml)
   action_run=${action_run//'${{ github.action_path }}'/"$GITHUB_WORKSPACE/claude"}
   /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run" \
     | tee "$RUNNER_TEMP/setup.log"
+  test ! -e "$RUNNER_TEMP/uv-python-used"
+  test ! -e "$RUNNER_TEMP/pythonpath-used"
 
   agent_path=$(sed -n 's/^\[setup-sandbox\] sandbox PATH: //p' "$RUNNER_TEMP/setup.log")
   test -n "$agent_path"
@@ -190,7 +209,8 @@ verify_refusals() {
   set_inputs
   export MITMPROXY_VERSION=0
   TEND_SANDBOX_PATH="$RUNNER_TEMP/tend-runner-home-alias" \
-    bash proxy/setup-sandbox.sh >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
+    "$TEND_UV_DIR/uv" run --script proxy/setup_sandbox.py \
+    >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
   # Actions parses workflow commands out of step output; don't annotate this
   # passing refusal test with the error it deliberately provokes.
   sed 's/^::error::/refused: /' "$RUNNER_TEMP/refused.log"
@@ -198,7 +218,7 @@ verify_refusals() {
   grep -q "::error::sandbox_path entry .* is under the runner's home" \
     "$RUNNER_TEMP/refused.log"
 
-  GITHUB_WORKSPACE='' bash proxy/setup-sandbox.sh \
+  GITHUB_WORKSPACE='' "$TEND_UV_DIR/uv" run --script proxy/setup_sandbox.py \
     >"$RUNNER_TEMP/empty-workspace.log" 2>&1 && empty_rc=0 || empty_rc=$?
   test "${empty_rc:-0}" -ne 0
   grep -q '::error::GITHUB_WORKSPACE must name' "$RUNNER_TEMP/empty-workspace.log"

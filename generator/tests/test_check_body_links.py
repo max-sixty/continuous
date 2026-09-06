@@ -1,4 +1,4 @@
-"""Tests for check-body-links.sh.
+"""Tests for check_body_links.py.
 
 The script exists because shape and existence are different questions: a
 hand-typed 40-hex string is a well-formed permalink whether or not the commit
@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path, uv_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "check-body-links.sh"
+SCRIPT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "check_body_links.py"
 
 SLUG = "max-sixty/tend"
 REAL = "0123456789abcdef0123456789abcdef01234567"
@@ -56,7 +56,7 @@ class Fixture:
 
     def run_path(self, arg: str, *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [BASH, str(SCRIPT), arg, *extra],
+            uv_script(SCRIPT, arg, *extra),
             capture_output=True,
             text=True,
             check=False,
