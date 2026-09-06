@@ -57,6 +57,32 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
             >> /tmp/enrich-errors.md
         done <<< "$JOBS"
 
+        # A job that fails by a plain non-zero exit — every test suite — writes
+        # one annotation, `Process completed with exit code 1.`, which the
+        # filter above drops because it names no cause. Its diagnosis is in the
+        # log instead, so read the log's tail before giving up. One call per
+        # run, not per job, hence outside the loop above.
+        if [ ! -s /tmp/enrich-errors.md ]; then
+          gh run view "$RUN_ID" --repo "$REPO" --log-failed \
+            > /tmp/enrich-log.txt 2>/dev/null || true
+          # The last `##[error]` is the anchor: the tool's own output is above
+          # it, runner cleanup below.
+          END=$(grep -n '##\[error\]' /tmp/enrich-log.txt | tail -1 | cut -d: -f1) || true
+          if [ -n "$END" ]; then
+            START=$(( END > 30 ? END - 30 : 1 ))
+            {
+              # A four-backtick fence so a log line that is itself a fence
+              # doesn't end the block early.
+              printf '#### log tail\n\n````\n'
+              # Drop the `job<TAB>step<TAB>` prefix and the timestamp
+              # `--log-failed` adds, then bound a pathological single line.
+              sed -n "${START},${END}p" /tmp/enrich-log.txt \
+                | cut -f3- | sed 's/^[0-9T:.Z-]*Z //' | cut -c -500
+              printf '````\n\n'
+            } >> /tmp/enrich-errors.md
+          fi
+        fi
+
         RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
         if [ -s /tmp/enrich-errors.md ]; then
           {
