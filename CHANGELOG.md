@@ -6,6 +6,35 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.2.0
+
+### Improved
+
+- **Codex can authenticate with a ChatGPT Plus or Pro subscription.** This is experimental; API-key auth is unchanged. A generated weekly workflow rotates the full credential bundle through Codex's own refresh path, and jobs that run concurrently read an access-only bundle. `tend check`, the install guidance, and the security model cover the new secret set. ([#1159](https://github.com/max-sixty/tend/pull/1159))
+- **Both harnesses accept `effort` and `args`.** `effort` sets reasoning effort and is validated against what each CLI supports; Claude previously had no setting for it. `args` passes exact CLI arguments, globally or per workflow. Each list item is one argv element, so a value containing spaces stays intact and nothing is shell-evaluated. ([#1161](https://github.com/max-sixty/tend/pull/1161))
+- **`enabled: false` pauses Tend without regenerating.** Every operational job reads the setting from the default branch before checkout, setup, reactions, or the agent, so a PR cannot disable its own review. Missing or invalid runtime config fails closed, and `tend check` reports when jobs are paused. ([#1132](https://github.com/max-sixty/tend/pull/1132))
+- **ci-fix runs one session per branch and watched workflow.** A red default branch fails every push that follows it, each on its own commit, so each failure used to boot its own agent and several could open competing fix PRs. The job-level concurrency group keys on the branch and the watched workflow, and does not cancel a session mid-fix. ([#1148](https://github.com/max-sixty/tend/pull/1148))
+- **What the bot posts is organized around the reader's decision.** PR descriptions, reviews, and replies carry the current conclusion and the evidence needed to act on it, in place of the body layouts the skills used to mandate. A draft review is identified by a hidden marker rather than by fixed visible wording. ([#1157](https://github.com/max-sixty/tend/pull/1157))
+- **A bug found by reading earns a PR only where a caller can reach it.** Where a doc comment and the code disagree, the bot reports the discrepancy for a maintainer to settle, since a test asserting the current output would freeze behavior nobody has called intended. ([#1134](https://github.com/max-sixty/tend/pull/1134))
+
+### Fixed
+
+- **Codex reads the repository's skills, and a fork PR cannot substitute its own.** Tend's repository skills are exposed through `.agents/skills`, so Codex discovers the same files Claude does. On a fork PR, `.agents` is pinned to the base branch alongside `.claude`, and a path whose type changed is restored from its topmost component, so a fork cannot replace the symlink with skills it supplies. ([`1454e60`](https://github.com/max-sixty/tend/commit/1454e60a91138249b0cbda69832e3cf0101b0353))
+- **A standing bot approval is dismissed once it no longer reflects the PR.** A review that withholds its verdict dismisses the earlier approval, and a rule in `running-in-ci` covers an approval invalidated from outside the PR — most often by another PR merging and superseding it. ([#1136](https://github.com/max-sixty/tend/pull/1136), [#1139](https://github.com/max-sixty/tend/pull/1139))
+- **`tend check` reads every page of the repository and environment secret listings**, so a secret on page two no longer passes as absent. ([#1137](https://github.com/max-sixty/tend/pull/1137))
+- **A dependency-bot PR this bot has already pushed to resolves through the configured-bot flow.** `resolve-conflicts` tells this bot's own commit apart from a third party's, rather than offering only a rebuild that would overwrite the fix `review` pushed. ([#1140](https://github.com/max-sixty/tend/pull/1140))
+- **Every SHA in a composed body is resolved against the API before the body is posted**, so a fabricated OID cannot ship a permalink that 404s. ([#1143](https://github.com/max-sixty/tend/pull/1143))
+- **The Codex harness passes the OpenAI key through the environment** rather than into the run body. ([#1128](https://github.com/max-sixty/tend/pull/1128))
+- **The notifications poll marks read only the threads it resolved.** Marking the whole repository read was clearing unrelated unread threads along with them. ([#1121](https://github.com/max-sixty/tend/pull/1121))
+- **The session-log upload copies the agent's tree as root and chowns the copy.** Making the source readable would let a symlink the agent planted aim the `chmod` at whatever tree it named. ([#1149](https://github.com/max-sixty/tend/pull/1149))
+- Nightly regeneration records the commit OID before removing its worktree ([#1119](https://github.com/max-sixty/tend/pull/1119)); the `review-runs` corrections script inherits `errexit`, so a failed `gh` call can no longer shrink the window it examines ([#1124](https://github.com/max-sixty/tend/pull/1124)); the independent code-review pass no longer reads as the session's final output ([#1127](https://github.com/max-sixty/tend/pull/1127)).
+
+### Internal
+
+- Runner behavior with deterministic state or parsing moved from Bash and skill prose into tested Python. The runner plugin has 15 Python commands and no shell scripts; review state, CI polling, evidence storage, nightly regeneration, run listing, PAT checks, link checks, and token reporting all have behavior tests. ([#1158](https://github.com/max-sixty/tend/pull/1158))
+- Pre-commit lints the generated workflow snapshots directly and matches actionlint's ShellCheck coverage. ([#1122](https://github.com/max-sixty/tend/pull/1122), [#1123](https://github.com/max-sixty/tend/pull/1123))
+- Claude Code moves to 2.1.263 and `uv` to 0.12.10; repo-local pins and the worker's dependencies move with them. ([#1153](https://github.com/max-sixty/tend/pull/1153), [#1155](https://github.com/max-sixty/tend/pull/1155), [#1156](https://github.com/max-sixty/tend/pull/1156), [#1129](https://github.com/max-sixty/tend/pull/1129), [#1130](https://github.com/max-sixty/tend/pull/1130), [#1146](https://github.com/max-sixty/tend/pull/1146))
+
 ## 0.1.24
 
 ### Fixed
