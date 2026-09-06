@@ -152,7 +152,7 @@ Write PR titles, issue titles, and commit subjects in plain, literal language th
 
 The titles that fail it read as figures rather than descriptions — a metaphor, a subject withheld for effect, a phrase that only lands once you already know the bug. Rewrite to the literal statement: `Press again for the tab the driver lost, not the one Chromium never made` → `Retry the click when the browser driver never reports the opened tab`.
 
-Open the PR body with two or three sentences — problem, fix, verification — and fold supporting detail into `<details>` (per **Comment Formatting**).
+Describe the current PR for a maintainer deciding whether to merge it. Follow **Reader-facing prose** under **Comment Formatting** and synthesize across commits and review rounds.
 
 If an existing PR addresses the same problem, work on that PR instead.
 
@@ -431,6 +431,24 @@ If `EXISTING` is greater than 0, **do not post** — another run already handled
 
 ## Comment Formatting
 
+### Reader-facing prose
+
+Write public prose for its reader and the decision the surface supports. A PR description should let a maintainer understand why the current diff exists and judge whether to merge it. A review should tell the author what changes the verdict: an actionable finding, a blocker, or an unresolved decision. A reply should close the loop on the question or event that prompted it.
+
+Lead with the current outcome or causal conclusion. Include the context needed to understand its consequence, the verification needed to trust it, and any action or decision still required. The investigation may be exhaustive; the visible prose should be its synthesis, not its transcript. Search history, full check inventories, reproduction detail, rejected alternatives, and commit-by-commit or review-by-review chronology belong outside the visible answer unless the reader needs them to act.
+
+The visible text must stand on its own. When useful supporting evidence would interrupt it, put a curated record in `<details>` under a descriptive summary. Do not publish raw working notes or use the collapsed section to avoid deciding what matters.
+
+For example, supporting material may use this shape when it helps the next reader; choose a summary and contents that fit the case:
+
+```markdown
+<details><summary>Reproduction and affected path</summary>
+
+...the evidence needed to verify or resume the analysis...
+
+</details>
+```
+
 **Compose bodies with the Write tool, then post with `--body-file`.** The composed file is reviewable before it ships, quoting and escaping are non-issues, and line wrapping is just file content. The bot writes to `/tmp/` constantly — one more file is cheap. `--body "…"` is fine only for a one-line body containing no backtick, `$`, or `\`. Inside double quotes bash runs a backticked span as a command and substitutes its output, so a markdown inline-code span is silently deleted from the posted comment: `` --body "`some-check` now passes" `` ships as ` now passes`. Inline code appears in nearly every body the bot writes, and single-quoting instead breaks on any apostrophe, so reach for `--body-file` whenever the text is anything but plain prose.
 
 ```bash
@@ -440,17 +458,7 @@ gh issue comment "$ISSUE" --body-file /tmp/comment-body.md
 
 **Line wrapping:** GitHub renders newlines literally in issue bodies, PR descriptions, and comments — a line break in the source becomes a `<br>` in the output, so a paragraph hard-wrapped at ~72 chars ships with mid-sentence breaks. Write each paragraph as a single long line and let the browser reflow. Code blocks, bullet lists, and tables keep their newlines as-is.
 
-Keep comments concise. Put supporting detail inside `<details>` tags — the reader should get the gist without expanding. Don't collapse content that *is* the answer (e.g., a requested analysis).
-
-When an answer rests on deeper research — citations across several files, a reproduction, a traced mechanism — keep the visible reply short and fold the sources, line-anchored links, and working notes into `<details>`. Each CI run is a fresh session with no memory of prior reasoning, so a follow-up on the same thread starts cold; the thread is the only durable record, so that block doubles as a scratchpad the next session reads back instead of re-deriving the same citations.
-
-```
-<details><summary>Sources and notes</summary>
-
-...line-anchored source links, repro steps, working notes...
-
-</details>
-```
+Each CI run is a fresh session with no memory of prior reasoning, so preserve evidence another run would need to resume the thread without re-deriving it. Curate that durable record for future readers too.
 
 Always use markdown links for files, issues, PRs, and docs. **Any link containing `#L` must use a commit SHA, never `blob/main/...#L42`** — line numbers shift silently, so the link stays valid but starts pointing at different code than the comment describes. Get the SHA with `git rev-parse HEAD` before composing the link.
 
@@ -475,14 +483,14 @@ Don't add job links, footers, or authorship sign-offs (e.g. `> _Written by Claud
 
 ## Keeping PR Titles and Descriptions Current
 
-When revising code after review feedback, update the title and description if the approach changed:
+When review changes the approach, recompose the title and description around the current result rather than appending a history of the changes:
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/{number} -X PATCH \
   -f title="new title" -F body=@/tmp/updated-body.md
 ```
 
-**A description describes the whole PR, not the increment this run reviewed.** Scope every behavior claim in it to the PR's merge base — not `LAST_REVIEW_SHA`, and not whatever range this run happened to diff:
+**A description describes the whole PR, not the increment this run reviewed.** It presents the current result coherently; prior attempts and review rounds stay in the thread unless they remain relevant to the merge decision. Scope every behavior claim in it to the PR's merge base — not `LAST_REVIEW_SHA`, and not whatever range this run happened to diff:
 
 ```bash
 gh pr diff <number>   # merge-base→head, whatever this session has checked out
@@ -528,9 +536,9 @@ Open the most recent prior run first; go deeper only if the answer is not there.
 
 ## Grounded Analysis
 
-CI runs are not interactive — every claim must be grounded in evidence. The thread is also high-latency: a follow-up may not arrive for hours, so make each response fairly complete rather than counting on a quick back-and-forth.
+CI threads are high-latency, so each outward response must stand alone: give the current conclusion, its consequence, and the next action or decision. Self-contained does not mean publishing the whole investigation.
 
-Read logs, code, and API data before drawing conclusions. Show evidence: cite log lines, file paths, commit SHAs. Trace causation — if two things co-occur, find the mechanism rather than saying "this may be related." Never claim a failure is "pre-existing" without checking main branch CI history. Distinguish what you verified from what you inferred.
+Read logs, code, and API data before drawing conclusions. Trace causation — if two things co-occur, find the mechanism rather than saying "this may be related." Never claim a failure is "pre-existing" without checking main branch CI history. Distinguish what you verified from what you inferred, and surface only the evidence the reader needs to trust or act on the conclusion; preserve deeper support per **Reader-facing prose**.
 
 `references/grounded-analysis.md` carries the depth: what counts as source evidence for a user-facing claim, how to verify an external tool's behavior and run a skill's own recipes safely, the hallucination shapes that recur (guessed links, silently truncated `gh` lists, unsubstituted placeholders), how to tell an upstream incident from a durable bug before writing a workaround, and who to ask when a check needs hardware CI doesn't have.
 

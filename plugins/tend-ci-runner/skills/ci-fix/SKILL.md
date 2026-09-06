@@ -58,21 +58,7 @@ git commit -m "fix: <description>"
 git push -u origin fix/ci-<run-id>
 ```
 
-Create the PR with `gh pr create`. PR body format:
-
-```
-## Problem
-[What failed and the root cause]
-
-## Solution
-[What was fixed and why this is the right level]
-
-## Testing
-[How the fix was verified]
-
----
-Automated fix for [failed run](run-url)
-```
+Create the PR with `gh pr create`, composing its body in a file per `running-in-ci`. Write for a maintainer deciding whether the current fix addresses the failure: explain the causal finding, why the change fixes it at the right level, and the verification relevant to that decision. Link the failed run as supporting evidence and follow **Reader-facing prose** in `running-in-ci`.
 
 ### 3a. Diagnosis without a fix (transient causes)
 
@@ -140,21 +126,7 @@ gh issue create \
   --body-file /tmp/diagnosis.md
 ```
 
-Body format:
-
-```
-## Failure
-
-[Workflow name + link to failed run]
-
-## Diagnosis
-
-[Root cause — what failed and why]
-
-## Why no fix was produced
-
-[What was attempted, what blocks an automated fix]
-```
+Compose `/tmp/diagnosis.md` as a durable account for a maintainer deciding what happens next. Include the failed workflow and run, the root cause and mechanism, why no safe automated fix was produced, and the current blocker or decision. Follow **Reader-facing prose** in `running-in-ci`; the issue should preserve the conclusion, not the diagnostic transcript.
 
 Skip step 4 — there's no PR to monitor.
 

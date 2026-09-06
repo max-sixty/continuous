@@ -347,7 +347,7 @@ git worktree remove "/tmp/review-runs-fix" --force
 
 `.config/tend.yaml` and `CLAUDE.md` are not under the read-only mount, but if you're already in the worktree for a `.claude/skills/` edit, do those edits there too so the branch stays self-contained.
 
-- **PR** (default): Branch `daily/review-runs-$GITHUB_RUN_ID`, fix, commit, push, create with label `review-runs`. Lead the PR description with two or three sentences — problem, fix, verification — and put the full analysis (run IDs, log excerpts, root cause, gate assessment) inside `<details>`.
+- **PR** (default): Branch `daily/review-runs-$GITHUB_RUN_ID`, fix, commit, push, create with label `review-runs`. Write the description for a maintainer deciding whether the current change fixes the general behavior gap, following **Reader-facing prose** in `running-in-ci`. The tracking issue already carries the evidence history; link it and include only the evidence needed to understand this change.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly.
 
 **Limit to at most 2 PRs per run.** Pick the highest-confidence findings; note the rest in the tracking issue.

@@ -125,7 +125,7 @@ If `IS_DRAFT == "true"`, run a lighter review:
 - Skip step 2 (overlap with other PRs) — landing-readiness concern, premature for WIP.
 - Skip the duplication scan in step 4 — the author is still shaping the design.
 - Submit as **COMMENT only**, never APPROVE. GitHub blocks approving drafts, and the author hasn't asked for a verdict yet.
-- Open the review body with this exact line: `Reviewing as a draft — flagging anything that looks worth a quick fix. Mark ready for a full review.`
+- Make the review's context clear: this is feedback on work in progress, not a merge verdict, and the author can mark it ready to request the full review.
 - Skip step 7 (CI monitoring) — drafts churn; CI failures are the author's to chase.
 - Skip step 9 (push fixes) — never push to a WIP branch.
 
@@ -217,14 +217,30 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/review-preflight.sh <number> -- \
 
 `/tmp/reviewed-head` holds the commit this session reviewed — written in step 1, rewritten by **Posting mechanics** if HEAD moved. Every path that posts a review reads it back; see **Pin every review to the commit you read**.
 
-If there are actionable findings, submit as a review with inline suggestions for concrete fixes. Every comment must give the author something to act on:
+If there are actionable findings, submit them as a review with inline suggestions for concrete fixes. The review is a decision surface for the author, not a record of the reviewer's work: publish only distinct points that require a change or decision, with enough mechanism and evidence to make each credible and actionable. Correct paths, unaffected behavior, verification inventory, and search history stay in the session. Follow **Reader-facing prose** in `running-in-ci` for any supporting detail.
 
-| Don't post (internal analysis) | Post (actionable) |
-|---|---|
-| "The fix correctly delegates to X" | "The error message still references the old behavior" |
-| "The threshold logic is correct" | _(nothing — silence means correct)_ |
+Don't explain what the code does — the author wrote it. Don't nitpick formatting — that's what linters are for. Explain why the consequence warrants a change.
 
-Don't explain what the code does — the author wrote it. Don't nitpick formatting — that's what linters are for. Explain *why* something should change, not just *what*.
+<example>
+<bad reason="Reports a correct path and the reviewer's verification, but gives the author nothing to act on">
+
+Bad:
+
+```
+The new delegation path looks correct. I also verified that the threshold logic is unchanged.
+```
+
+</bad>
+<good reason="Names one remaining consequence and the change that would resolve it">
+
+Good:
+
+```
+The failure message still names the removed local path, so it directs users to an option that no longer exists. Update it to name the delegated command.
+```
+
+</good>
+</example>
 
 **A findings review never supersedes a standing approval — dismiss it.** GitHub moves `reviewDecision` only on an `APPROVED` or a `CHANGES_REQUESTED`, so a COMMENT posted over the bot's own earlier approval leaves the PR reading as bot-approved and mergeable over the findings you just posted. How the head moved makes no difference: an ordinary push leaves the approval standing exactly as a rewrite does. So whenever this round posts a COMMENT that withholds the verdict, dismiss the approval that still decides the PR — after the review POST lands, so a failed post doesn't leave the PR with neither a verdict nor findings. Findings are the common case, but the withheld-merge-readiness COMMENT above is reachable with an approval already standing, and it leaves the same wrong signal: the PR reads bot-approved while the review names a blocker. A COMMENT that withholds nothing does not qualify — step 1's unanswered-question exception posts one at a head the approval already covers, and dismissing there withdraws a verdict the code still earns.
 
@@ -246,9 +262,9 @@ fi
 
 **When confidence is low**, go beyond checking the implementation — question the approach: "Does this bypass or duplicate an existing API?" "What does this change *not* handle?" If the design involves a judgment call, flag it for human review as a COMMENT.
 
-**Attribute a withheld approval to whatever actually decided it.** Cite repo guidance as the reason only when you can name the file and heading that guidance lives in; a reader who goes looking for "this repo's review policy" and finds nothing written starts doubting the rest of the review too. When the call is your own judgment, say so plainly — "I'd want a human on this one, it changes what `--force` will delete" rather than "per this repo's review policy this is a hold-for-human surface". Judgment is a sufficient reason on its own; borrowed authority that doesn't exist is not.
+**Attribute a withheld approval to whatever actually decided it.** Cite repo guidance as the reason only when you can name the file and heading that guidance lives in. When the call is your own judgment, identify the risky consequence and the human decision it needs; judgment is sufficient authority without inventing a repository policy.
 
-**Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Complete steps 2–5 — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt an APPROVE — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 7. Always post CI failure analysis as a COMMENT, even on self-authored PRs.
+**Self-authored PRs** (`PR_AUTHOR == BOT_LOGIN` — compare the literal bot login string, not "authored by someone senior" or "by the repo owner"): Complete steps 2–5 — self-review catches real issues (lint failures, edge cases) and is intentionally valuable. Do NOT attempt an APPROVE — GitHub rejects self-approvals. Submit as COMMENT when there are concerns, or stay silent and skip to step 7. The self-review exists to find concerns, not to publish a clean-path verdict or proof that earlier findings were resolved. Always post a current CI failure as a COMMENT because it is itself a concern.
 
 **Not confident enough to approve** (unfamiliar module, subtle logic): Add a `+1` reaction instead — no review needed unless there are specific observations.
 
@@ -329,7 +345,7 @@ PENDING=$(jq --arg own "/runs/$GITHUB_RUN_ID/" --arg wf "$GITHUB_WORKFLOW" '
   ```
 
   Every one `cancelled` — the red is superseded, so APPROVE and name the still-unverified checks in the body. `cancelled` is the only conclusion that earns an approval here: a real `failure`, an empty conclusion (the run is still going, so the job failed on its own merits), or an unresolvable URL (a third-party status context like `codecov/patch`, never an Actions run) all take the terminal-red branch below. Don't leave this to improvisation: the same stale red must not draw an APPROVE on one PR and a withheld approval on the next.
-- **`$FAILED` set and `$PENDING == 0`** — genuine terminal red. Skip the close-out and finish. But if **no prior substantive bot review** stands on this PR, don't exit fully silent or leave only a `+1` reaction — a clean external-dependency bump then carries zero review signal. Post a brief COMMENT recording the diff assessment and why approval is held (e.g. "Diff is a correct, mechanical dependency bump; holding APPROVE because `check-ok-to-merge` is red."). Any earlier substantive review (e.g. a COMMENT with inline suggestions) already stands as the active verdict — leave it. On a bot PR where you intend to push the fix yourself (step 9), post that COMMENT before pushing, while the rollup it describes is still the current one.
+- **`$FAILED` set and `$PENDING == 0`** — genuine terminal red. Skip the close-out and finish. But if **no prior substantive bot review** stands on this PR, don't exit fully silent or leave only a `+1` reaction — a clean external-dependency bump then carries zero review signal. Post a brief COMMENT stating the diff assessment and the failing check that withholds approval. Any earlier substantive review already stands as the active verdict — leave it. On a bot PR where you intend to push the fix yourself (step 9), post that COMMENT before pushing, while the rollup it describes is still the current one.
 - **`$FAILED` empty** — proceed with APPROVE.
 
 Step 7's "approve, foreground-poll CI, dismiss if a check fails" pattern only recovers while the session is still alive — the job timeout or a poll cap can leave a post-approve failure undismissed and the PR carrying a misleading APPROVED state. A synchronous pre-APPROVE peek catches the case where the failure is already in the rollup — including non-required checks like `codecov/patch` that an overlay treats as a merge gate. Reducing to the latest entry per name and workflow — and, when the cap expires first, checking each `FAILURE`'s run conclusion — is what keeps a superseded red from being mistaken for a real one.
@@ -340,13 +356,9 @@ Post at most one review per run. Give a verdict (**approve** or **comment**, nev
 
 For fixes targeting lines outside the diff, offer to push a fix commit instead.
 
-Post inline suggestions via the review API:
+Post inline suggestions via the review API. First compose `/tmp/review-body.md` according to this step's review goal, then build the payload:
 
 `````bash
-cat > /tmp/review-body.md << 'EOF'
-Summary of suggestions
-EOF
-
 cat > /tmp/review-payload.json << 'ENDJSON'
 {
   "event": "COMMENT",

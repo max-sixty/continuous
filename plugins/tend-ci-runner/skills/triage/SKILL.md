@@ -78,7 +78,7 @@ If you cannot reproduce the bug (unclear steps, environment-specific, etc.), not
 
 **CRITICAL — gate check before proceeding:**
 
-You MUST have a failing test from Step 5 before writing any fix. If you skipped the test (couldn't write one, environment-specific bug, etc.), do NOT attempt a fix — go directly to Step 7 and use the "Reproduction test only" or "Could not reproduce" comment template.
+You MUST have a failing test from Step 5 before writing any fix. If you skipped the test (couldn't write one, environment-specific bug, etc.), do NOT attempt a fix — go directly to Step 7 and report the outcome you established.
 
 **Only attempt a fix if ALL of these conditions are met:**
 
@@ -119,21 +119,46 @@ Step 3's duplicate check catches identical fixes. It misses the *same root cause
    Closes #$ARGUMENTS"
    git push -u origin fix/issue-$ARGUMENTS
    ```
-   Compose the body with the Write tool at `/tmp/pr-body.md` — the fill-ins below are freeform prose that routinely carries markdown inline code, which bash executes inside a double-quoted `--body`:
+   Compose the body with the Write tool at `/tmp/pr-body.md`. Write for a maintainer deciding whether the current fix resolves the issue: explain the causal finding, the resulting behavior change, and the reproduction test that now passes. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`, and end with `Closes #$ARGUMENTS — automated triage` so merging closes the issue.
+
+   The headings below are one possible shape when they help a reviewer scan the case. They are not a required outline; choose the structure that fits the change.
+
+   <example>
+   <bad reason="The headings are filled with a restatement, investigation chronology, and a generic test claim">
+
+   Bad:
 
    ```markdown
    ## Problem
-   [What the issue reported and the root cause]
+   The issue reports that retries fail.
 
    ## Solution
-   [What was fixed and why]
+   I inspected the retry loop, compared several paths, and changed three files.
 
    ## Testing
-   [How the fix was verified — mention the reproduction test]
-
-   ---
-   Closes #$ARGUMENTS — automated triage
+   I ran the test suite.
    ```
+
+   </bad>
+   <good reason="The same headings carry the cause, resulting behavior, and evidence a reviewer needs">
+
+   Good:
+
+   ```markdown
+   ## Problem
+   A retry drops the resolved workspace root, so its second attempt reads from the process directory and fails outside the repository.
+
+   ## Solution
+   Keep the resolved root in retry state. Both attempts now address the same workspace.
+
+   ## Testing
+   The regression test reproduces the second-attempt failure before the change and passes after it.
+
+   Closes #123 — automated triage
+   ```
+
+   </good>
+   </example>
 
    ```bash
    gh pr create --title "fix: <description>" --body-file /tmp/pr-body.md
@@ -151,15 +176,7 @@ git commit -m "test: add reproduction for #$ARGUMENTS"
 git push -u origin repro/issue-$ARGUMENTS
 ```
 
-Compose the body with the Write tool at `/tmp/pr-body.md`:
-
-```markdown
-## Context
-Adds a failing test that reproduces #$ARGUMENTS. The fix is not yet included — this PR captures the reproduction so a maintainer can investigate.
-
----
-Automated triage for #$ARGUMENTS
-```
+Compose the body with the Write tool at `/tmp/pr-body.md`. Make clear that the PR deliberately adds a failing reproduction without a fix, what behavior it captures, and any causal boundary already established so a maintainer knows what remains to decide. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`, and end with `Automated triage for #$ARGUMENTS`.
 
 ```bash
 gh pr create --title "test: reproduction for #$ARGUMENTS" --body-file /tmp/pr-body.md
@@ -171,13 +188,7 @@ Note the PR number for the comment.
 
 **Recheck before posting** per **Recheck Before Posting** in `/tend-ci-runner:running-in-ci` — triage can take minutes, so re-fetch the issue and skip any point a new human comment or a sibling tend workflow already covered.
 
-Always comment via `gh issue comment`. Keep it brief, polite, and specific. A maintainer will always review — never claim the issue is fully resolved by automation alone.
-
-**Drop the maintainer-deferral closer** ("a maintainer will review", "I'll leave it for a maintainer to evaluate and prioritize", and the like) **when `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`** — deferring to a maintainer reads as absurd when the reporter is one. Keep it otherwise, where it signals the action isn't authoritative.
-
-```bash
-gh api "repos/$GITHUB_REPOSITORY/issues/$ARGUMENTS" --jq '.author_association'
-```
+Always comment via `gh issue comment`. Write for the issue author: lead with the current disposition, then give the causal finding and the action taken or the one concrete input or decision still needed. Link any fix, reproduction, or duplicate. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`; do not restate the report or narrate the investigation. Acknowledge the reporter when the situation calls for it, but do not use thanks or maintainer deferrals as fixed openers and closers. Do not present the bot's judgment as a maintainer decision.
 
 **Stay within what you verified.** State facts you found in the codebase — don't characterize something as "known" unless you find prior issues or documentation about it. Don't speculate beyond the code you read.
 
@@ -187,54 +198,35 @@ gh api "repos/$GITHUB_REPOSITORY/issues/$ARGUMENTS" --jq '.author_association'
 
 ### Reply examples
 
-These illustrate the tone and what each kind of reply should cover; they aren't text to paste. Match the situation, then write a reply that fits the actual issue — vary the wording and drop anything that doesn't apply.
+These examples demonstrate tone, candor, and the boundary between the bot's work and a maintainer's decision. They are neither templates nor a complete list of outcomes. Match the actual issue's context and write the reply afresh.
 
-#### Fix PR created
+<example>
+<bad reason="The stock politeness carries no result, useful context, or concrete next step">
 
-> Thanks for reporting this. I was able to reproduce the issue and identified the root cause: [one-sentence explanation].
->
-> I've opened #PR_NUMBER with a fix. A maintainer will review it shortly.
+Bad:
 
-#### Reproduction test only (no fix attempted)
+> Thanks for reporting this. I investigated the issue, and a maintainer will review it.
 
-> Thanks for reporting this. I was able to reproduce the issue — #PR_NUMBER adds a failing test that demonstrates the bug.
->
-> Root cause appears to be [brief explanation if known, or "still under investigation"]. A maintainer will take a closer look.
+</bad>
+<good reason="Each reply acknowledges the person naturally, states the current result, and is honest about what remains">
 
-#### Could not reproduce
+Good:
 
-> Thanks for reporting this. I tried to reproduce this but wasn't able to with the information provided.
->
-> Could you share [specific information needed — exact command, config file, OS, shell, etc.]? That would help narrow it down.
->
-> A maintainer will also take a look.
+**Fix ready**
 
-#### Bug already fixed
+> Thanks for the clear report. The second retry was dropping the resolved workspace root. #123 keeps it across attempts and adds a regression test.
 
-> Thanks for reporting this. I looked into this and it appears the behavior described may already be fixed on the default branch (the relevant test passes).
->
-> Could you confirm which version you're running? If you're on an older release, updating should resolve this. A maintainer will confirm.
+**Reproduction only**
 
-#### Feature may already exist
+> I could reproduce this, but I don't have a fix I can defend yet. #123 preserves the failure as a regression test; the unresolved part is which layer should own the fallback.
 
-> Thanks for the suggestion. It's possible that [existing feature — specific behavior, config/flag] already does what you're looking for: [brief description of how it works].
->
-> If that's not quite what you had in mind, could you clarify what additional behavior you're looking for? A maintainer will take a look either way.
+**More information needed**
 
-#### Feature does not exist
+> I couldn't reproduce this with the configuration in the issue. Could you share the exact command and generated config file? Those are the two inputs that still differ from the failing path.
 
-> Thanks for the suggestion. There's no [capability] for this today. The closest related functionality is [X], which [does Y].
->
-> I'll leave it for a maintainer to evaluate and prioritize.
+**Feature request**
 
-#### Question
+> Thanks for spelling out the use case. This isn't available today. `--workspace` selects one root but cannot discover nested roots. The request fits beside that behavior; a maintainer still needs to decide whether discovery should be automatic or opt-in.
 
-> Thanks for reaching out. This looks like a usage question rather than a bug report.
->
-> [Brief answer if obvious from the codebase, or pointer to relevant docs/help text.]
->
-> A maintainer can provide more detail if needed.
-
-#### Duplicate
-
-> Thanks for reporting this. This appears to be related to #EXISTING_ISSUE [and/or PR #EXISTING_PR]. I'll leave it to a maintainer to confirm and link them.
+</good>
+</example>
