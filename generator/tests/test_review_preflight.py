@@ -17,7 +17,8 @@ PREFLIGHT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "review_prefl
 
 BOT = "tend-bot"
 PR = "7"
-DRAFT_REVIEW_LINE = (
+DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
+LEGACY_DRAFT_REVIEW_LINE = (
     "Reviewing as a draft — flagging anything that looks worth a quick fix. "
     "Mark ready for a full review."
 )
@@ -394,7 +395,7 @@ def test_ready_for_review_does_not_override_edit_review_identity(
 ) -> None:
     marker = tmp_path / "edited"
     event = _event(tmp_path / "event.json", "ready_for_review")
-    pr.reviews(_review(pr.reviewed, DRAFT_REVIEW_LINE))
+    pr.reviews(_review(pr.reviewed, LEGACY_DRAFT_REVIEW_LINE))
 
     result = pr.run(
         "--edit-review",
@@ -499,9 +500,10 @@ def test_dedup_uses_the_retargeted_head(pr: Fixture) -> None:
 @pytest.mark.parametrize(
     ("action", "body", "expected"),
     [
-        ("ready_for_review", DRAFT_REVIEW_LINE, "post:"),
+        ("ready_for_review", DRAFT_REVIEW_MARKER, "post:"),
+        ("ready_for_review", LEGACY_DRAFT_REVIEW_LINE, "post:"),
         ("ready_for_review", "A landing concern.", "skip:"),
-        ("synchronize", DRAFT_REVIEW_LINE, "skip:"),
+        ("synchronize", DRAFT_REVIEW_MARKER, "skip:"),
     ],
 )
 def test_only_ready_for_review_replaces_a_draft_review(

@@ -165,11 +165,19 @@ Otherwise its JSON supplies the title, old and new versions, compare URL, and
 upstream commit subjects. It leaves the prepared worktree and state on disk for
 the shipping command; do not `cd` into it.
 
-Compose the PR body with the Write tool at `/tmp/tend-update-body.md` — describe the upgrade, **don't paste a file list** (the diff is just mechanical action-ref bumps):
-
-- Open by noting this is the automated nightly regeneration of tend's workflow files — phrase it per-run, or fold it into the version summary.
-- **Version bumped**: add a `**tend version:** OLD → NEW` line, then a short **Notable changes** list — 3–5 bullets summarizing the `upstream_commits` entries. Rewrite each `(#NNN)` ref as `max-sixty/tend#NNN` — a bare `#NNN` auto-links to this repo's own issues, not tend's. Filter to **consumer-relevant** changes only — harness/action behavior, skill updates (review, ci-fix, triage, nightly, etc.), generator output that changes the adopter's workflow files, CI-monitoring guidance. **Exclude** pure mechanics (`chore: regenerate workflows`, `chore: release`, action-pin and lockfile bumps) and **tend-internal items** that affect only tend's own development or release. Close with `compare_url`. If the commit list is empty, keep just the version line and compare link.
-- **No version bump**: one sentence on what the regeneration changed. No version line or commit list.
+Compose the PR body with the Write tool at `/tmp/tend-update-body.md`. Its
+reader is deciding whether to adopt the regenerated workflows, so explain the
+consumer-visible effect of the upgrade rather than inventorying changed files
+or commits. When the version changed, state the old and new versions,
+synthesize the `upstream_commits` entries into the behavior adopters will
+notice, and link `compare_url` as support. Rewrite each `(#NNN)` reference as
+`max-sixty/tend#NNN` — a bare `#NNN` auto-links to this repo's own issues, not
+tend's. Filter out release mechanics, action-pin and lockfile bumps, and
+tend-internal work with no adopter-visible effect. If `upstream_commits` is
+empty, the comparison call failed: include only the version line and compare
+link, and do not infer upstream behavior. For a same-version regeneration,
+explain the generator behavior that made the committed workflows stale. Follow
+**Reader-facing prose** in `/tend-ci-runner:running-in-ci`.
 
 Then ship the prepared change:
 

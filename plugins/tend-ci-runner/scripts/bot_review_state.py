@@ -14,7 +14,8 @@ from typing import Any
 
 import github_cli
 
-DRAFT_PREFIX = "Reviewing as a draft —"
+DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
+LEGACY_DRAFT_REVIEW_PREFIX = "Reviewing as a draft —"
 FEEDBACK_QUERY = """
 query($owner:String!,$repo:String!,$number:Int!) {
   repository(owner:$owner,name:$repo) {
@@ -105,6 +106,14 @@ def review_state(
         else None
     )
 
+    def is_draft_review(review: dict[str, Any]) -> bool:
+        body = review.get("body") or ""
+        # TODO(2026-12-01): Drop the prose-prefix fallback after pre-marker
+        # reviews have aged out.
+        return review.get("state") == "COMMENTED" and (
+            DRAFT_REVIEW_MARKER in body or body.startswith(LEGACY_DRAFT_REVIEW_PREFIX)
+        )
+
     return {
         "head_sha": head_sha,
         "bot_login": bot,
@@ -129,8 +138,7 @@ def review_state(
                 "id": at_head[-1]["id"],
                 "state": at_head[-1]["state"],
                 "at": at_head[-1].get("submitted_at"),
-                "draft_mode": at_head[-1]["state"] == "COMMENTED"
-                and (at_head[-1].get("body") or "").startswith(DRAFT_PREFIX),
+                "draft_mode": is_draft_review(at_head[-1]),
             }
             if at_head
             else None

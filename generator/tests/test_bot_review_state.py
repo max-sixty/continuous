@@ -31,7 +31,8 @@ RUNNING_IN_CI_SKILL = (
 
 BOT = "tend-bot"
 HEAD = "head000"
-DRAFT_REVIEW_LINE = (
+DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
+LEGACY_DRAFT_REVIEW_LINE = (
     "Reviewing as a draft — flagging anything that looks worth a quick fix. "
     "Mark ready for a full review."
 )
@@ -380,7 +381,14 @@ def test_a_review_with_content_anchors(
     assert _state(env)["at_head"]["id"] == 1, kind
 
 
-def test_at_head_identifies_a_tend_draft_review(env: dict[str, str]) -> None:
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"Feedback on this work in progress.\n\n{DRAFT_REVIEW_MARKER}",
+        LEGACY_DRAFT_REVIEW_LINE,
+    ],
+)
+def test_at_head_identifies_a_tend_draft_review(env: dict[str, str], body: str) -> None:
     """A ready-for-review pass may replace its earlier draft COMMENT, while
     ordinary duplicate runs still stop on every other substantive review."""
     _write(
@@ -390,7 +398,7 @@ def test_at_head_identifies_a_tend_draft_review(env: dict[str, str]) -> None:
             _review(
                 1,
                 "2026-01-01T00:00:00Z",
-                body=DRAFT_REVIEW_LINE,
+                body=body,
             )
         ],
     )
@@ -762,7 +770,8 @@ def test_review_skill_preserves_the_status_free_queue_contract() -> None:
         "If `force_full_review` is false and the incremental changes are trivial"
         in skill
     )
-    assert f"Open the review body with this exact line: `{DRAFT_REVIEW_LINE}`" in skill
+    assert f"Include the exact hidden marker `{DRAFT_REVIEW_MARKER}`" in skill
+    assert "Open the review body with this exact line" not in skill
     assert "Post at most one review per run." in skill
     assert "exception to one review per run" not in skill
     assert "STARTED_DRAFT" not in skill
