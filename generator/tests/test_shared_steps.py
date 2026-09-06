@@ -35,12 +35,14 @@ RESTORE_SENSITIVE_CONFIG = (
 # fork can give an instruction path — a rewrite, a move, a directory's name
 # pointed outside the checkout (so a write or delete through it would land
 # there), a directory swapped for a file and a file for a directory, and files
-# or a `.claude` symlink planted where the base has none. Both harnesses' pin
-# scripts run against it and are held to the same end state.
+# or a `.claude` / `.agents` symlink planted where the base has none. Both
+# harnesses' pin scripts run against it and are held to the same end state.
 _BASE = {
     "README.md": "base readme\n",
     "CLAUDE.md": "root guidance\n",
     "AGENTS.md": "-> CLAUDE.md",
+    ".agents/plugins/marketplace.json": "base plugins\n",
+    ".agents/skills": "-> ../.claude/skills",
     ".claude/skills/running-tend/SKILL.md": "root skill\n",
     "site/CLAUDE.md": "site guidance\n",
     "docs/CLAUDE.md": "docs guidance\n",
@@ -48,13 +50,19 @@ _BASE = {
     "nested/AGENTS.md": "nested guidance\n",
     "tools/CLAUDE.md": "tools guidance\n",
     "moved/CLAUDE.md": "moved guidance\n",
+    "apps/api/.agents/skills/deploy/SKILL.md": "api skill\n",
     "apps/web/.claude/skills/deploy/SKILL.md": "web skill\n",
 }
 
 # Targets a fork symlink could redirect a write or a delete to.
 _OUTSIDE = {
     rel: "must not change\n"
-    for rel in (".claude/skills/deploy/SKILL.md", "CLAUDE.md", "AGENTS.md")
+    for rel in (
+        ".agents/skills/deploy/SKILL.md",
+        ".claude/skills/deploy/SKILL.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+    )
 }
 
 
@@ -141,6 +149,9 @@ def _tampered_checkout(tmp_path: Path) -> tuple[Path, Path, Path]:
         _write(repo / "README.md", "fork readme\n")
         _write(repo / "CLAUDE.md", "EVIL root\n")
         _write(repo / "AGENTS.md", f"-> {outside / 'AGENTS.md'}")
+        _write(repo / ".agents/plugins/marketplace.json", "EVIL plugins\n")
+        (repo / ".agents/skills").unlink()
+        _write(repo / ".agents/skills/fork-only/SKILL.md", "EVIL\n")
         _write(repo / ".claude/skills/running-tend/SKILL.md", "EVIL skill\n")
         _write(repo / ".claude/skills/fork-only/SKILL.md", "EVIL\n")
         _write(repo / ".claude/escape", f"-> {outside / 'CLAUDE.md'}")
@@ -155,6 +166,8 @@ def _tampered_checkout(tmp_path: Path) -> tuple[Path, Path, Path]:
         # Same content at a new path: git reports this as a rename.
         _write(repo / "elsewhere/CLAUDE.md", _BASE["moved/CLAUDE.md"])
         (repo / "moved/CLAUDE.md").unlink()
+        shutil.rmtree(repo / "apps/api/.agents")
+        _write(repo / "apps/api/.agents", f"-> {outside / '.agents'}")
         shutil.rmtree(repo / "apps/web")
         _write(repo / "apps/web", f"-> {outside}")
         _write(repo / "fork-only/CLAUDE.md", "EVIL\n")
@@ -169,8 +182,9 @@ def _tampered_checkout(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 # The checkout after pinning: the base's instruction paths, the PR's own
 # changes elsewhere, and fork content that isn't an instruction path — the
-# directory a planted `.claude` symlink pointed at, and a directory named
-# `CLAUDE.md`, which neither CLI can read as an instruction file.
+# directories planted `.claude` and `.agents` symlinks pointed at, and a
+# directory named `CLAUDE.md`, which neither CLI can read as an instruction
+# file.
 _PINNED = {
     **_BASE,
     "README.md": "fork readme\n",

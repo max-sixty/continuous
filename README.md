@@ -172,11 +172,12 @@ instead receives an expiring access-only token, never the rotating refresh
 token. GitHub authentication applies to any repository the bot account can
 access, including repositories other than the one that started the run.
 
-**Config pinning** — the action restores `.mcp.json`, `.claude.json`,
-`.gitmodules`, `.ripgreprc`, `.husky`, and every `CLAUDE.md`, `CLAUDE.local.md`,
-`AGENTS.md`, and `.claude/` in the tree, at any depth, from the base branch
-before the agent starts, blocking both startup-time code execution and prompt
-injection from a PR's own copy of those files.
+**Config pinning** — before the agent starts, both harnesses restore every
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, and `.agents/` in the
+tree, at any depth, from the base branch. Both harnesses also restore
+`.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`, and `.husky`, blocking
+startup-time code execution and prompt injection from a PR's own copy of these
+files.
 
 **Rate limiting** — Burst detection (10 PRs and 10 issues per 20 minutes,
 checked independently) and daily spike detection halt the bot before runaway
