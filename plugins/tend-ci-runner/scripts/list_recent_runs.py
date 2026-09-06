@@ -11,13 +11,17 @@ import os
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import github_cli
 
 WINDOW_CAP = timedelta(hours=6)
+REVIEW_RUNS_WINDOW_CAP = timedelta(hours=49)
+REVIEW_RUNS_DEFAULT_WINDOW = timedelta(hours=25)
 AD_HOC_WINDOW = timedelta(hours=1)
 CREATION_CUSHION = timedelta(hours=2)
+REVIEW_RUNS_CREATION_CUSHION = timedelta(hours=24)
 RUN_LIMIT = 200
 
 
@@ -31,7 +35,14 @@ def _stamp(value: datetime) -> str:
 
 def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    prefixes = args or ["tend-"]
+    profile = args[0] if args else ""
+    if profile not in {"review-reviewers", "review-runs"}:
+        print(
+            f"usage: {sys.argv[0]} review-reviewers|review-runs [workflow-prefix ...]",
+            file=sys.stderr,
+        )
+        return 2
+    prefixes = args[1:] or ["tend-"]
     now = now or datetime.now(UTC)
     repo_args = (
         ["-R", os.environ["TARGET_REPO"]] if os.environ.get("TARGET_REPO") else []
@@ -47,7 +58,8 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
         if row["name"].startswith(prefix)
     )
 
-    floor_cap = now - WINDOW_CAP
+    window_cap = REVIEW_RUNS_WINDOW_CAP if profile == "review-runs" else WINDOW_CAP
+    floor_cap = now - window_cap
     current_workflow = os.environ.get("GITHUB_WORKFLOW")
     if current_workflow:
         anchors = github_cli.json_call(
@@ -69,10 +81,14 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
             (row for row in anchors if int(row["databaseId"]) != current_run), None
         )
         if previous is None:
-            completed_after = floor_cap
+            completed_after = (
+                now - REVIEW_RUNS_DEFAULT_WINDOW
+                if profile == "review-runs"
+                else floor_cap
+            )
             print(
                 f"WARNING: no successful '{current_workflow}' run found. Window "
-                f"floored at {_stamp(floor_cap)}; anything earlier is NOT in this "
+                f"floored at {_stamp(completed_after)}; anything earlier is NOT in this "
                 "list. Record a coverage gap, not an all-clear.",
                 file=sys.stderr,
             )
@@ -81,7 +97,8 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
             if completed_after < floor_cap:
                 print(
                     f"WARNING: the last successful '{current_workflow}' run started "
-                    f"{previous['createdAt']}, more than 6h back. Window floored at "
+                    f"{previous['createdAt']}, more than "
+                    f"{window_cap.total_seconds() / 3600:g}h back. Window floored at "
                     f"{_stamp(floor_cap)}; runs that completed before it are NOT in "
                     "this list. Record a coverage gap, not an all-clear.",
                     file=sys.stderr,
@@ -90,7 +107,14 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
     else:
         completed_after = now - AD_HOC_WINDOW
 
-    created_since = (completed_after - CREATION_CUSHION).strftime("%Y-%m-%dT%H:%M:%S")
+    cushion = (
+        REVIEW_RUNS_CREATION_CUSHION if profile == "review-runs" else CREATION_CUSHION
+    )
+    created_since = (completed_after - cushion).strftime("%Y-%m-%dT%H:%M:%S")
+    if profile == "review-runs":
+        Path(
+            os.environ.get("REVIEW_RUNS_SINCE_FILE", "/tmp/review-runs-since")
+        ).write_text(f"{_stamp(completed_after)}\n")
     runs_by_id: dict[int, dict[str, Any]] = {}
     for workflow in workflows:
         rows = github_cli.json_call(
@@ -102,7 +126,7 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
             "--created",
             f">={created_since}",
             "--json",
-            "databaseId,conclusion,createdAt,updatedAt",
+            "databaseId,conclusion,createdAt,updatedAt,name",
             "--limit",
             str(RUN_LIMIT),
         )

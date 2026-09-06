@@ -205,11 +205,15 @@ def _invoke(
 
 
 def _poll_args(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    return _invoke(poll_pr_checks, env, list(args))
+    return _invoke(poll_pr_checks, env, ["poll", *args])
 
 
 def _poll(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return _poll_args(env, "7", HEAD_SHA)
+
+
+def _snapshot(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return _invoke(poll_pr_checks, env, ["snapshot", "7", HEAD_SHA])
 
 
 def test_settled_green(env: dict[str, str]) -> None:
@@ -219,6 +223,20 @@ def test_settled_green(env: dict[str, str]) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "green" in result.stdout
+
+
+def test_snapshot_prints_the_pinned_rollup_and_live_head(env: dict[str, str]) -> None:
+    _serve(env, _resp(_check_run("tests"), _status_ctx("codecov/patch", "PENDING")))
+
+    result = _snapshot(env)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "sha": HEAD_SHA,
+        "head_sha": HEAD_SHA,
+        "pending": ["codecov/patch"],
+        "failed": [],
+    }
 
 
 def test_red_names_the_failing_check_with_its_url(env: dict[str, str]) -> None:

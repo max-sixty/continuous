@@ -191,20 +191,31 @@ def head_note(*, pr: str, repo: str, sha: str) -> None:
         )
 
 
-def main(
-    argv: list[str] | None = None, *, sleep: Callable[[float], None] = time.sleep
-) -> int:
-    args = sys.argv[1:] if argv is None else argv
-    pr = args[0] if args else ""
-    sha = args[1] if len(args) > 1 else ""
-    if len(args) != 2 or not SHA_RE.fullmatch(sha):
-        print(
-            "poll_pr_checks.py: <sha> must be a full 40-char lowercase commit "
-            f"OID, got '{sha}' — UNVERIFIED, not green",
-            file=sys.stderr,
-        )
-        return 2
+def _head_sha(pr: str, repo: str) -> str:
+    response = github_cli.json_call(
+        "pr", "view", pr, "--repo", repo, "--json", "headRefOid"
+    )
+    return str(response["headRefOid"])
 
+
+def snapshot(pr: str, sha: str) -> int:
+    """Print the current non-own check state for one pinned PR commit."""
+    repo = os.environ["GITHUB_REPOSITORY"]
+    rollup = fetch_rollup(
+        repo=repo,
+        sha=sha,
+        run_id=os.environ.get("GITHUB_RUN_ID", ""),
+        workflow=os.environ.get("GITHUB_WORKFLOW", ""),
+    )
+    if rollup is None:
+        print(f"could not read a complete check rollup for {sha}", file=sys.stderr)
+        return 2
+    github_cli.dump({"sha": sha, "head_sha": _head_sha(pr, repo), **rollup})
+    return 0
+
+
+def poll(pr: str, sha: str, *, sleep: Callable[[float], None] = time.sleep) -> int:
+    """Poll one pinned PR commit until its checks settle or the cap expires."""
     repo = os.environ["GITHUB_REPOSITORY"]
     try:
         github_cli.run("api", f"repos/{repo}/commits/{sha}", "--silent", quiet=True)
@@ -264,6 +275,30 @@ def main(
         print(*last["failed"], sep="\n")
     head_note(pr=pr, repo=repo, sha=sha)
     return 3
+
+
+def main(
+    argv: list[str] | None = None, *, sleep: Callable[[float], None] = time.sleep
+) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    command = args[0] if args else ""
+    args = args[1:]
+    pr = args[0] if args else ""
+    sha = args[1] if len(args) > 1 else ""
+    if len(args) != 2 or not SHA_RE.fullmatch(sha):
+        print(
+            "poll_pr_checks.py: poll|snapshot <pr-number> <sha>; <sha> must be "
+            "a full 40-char lowercase commit "
+            f"OID, got '{sha}' — UNVERIFIED, not green",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "snapshot":
+        return snapshot(pr, sha)
+    if command == "poll":
+        return poll(pr, sha, sleep=sleep)
+    print(f"unknown command: {command or '<none>'}", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

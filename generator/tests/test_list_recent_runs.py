@@ -124,7 +124,8 @@ def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             try:
                 returncode = list_recent_runs.main(
-                    list(args), now=datetime.fromtimestamp(NOW, tz=UTC)
+                    ["review-reviewers", *args],
+                    now=datetime.fromtimestamp(NOW, tz=UTC),
                 )
             except subprocess.CalledProcessError as error:
                 returncode = error.returncode
@@ -287,3 +288,24 @@ def test_overlapping_prefixes_do_not_double_count(env: dict[str, str]) -> None:
 
     assert result.returncode == 0, result.stderr
     assert _ids(result) == [1], "one workflow's runs were counted once per prefix"
+
+
+def test_review_runs_profile_persists_its_wider_completion_window(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    since_file = tmp_path / "since"
+    env["REVIEW_RUNS_SINCE_FILE"] = str(since_file)
+    _anchor(env, (555, NOW - 28 * 3600))
+    _runs(env, _run_entry(1, updated=NOW - 26 * 3600))
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(os, "environ", env.copy())
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = list_recent_runs.main(
+                ["review-runs"], now=datetime.fromtimestamp(NOW, tz=UTC)
+            )
+
+    assert result == 0, stderr.getvalue()
+    assert [row["databaseId"] for row in json.loads(stdout.getvalue())] == [1]
+    assert since_file.read_text() == f"{_iso(NOW - 28 * 3600)}\n"

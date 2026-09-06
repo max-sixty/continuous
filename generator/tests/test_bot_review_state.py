@@ -42,9 +42,11 @@ FAKE_GH = (
     + r"""
 case "$*" in
   "api user"*)          emit '{"login":"'"$BOT_LOGIN"'"}' ;;
+  "api graphql"*)       emit "$(cat "$GRAPHQL_JSON")" ;;
   "pr view "*)          emit "$(cat "$PR_HEAD_JSON")" ;;
   *"/pulls/"*"/comments"*) emit "$(cat "$INLINE_JSON")" ;;
   *"/issues/"*"/timeline"*) emit "$(cat "$TIMELINE_JSON")" ;;
+  *"/dismissals"*)          emit '{}' ;;
   *"/pulls/"*"/reviews"*)   emit "$(cat "$REVIEWS_JSON")" ;;
   *) exit 1 ;;
 esac
@@ -67,6 +69,7 @@ def env(tmp_path: Path) -> dict[str, str]:
         "INLINE_JSON": [],
         "TIMELINE_JSON": [],
         "REVIEWS_JSON": [],
+        "GRAPHQL_JSON": {},
     }
     paths = {}
     for key, value in files.items():
@@ -78,13 +81,14 @@ def env(tmp_path: Path) -> dict[str, str]:
         "GH_CALLS": str(tmp_path / "gh-calls.log"),
         "GITHUB_REPOSITORY": "owner/repo",
         "BOT_LOGIN": BOT,
+        "CHECKED_HEAD_DIR": str(tmp_path),
         **paths,
     }
 
 
 def _state(env: dict[str, str]) -> dict:
     result = subprocess.run(
-        uv_script(BOT_REVIEW_STATE, "7"),
+        uv_script(BOT_REVIEW_STATE, "state", "7"),
         env=env,
         capture_output=True,
         text=True,
@@ -92,6 +96,16 @@ def _state(env: dict[str, str]) -> dict:
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def _run_cli(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        uv_script(BOT_REVIEW_STATE, *args),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def _write(env: dict[str, str], key: str, value: object) -> None:
@@ -134,6 +148,7 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     state = _state(env)
 
     assert state["head_sha"] == HEAD
+    assert state["bot_login"] == BOT
     assert state["last_substantive"] is None
     assert state["at_head"] is None
     assert state["orphan_id"] is None
@@ -141,6 +156,186 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["stale_approval_id"] == ""
     assert state["standing_approval_id"] == ""
     assert state["force_pushed_since"] is False
+
+
+def test_prepare_approval_pins_only_an_unapproved_head(env: dict[str, str]) -> None:
+    result = _run_cli(env, "prepare-approval", "7")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "head_sha": HEAD,
+        "already_approved": False,
+    }
+    pin = Path(env["CHECKED_HEAD_DIR"]) / "checked-head-7"
+    assert pin.read_text() == f"{HEAD}\n"
+
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", state="APPROVED")],
+    )
+    result = _run_cli(env, "prepare-approval", "7")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["already_approved"] is True
+    assert not pin.exists()
+
+
+def test_feedback_combines_conversation_reviews_and_inline_comments(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "PR_HEAD_JSON",
+        {
+            "comments": [
+                {
+                    "author": {"login": "human"},
+                    "createdAt": "2026-01-02T00:00:00Z",
+                    "body": "question",
+                },
+                {
+                    "author": None,
+                    "createdAt": "2026-01-03T00:00:00Z",
+                    "body": "deleted account",
+                },
+            ],
+            "reviews": [
+                {
+                    "author": {"login": BOT},
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-01-01T00:00:00Z",
+                    "body": "finding",
+                },
+                {"author": {"login": "human"}, "state": "APPROVED", "body": "ok"},
+            ],
+        },
+    )
+    _write(
+        env,
+        "GRAPHQL_JSON",
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "author": {"login": BOT},
+                                                "path": "a.py",
+                                                "line": 3,
+                                                "createdAt": "2026-01-01T01:00:00Z",
+                                                "body": "inline",
+                                            },
+                                            {
+                                                "author": {"login": "human"},
+                                                "path": "a.py",
+                                                "line": 3,
+                                                "body": "reply",
+                                            },
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    result = _run_cli(env, "feedback", "7")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "previous_reviews": [
+            {
+                "state": "COMMENTED",
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "body": "finding",
+            }
+        ],
+        "conversation": [
+            {
+                "author": "human",
+                "created_at": "2026-01-02T00:00:00Z",
+                "body": "question",
+            },
+            {
+                "author": "",
+                "created_at": "2026-01-03T00:00:00Z",
+                "body": "deleted account",
+            },
+        ],
+        "inline_comments": [
+            {
+                "path": "a.py",
+                "line": 3,
+                "created_at": "2026-01-01T01:00:00Z",
+                "body": "inline",
+            }
+        ],
+    }
+
+
+def test_threads_filters_to_unresolved_threads_started_by_the_bot(
+    env: dict[str, str],
+) -> None:
+    def thread(thread_id: str, *, bot: str = BOT, resolved: bool = False) -> dict:
+        return {
+            "id": thread_id,
+            "isResolved": resolved,
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": bot},
+                        "path": "a.py",
+                        "line": 3,
+                        "body": "finding",
+                    }
+                ]
+            },
+        }
+
+    _write(
+        env,
+        "GRAPHQL_JSON",
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                thread("keep"),
+                                thread("resolved", resolved=True),
+                                thread("human", bot="human"),
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    result = _run_cli(env, "threads", "7")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [
+        {"id": "keep", "path": "a.py", "line": 3, "body": "finding"}
+    ]
+
+
+def test_resolve_thread_uses_the_graphql_mutation(env: dict[str, str]) -> None:
+    result = _run_cli(env, "resolve-thread", "THREAD_kwDO")
+
+    assert result.returncode == 0, result.stderr
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert "api graphql" in calls
+    assert "threadId=THREAD_kwDO" in calls
+    assert "resolveReviewThread" in calls
 
 
 def test_an_unsubmitted_review_anchors_nothing(env: dict[str, str]) -> None:
@@ -404,6 +599,49 @@ def test_a_later_changes_requested_supersedes_the_approval(
     assert _state(env)["standing_approval_id"] == ""
 
 
+def test_dismiss_command_clears_only_the_standing_approval(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(3, "2026-01-01T00:00:00Z", state="APPROVED")],
+    )
+
+    result = _run_cli(env, "dismiss", "7", "Superseded by findings")
+
+    assert result.returncode == 0, result.stderr
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert "/reviews/3/dismissals -X PUT -f message=Superseded by findings" in calls
+
+    Path(env["GH_CALLS"]).write_text("")
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(4, "2026-01-02T00:00:00Z", state="CHANGES_REQUESTED")],
+    )
+    result = _run_cli(env, "dismiss", "7", "Superseded by findings")
+    assert result.returncode == 0, result.stderr
+    assert "/dismissals" not in Path(env["GH_CALLS"]).read_text()
+
+
+def test_dismiss_stale_command_targets_only_the_pre_rewrite_approval(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(3, "2026-01-01T00:00:00Z", state="APPROVED")],
+    )
+    _rewrite_at(env, "2026-01-02T00:00:00Z")
+
+    result = _run_cli(env, "dismiss-stale", "7", "Rebased")
+
+    assert result.returncode == 0, result.stderr
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert "/reviews/3/dismissals -X PUT -f message=Rebased" in calls
+
+
 def test_an_approval_on_an_older_commit_is_not_an_approval_of_this_one(
     env: dict[str, str],
 ) -> None:
@@ -514,12 +752,14 @@ def test_review_skill_preserves_the_status_free_queue_contract() -> None:
 
     assert "repos/$REPO/statuses/$HEAD_SHA" not in skill
     assert "tend-review/<number>" not in skill
-    assert "--json headRefOid,state" in skill
-    assert '[ "$PR_STATE" != "OPEN" ]' in skill
-    assert "scripts/review-preflight.sh <number>" in skill
-    assert 'if [ "$EVENT_ACTION" = "ready_for_review" ]; then' in skill
+    assert 'review_preflight.py" start <number>' in skill
     assert (
-        "If `FORCE_FULL_REVIEW` is false and the incremental changes are trivial"
+        'if state != "OPEN"'
+        in BOT_REVIEW_STATE.with_name("review_preflight.py").read_text()
+    )
+    assert "force_full_review" in skill
+    assert (
+        "If `force_full_review` is false and the incremental changes are trivial"
         in skill
     )
     assert f"Open the review body with this exact line: `{DRAFT_REVIEW_LINE}`" in skill
@@ -535,8 +775,8 @@ def test_review_skill_dismisses_a_standing_approval_when_it_posts_findings() -> 
     only one of them merges findings under a bot APPROVED."""
     skill = REVIEW_SKILL.read_text()
 
-    assert ".standing_approval_id" in skill
-    assert "reviews/$STANDING/dismissals" in skill
+    assert "bot_review_state.py" in skill
+    assert "dismiss <number>" in skill
     assert "A findings review never supersedes a standing approval" in skill
     # The force-push branch defers to that one rule rather than restating it.
     assert "last_substantive.state, .last_substantive.id" not in skill
@@ -549,8 +789,9 @@ def test_review_skill_defines_every_id_its_dismissal_recipes_use() -> None:
     skill = REVIEW_SKILL.read_text()
 
     assert "$REVIEW_ID" not in skill
-    # Both dismissal sites read the same field, so there is one mechanism.
-    assert skill.count("reviews/$STANDING/dismissals") == 2
+    # Both dismissal sites invoke the same command, so there is one mechanism.
+    assert skill.count("dismiss <number>") == 2
+    assert "reviews/$STANDING/dismissals" not in skill
 
 
 def test_review_skill_spares_the_approval_when_the_comment_withholds_nothing() -> None:
@@ -575,8 +816,8 @@ def test_a_dismissal_path_exists_for_an_invalidation_that_is_not_an_event() -> N
     suppress the comment that would otherwise carry it."""
     skill = RUNNING_IN_CI_SKILL.read_text()
 
-    assert ".standing_approval_id" in skill
-    assert "reviews/$STANDING/dismissals" in skill
-    assert "-X PUT" in skill
+    assert "bot_review_state.py" in skill
+    assert "dismiss <number>" in skill
+    assert "reviews/$STANDING/dismissals" not in skill
     # Not keyed on this session posting anything.
     assert "whether or not this session posts" in skill

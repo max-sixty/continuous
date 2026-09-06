@@ -202,7 +202,7 @@ runs:
     - name: Compose system prompt
       id: prompt
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/compose-system-prompt.sh"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/compose_system_prompt.py"
       env:
         SYSTEM_PROMPT_FILE: ${{ github.action_path }}/../shared/system-prompt.md
         BOT_NAME: ${{ steps.bot.outputs.login }}

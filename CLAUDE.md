@@ -110,6 +110,7 @@ tend/
 │   └── action.yaml       # Claude harness composite action (default, headless)
 ├── codex/
 │   ├── action.yaml       # Codex harness composite action
+│   ├── runner.py         # Codex harness commands (plugin, prompt, execution)
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
 ├── shared/
 │   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
