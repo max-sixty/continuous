@@ -309,7 +309,13 @@ runs:
     - name: Stage subscription auth (sandbox)
       if: steps.codex_auth.outputs.mode == 'subscription'
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
       run: |
+        set +x
         sudo -u "$SANDBOX" mkdir -p "$AGENT_HOME/.codex"
         sudo install -o "$SANDBOX" -g "$SANDBOX" -m 600 \
           "$RUNNER_TEMP/tend-codex-auth.json" "$AGENT_HOME/.codex/auth.json"

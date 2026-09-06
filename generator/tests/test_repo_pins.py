@@ -102,6 +102,13 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
     ] == ["Configure Codex auth"]
     subscription = steps["Stage subscription auth (sandbox)"]
     assert subscription["if"] == "steps.codex_auth.outputs.mode == 'subscription'"
+    assert subscription["env"] == {
+        "BASH_ENV": "",
+        "BASHOPTS": "",
+        "SHELLOPTS": "",
+        "PS4": "",
+    }
+    assert subscription["run"].startswith("set +x\n")
     assert '"$AGENT_HOME/.codex/auth.json"' in subscription["run"]
     assert 'rm -f -- "$RUNNER_TEMP/tend-codex-auth.json"' in subscription["run"]
     run_env = steps["Run Codex"]["env"]
