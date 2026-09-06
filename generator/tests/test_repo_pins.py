@@ -122,7 +122,18 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
     )
 
 
-def test_codex_hardened_shells_scrub_startup_and_pin_command_resolution() -> None:
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_hardened_shells_scrub_bash_env(harness: str) -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / harness / "action.yaml").read_text()
+    )
+
+    for step in action["runs"]["steps"]:
+        if "--noprofile" in step.get("shell", ""):
+            assert step.get("env", {}).get("BASH_ENV") == "", step["name"]
+
+
+def test_codex_hardened_shells_pin_command_resolution() -> None:
     action = YAML(typ="safe", pure=True).load(
         (REPO_ROOT / "codex" / "action.yaml").read_text()
     )
@@ -133,13 +144,12 @@ def test_codex_hardened_shells_scrub_startup_and_pin_command_resolution() -> Non
             continue
 
         env = step.get("env", {})
-        assert env["BASH_ENV"] == "", step["name"]
         lines = step["run"].splitlines()
         if len(lines) == 1:
             assert lines[0].startswith(f"{safe_path} /usr/bin/"), step["name"]
             continue
 
-        assert {name: env[name] for name in ("BASHOPTS", "SHELLOPTS", "PS4")} == {
+        assert {name: env.get(name) for name in ("BASHOPTS", "SHELLOPTS", "PS4")} == {
             "BASHOPTS": "",
             "SHELLOPTS": "",
             "PS4": "",
