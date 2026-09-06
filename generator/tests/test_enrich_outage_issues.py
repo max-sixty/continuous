@@ -52,6 +52,22 @@ PYTEST_TAIL = _log(
     "##[error]Process completed with exit code 1.",
 )
 
+# The log API returns a colour escape as the literal characters `^[[42m`, not an
+# ESC byte, so nothing downstream renders it away.
+COLOURED_TAIL = _log(
+    "shellcheck.................................................^[[42mPassed^[[m",
+    "^[[31mFAILED^[[0m tests/test_sandbox.py::test_proxy_env",
+    "##[error]Process completed with exit code 1.",
+)
+
+# The first line of each step's log carries a byte-order mark ahead of the
+# timestamp. It only reaches the window when the failing step is shorter than
+# the window itself.
+BOM_TAIL = (
+    "test\tRun the action\t\ufeff2026-09-06T08:00:00.1234567Z curl: (35) Recv failure\n"
+    + _log("##[error]Process completed with exit code 35.")
+)
+
 FAKE_GH = (
     GH_PREAMBLE
     + r"""
@@ -175,3 +191,59 @@ def test_an_unavailable_log_does_not_abort_the_batch(env: dict[str, str]) -> Non
     body = _run(env)
 
     assert "No failure details could be extracted." in body
+
+
+def test_terminal_colour_escapes_are_stripped(env: dict[str, str]) -> None:
+    """Any tool that forces colour under CI (pre-commit, cargo, npm) writes
+    them, and unrendered they bury the diagnosis the fallback exists to
+    surface."""
+    Path(env["LOG_TXT"]).write_text(COLOURED_TAIL)
+
+    body = _run(env)
+
+    assert "^[" not in body
+    assert "shellcheck.................................................Passed" in body
+    assert "FAILED tests/test_sandbox.py::test_proxy_env" in body
+
+
+def test_the_step_boundary_bom_does_not_defeat_the_timestamp_strip(
+    env: dict[str, str],
+) -> None:
+    """The mark sits ahead of the timestamp, so an anchored strip misses both."""
+    Path(env["LOG_TXT"]).write_text(BOM_TAIL)
+
+    body = _run(env)
+
+    assert "curl: (35) Recv failure" in body
+    assert "2026-09-06T08:00:00.1234567Z" not in body
+    assert "\ufeff" not in body
+
+
+def test_an_oversized_batch_is_truncated_rather_than_rejected(
+    env: dict[str, str],
+) -> None:
+    """A body over GitHub's 65536-char limit is refused with a 422, and under
+    `set -e` that takes the whole pass down. No marker is written for any run in
+    the batch, so the next night rebuilds the identical batch and fails the same
+    way — the enrichment jams permanently."""
+    runs = [str(int(RUN_ID) + i) for i in range(6)]
+    Path(env["ISSUE_JSON"]).write_text(
+        json.dumps(
+            {
+                "body": "\n".join(
+                    f"https://github.com/owner/repo/actions/runs/{run}" for run in runs
+                ),
+                "comments": [],
+            }
+        )
+    )
+    Path(env["LOG_TXT"]).write_text(
+        _log(*(["x" * 600] * 30), "##[error]Process completed with exit code 1.")
+    )
+
+    body = _run(env)
+
+    assert len(body) < 65536
+    assert "_Truncated" in body
+    assert f"<!-- enriched-run:{runs[0]} -->" in body
+    assert f"<!-- enriched-run:{runs[-1]} -->" not in body

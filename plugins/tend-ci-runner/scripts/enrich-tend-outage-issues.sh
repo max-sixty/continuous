@@ -74,10 +74,15 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
               # A four-backtick fence so a log line that is itself a fence
               # doesn't end the block early.
               printf '#### log tail\n\n````\n'
-              # Drop the `job<TAB>step<TAB>` prefix and the timestamp
-              # `--log-failed` adds, then bound a pathological single line.
+              # Drop the `job<TAB>step<TAB>` prefix, the byte-order mark the
+              # first line of each step carries ahead of its timestamp, the
+              # timestamp itself, and the colour escapes — which the log API
+              # hands back as the literal characters `^[[42m`, so nothing
+              # downstream renders them. Then bound a pathological single line.
               sed -n "${START},${END}p" /tmp/enrich-log.txt \
-                | cut -f3- | sed 's/^[0-9T:.Z-]*Z //' | cut -c -500
+                | cut -f3- \
+                | sed 's/^\xef\xbb\xbf//; s/^[0-9T:.Z-]*Z //; s/\^\[\[[0-9;]*[A-Za-z]//g' \
+                | cut -c -500
               printf '````\n\n'
             } >> /tmp/enrich-errors.md
           fi
@@ -104,6 +109,21 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
         fi
       done
 
-    [ -s /tmp/enrich-batch.md ] \
-      && gh issue comment "$ISSUE" --repo "$REPO" -F /tmp/enrich-batch.md
+    # GitHub rejects a comment body over 65536 characters with a 422. Under
+    # `set -e` that rejection takes the whole nightly pass down — and because
+    # the `enriched-run` markers land only with the comment, the next night
+    # rebuilds the identical oversized batch and fails the same way. Truncate instead: the runs that fall off
+    # keep no marker and are enriched by a later, smaller batch.
+    if [ -s /tmp/enrich-batch.md ]; then
+      if [ "$(wc -c < /tmp/enrich-batch.md)" -gt 60000 ]; then
+        # `sed '$d'` drops the line `head -c` cut mid-way, so the body can't end
+        # on half a UTF-8 character.
+        head -c 60000 /tmp/enrich-batch.md | sed '$d' > /tmp/enrich-post.md
+        printf '\n_Truncated; the remaining runs are enriched by a later batch._\n' \
+          >> /tmp/enrich-post.md
+      else
+        cp /tmp/enrich-batch.md /tmp/enrich-post.md
+      fi
+      gh issue comment "$ISSUE" --repo "$REPO" -F /tmp/enrich-post.md
+    fi
   done
