@@ -16,10 +16,11 @@ Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
 `.claude/skills/running-tend/SKILL.md`, the adopter-owned overlay the rest of
 the docs name. Not a `docs/agent-notes.md` of its own: fork-PR instruction
-pinning covers `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` at
-any depth under both harnesses (`shared/steps/restore-sensitive-config.sh` for
-Claude, `shared/steps/pin-instruction-files.sh` for Codex), so notes parked
-outside those paths are read from the fork's own tree.
+pinning covers `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, and
+`.agents/` at any depth under both harnesses
+(`shared/steps/restore-sensitive-config.sh` for Claude,
+`shared/steps/pin-instruction-files.sh` for Codex), so notes parked outside
+those paths are read from the fork's own tree.
 
 ## Threats
 
@@ -287,14 +288,14 @@ extend trust to `max-sixty/tend`'s release-tag integrity the same way they
 trust any third-party action's publisher; pinning to `X.Y.Z` (or a commit
 SHA) bounds that trust to a reviewed, immutable point.
 
-**Config pinning.** The Claude harness actions restore RCE-relevant config from
-the PR base branch before the agent starts: `.claude/`, `.mcp.json`, `.claude.json`,
-`.gitmodules`, `.ripgreprc`, `.husky` at the root, plus — as a prompt-injection
-defense — every `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/` at
-any depth, since Claude Code loads the instruction file nearest the file the
-agent opens and the skills under any directory's `.claude/`. A malicious PR's
-`SessionStart` hook, MCP server, or injected `CLAUDE.md` is reverted before
-Claude reads it. The restoration is `git restore --source=<base>` in shell:
+**Config pinning.** Before the agent starts, both harnesses restore every
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, and `.agents/` at any
+depth from the PR base branch. Their CLIs load nearby instruction files and
+skills from those directories. The Claude harness also restores RCE-relevant
+config at the root: `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`,
+and `.husky`. A malicious PR's `SessionStart` hook, MCP server, or injected
+skill is reverted before an agent reads it. The restoration is
+`git restore --source=<base>` in shell:
 base-branch versions are written back, fork-added paths removed, and a
 fork-planted symlink replaced rather than written through. The root path list
 and ordering mirror claude-code-action's `restore-config.ts`. The PR's own

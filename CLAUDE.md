@@ -331,6 +331,9 @@ Bundled skills in `plugins/tend-ci-runner/skills/` supply defaults. Consumer
 repos overlay them at `.claude/skills/running-tend/SKILL.md`; where the two
 conflict, the overlay wins.
 
+`.agents/skills` links to `.claude/skills`, so Claude and Codex discover the
+same repo-local skills.
+
 When writing a bundled skill, keep the content universal — it applies to
 every consumer. Repo-specific policy, taste, or convention (PR title
 formats, label names, branch routing) belongs in an overlay. Tend has its
