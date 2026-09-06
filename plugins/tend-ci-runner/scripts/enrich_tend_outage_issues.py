@@ -55,6 +55,13 @@ def truncate_line(line: str) -> str:
     return line.encode()[:MAX_LINE_BYTES].decode(errors="ignore")
 
 
+def fenced(body: str) -> str:
+    """Wrap body in a fence longer than any backtick run it contains."""
+    longest = max((len(run) for run in re.findall(r"`+", body)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}\n{body}\n{fence}"
+
+
 def bounded_message(messages: list[str]) -> str:
     """Join useful annotations and bound their rendered lines."""
     return "\n".join(
@@ -94,7 +101,7 @@ def annotation_details(repo: str, run_id: str) -> list[str]:
         ]
         messages = [message for message in messages if message]
         if messages:
-            detail = f"#### {job['name']}\n\n```\n{bounded_message(messages)}\n```"
+            detail = f"#### {job['name']}\n\n{fenced(bounded_message(messages))}"
             details.append(detail)
             rendered_bytes += len(detail.encode())
     return details
@@ -126,7 +133,7 @@ def log_details(repo: str, run_id: str) -> list[str]:
     end = errors[-1]
     window = lines[max(0, end - 30) : end + 1]
     body = "\n".join(clean_log_line(line) for line in window)
-    return [f"#### log tail\n\n````\n{body}\n````"]
+    return [f"#### log tail\n\n{fenced(body)}"]
 
 
 def failure_details(repo: str, run_id: str) -> list[str]:

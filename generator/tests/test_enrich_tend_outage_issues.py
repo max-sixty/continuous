@@ -161,6 +161,23 @@ def test_annotations_win_and_the_log_is_not_fetched(env: dict[str, str]) -> None
     assert "run view" not in Path(env["GH_CALLS"]).read_text()
 
 
+def test_annotation_fence_outgrows_agent_markdown(env: dict[str, str]) -> None:
+    message = (
+        "The failing command was:\n\n`````markdown\n```bash\nuv run pytest\n```\n"
+        "`````\n\nRe-run it locally."
+    )
+    Path(env["ANNOTATIONS_JSON"]).write_text(
+        json.dumps([{"annotation_level": "failure", "message": message}])
+    )
+
+    body = _run(env)
+
+    assert f"#### tests\n\n``````\n{message}\n``````" in body
+    assert body.index("Re-run it locally.") < body.index(
+        f"<!-- enriched-run:{RUN_ID} -->"
+    )
+
+
 def test_a_run_with_no_recoverable_detail_still_records_the_marker(
     env: dict[str, str],
 ) -> None:
@@ -191,6 +208,23 @@ def test_terminal_colour_escapes_are_stripped(env: dict[str, str]) -> None:
     assert "^[" not in body
     assert "shellcheck.................................................Passed" in body
     assert "FAILED tests/test_sandbox.py::test_proxy_env" in body
+
+
+def test_log_fence_outgrows_fenced_output(env: dict[str, str]) -> None:
+    Path(env["ANNOTATIONS_JSON"]).write_text(json.dumps(EXIT_ONLY))
+    Path(env["LOG_TXT"]).write_text(
+        _log(
+            "````",
+            "diagnostic",
+            "````",
+            "##[error]Process completed with exit code 1.",
+        )
+    )
+
+    body = _run(env)
+
+    assert "#### log tail\n\n`````\n````\ndiagnostic\n````\n" in body
+    assert f"<!-- enriched-run:{RUN_ID} -->" in body
 
 
 def test_the_step_boundary_bom_does_not_defeat_the_timestamp_strip(
