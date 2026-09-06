@@ -126,6 +126,7 @@ If `IS_DRAFT == "true"`, run a lighter review:
 - Skip the duplication scan in step 4 — the author is still shaping the design.
 - Submit as **COMMENT only**, never APPROVE. GitHub blocks approving drafts, and the author hasn't asked for a verdict yet.
 - Make the review's context clear: this is feedback on work in progress, not a merge verdict, and the author can mark it ready to request the full review.
+- Include the exact hidden marker `<!-- tend:draft-review -->` anywhere in the review body. Posting mechanics uses it to replace this COMMENT with a full verdict when the PR becomes ready; it is not part of the reader-facing prose.
 - Skip step 7 (CI monitoring) — drafts churn; CI failures are the author's to chase.
 - Skip step 9 (push fixes) — never push to a WIP branch.
 

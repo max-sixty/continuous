@@ -104,8 +104,11 @@ gh api --paginate "repos/$REPO/pulls/$PR/reviews" \
           | last
           | if . == null then null else
               {id, state, at: .submitted_at,
+               # TODO(2026-12-01): Drop the prose-prefix fallback after draft
+               # reviews created by pre-marker releases have aged out.
                draft_mode: (.state == "COMMENTED"
-                            and ((.body // "") | startswith("Reviewing as a draft —")))}
+                            and (((.body // "") | contains("<!-- tend:draft-review -->"))
+                                 or ((.body // "") | startswith("Reviewing as a draft —"))))}
             end),
         orphan_id: ($subs
           | map(select(.commit_id == $head and (.body | length) > 0
