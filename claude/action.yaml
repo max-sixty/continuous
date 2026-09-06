@@ -77,7 +77,7 @@ inputs:
       Pinned `mitmproxy` version for the credential-injection proxy. Pinned
       so the uv download cache key is stable; bump to upgrade.
   uv_version:
-    default: "0.12.7"
+    default: "0.12.10"
     description: >-
       Pinned `uv` version. The credential-injection proxy always uses a private
       copy off $PATH. The agent gets a separate fallback after the adopter PATH,
