@@ -6,7 +6,6 @@ import importlib.resources
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -887,49 +886,17 @@ def test_ci_fix_custom_branches(tmp_path: Path) -> None:
     assert 'branches: ["main", "release"]' in ci_fix.content
 
 
-@pytest.mark.parametrize(
-    ("conclusion", "started", "updated", "expected"),
-    [
-        ("failure", "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", "true"),
-        ("cancelled", "2026-01-01T00:00:00Z", "2026-01-01T05:54:59Z", "false"),
-        ("cancelled", "2026-01-01T00:00:00Z", "2026-01-01T05:55:00Z", "true"),
-    ],
-)
-def test_ci_fix_classifies_six_hour_cancellations(
-    tmp_path: Path,
-    conclusion: str,
-    started: str,
-    updated: str,
-    expected: str,
-) -> None:
+def test_ci_fix_runs_for_failures_and_cancellations(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path, _extra_for("ci-fix")))
     workflow = yaml.safe_load(
         next(
             wf for wf in generate_all(cfg) if wf.filename == "tend-ci-fix.yaml"
         ).content
     )
-    script = next(
-        step
-        for step in workflow["jobs"]["classify"]["steps"]
-        if step.get("id") == "classify"
-    )["run"]
-    output = tmp_path / "output"
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        env={
-            "CONCLUSION": conclusion,
-            "STARTED_AT": started,
-            "UPDATED_AT": updated,
-            "GITHUB_OUTPUT": str(output),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
+    assert workflow["jobs"]["fix-ci"]["if"] == (
+        'contains(fromJSON(\'["failure", "cancelled"]\'), '
+        "github.event.workflow_run.conclusion)"
     )
-
-    assert result.returncode == 0, result.stderr
-    assert output.read_text() == f"should_fix={expected}\n"
 
 
 def test_cli_init_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1446,11 +1413,11 @@ def test_fork_guard_omitted_when_repo_owner_empty(tmp_path: Path) -> None:
                 f"{filename} job '{job_name}' must not contain the guard "
                 "when repo_owner is unset"
             )
-    # ci-fix still classifies failure vs six-hour cancellation without the guard.
+    # ci-fix's conclusion check must survive even without the guard.
     ci_fix = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
-    assert "github.event.workflow_run.conclusion" in ci_fix["jobs"]["classify"]["if"]
     assert ci_fix["jobs"]["fix-ci"]["if"] == (
-        "needs.classify.outputs.should_fix == 'true'"
+        'contains(fromJSON(\'["failure", "cancelled"]\'), '
+        "github.event.workflow_run.conclusion)"
     )
 
 
