@@ -173,7 +173,7 @@ it here.
 ```bash
 # Composite-action inputs
 yq -r '.inputs | to_entries[] | select(.key | test("_version$"))
-  | "\(filename) \(.key) = \(.value.default)"' */action.yaml
+  | "\(filename) \(.key) = \(.value.default)"' */action.yaml */*/action.yaml
 
 # Python: `==` and upper bounds freeze a version. Floors (`click>=8.0`) state
 # compatibility instead and stay put — raising one only narrows adopter support.
@@ -212,11 +212,11 @@ where CI can't. Split PRs by who runs the result, and take what fits in one
 session rather than clearing a backlog at once — an unswept pin waits a week, a
 swamped run finishes nothing.
 
-- **Ships to adopters** — `claude/action.yaml` and `codex/action.yaml` run in
-  every adopter's job from the next release; `generator/src/tend/templates/`
-  and `workflows.py` render into their workflow files. One PR each, titled
-  `chore: bump <name> to <version>` (the uv-plus-mitmproxy PR names both), its
-  body naming what changed.
+- **Ships to adopters** — `claude/action.yaml`, `codex/action.yaml`, and
+  `codex/refresh/action.yaml` run in adopter jobs from the next release;
+  `generator/src/tend/templates/` and `workflows.py` render into their workflow
+  files. One PR each, titled `chore: bump <name> to <version>` (the
+  uv-plus-mitmproxy PR names both), its body naming what changed.
 - **Ours alone** — everything else: pre-commit revs, the workspace dev pins,
   the `uv_build` backend, npm devDependencies, `WORKTRUNK_VERSION`, the
   hand-maintained `.github/workflows/` files and `.config/tend.yaml`. One PR
@@ -231,7 +231,7 @@ swamped run finishes nothing.
 | `claude_version` | `claude/action.yaml` | npm's `latest` dist-tag, not `stable` |
 | `mitmproxy_version` | `claude/action.yaml` | move the root `pyproject.toml` `==` pin with it and `uv lock` |
 | `uv_version` | both harness `action.yaml` files | move both defaults together, with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml` | `latest`; `alpha` only for a fix not yet released |
+| `codex_version` | `codex/action.yaml`, `codex/refresh/action.yaml` | move both defaults together; `alpha` only for a fix not yet released |
 | `uv_build` | `generator/pyproject.toml` | its range must contain the uv doing the build; a stale one only warns during `uv build`, so only this sweep catches it |
 | `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh` and that `wt config approvals add --yes` still records approvals without a TTY |
 
@@ -248,10 +248,12 @@ also supplies the agent fallback in both harnesses. CI smokes the installer and
 proxy together, so move uv and mitmproxy in one PR.
 
 For `codex_version`, CI's `test-codex-surface` job installs whatever is pinned
-and asserts the CLI surface the action depends on, so a bump that breaks it
-fails on its own PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live
-agent session stays unverified. Report the relevant release notes crossed by
-the bump in its PR.
+and asserts the credential-free CLI surface the action depends on. Before a
+bump, use an isolated Plus/Pro login to run the refresh action and require both
+the full and access-only credentials to rotate. Inspect Codex's auth manager
+too: an unparsable access token must fall through to the stale `last_refresh`,
+and that refresh must use the refresh token without requiring the old access
+token. Report the relevant release notes crossed by the bump in its PR.
 
 ### `uses:` refs
 
