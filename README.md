@@ -61,6 +61,10 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
   - Maintainers of sizeable OSS projects [get a 20x Claude Max subscription
     for free from
     Anthropic](https://claude.com/contact-sales/claude-for-oss).
+- A compromise of the runner or credential proxy could expose the bot PAT or
+  model credential. The agent cannot read them during normal operation, and
+  the merge restriction, environment gate, and immutable releases limit what a
+  stolen bot credential can do.
 
 ## Workflows
 
@@ -160,7 +164,9 @@ secrets into it stays manual — their values can't be read back.
 user. Tend's exact-host proxy holds the bot token; Claude model auth uses the
 same mechanism, while Codex model auth uses OpenAI's proxy that accepts only
 Responses API calls. The proxies authenticate the agent without placing the
-real credentials in its environment.
+real credentials in its environment. GitHub authentication applies to any
+repository the bot account can access, including repositories other than the
+one that started the run.
 
 **Config pinning** — the action restores `.mcp.json`, `.claude.json`,
 `.gitmodules`, `.ripgreprc`, `.husky`, and every `CLAUDE.md`, `CLAUDE.local.md`,

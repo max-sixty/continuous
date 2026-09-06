@@ -45,6 +45,94 @@ enough that the per-log read cost is material. Until then the agent-driven
 path covers the same ground, and survives no longer than the 30-day
 artifact retention either way.
 
+## Auth: GitHub App alternatives to PAT — not planned
+
+**Not planned (2026-06-14).** Both alternatives below replace the classic
+PAT with a GitHub App installation token (~1 h lifetime, repo-scoped). This
+would reduce the impact of a token stolen through a compromised runner or
+credential proxy. Neither is being pursued: both require tend to stand up
+and operate a hosted service (a token-minting endpoint or a full webhook
+handler), which gives up tend's defining property of stamping workflow files
+into the adopter's repo and running nothing of its own. The credential proxy
+keeps the PAT out of the agent on both harnesses, and the environment gate keeps
+it out of any workflow the bot can start on its own. Cross-repository GitHub
+access through the live proxy is intended behavior, not part of this analysis.
+
+### Model A: token-minting service
+
+Adopter installs our GitHub App; `tend init` generates the same workflow
+files. The only auth change is an OIDC call to our service that mints a
+scoped installation token per workflow run. Workflows still live and run
+in the adopter's repo.
+
+```yaml
+- uses: max-sixty/tend/auth@X.Y.Z   # OIDC → our service → scoped token
+  id: auth
+- uses: actions/checkout@v6
+  with:
+    token: ${{ steps.auth.outputs.token }}
+- uses: max-sixty/tend/claude@X.Y.Z
+  with:
+    github_token: ${{ steps.auth.outputs.token }}
+    claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+Trust model: standard GitHub App — adopters trust the App by installing it,
+like installing Codecov or Renovate. We hold the App private key; adopters
+hold their own Claude OAuth token. A workflow-run OIDC token
+(`id-token: write`) proves the caller's repo identity to our service.
+
+Could be extended to push workflow updates via PR, but that requires a
+webhook handler to detect config changes.
+
+### Model B: full webhook handler
+
+Adopter installs our GitHub App, adds `.config/tend.yaml`, done — no
+workflow files. GitHub sends raw events to our service; we run the logic
+(engagement verification, concurrency, dispatch) and execute Claude on our
+infrastructure (or dispatch back to the adopter's runners).
+
+Most cohesive UX, and partially addresses the fork-PR gap — we receive
+inline review-comment webhooks regardless of fork status.
+
+Trade-offs: a compromise of our infra exposes write access to every
+adopter's repo *and* their code. Anthropic token has three options:
+
+- Adopter hands it to us; we hold it. If our service is compromised, the
+  attacker gets every adopter's Claude token.
+- We provide Claude access and bill the adopter. Simpler for them; we take
+  on billing and usage management.
+- `workflow_dispatch` back to their runners. Token stays in their secrets;
+  adds latency and complexity.
+
+## Auth: triage + fork privilege model
+
+Currently only `write + branch protection` exists. The planned `mode` field
+in `.config/tend.yaml` would select between two models:
+
+| | **Triage + fork** | **Write + branch protection** (current) |
+|---|---|---|
+| Bot collaborator level | Triage | Write |
+| Bot pushes code to | Own fork | Target repo branches |
+| Creates PRs | From fork | Same-repo |
+| Approvals count for required reviews | No | Yes |
+| Branch protection required | **No** | **Yes** — primary security boundary |
+| Leaked PAT blast radius | Comments/reviews; fork write only | Full write to target repo |
+| Setup complexity | Low | Medium |
+
+`Triage + fork` would be the recommended default. The bot pushes to its
+own fork and creates cross-fork PRs:
+
+```bash
+git remote add fork https://x-access-token:${TEND_BOT_TOKEN}@github.com/${BOT_NAME}/${REPO}.git
+git push fork fix/ci-123
+gh pr create --repo ${TARGET_REPO} --head ${BOT_NAME}:fix/ci-123
+```
+
+Limitations: triage-level approvals don't satisfy required-review policies,
+and triage can't push to human PR branches — the bot posts review
+suggestions instead.
+
 ## Security hardening — deferred
 
 From the old `docs/security-model.md` "what we could do but don't" — none

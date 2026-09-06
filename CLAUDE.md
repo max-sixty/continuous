@@ -236,13 +236,22 @@ across runs. The `user` scope lets `install-tend` set the bot's profile
 bio (`PATCH /user`) so the account's authorization stance is discoverable
 on the bot's user page.
 
+The agent may use PAT-backed GitHub API and git access for any repository the
+bot account can reach; this cross-repository access is intentional. Credential
+isolation keeps the PAT itself out of the agent process. If the PAT is stolen
+by compromising the runner or proxy, its `public_repo` scope grants full write
+to every public repository the bot can access. Fine-grained PATs allow
+per-category scoping but don't support outside collaborators ([GitHub roadmap
+#601](https://github.com/github/roadmap/issues/601), not shipped).
+
 **Current privilege model: write + branch protection + environment gate.**
 The bot has write access; a merge restriction (ruleset or branch
 protection) is the primary security boundary — without it the bot can merge
 its own PRs — and the `tend` environment keeps the operational secrets out
 of any run the bot can cause on its own. `tend check` verifies both are
 configured correctly, and `--fix` creates either. See
-`docs/security-model.md` for the full threat model.
+`docs/security-model.md` for the full threat model. Alternative models
+(GitHub App, triage+fork) are in `TODO.md`.
 
 Every adopter runs the environment gate: both secrets live in the `tend`
 environment with no repo-level copies. This repo's own workflows name it

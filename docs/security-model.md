@@ -4,7 +4,9 @@ Tend gives an AI agent write access to a repository and runs it on
 attacker-controlled input (PR diffs, issue bodies, comments, CI logs). The
 agent uses authenticated GitHub and model connections to push commits, post
 reviews, and create PRs. The security model keeps the real credentials outside
-the agent process and requires a human to land code.
+the agent process and requires a human to land code. The agent is expected to
+use the GitHub API for any repository the bot account can access, including
+repositories other than the one that started the run.
 
 Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
@@ -17,12 +19,17 @@ outside those paths are read from the fork's own tree.
 
 ## Threats
 
-Two things an attacker wants, roughly in order of severity:
+Three things an attacker wants, roughly in order of severity:
 
 1. **Merge malicious code to the default branch.** Game over — the attacker
    controls the repo. Everything else is damage limitation compared to this.
 
-2. **Hijack a single session.** An attacker who controls what the agent does
+2. **Exfiltrate tokens.** The agent does not receive the real credentials, so
+   code running inside the agent must cross the UID boundary or compromise a
+   runner-owned proxy to steal them. If stolen, the bot PAT grants persistent
+   GitHub access and the model credential grants billed API access.
+
+3. **Hijack a single session.** An attacker who controls what the agent does
    in one run can push malicious branches, post misleading reviews, or create
    spam PRs.
 
@@ -315,12 +322,15 @@ harnesses run it as the non-sudo sandbox user.
 non-sudo `tend-sandbox` user, sharing the GitHub proxy machinery under the
 top-level `proxy/`. The bot PAT lives only in a local mitmproxy that the agent
 reaches over `HTTPS_PROXY`; the proxy injects it only for exact GitHub hosts
-and tunnels everything else. Claude's Anthropic credential (OAuth token or API
-key) uses the same proxy and is injected only for `api.anthropic.com`. Codex's
-OpenAI key is instead read from stdin by OpenAI's hardened Responses API proxy,
-which exposes only `POST /v1/responses` on loopback. The agent holds only a
-dummy PAT and the local inference endpoint, so it can't read the real secrets:
-a different UID with no sudo can't read either proxy's
+and tunnels everything else. This authenticates API and git operations for any
+repository the bot account can access; credential isolation protects the PAT
+itself rather than restricting those operations to the triggering repository.
+Claude's Anthropic credential (OAuth token or API key) uses the same proxy and
+is injected only for `api.anthropic.com`. Codex's OpenAI key is instead read
+from stdin by OpenAI's hardened Responses API proxy, which exposes only
+`POST /v1/responses` on loopback. The agent holds only a dummy PAT and the local
+inference endpoint, so it can't read the real secrets: a different UID with no
+sudo can't read either proxy's
 `/proc/<pid>/environ`, the credential `actions/checkout` persists in
 `.git/config` is stripped before the workspace is handed over, and the model
 auth is never written to the agent's env or disk. The injection allowlist is
@@ -416,6 +426,13 @@ HTTP requests to an external server, or workflow logs; on GitHub-hosted
 runners there's no way to restrict outbound network access. On both harnesses
 the credential isolation above keeps the real tokens out of the agent's reach,
 so they are not among what a hijacked session can send.
+
+**Credential theft.** Isolation minimizes the chance that a hijacked session
+can steal the real tokens, but it does not protect against compromise of the
+runner-owned proxy or the runner itself. A stolen classic PAT remains valid
+until revoked and grants access to every public repository the bot account can
+reach. The merge restriction, environment gate, and immutable releases limit
+what the stolen credential can do.
 
 **Prompt injection without code execution.** Even without hijacking the
 tools, an attacker who controls what Claude reads can influence its behavior.
