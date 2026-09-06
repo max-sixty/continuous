@@ -94,3 +94,5 @@ On a core-logic change, take one more pass as a fresh reviewer holding the verif
 Return the findings to the caller as a list of at most 10 (at most 4 for a peripheral change), ranked most-severe first, each with `file`, `line`, `summary`, `failure_scenario`, and its verdict. If nothing survives verification, say so in one line. Don't call the `ReportFindings` tool and don't publish an artifact — the caller owns the output.
 
 Tell the caller which mode ran (fanned-out angles with a subagent verify, or a single inline pass) so it can weigh the findings — context for the caller, not content for the review it posts.
+
+**Running from a caller skill, this is a sub-step, not the answer.** When the pass runs in the caller's own session rather than a subagent, there is no separate caller to return to — "return the findings" means hand them to the caller's next step and continue there. A session that emits them as its final message ends with the caller's work unfinished and nothing posted, leaving the findings reachable only from the session log. Invoked directly, with no caller, the findings *are* the answer.

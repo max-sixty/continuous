@@ -16,6 +16,7 @@ from tend.checks import (
     ROLE_ID_WRITE,
     CheckResult,
     _has_restrict_updates_ruleset,
+    _list_org_secrets,
     _restrict_updates_ruleset,
     admitted_refs,
     check_bot_permission,
@@ -23,6 +24,7 @@ from tend.checks import (
     check_credential_environments,
     check_environment,
     check_environment_deployments,
+    check_memory_gist_repository,
     check_repo_secret_allowlist,
     check_secrets,
     detect_canonical_owner,
@@ -35,8 +37,11 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
+    STANDARD_WORKFLOWS,
     Config,
+    WorkflowConfig,
 )
 from tend.workflows import TEND_ENVIRONMENT
 
@@ -48,6 +53,8 @@ def _config(
     protected_branches: list[str] | None = None,
     harness: str = "claude",
     model: str = "opus",
+    memory_gist: bool = False,
+    workflows: dict[str, WorkflowConfig] | None = None,
 ) -> Config:
     """Build a Config for tests without hand-listing every positional arg."""
     return Config(
@@ -58,7 +65,8 @@ def _config(
         model=model,
         effort="",
         setup=[],
-        workflows={},
+        workflows=workflows or {},
+        memory_gist=memory_gist,
     )
 
 
@@ -70,11 +78,18 @@ def _make_completed(
     )
 
 
-def _secret_names(args: tuple, *names: str) -> str:
-    """A secrets listing in whichever shape the caller asked for: objects for
-    `gh secret list --json name`, bare names for the `--jq` reads."""
-    listed = [{"name": n} for n in names] if "--json" in args else list(names)
-    return json.dumps(listed) + "\n"
+def _url(args: tuple[str, ...]) -> str:
+    """The API path in a `_gh` call, wherever flags put it.
+
+    A `graphql` call carries no path, so it answers with its subcommand.
+    """
+    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
+
+
+def _secret_names(*names: str) -> str:
+    """A secrets listing in the shape every caller reads: one name per line,
+    which is what `--jq` under `--paginate` emits."""
+    return "".join(f"{n}\n" for n in names)
 
 
 def _write_config(tmp_path: Path, content: str = "bot_name: test-bot") -> Path:
@@ -144,12 +159,12 @@ def _org_secret_gh(
             return _make_completed("\n".join(shared.get(url.split("/")[-2], [])) + "\n")
         if url == "orgs/acme/actions/secrets":
             listed = [{"name": n, "visibility": v} for n, v in org_secrets]
-            return _make_completed(json.dumps(listed) + "\n")
+            return _make_completed("".join(json.dumps(e) + "\n" for e in listed))
         if url == "orgs/acme":
             return _make_completed(f"{plan}\n")
         if url == "repos/acme/widget":
             return _make_completed(f"{str(repo_private).lower()}\n")
-        return _make_completed("[]\n")
+        return _make_completed("")
 
     return fake
 
@@ -301,7 +316,7 @@ def test_branch_protected() -> None:
     ruleset = json.dumps({"bypass_actors": [_role_actor(ROLE_ID_ADMIN)]})
 
     def fake_gh(*args, **kwargs):
-        url = args[1]
+        url = _url(args)
         if "rules/branches" in url:
             return _make_completed(branch_rules)
         if "/rulesets/" in url:
@@ -344,7 +359,7 @@ def test_branch_protected_ruleset_inconclusive_skips() -> None:
     )
 
     def fake_gh(*args, **kwargs):
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo/branches/main" and ".protected" in args:
             return _make_completed("true\n")
         if "rules/branches" in url:
@@ -713,7 +728,7 @@ def test_bot_permission_404_wrong_username() -> None:
 def test_secrets_present() -> None:
     with patch(
         "tend.checks._gh",
-        return_value=_make_completed('["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n'),
+        return_value=_make_completed("TEND_BOT_TOKEN\nCLAUDE_CODE_OAUTH_TOKEN\n"),
     ):
         result = check_secrets(
             "owner/repo", ["TEND_BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
@@ -722,7 +737,7 @@ def test_secrets_present() -> None:
 
 
 def test_secrets_missing() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed('["TEND_BOT_TOKEN"]\n')):
+    with patch("tend.checks._gh", return_value=_make_completed("TEND_BOT_TOKEN\n")):
         result = check_secrets(
             "owner/repo", ["TEND_BOT_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
         )
@@ -734,7 +749,7 @@ def test_secrets_missing() -> None:
 def test_secrets_missing_with_org_403_hint() -> None:
     """When org secrets return 403 and secrets are missing, include the hint."""
     with (
-        patch("tend.checks._gh", return_value=_make_completed('["TEND_BOT_TOKEN"]\n')),
+        patch("tend.checks._gh", return_value=_make_completed("TEND_BOT_TOKEN\n")),
         patch("tend.checks._list_org_secrets", return_value=(None, True)),
     ):
         result = check_secrets(
@@ -769,10 +784,50 @@ def test_secrets_api_error() -> None:
     assert result.passed is None
 
 
-def test_secrets_bad_json() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed("not json")):
-        result = check_secrets("owner/repo", ["TEND_BOT_TOKEN"])
-    assert result.passed is None
+def test_secrets_reads_every_page_of_the_environment() -> None:
+    """An Actions secrets endpoint serves 30 per page. Reading only the first
+    reports a secret that is present as missing, failing a correctly set up
+    repo."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        # What `gh api --paginate --jq '.secrets[].name'` emits across two
+        # pages: one name per line, the pages simply concatenated.
+        return _make_completed(f"{BOT_TOKEN_SECRET}\n{CLAUDE_TOKEN_SECRET}\n")
+
+    with patch("tend.checks._gh", side_effect=fake):
+        result = check_secrets("owner/repo", [BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET])
+    assert result.passed is True, result.message
+    assert any("--paginate" in c for c in calls), (
+        "the listing must be paginated, or page 2 is invisible whatever the parse does"
+    )
+
+
+def test_org_secrets_read_every_page() -> None:
+    """`_list_org_secrets` feeds both the allowlist and the org-copy hint, and
+    an org past 30 secrets is the ordinary case rather than the exotic one."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        url = _url(args)
+        if url == "orgs/acme/actions/secrets":
+            return _make_completed(
+                '{"name":"FIRST_PAGE","visibility":"all"}\n'
+                '{"name":"SECOND_PAGE","visibility":"all"}\n'
+            )
+        if url == "orgs/acme":
+            return _make_completed("team\n")
+        if url == "repos/acme/widget":
+            return _make_completed("false\n")
+        return _make_completed("")
+
+    with patch("tend.checks._gh", side_effect=fake):
+        secrets, forbidden = _list_org_secrets("acme", "acme/widget")
+    assert forbidden is False
+    assert secrets == {"FIRST_PAGE", "SECOND_PAGE"}
+    assert any("--paginate" in c and "orgs/acme/actions/secrets" in c for c in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -785,9 +840,7 @@ def test_repo_secret_allowlist_pass() -> None:
     with (
         patch(
             "tend.checks._gh",
-            return_value=_make_completed(
-                '["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]\n'
-            ),
+            return_value=_make_completed("TEND_BOT_TOKEN\nCLAUDE_CODE_OAUTH_TOKEN\n"),
         ),
         patch("tend.checks._list_org_secrets", return_value=(set(), False)),
     ):
@@ -804,7 +857,7 @@ def test_repo_secret_allowlist_unexpected_repo() -> None:
         patch(
             "tend.checks._gh",
             return_value=_make_completed(
-                '["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","PYPI_TOKEN"]\n'
+                "TEND_BOT_TOKEN\nCLAUDE_CODE_OAUTH_TOKEN\nPYPI_TOKEN\n"
             ),
         ),
         patch("tend.checks._list_org_secrets", return_value=(set(), False)),
@@ -822,7 +875,7 @@ def test_repo_secret_allowlist_unexpected_org() -> None:
     with (
         patch(
             "tend.checks._gh",
-            return_value=_make_completed('["TEND_BOT_TOKEN"]\n'),
+            return_value=_make_completed("TEND_BOT_TOKEN\n"),
         ),
         patch(
             "tend.checks._list_org_secrets",
@@ -840,7 +893,7 @@ def test_repo_secret_allowlist_unexpected_both() -> None:
     with (
         patch(
             "tend.checks._gh",
-            return_value=_make_completed('["TEND_BOT_TOKEN","PYPI_TOKEN"]\n'),
+            return_value=_make_completed("TEND_BOT_TOKEN\nPYPI_TOKEN\n"),
         ),
         patch(
             "tend.checks._list_org_secrets",
@@ -860,7 +913,7 @@ def test_repo_secret_allowlist_org_allowed() -> None:
     with (
         patch(
             "tend.checks._gh",
-            return_value=_make_completed('["TEND_BOT_TOKEN"]\n'),
+            return_value=_make_completed("TEND_BOT_TOKEN\n"),
         ),
         patch(
             "tend.checks._list_org_secrets",
@@ -878,7 +931,7 @@ def test_repo_secret_allowlist_org_forbidden() -> None:
     with (
         patch(
             "tend.checks._gh",
-            return_value=_make_completed('["TEND_BOT_TOKEN"]\n'),
+            return_value=_make_completed("TEND_BOT_TOKEN\n"),
         ),
         patch("tend.checks._list_org_secrets", return_value=(None, True)),
     ):
@@ -893,7 +946,7 @@ def test_repo_secret_allowlist_with_extra_allowed() -> None:
         patch(
             "tend.checks._gh",
             return_value=_make_completed(
-                '["TEND_BOT_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","CODECOV_TOKEN"]\n'
+                "TEND_BOT_TOKEN\nCLAUDE_CODE_OAUTH_TOKEN\nCODECOV_TOKEN\n"
             ),
         ),
         patch("tend.checks._list_org_secrets", return_value=(set(), False)),
@@ -907,7 +960,7 @@ def test_repo_secret_allowlist_with_extra_allowed() -> None:
 def test_repo_secret_allowlist_empty_repo() -> None:
     """No secrets at all — passes."""
     with (
-        patch("tend.checks._gh", return_value=_make_completed("[]\n")),
+        patch("tend.checks._gh", return_value=_make_completed("")),
         patch("tend.checks._list_org_secrets", return_value=(set(), False)),
     ):
         result = check_repo_secret_allowlist("owner/repo", {"TEND_BOT_TOKEN"})
@@ -1057,10 +1110,24 @@ def test_repo_secret_allowlist_no_gh() -> None:
     assert result.passed is None
 
 
-def test_repo_secret_allowlist_bad_json() -> None:
-    with patch("tend.checks._gh", return_value=_make_completed("not json")):
-        result = check_repo_secret_allowlist("owner/repo", {"TEND_BOT_TOKEN"})
-    assert result.passed is None
+def test_repo_secret_allowlist_reads_every_page() -> None:
+    """The failure mode a missed page produces here is a silent pass: an
+    ungated release secret sitting on page 2 reads as "no unexpected secret",
+    so the check reports the repo clean while the exposure stands."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return _make_completed(f"{BOT_TOKEN_SECRET}\nPYPI_TOKEN\n")
+
+    with (
+        patch("tend.checks._gh", side_effect=fake),
+        patch("tend.checks._list_org_secrets", return_value=(set(), False)),
+    ):
+        result = check_repo_secret_allowlist("owner/repo", {BOT_TOKEN_SECRET})
+    assert result.passed is False, result.message
+    assert "PYPI_TOKEN" in result.message
+    assert any("--paginate" in c for c in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -1089,7 +1156,7 @@ def test_run_all_checks_no_repo() -> None:
 _BRANCH_HAS_UPDATE_RULE = _make_branch_rules("update")
 
 
-def _gh_all_pass(*admitted: str):
+def _gh_all_pass(*admitted: str, environment_secrets: tuple[str, ...] | None = None):
     """A gh CLI where every check passes, for a repo whose environment admits
     `admitted` (default `main`). The admitted set is a parameter because the
     environment check demands it match the config's protected refs exactly, so
@@ -1104,17 +1171,16 @@ def _gh_all_pass(*admitted: str):
         if url.endswith("/environments"):
             return _make_completed(f"{TEND_ENVIRONMENT}\n")
         if url.endswith("/secrets") and "/environments/" in url:
-            # Two callers read this path with different `--jq` shapes: the
-            # membership check wants a JSON array, the environment sweep one
-            # name per line. The fake answers whichever was asked for.
             names = (
-                [BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET]
+                list(
+                    (BOT_TOKEN_SECRET, CLAUDE_TOKEN_SECRET)
+                    if environment_secrets is None
+                    else environment_secrets
+                )
                 if url.endswith(f"{TEND_ENVIRONMENT}/secrets")
                 else []
             )
-            if any(a.startswith("[.secrets") for a in args):
-                return _make_completed(json.dumps(names))
-            return _make_completed("\n".join(names) + "\n")
+            return _make_completed("".join(f"{n}\n" for n in names))
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -1149,7 +1215,7 @@ def _gh_all_pass(*admitted: str):
         # is deliberately the only place the operational names appear, so a
         # check reading the wrong level cannot pass by accident.
         if "secrets" in url:
-            return _make_completed("[]\n")
+            return _make_completed("")
         return _make_completed(returncode=1)
 
     return fake
@@ -1165,6 +1231,88 @@ def test_run_all_checks_with_explicit_repo() -> None:
     assert all(r.passed is True for r in results)
 
 
+def test_run_all_checks_requires_auth_for_each_effective_harness() -> None:
+    cfg = _config(
+        harness="codex",
+        model="gpt-5.5",
+        workflows={
+            "nightly": WorkflowConfig(harness="claude", model="opus"),
+        },
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch(
+            "tend.checks._gh",
+            side_effect=_gh_all_pass(
+                environment_secrets=(BOT_TOKEN_SECRET, OPENAI_KEY_SECRET)
+            ),
+        ),
+    ):
+        results = run_all_checks(cfg, repo="owner/repo")
+
+    auth = {result.name: result for result in results if result.name.endswith("-auth")}
+    assert auth["codex-auth"].passed is True
+    assert auth["claude-auth"].passed is False
+    assert CLAUDE_TOKEN_SECRET in auth["claude-auth"].message
+
+
+def test_run_all_checks_requires_configured_auth_when_all_workflows_are_disabled() -> (
+    None
+):
+    cfg = _config(
+        harness="codex",
+        model="gpt-5.5",
+        workflows={name: WorkflowConfig(enabled=False) for name in STANDARD_WORKFLOWS},
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch(
+            "tend.checks._gh",
+            side_effect=_gh_all_pass(environment_secrets=(BOT_TOKEN_SECRET,)),
+        ),
+    ):
+        results = run_all_checks(cfg, repo="owner/repo")
+
+    auth = [result for result in results if result.name.endswith("-auth")]
+    assert len(auth) == 1
+    assert auth[0].name == "codex-auth"
+    assert auth[0].passed is False
+    assert OPENAI_KEY_SECRET in auth[0].message
+
+
+def test_memory_gist_requires_its_environment_secret() -> None:
+    def fake(*args, **kwargs):
+        if args[1] == "repos/owner/repo" and ".private" in args:
+            return _make_completed("false\n")
+        return _gh_all_pass()(*args, **kwargs)
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("tend.checks._gh", side_effect=fake),
+    ):
+        results = run_all_checks(_config(memory_gist=True), repo="owner/repo")
+
+    secrets = next(result for result in results if result.name == "secrets")
+    assert secrets.passed is False
+    assert MEMORY_GIST_SECRET in secrets.message
+
+
+@pytest.mark.parametrize(
+    ("private", "passed"),
+    [("false", True), ("true", False), ("malformed", None)],
+)
+def test_memory_gist_checks_repository_visibility(
+    private: str, passed: bool | None
+) -> None:
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(private + "\n"),
+    ):
+        result = check_memory_gist_repository("owner/repo")
+
+    assert result.passed is passed
+
+
 def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
     """A repo-level copy of an operational secret defeats the environment.
 
@@ -1176,9 +1324,9 @@ def test_run_all_checks_flags_operational_secrets_left_at_repo_level() -> None:
     """
 
     def gh_with_repo_level_copy(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        url = args[1]
+        url = _url(args)
         if "environments/tend/secrets" not in url and url.endswith("actions/secrets"):
-            return _make_completed(json.dumps([BOT_TOKEN_SECRET]) + "\n")
+            return _make_completed(f"{BOT_TOKEN_SECRET}\n")
         return _gh_all_pass()(*args, **kwargs)
 
     with (
@@ -1199,7 +1347,7 @@ def test_run_all_checks_allowlist_catches_unexpected() -> None:
     """Unexpected repo-level secret is flagged."""
 
     def fake_gh_with_extra_secret(*args, **kwargs) -> subprocess.CompletedProcess[str]:
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -1213,7 +1361,7 @@ def test_run_all_checks_allowlist_catches_unexpected() -> None:
         if "collaborators" in url:
             return _make_completed(_permission_response("write"))
         if "secrets" in url:
-            return _make_completed('["T1","T2","PYPI_TOKEN"]\n')
+            return _make_completed("T1\nT2\nPYPI_TOKEN\n")
         return _make_completed(returncode=1)
 
     with (
@@ -1254,7 +1402,7 @@ def test_codex_engine_passes_with_openai_key() -> None:
     """Engine=codex with OPENAI_API_KEY set passes the codex-auth check."""
 
     def fake_gh(*args, **kwargs):
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -1264,9 +1412,7 @@ def test_codex_engine_passes_with_openai_key() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed(
-                _secret_names(args, BOT_TOKEN_SECRET, OPENAI_KEY_SECRET)
-            )
+            return _make_completed(_secret_names(BOT_TOKEN_SECRET, OPENAI_KEY_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1284,7 +1430,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
     """Engine=codex with OPENAI_API_KEY unset is a hard failure."""
 
     def fake_gh(*args, **kwargs):
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -1294,7 +1440,7 @@ def test_codex_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
+            return _make_completed(_secret_names(BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1334,7 +1480,7 @@ def test_claude_engine_passes_with_api_key() -> None:
     """Engine=claude with only ANTHROPIC_API_KEY set passes claude-auth."""
 
     def fake_gh(*args, **kwargs):
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -1345,7 +1491,7 @@ def test_claude_engine_passes_with_api_key() -> None:
             return _make_completed("write\n")
         if "secrets" in url:
             return _make_completed(
-                _secret_names(args, BOT_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET)
+                _secret_names(BOT_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET)
             )
         return _make_completed(returncode=1)
 
@@ -1363,7 +1509,7 @@ def test_claude_engine_fails_when_no_auth() -> None:
     """Engine=claude with neither secret set is a hard failure."""
 
     def fake_gh(*args, **kwargs):
-        url = args[1]
+        url = _url(args)
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
         if "rules/branches" in url:
@@ -1373,7 +1519,7 @@ def test_claude_engine_fails_when_no_auth() -> None:
         if "collaborators" in url:
             return _make_completed("write\n")
         if "secrets" in url:
-            return _make_completed(_secret_names(args, BOT_TOKEN_SECRET))
+            return _make_completed(_secret_names(BOT_TOKEN_SECRET))
         return _make_completed(returncode=1)
 
     with (
@@ -1428,6 +1574,21 @@ def test_cli_check_all_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert "PASS" in result.output
 
 
+def test_cli_check_reports_disabled_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(tmp_path, "bot_name: test-bot\nenabled: false\n")
+    monkeypatch.chdir(tmp_path)
+
+    with patch("tend.cli.run_all_checks", return_value=[]):
+        result = CliRunner().invoke(main, ["check"])
+
+    assert result.exit_code == 0
+    assert (
+        "Tend is disabled in config; new operational jobs will skip." in result.output
+    )
+
+
 def test_cli_check_failure_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1480,14 +1641,6 @@ def test_init_prints_check_reminder(
 # pushed to a feature branch before its first step. Each way the policy can be
 # too generous is a way the secrets come back.
 # ---------------------------------------------------------------------------
-
-
-def _url(args: tuple[str, ...]) -> str:
-    """The API path in a `_gh` call, wherever flags put it.
-
-    A `graphql` call carries no path, so it answers with its subcommand.
-    """
-    return next((a for a in args if a.startswith(("repos/", "orgs/"))), args[1])
 
 
 def _env_gh(env_body: str | None, policies: str = "main"):

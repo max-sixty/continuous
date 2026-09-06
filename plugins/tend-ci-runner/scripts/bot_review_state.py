@@ -55,6 +55,14 @@ def review_state(
     ]
     body_at_head = [review for review in at_head if review.get("body")]
     fresh_approvals = [review for review in approvals if after_rewrite(review)]
+    decisions = [
+        review
+        for review in mine
+        if review.get("state") in {"APPROVED", "CHANGES_REQUESTED"}
+    ]
+    standing_approval = (
+        decisions[-1] if decisions and decisions[-1].get("state") == "APPROVED" else None
+    )
 
     return {
         "head_sha": head_sha,
@@ -95,6 +103,9 @@ def review_state(
             and last_force_push_at
             and (last_approval.get("submitted_at") or "") < last_force_push_at
             else ""
+        ),
+        "standing_approval_id": (
+            standing_approval["id"] if standing_approval else ""
         ),
     }
 

@@ -106,10 +106,12 @@ jobs:
     permissions:
       contents: write
     steps:
+<<check_tend_enabled(cfg)>>
       # Identifiers only: `verify` re-reads the review or comment from the
       # API, so the words the bot weighs and acts on are the ones GitHub
       # holds, and a forged dispatch faces the same scrutiny as a relayed one.
       - name: Re-enter on an admitted ref
+        if: <<tend_enabled_condition>>
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -136,18 +138,23 @@ jobs:
         <<not_bookkeeping()>>)
     runs-on: ubuntu-24.04
 <<environment()>>
+    permissions:
+      contents: read
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       reason: ${{ steps.check.outputs.reason }}
       url: ${{ steps.check.outputs.url }}
       ts: ${{ steps.check.outputs.ts }}
     steps:
+<<check_tend_enabled(cfg)>>
       - uses: astral-sh/setup-uv@v10.0.1
+        if: <<tend_enabled_condition>>
         with:
           version: "<<uv_version>>"
           ignore-empty-workdir: true
       - name: Verify bot engagement
         id: check
+        if: <<tend_enabled_condition>>
         run: |
           uv run --script - <<heredoc>>'TEND_PY'
 <<check_script|indent(10, first=True)>>
@@ -178,6 +185,7 @@ jobs:
     permissions:
 <<permissions()>>
     steps:
+<<check_tend_enabled(cfg)>>
       # Both halves of the reaction belong to this job, so the eyes can only
       # go on once the job that takes them off has started. Put them in
       # `verify` and `handle` respectively and the routine burst case strands
@@ -189,14 +197,15 @@ jobs:
       # step verified belongs to this PR; a review *submission* has no single
       # comment to react to, so it gets no eyes — same as when the events
       # arrived directly. The job's own `if` already carries `should_run`.
-<<react_eyes(reaction_target, if_condition=summoned(cfg.bot_name, 'needs.verify.outputs.reason'))>>
+<<react_eyes(reaction_target, if_condition="(" ~ tend_enabled_condition ~ ") && (" ~ summoned(cfg.bot_name, 'needs.verify.outputs.reason') ~ ")")>>
 
-<<checkout(cfg)>>
+<<checkout(cfg, if_condition=tend_enabled_condition)>>
 <<setup>>
       - name: Check out PR branch
         if: |
-          (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
-          github.event_name == 'repository_dispatch'
+          steps.tend_enabled.outputs.enabled == 'true' &&
+          ((github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
+          github.event_name == 'repository_dispatch')
         run: |
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
           if [ "$PR_STATE" = "OPEN" ]; then
@@ -210,6 +219,7 @@ jobs:
 
       - name: Compute queue delay
         id: delay
+        if: <<tend_enabled_condition>>
         run: |
           if [ -z "$EVENT_TS" ]; then
             echo "seconds=" >> "$GITHUB_OUTPUT"
@@ -222,6 +232,6 @@ jobs:
           # the API record — the dispatch payload never carries one to spoof.
           EVENT_TS: ${{ github.event.comment.updated_at || needs.verify.outputs.ts || github.event.issue.updated_at }}
 
-<<agent_step(cfg, prompt_body)>><<restore_local_actions(local_actions)>>
+<<agent_step(cfg, prompt_body, if_condition=tend_enabled_condition)>><<restore_local_actions(local_actions, if_condition=tend_enabled_condition)>>
 
-<<unreact_eyes(cfg, reaction_target, if_condition="always()\n&& " ~ summoned(cfg.bot_name, 'needs.verify.outputs.reason'))>>
+<<unreact_eyes(cfg, reaction_target, if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")\n&& (" ~ summoned(cfg.bot_name, 'needs.verify.outputs.reason') ~ ")")>>

@@ -5,7 +5,12 @@ together, so each reads correct on its own while the pair stops agreeing.
 """
 
 import json
+import re
 from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+from tend.cli import main
 
 from tests import _yaml as yaml
 
@@ -24,16 +29,22 @@ def test_notification_skill_uses_one_paginated_cutoff_snapshot() -> None:
     assert "sort_by(.updated_at)" in skill
 
 
-def test_notification_skill_uses_a_bounded_repository_acknowledgement() -> None:
+def test_notification_skill_acknowledges_only_the_threads_it_resolved() -> None:
+    """The acknowledgement is per thread, never repository-wide.
+
+    `PUT /repos/{owner}/{repo}/notifications` marks by timestamp rather than by
+    outcome, so it acts on threads the run never examined — including a thread
+    deferred because its dedicated workflow is still in flight. REST has no
+    "mark unread", so that overshoot is unrecoverable. Acknowledging exactly the
+    threads that reached an outcome needs no timestamp reasoning at all.
+    """
     skill = _read("plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md")
 
-    assert "repos/$GITHUB_REPOSITORY/notifications" in skill
-    assert 'last_read_at="$ACK_CUTOFF"' in skill
-    assert '"$UNRESOLVED_AT -1 second"' in skill
-    assert 'if [ -n "$UNRESOLVED_AT" ]; then' in skill
-    assert "else\n  ACK_CUTOFF=$CUTOFF" in skill
-    assert "Never acknowledge a same-repository thread individually." in skill
-    assert "notifications/threads/<thread-id>" in skill
+    assert 'gh api "notifications/threads/$THREAD_ID" -X PATCH' in skill
+    assert "repos/$GITHUB_REPOSITORY/notifications" not in skill
+    assert "-f last_read_at=" not in skill
+    assert "ACK_CUTOFF" not in skill
+    assert "Never acknowledge a thread before it has an outcome" in skill
 
 
 def test_notification_skill_pins_the_fragile_dedup_queries() -> None:
@@ -244,3 +255,107 @@ def test_review_reviewers_matrix_covers_consumers() -> None:
 
     missing = sorted(set(consumers) - set(matrix))
     assert not missing, f"add consumers to review-reviewers.yaml matrix: {missing}"
+
+
+def _bash_blocks(markdown: str) -> list[str]:
+    return [block.split("```", 1)[0] for block in markdown.split("```bash\n")[1:]]
+
+
+def test_nightly_regen_pins_its_poll_to_the_commit_it_pushed() -> None:
+    """Step 7 must stash the pushed OID before it removes the regen worktree.
+
+    The commit is made on `tend/update-workflows` inside `/tmp`, and the block
+    destroys that worktree on the way out. Afterwards the main checkout's
+    `git rev-parse HEAD` — the derivation **CI Monitoring** prescribes "after
+    your own push" — resolves to the default branch, a different commit on a
+    different branch, so the session is steered to the two sources tend has
+    ruled out: the PR head (which a sibling push retargets mid-poll) or the
+    abbreviated OID retyped out of `git commit`'s output.
+    """
+    skill = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
+
+    ship = [
+        block
+        for block in _bash_blocks(skill)
+        if "gh pr create" in block and "git worktree remove" in block
+    ]
+    assert len(ship) == 1, "Step 7 no longer ships the regen PR from one block"
+    block = ship[0]
+
+    capture = [
+        line
+        for line in block.splitlines()
+        if line.startswith("git rev-parse HEAD > ") and "/tmp/" in line
+    ]
+    assert capture, (
+        "Step 7 pushes from the /tmp worktree and then removes it without "
+        "recording the pushed OID; the poll that follows has no correct local "
+        "source for it."
+    )
+    assert block.index("git commit") < block.index(capture[0]), (
+        "the OID must be captured after the commit it names"
+    )
+    assert block.index(capture[0]) < block.index("git worktree remove"), (
+        "the OID must be captured while the worktree still exists"
+    )
+
+    stash = capture[0].split(">", 1)[1].strip().strip('"')
+    poll = [
+        line
+        for line in skill.splitlines()
+        if "poll-pr-checks.sh" in line and f"cat {stash}" in line
+    ]
+    assert poll, (
+        f"Step 7 stashes the pushed OID at {stash} but never points the poll at it"
+    )
+
+
+def test_nightly_regen_stages_every_path_init_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 7's `git add -A` pathspecs must cover everything `tend init` writes.
+
+    The recipe names a fixed pathspec while the generator's output set grows —
+    `.github/actionlint.yaml` arrived after the recipe was written, and while
+    the pathspec read `.github/workflows .config` the regeneration PR shipped
+    without it, leaving adopters who lint workflows red and re-creating the
+    file untracked every night.
+    """
+    skill = _read("plugins", "tend-ci-runner", "skills", "nightly", "SKILL.md")
+
+    pathspecs = re.findall(r"^git add -A (.+)$", skill, re.MULTILINE)
+    assert pathspecs, "Step 7 no longer stages the regenerated files"
+    assert len(set(pathspecs)) == 1, f"Step 7 stages inconsistent sets: {pathspecs}"
+    staged = pathspecs[0].split()
+
+    # The stamp-only skip and the `git status` inspection both read the staged
+    # set: a file `init` newly created is invisible to a plain `git diff`, so a
+    # release whose only change is a new output path would skip the PR as a
+    # no-op. They must name the same paths the `git add -A` lines stage —
+    # widening only the staging leaves the no-op check blind to the new path.
+    specs = " ".join(staged)
+    assert f"git status --porcelain {specs}" in skill
+    assert f"git diff --cached --no-color {specs}" in skill
+
+    config = tmp_path / ".config" / "tend.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text("bot_name: test-bot\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["init"])
+    assert result.exit_code == 0, result.output
+
+    written = {
+        p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()
+    }
+    assert ".github/actionlint.yaml" in written, "review no longer writes the ignore"
+
+    uncovered = sorted(
+        path
+        for path in written
+        if not any(path == spec or path.startswith(f"{spec}/") for spec in staged)
+    )
+    assert not uncovered, (
+        f"`tend init` writes paths the nightly regeneration never stages: {uncovered}. "
+        "Widen Step 7's `git add -A` pathspecs so the regeneration PR carries them."
+    )

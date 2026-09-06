@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.resources
 import json
 import re
+import subprocess
 from pathlib import Path
 from textwrap import dedent
 
@@ -16,7 +17,9 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
+    STANDARD_WORKFLOWS,
     Config,
 )
 from tend.workflows import (
@@ -31,12 +34,24 @@ from tend.workflows import (
 from tests import ACTION_VERSION, agent_prompt
 from tests import _yaml as yaml
 
+CHECK_ENABLED = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "tend"
+    / "templates"
+    / "check-enabled.rb"
+)
+
 
 def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
     cfg = tmp_path / ".config" / "tend.yaml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(f"bot_name: test-bot\n{extra}")
     return cfg
+
+
+def test_standard_workflow_registry_matches_the_generators() -> None:
+    assert STANDARD_WORKFLOWS == set(GENERATORS)
 
 
 def test_minimal_config_generates_seven_workflows(tmp_path: Path) -> None:
@@ -73,6 +88,129 @@ def test_disabled_workflow_not_generated(tmp_path: Path) -> None:
     names = {wf.filename for wf in workflows}
     assert "tend-weekly.yaml" not in names
     assert len(workflows) == 6
+
+
+def test_top_level_disable_keeps_workflows_installed_and_gates_every_job(
+    tmp_path: Path,
+) -> None:
+    """The runtime switch can turn itself back on without regeneration."""
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                enabled: false
+                workflows:
+                  ci-fix:
+                    watched_workflows: ["ci"]
+            """),
+        )
+    )
+
+    assert cfg.enabled is False
+    workflows = generate_all(cfg, with_install_test=True)
+    assert len(workflows) == len(STANDARD_WORKFLOWS) + 1
+
+    condition = "steps.tend_enabled.outputs.enabled == 'true'"
+    for workflow in workflows:
+        jobs = yaml.safe_load(workflow.content)["jobs"]
+        for job_name, job in jobs.items():
+            steps = job["steps"]
+            gate = steps[0]
+            assert gate["id"] == "tend_enabled", (workflow.filename, job_name)
+            assert f"contents/{cfg.config_path}" in gate["run"]
+            assert "secrets." not in str(gate)
+            if workflow.filename == "tend-install-test.yaml":
+                assert "?ref=${{ github.event.pull_request.head.sha }}" in gate["run"]
+            for step in steps[1:]:
+                assert condition in str(step.get("if", "")), (
+                    workflow.filename,
+                    job_name,
+                    step,
+                )
+
+
+@pytest.mark.parametrize(
+    ("config", "enabled"),
+    [
+        ("bot_name: bot\n", "true"),
+        ("bot_name: bot\nenabled: true\n", "true"),
+        ("bot_name: bot\nenabled: false\n", "false"),
+        ("\ufeffbot_name: bot\nenabled: false\n", "false"),
+    ],
+)
+def test_runtime_enabled_check(tmp_path: Path, config: str, enabled: str) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(config)
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"enabled={enabled}\n"
+    assert ("Tend disabled" in result.stderr) is (enabled == "false")
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "bot_name: bot\nenabled: no\n",
+        'bot_name: bot\nenabled: "false"\n',
+        "bot_name: bot\nenabled:\n",
+        "bot_name: bot\nenabled: {}\n",
+        "bot_name: bot\nenabled: true\nenabled: false\n",
+    ],
+)
+def test_runtime_enabled_check_rejects_non_boolean_values(
+    tmp_path: Path, config: str
+) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(config)
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "enabled must" in result.stderr
+
+
+def test_runtime_enabled_check_rejects_multiple_documents(tmp_path: Path) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text("bot_name: bot\n---\nenabled: false\n")
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "exactly one YAML document" in result.stderr
+
+
+def test_runtime_enabled_check_rejects_yaml_merge_keys(tmp_path: Path) -> None:
+    path = tmp_path / "tend.yaml"
+    path.write_text(
+        "defaults: &defaults\n  enabled: false\n<<: *defaults\nbot_name: bot\n"
+    )
+
+    result = subprocess.run(
+        ["ruby", str(CHECK_ENABLED), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "YAML merge keys" in result.stderr
 
 
 def test_setup_steps_rendered(tmp_path: Path) -> None:
@@ -137,7 +275,8 @@ def test_local_setup_action_restored_for_post_cleanup(
     chain walks.
 
     `always()` covers a failed session so cleanup still sees the version the
-    runner loaded."""
+    runner loaded. The runtime switch still applies because a disabled job
+    never loaded the local action."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
@@ -149,7 +288,9 @@ def test_local_setup_action_restored_for_post_cleanup(
     assert condition.startswith("always()"), (
         f"{name}: the restore has to run even when the session fails"
     )
-    assert condition == "always()", f"{name}: restore has an extra gate"
+    assert condition.strip() == (
+        "always()\n&& (steps.tend_enabled.outputs.enabled == 'true')"
+    ), f"{name}: restore has an unexpected gate"
     switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
@@ -271,6 +412,53 @@ def test_sandbox_levers_absent_by_default(tmp_path: Path) -> None:
             assert not levers & inputs
 
 
+def test_memory_gist_is_an_explicit_experimental_claude_only_input(
+    tmp_path: Path,
+) -> None:
+    disabled = Config.load(_minimal_config(tmp_path))
+    for wf in generate_all(disabled):
+        for inputs in _agent_step_inputs(wf.content):
+            assert "memory_gist" not in inputs
+            assert "memory_gist_id" not in inputs
+
+    enabled = Config.load(_minimal_config(tmp_path, "memory_gist: true\n"))
+    for wf in generate_all(enabled):
+        data = yaml.safe_load(wf.content)
+        agent_steps = [
+            step
+            for job in data["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("max-sixty/tend/claude@")
+        ]
+        for step in agent_steps:
+            assert step["with"]["memory_gist"] == "true"
+            assert step["with"]["memory_gist_id"] == (
+                f"${{{{ secrets.{MEMORY_GIST_SECRET} }}}}"
+            )
+
+
+def test_memory_gist_follows_a_per_workflow_claude_override(
+    tmp_path: Path,
+) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+            harness: codex
+            model: gpt-5.5
+            memory_gist: true
+            workflows:
+              nightly:
+                harness: claude
+                model: opus
+        """),
+        )
+    )
+    workflows = {wf.filename: wf.content for wf in generate_all(cfg)}
+    assert "memory_gist:" in workflows["tend-nightly.yaml"]
+    assert "memory_gist:" not in workflows["tend-review.yaml"]
+
+
 def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
     """Codex runs on the runner (no proxy sandbox), so the sandbox_* inputs are
     not threaded — a codex adopter uses `setup:` instead."""
@@ -379,9 +567,10 @@ def test_setup_step_user_if_narrows_notifications_guard(
         if s.get("run") == "./flaky.sh"
     )
     assert step["if"] == (
+        "((steps.tend_enabled.outputs.enabled == 'true') && "
         "(steps.check.outputs.count != '0' || "
         "steps.check.outputs.conflict_count != '0' || "
-        "github.event_name == 'workflow_dispatch') && (runner.os == 'Linux')"
+        "github.event_name == 'workflow_dispatch')) && (runner.os == 'Linux')"
     )
 
 
@@ -715,6 +904,36 @@ def test_ci_fix_custom_branches(tmp_path: Path) -> None:
     assert 'branches: ["main", "release"]' in ci_fix.content
 
 
+def test_ci_fix_serializes_per_branch_and_watched_workflow(tmp_path: Path) -> None:
+    """One session per red branch, not per red commit.
+
+    A branch stays red across the pushes that follow, each failing on its own
+    commit, so a commit-keyed group would let every one of them boot its own
+    agent against the same breakage. The watched workflow is keyed in as well
+    so a red `publish-site` is not starved by a stream of red `ci`.
+    """
+    extra = dedent("""\
+        workflows:
+          ci-fix:
+            watched_workflows: ["ci", "publish-site"]
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    doc = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
+    job = doc["jobs"]["fix-ci"]
+
+    assert job["concurrency"]["group"] == (
+        "${{ github.workflow }}-${{ github.event.workflow_run.name }}"
+        "-${{ github.event.workflow_run.head_branch }}"
+    )
+    # Cancelling mid-session strands outward actions already taken — a pushed
+    # branch, a half-written PR.
+    assert job["concurrency"]["cancel-in-progress"] is False
+    # Job-level, not workflow-level: the `if` filters the green runs that make
+    # up most workflow_run events, and a skipped job never enters the group.
+    assert "concurrency" not in doc
+
+
 def test_cli_init_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _minimal_config(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -849,17 +1068,17 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
 
     triage = yaml.safe_load(workflows["tend-triage.yaml"].content)
-    first = triage["jobs"]["triage"]["steps"][0]
-    assert "content=eyes" in first["run"]
-    assert first["env"]["TARGET"] == "issues/${{ github.event.issue.number }}"
-    # Every issues:opened event the job-level `if` admits is the bot's to take.
-    assert "if" not in first
+    react = _eyes_steps(triage["jobs"]["triage"]["steps"])[0]
+    assert react["env"]["TARGET"] == "issues/${{ github.event.issue.number }}"
+    # Every enabled issues:opened event the job-level `if` admits is the bot's
+    # to take.
+    assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
     react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
     assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
-    # Every admitted review run boots a session, so each one gets a reaction.
-    assert "if" not in react
+    # Every enabled review run boots a session, so each one gets a reaction.
+    assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
 
 @pytest.mark.parametrize(

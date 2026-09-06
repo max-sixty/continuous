@@ -142,6 +142,8 @@ Used by both Step 4 (applied to recent diffs) and Step 6 (applied to full files)
 - Stale or incorrect documentation (comments, docstrings that no longer match behavior)
 - Missing test coverage for non-trivial logic
 
+A bug finding earns a PR only where a caller can reach it. For a defect found by reading rather than from an observed failure, name the in-repo call path that triggers it. If no caller can, the finding is a note in the Step 9 summary, not a PR — public visibility doesn't clear the bar on its own, since an item exported incidentally (a utility module under a default-on feature) promises nothing to anyone. Where it *is* part of a published library's documented surface, the fix stands: say so in the PR body, naming the contract rather than the visibility keyword.
+
 **Convention compliance (from CLAUDE.md and project skills):**
 - Code patterns that violate conventions stated in the project's CLAUDE.md
 - Stale CLAUDE.md entries — conventions that reference renamed files, deleted functions, or outdated patterns
@@ -256,8 +258,20 @@ git config --global user.email "${BOT_ID}+${BOT_LOGIN}@users.noreply.github.com"
 git commit -m "$TITLE"
 git push -u origin tend/update-workflows
 gh pr create --title "$TITLE" --body-file "/tmp/tend-update-body.md"
+# Stash the pushed OID before the worktree goes. The poll below pins to the
+# commit this run pushed, and once the worktree is removed the main checkout's
+# `git rev-parse HEAD` resolves to the default branch — a different commit on a
+# different branch — leaving the PR head (which a sibling push retargets
+# mid-poll) or a retyped abbreviated OID as the only sources.
+git rev-parse HEAD > "/tmp/tend-update-sha"
 cd -
 git worktree remove "/tmp/tend-update-workflows" --force
+```
+
+Then poll that commit's checks per **CI Monitoring** in `/tend-ci-runner:running-in-ci` — foreground, `timeout: 600000`:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/poll-pr-checks.sh <pr-number> "$(cat /tmp/tend-update-sha)"
 ```
 
 ## Step 8: Fix findings

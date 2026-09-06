@@ -23,12 +23,60 @@ from tend.workflows import UV_VERSION
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_generated_workflow_snapshot_hook_covers_every_snapshot() -> None:
+    config = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / ".pre-commit-config.yaml").read_text()
+    )
+    hooks = [
+        hook
+        for repo in config["repos"]
+        for hook in repo["hooks"]
+        if hook.get("name") == "Lint generated workflow snapshots"
+    ]
+    assert len(hooks) == 1, f"expected one snapshot actionlint hook, got: {hooks}"
+
+    snapshots = sorted((REPO_ROOT / "generator/tests/_regtest_outputs").glob("*.out"))
+    assert snapshots, "no generated workflow snapshots found"
+
+    pattern = re.compile(hooks[0]["files"])
+    unmatched = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in snapshots
+        if not pattern.search(path.relative_to(REPO_ROOT).as_posix())
+    ]
+    assert not unmatched, f"snapshot actionlint hook skips: {unmatched}"
+
+
 def test_claude_transcript_summary_is_opt_in() -> None:
     action = YAML(typ="safe", pure=True).load(
         (REPO_ROOT / "claude" / "action.yaml").read_text()
     )
 
     assert action["inputs"]["show_full_output"]["default"] == "false"
+
+
+def test_experimental_memory_gist_sync_cannot_replace_the_agent_verdict() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "claude" / "action.yaml").read_text()
+    )
+    steps = {step["name"]: step for step in action["runs"]["steps"]}
+
+    assert action["inputs"]["memory_gist"]["default"] == "false"
+    assert steps["Restore experimental memory Gist"]["continue-on-error"] is True
+    assert steps["Save experimental memory Gist"]["continue-on-error"] is True
+    assert (
+        steps["Remove experimental memory Gist working copy"]["continue-on-error"]
+        is True
+    )
+    assert (
+        steps["Save experimental memory Gist"]["if"]
+        == "always() && steps.auto_memory.outcome == 'success' && "
+        "steps.claude.outputs.sandbox_reaped == 'true'"
+    )
+    restore = steps["Restore experimental memory Gist"]["run"]
+    save = steps["Save experimental memory Gist"]["run"]
+    assert 'gist_memory.py" \\\n  restore;' in restore
+    assert 'gist_memory.py" \\\n  save;' in save
 
 
 def test_uv_build_range_admits_the_pinned_uv() -> None:
@@ -125,11 +173,9 @@ def test_action_path_references_resolve(harness: str) -> None:
 # regex covers the standalone step scripts, not `claude/` or `codex/`.
 ACTIONS = ("claude/action.yaml", "codex/action.yaml")
 
-# actionlint substitutes `${{ … }}` with a shell VARIABLE before handing a body
-# to shellcheck, and the choice matters: a literal placeholder makes shellcheck
-# judge the surrounding test (`[ -z "literal" ]` → SC2157 "always false",
-# `[ "literal" = "true" ]` → SC2050 "expression is constant") and report on the
-# substitution rather than the code. A variable is opaque to those checks.
+# Replace `${{ … }}` with an opaque shell variable before checking composite
+# bodies. A literal placeholder would make shellcheck report on the replacement
+# instead of the code (`[ -z "literal" ]` → SC2157 "always false").
 GHA_EXPR = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
 
 
@@ -137,8 +183,7 @@ GHA_EXPR = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
 def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
     """Hold inline step bodies to the same shellcheck the step scripts get.
 
-    Severity matches the shellcheck hook in .pre-commit-config.yaml, which
-    matches actionlint's own default.
+    Severity matches the shellcheck hook in .pre-commit-config.yaml.
     """
     shellcheck = shutil.which("shellcheck")
     assert shellcheck, "install shellcheck (preinstalled on CI runners)"
@@ -165,3 +210,40 @@ def test_inline_run_bodies_pass_shellcheck(action: str) -> None:
             findings.append(f"--- {action} :: {name}\n{result.stdout}")
 
     assert not findings, "\n".join(findings)
+
+
+# Anchoring on `${{ … }}` would match the bare reference alone, letting
+# `${{ inputs.x || '' }}` and `${{ format('{0}', inputs.x) }}` through. Any
+# `inputs.<name>` in a `run:` body is necessarily a GHA expression — bash has no
+# such syntax — so the unanchored match is both simpler and strictly broader.
+# (`inputs['x']` index syntax is missed either way.)
+INPUT_REF = re.compile(r"inputs\.([A-Za-z0-9_]+)")
+
+
+@pytest.mark.parametrize("action", ACTIONS)
+def test_inputs_reach_run_bodies_through_env(action: str) -> None:
+    """An input must not be interpolated into an inline `run:` body.
+
+    GitHub substitutes `${{ … }}` into the script *text* before bash parses it,
+    so a value carrying a quote or `$(…)` stops being a string and becomes
+    script executing as the runner user — which holds the real PAT and, under
+    codex, the model key. Through `env:` the value is passed to the process,
+    never to the parser. Nothing else catches this: shellcheck sees the
+    placeholder the sibling test substitutes in, and actionlint does not read
+    action.yaml at all.
+
+    Every input in both actions already arrives this way, so the rule is a flat
+    ban rather than a list of which values are secret enough to deserve it.
+    """
+    doc = YAML(typ="safe", pure=True).load((REPO_ROOT / action).read_text())
+
+    inlined = [
+        f"{step.get('name', '<unnamed>')} inlines inputs.{name}"
+        for step in doc["runs"]["steps"]
+        if "run" in step
+        for name in sorted(set(INPUT_REF.findall(step["run"])))
+    ]
+    assert not inlined, (
+        f"{action}: pass these through the step's `env:` instead of `${{{{ }}}}` "
+        f"in the body: {inlined}"
+    )

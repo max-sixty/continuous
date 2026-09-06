@@ -6,6 +6,31 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.1.24
+
+### Fixed
+
+- **Generated notifications workflows pass actionlint.** The literal GraphQL `$q` variable now carries a scoped ShellCheck directive, avoiding SC2016 without allowing the shell to expand it. ([#1112](https://github.com/max-sixty/tend/pull/1112))
+
+## 0.1.23
+
+### Improved
+
+- **Claude runs can opt into persistent auto memory.** The experimental `memory_gist: true` setting restores and saves Claude Code's model-authored memory through a bot-owned secret Gist for public repositories. Gist ownership, repository binding, file shapes, signed baselines, and remote conflicts are checked; synchronization failures remain warnings. ([#1110](https://github.com/max-sixty/tend/pull/1110))
+- **The 15-minute notifications poll repairs conflicts on bot-authored PRs.** It boots for possible conflicts even with an empty inbox, verifies each merge locally, and either pushes against an exact head lease or leaves a per-head deferral for the nightly retry. ([#1108](https://github.com/max-sixty/tend/pull/1108))
+- **Both harnesses provide a pinned `uv` fallback to agent sessions.** Project-installed `uv` stays ahead on `PATH`, while Claude's credential proxy keeps its isolated copy. ([#1109](https://github.com/max-sixty/tend/pull/1109))
+
+### Fixed
+
+- **Review conclusions are bound to the current PR state.** A required independent code-review pass and a final tested preflight gate every post and edit, safely retarget descendant pushes, reject duplicates, and withhold approval when the author says the PR is not ready to merge. ([#1080](https://github.com/max-sixty/tend/pull/1080), [#1087](https://github.com/max-sixty/tend/pull/1087), [#1104](https://github.com/max-sixty/tend/pull/1104), [#1107](https://github.com/max-sixty/tend/pull/1107))
+- **Generated workflow overrides remain valid through rendering and prechecks.** Multi-line prompts and sandbox inputs preserve their indentation, adopter setup conditions narrow Tend's precheck guard, and `init` merges a scoped actionlint ignore for the supported `concurrency.queue` syntax. ([#1095](https://github.com/max-sixty/tend/pull/1095), [#1103](https://github.com/max-sixty/tend/pull/1103), [#1106](https://github.com/max-sixty/tend/pull/1106))
+- **Claude OAuth setup reports TUI failures immediately.** It distinguishes the normal localhost callback from the paste fallback and surfaces rejected codes instead of waiting for the full approval window. ([#1105](https://github.com/max-sixty/tend/pull/1105))
+
+### Internal
+
+- The consumer review matrix covers every tracked adopter, and the weekly refresh retains known repositories that code search misses. ([#1093](https://github.com/max-sixty/tend/pull/1093), [#1096](https://github.com/max-sixty/tend/pull/1096))
+- Claude Code moves to 2.1.251, Codex to 0.151.0, uv to 0.12.7, Ruff to 0.16.5, and Astro to 7.2.9; repo-local action pins move with them. ([#1097](https://github.com/max-sixty/tend/pull/1097), [#1098](https://github.com/max-sixty/tend/pull/1098), [#1099](https://github.com/max-sixty/tend/pull/1099), [#1100](https://github.com/max-sixty/tend/pull/1100), [#1101](https://github.com/max-sixty/tend/pull/1101), [#1102](https://github.com/max-sixty/tend/pull/1102))
+
 ## 0.1.22
 
 ### Fixed

@@ -49,10 +49,11 @@ Pass extra prefixes when running token reports or listing runs so these
 workflows are included:
 
 ```bash
-uv run --script \
-  "${CLAUDE_PLUGIN_ROOT}/scripts/token_report.py" "${HOURS:-24}" "review-"
+# Claude leaves this unset in the shell; Codex exports it.
+SCRIPTS="${CLAUDE_PLUGIN_ROOT:-/home/tend-sandbox/tend-marketplace/plugins/tend-ci-runner}/scripts"
+uv run --script "$SCRIPTS/token_report.py" "${HOURS:-24}" "review-"
 TARGET_REPO=max-sixty/tend uv run --script \
-  "${CLAUDE_PLUGIN_ROOT}/scripts/list_recent_runs.py" "tend-" "review-"
+  "$SCRIPTS/list_recent_runs.py" "tend-" "review-"
 ```
 
 Under `review-runs`, `$HOURS` is the lookback derived from its Step 1 anchor —

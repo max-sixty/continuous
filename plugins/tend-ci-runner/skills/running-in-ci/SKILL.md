@@ -260,6 +260,24 @@ If it moved, `git fetch` and read the new commits before verifying: drop whateve
 
 When merging the default branch into a PR branch, **never use `--allow-unrelated-histories`**: if `git merge` fails because no merge base exists, the checkout is broken (usually shallow — re-checkout with `fetch-depth: 0`), and forcing the merge creates add/add conflicts in every file. If the merge fails because untracked files would be overwritten, stash them (`git stash --include-untracked`, merge, `git stash pop`) rather than deleting them.
 
+## Dismiss a standing bot approval the moment you conclude the PR shouldn't merge
+
+A bot `APPROVED` keeps deciding the PR until a dismissal or a `CHANGES_REQUESTED` replaces it. A later COMMENT doesn't, and neither does the event that actually invalidated it: another PR merging and superseding this one, a dependency bump that turns this PR into a downgrade, an approach the thread has since rejected. None of those touch the approved PR, so no review round fires and the approval stands indefinitely — with nothing between it and a merge once the branch stops conflicting. Whichever session reaches the conclusion is the one that has to clear it, whether or not this session posts anything.
+
+Keying the dismissal to a post is what leaves it standing: **Recheck Before Posting** rightly suppresses a second deferral comment when one already stands, and a dismissal that rides on that comment is suppressed with it. Dismiss on the conclusion, then say so in the summary — where this session does post a review carrying that conclusion, dismiss after the post lands, so a failed post doesn't leave the PR with neither a verdict nor findings.
+
+```bash
+REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+# "" once a dismissal or a later CHANGES_REQUESTED has cleared it, so a second
+# session over the same PR dismisses nothing.
+STANDING=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> | jq -r '.standing_approval_id')
+# PUT, not POST — the dismiss endpoint requires it.
+[ -z "$STANDING" ] || gh api "repos/$REPO/pulls/<number>/reviews/$STANDING/dismissals" \
+  -X PUT -f message="<what invalidated the approval>"
+```
+
+The test is the merge, not tidiness: a finding you'd have left as a review comment is no reason to withdraw a verdict the code still earns, and neither is a branch that merely can't merge yet — a conflicting PR whose code the approval still covers keeps it. Dismiss when merging the PR, once it could merge, would be the wrong outcome.
+
 ## CI Monitoring
 
 After pushing, what to do depends on whether a red result creates a follow-up.
@@ -276,6 +294,9 @@ PINNED_SHA=$(git rev-parse HEAD)
 # In a review session, HEAD is the ephemeral refs/pull/N/merge commit, which
 # carries no rollup at all; pin the PR head instead:
 #   PINNED_SHA=$(gh pr view <number> --json headRefOid --jq '.headRefOid')
+# When the push happened in a /tmp worktree the recipe then removes, capture
+# the OID there — `git rev-parse HEAD > /tmp/<name>-sha` — before the removal.
+# Back in the main checkout HEAD is the default branch, not what you pushed.
 uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/poll_pr_checks.py" <number> "$PINNED_SHA"
 ```
@@ -435,7 +456,15 @@ When an answer rests on deeper research — citations across several files, a re
 
 Always use markdown links for files, issues, PRs, and docs. **Any link containing `#L` must use a commit SHA, never `blob/main/...#L42`** — line numbers shift silently, so the link stays valid but starts pointing at different code than the comment describes. Get the SHA with `git rev-parse HEAD` before composing the link.
 
-**GitHub URLs — read `$GITHUB_REPOSITORY` from the environment, don't hand-type the owner.** The model reliably guesses wrong — past comments have shipped with the wrong owner (e.g. `anthropics/<repo>` on a repo not owned by Anthropic). Before posting, scan the composed body for `github.com/`: confirm every owner matches `$GITHUB_REPOSITORY`, **and** every URL with a `#L<n>` anchor is SHA-pinned. A `blob/main/...#L<n>` hit is the link-rot shape — replace `main` with `$(git rev-parse HEAD)` for that link and re-scan. This catches both the wrong-owner typo and the un-pinned line-link slip in one pre-post pass.
+**Check the body's links before posting it.** Run this over every composed body — comment, PR body, issue body — as part of the pre-post pass, and fix what it names:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/check-body-links.sh /tmp/comment-body.md
+```
+
+It resolves every 40-hex SHA in the body against the API and reports any `#L` anchor pinned to a branch or an abbreviation. Resolving is the part a scan by eye cannot do: a hand-typed OID is well-formed whether or not the commit exists, so a fabricated SHA — the model extending an abbreviation it saw in `git log` instead of running `git rev-parse HEAD` — reads as correctly pinned and ships a permalink that 404s. Run it after the push when the body cites a commit from this session; before the push that commit is unreachable and reports as dead, correctly.
+
+**Owners it cannot check — read `$GITHUB_REPOSITORY` from the environment, don't hand-type the owner.** The model reliably guesses wrong — past comments have shipped with the wrong owner (e.g. `anthropics/<repo>` on a repo not owned by Anthropic). The script catches a wrong owner on a SHA-pinned link, because that URL does not resolve either; on every other link, scan the body's `github.com/` hits and confirm each owner is either `$GITHUB_REPOSITORY` or a repo the text genuinely means.
 
 **Authoring fenced bodies with backticks.** When a body contains a fenced code block, the model often defensively escapes the inner fence (`` \`\`\`bash ``) "to prevent it from closing the outer fence early"; the same instinct can produce `` \`foo\` `` for inline spans. Those backslashes survive into the rendered body as literal `\` characters. Author with bare backticks. For nested fenced blocks, use a **longer outer fence** — four or five backticks outside, three inside — so the inner three-backtick fence renders intact without escaping. The Write tool preserves data verbatim, so the same authoring rule applies whether you compose with the Write tool or inline; Write just removes shell-quoting from the equation.
 

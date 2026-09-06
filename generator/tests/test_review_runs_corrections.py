@@ -172,10 +172,24 @@ def test_a_failed_candidate_search_aborts_rather_than_reporting_no_reviews(
     assert result.stdout == ""
 
 
-def test_a_failed_comment_page_aborts_even_when_the_next_endpoint_succeeds(
+def test_a_failed_comment_endpoint_aborts_rather_than_reporting_the_other_half(
     env: dict[str, str],
 ) -> None:
+    _write(env, "PR_COMMENTS_JSON", [_comment(IN_WINDOW)])
     env["ISSUE_COMMENTS_FAILS"] = "1"
+
+    result = _run(env, SINCE)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
+def test_a_failed_review_fetch_aborts_rather_than_dropping_that_prs_reviews(
+    env: dict[str, str],
+) -> None:
+    _write(env, "CANDIDATES_JSON", [{"number": 1}, {"number": 2}])
+    _write(env, "REVIEWS_JSON", [_review(IN_WINDOW)])
+    env["REVIEW_FAIL_PR"] = "1"
 
     result = _run(env, SINCE)
 

@@ -25,6 +25,9 @@ BOT_REVIEW_STATE = (
     / "bot_review_state.py"
 )
 REVIEW_SKILL = BOT_REVIEW_STATE.parent.parent / "skills" / "review" / "SKILL.md"
+RUNNING_IN_CI_SKILL = (
+    BOT_REVIEW_STATE.parent.parent / "skills" / "running-in-ci" / "SKILL.md"
+)
 
 BOT = "tend-bot"
 HEAD = "head000"
@@ -136,6 +139,7 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["orphan_id"] is None
     assert state["fresh_approval_sha"] == ""
     assert state["stale_approval_id"] == ""
+    assert state["standing_approval_id"] == ""
     assert state["force_pushed_since"] is False
 
 
@@ -339,6 +343,67 @@ def test_a_dismissed_approval_is_not_re_dismissed(env: dict[str, str]) -> None:
     assert _state(env)["stale_approval_id"] == ""
 
 
+def test_an_approval_stands_through_ordinary_pushes_and_comment_reviews(
+    env: dict[str, str],
+) -> None:
+    """GitHub never lets a later COMMENTED supersede an APPROVED, so a PR that
+    takes ordinary pushes onto a bot approval and then draws findings-bearing
+    re-reviews still merges reading APPROVED. No rewrite happened, so
+    `stale_approval_id` — which is keyed on one — cannot see it."""
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(3, "2026-01-01T00:00:00Z", state="APPROVED", sha=OLD),
+            _review(4, "2026-01-02T00:00:00Z", body="findings", sha=OLD),
+            _review(5, "2026-01-03T00:00:00Z", body="more findings"),
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["standing_approval_id"] == 3
+    assert state["stale_approval_id"] == "", "no rewrite happened"
+
+
+def test_a_dismissed_approval_is_not_standing(env: dict[str, str]) -> None:
+    """Dismissing rewrites the record's state, so the next run's findings
+    review does not dismiss it a second time."""
+    _write(env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="DISMISSED")])
+
+    assert _state(env)["standing_approval_id"] == ""
+
+
+def test_the_newest_approval_is_the_standing_one(env: dict[str, str]) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(3, "2026-01-01T00:00:00Z", state="APPROVED", sha=OLD),
+            _review(4, "2026-01-02T00:00:00Z", state="APPROVED"),
+        ],
+    )
+
+    assert _state(env)["standing_approval_id"] == 4
+
+
+def test_a_later_changes_requested_supersedes_the_approval(
+    env: dict[str, str],
+) -> None:
+    """CHANGES_REQUESTED does set the PR's review decision, so the approval it
+    replaced is no longer what a findings review has to clear."""
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(3, "2026-01-01T00:00:00Z", state="APPROVED", sha=OLD),
+            _review(4, "2026-01-02T00:00:00Z", state="CHANGES_REQUESTED"),
+        ],
+    )
+
+    assert _state(env)["standing_approval_id"] == ""
+
+
 def test_an_approval_on_an_older_commit_is_not_an_approval_of_this_one(
     env: dict[str, str],
 ) -> None:
@@ -462,3 +527,56 @@ def test_review_skill_preserves_the_status_free_queue_contract() -> None:
     assert "exception to one review per run" not in skill
     assert "STARTED_DRAFT" not in skill
     assert "LIVE_DRAFT" not in skill
+
+
+def test_review_skill_dismisses_a_standing_approval_when_it_posts_findings() -> None:
+    """The rule sits at the posting site, not in one push-shape's branch: the
+    force-push and ordinary-push paths fail identically, and a rule stated for
+    only one of them merges findings under a bot APPROVED."""
+    skill = REVIEW_SKILL.read_text()
+
+    assert ".standing_approval_id" in skill
+    assert "reviews/$STANDING/dismissals" in skill
+    assert "A findings review never supersedes a standing approval" in skill
+    # The force-push branch defers to that one rule rather than restating it.
+    assert "last_substantive.state, .last_substantive.id" not in skill
+
+
+def test_review_skill_defines_every_id_its_dismissal_recipes_use() -> None:
+    """Step 7's CI-failure dismissal read `$REVIEW_ID`, which step 1 was the
+    only site to name. With that sentence gone the path collapsed to
+    `reviews//dismissals`, leaving an approval standing over a red check."""
+    skill = REVIEW_SKILL.read_text()
+
+    assert "$REVIEW_ID" not in skill
+    # Both dismissal sites read the same field, so there is one mechanism.
+    assert skill.count("reviews/$STANDING/dismissals") == 2
+
+
+def test_review_skill_spares_the_approval_when_the_comment_withholds_nothing() -> None:
+    """Step 1's unanswered-question exception posts a COMMENT at a head the
+    approval already covers. A trigger keyed on any COMMENT dismisses there,
+    withdrawing a verdict the code still earns and leaving the PR with none —
+    the next run hits the already-reviewed shortcut and posts nothing."""
+    skill = REVIEW_SKILL.read_text()
+
+    assert "posts a COMMENT that withholds the verdict" in skill
+    assert "A COMMENT that withholds nothing does not qualify" in skill
+    assert "whenever this round posts a COMMENT rather than an approval" not in skill
+
+
+def test_a_dismissal_path_exists_for_an_invalidation_that_is_not_an_event() -> None:
+    """Every dismissal site in `review` and `weekly` is keyed on something that
+    happened *on* the approved PR — a review round, a rewrite, a red check. An
+    approval superseded by a *different* PR merging reaches none of them, so it
+    stands until a human clears it. The generic rule lives in `running-in-ci`,
+    which every skill that can reach that conclusion loads, and it fires on the
+    conclusion rather than on a post — the dedup rules routinely (and rightly)
+    suppress the comment that would otherwise carry it."""
+    skill = RUNNING_IN_CI_SKILL.read_text()
+
+    assert ".standing_approval_id" in skill
+    assert "reviews/$STANDING/dismissals" in skill
+    assert "-X PUT" in skill
+    # Not keyed on this session posting anything.
+    assert "whether or not this session posts" in skill

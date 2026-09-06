@@ -35,6 +35,7 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     Config,
 )
@@ -485,6 +486,20 @@ def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
     )
 
 
+def _lines(stdout: str) -> set[str]:
+    """The non-empty lines of a `gh --jq` stream, which emits one result per line.
+
+    Every secret listing below is read this way, and every one of them passes
+    `--paginate`. Both halves are load-bearing: an Actions secrets endpoint
+    serves 30 per page, and `gh api --paginate` applies `--jq` per page — so an
+    array-building filter emits one array *per page* and their concatenation is
+    not JSON. Reading a single page instead reports the tail as absent, which
+    in `check_repo_secret_allowlist` reads as "no unexpected secret": the
+    direction that hides exposure rather than announcing it.
+    """
+    return {line.strip() for line in stdout.splitlines() if line.strip()}
+
+
 # The operational secrets live in a deployment-gated environment rather than at
 # repo level, so every "is the secret set?" check reads them from there. A copy
 # left at repo level defeats the gate entirely — any workflow can read it
@@ -494,9 +509,10 @@ def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
     """Secret names in the tend environment. Returns (names, error message)."""
     result = _gh(
         "api",
+        "--paginate",
         f"repos/{repo}/environments/{TEND_ENVIRONMENT}/secrets",
         "--jq",
-        "[.secrets[].name]",
+        ".secrets[].name",
     )
     if result is None:
         return None, "gh CLI not found"
@@ -506,10 +522,7 @@ def _env_secret_names(repo: str) -> tuple[set[str] | None, str]:
             "(missing environment, or requires admin access). "
             "See the environment check above for how to create it."
         )
-    try:
-        return set(json.loads(result.stdout)), ""
-    except json.JSONDecodeError:
-        return None, "Could not parse environment secrets response"
+    return _lines(result.stdout), ""
 
 
 def _env_path(env_name: str) -> str:
@@ -1344,6 +1357,29 @@ def check_secrets(repo: str, expected: list[str]) -> CheckResult:
     return CheckResult("secrets", False, msg)
 
 
+def check_memory_gist_repository(repo: str) -> CheckResult:
+    """Secret Gists are unlisted rather than private, so memory is public-only."""
+    is_public = _repo_is_public(repo)
+    if is_public is None:
+        return CheckResult(
+            "memory-gist",
+            None,
+            f"Could not determine whether {repo} is public",
+        )
+    if not is_public:
+        return CheckResult(
+            "memory-gist",
+            False,
+            "memory_gist is experimental and available only for public repositories: "
+            "a secret Gist is unlisted, not private",
+        )
+    return CheckResult(
+        "memory-gist",
+        True,
+        "memory_gist is experimental and limited to this public repository",
+    )
+
+
 def _repo_is_public(repo: str) -> bool | None:
     """Whether `repo` is public. None when it cannot be determined."""
     result = _gh("api", f"repos/{repo}", "--jq", ".private")
@@ -1365,7 +1401,7 @@ def _org_secret_repos(org: str, name: str) -> set[str] | None:
     )
     if result is None or result.returncode != 0:
         return None
-    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return _lines(result.stdout)
 
 
 def _org_plan_is_free(org: str) -> bool:
@@ -1393,9 +1429,10 @@ def _list_org_secrets(org: str, repo: str) -> tuple[set[str] | None, bool]:
     """
     result = _gh(
         "api",
+        "--paginate",
         f"orgs/{org}/actions/secrets",
         "--jq",
-        "[.secrets[] | {name, visibility}]",
+        ".secrets[] | {name, visibility}",
     )
     if result is None:
         return None, False
@@ -1403,7 +1440,10 @@ def _list_org_secrets(org: str, repo: str) -> tuple[set[str] | None, bool]:
         forbidden = "HTTP 403" in result.stderr
         return None, forbidden
     try:
-        listed = [(s["name"], s.get("visibility")) for s in json.loads(result.stdout)]
+        listed = [
+            (s["name"], s.get("visibility"))
+            for s in (json.loads(line) for line in _lines(result.stdout))
+        ]
     except (json.JSONDecodeError, TypeError, KeyError):
         return None, False
 
@@ -1433,7 +1473,9 @@ def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
     (registry tokens, signing keys) that should be in a protected GitHub
     Environment instead.
     """
-    result = _gh("api", f"repos/{repo}/actions/secrets", "--jq", "[.secrets[].name]")
+    result = _gh(
+        "api", "--paginate", f"repos/{repo}/actions/secrets", "--jq", ".secrets[].name"
+    )
     if result is None:
         return CheckResult("repo-secret-allowlist", None, "gh CLI not found")
     if result.returncode != 0:
@@ -1443,12 +1485,7 @@ def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
             "Could not list secrets (may require admin access)",
         )
 
-    try:
-        repo_secrets = set(json.loads(result.stdout))
-    except json.JSONDecodeError:
-        return CheckResult(
-            "repo-secret-allowlist", None, "Could not parse secrets response"
-        )
+    repo_secrets = _lines(result.stdout)
 
     # Best-effort: include the org-level secrets this repo can read (also
     # available to its workflows). Ones scoped away from it are not.
@@ -1684,6 +1721,8 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     # The engine-specific auth secret is verified by check_claude_auth /
     # check_codex_auth below, which name the relevant one in their message.
     required_secrets = [BOT_TOKEN_SECRET]
+    if cfg.memory_gist:
+        required_secrets.append(MEMORY_GIST_SECRET)
 
     # The operational secrets are deliberately absent from `allowed`: they
     # belong to the environment, and a copy left at repo level is readable by
@@ -1701,9 +1740,12 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     results.append(check_environment_deployments(repo))
     results.append(check_credential_environments(repo, cfg, admitted))
     results.append(check_secrets(repo, required_secrets))
-    if cfg.harness == "claude":
+    if cfg.memory_gist:
+        results.append(check_memory_gist_repository(repo))
+    enabled_harnesses = cfg.enabled_harnesses() or {cfg.harness}
+    if "claude" in enabled_harnesses:
         results.append(check_claude_auth(repo))
-    else:
+    if "codex" in enabled_harnesses:
         results.append(check_codex_auth(repo))
     results.append(check_repo_secret_allowlist(repo, allowed))
     return results

@@ -76,10 +76,78 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check whether tend is enabled
+        id: tend_enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/.config/tend.yaml" \
+            > "$RUNNER_TEMP/tend.yaml"
+          ruby - "$RUNNER_TEMP/tend.yaml" <<'RUBY' >> "$GITHUB_OUTPUT"
+          # Inspect the parsed YAML node so the extra YAML 1.1 boolean words (yes/no/on/off)
+          # do not diverge from the YAML 1.2 parser used by `tend init`.
+          require "psych"
+
+          path = ARGV.fetch(0)
+          documents = Psych.parse_stream(File.read(path, mode: "r:bom|utf-8")).children
+          unless documents.length == 1
+            abort "tend config must contain exactly one YAML document"
+          end
+
+          mapping = documents.first.root
+          unless mapping.is_a?(Psych::Nodes::Mapping)
+            abort "tend config must contain a YAML mapping"
+          end
+
+          def has_yaml_merge_key?(node)
+            case node
+            when Psych::Nodes::Mapping
+              node.children.each_slice(2).any? do |key, value|
+                (key.is_a?(Psych::Nodes::Scalar) && key.plain && key.value == "<<") ||
+                  has_yaml_merge_key?(key) || has_yaml_merge_key?(value)
+              end
+            when Psych::Nodes::Sequence
+              node.children.any? { |value| has_yaml_merge_key?(value) }
+            else
+              false
+            end
+          end
+
+          if has_yaml_merge_key?(mapping)
+            abort "tend config: YAML merge keys (<<) are not supported"
+          end
+
+          matches = mapping.children.each_slice(2).select do |key, _value|
+            key.is_a?(Psych::Nodes::Scalar) && key.value == "enabled"
+          end
+          abort "tend config: enabled must appear at most once" if matches.length > 1
+
+          value = matches.dig(0, 1)
+          enabled = true
+          if value
+            bool_tag = value.respond_to?(:tag) && value.tag == "tag:yaml.org,2002:bool"
+            literal = value.value.downcase if value.is_a?(Psych::Nodes::Scalar)
+            unless value.is_a?(Psych::Nodes::Scalar) &&
+                (value.plain || bool_tag) &&
+                ["true", "false"].include?(literal)
+              abort "tend config: enabled must be true or false"
+            end
+            enabled = literal == "true"
+          end
+
+          puts "enabled=#{enabled}"
+
+          unless enabled
+            warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
+          end
+          RUBY
       # Identifiers only: `verify` re-reads the review or comment from the
       # API, so the words the bot weighs and acts on are the ones GitHub
       # holds, and a forged dispatch faces the same scrutiny as a relayed one.
       - name: Re-enter on an admitted ref
+        if: steps.tend_enabled.outputs.enabled == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -108,18 +176,89 @@ jobs:
     environment:
       name: tend
       deployment: false
+    permissions:
+      contents: read
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       reason: ${{ steps.check.outputs.reason }}
       url: ${{ steps.check.outputs.url }}
       ts: ${{ steps.check.outputs.ts }}
     steps:
+      - name: Check whether tend is enabled
+        id: tend_enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/.config/tend.yaml" \
+            > "$RUNNER_TEMP/tend.yaml"
+          ruby - "$RUNNER_TEMP/tend.yaml" <<'RUBY' >> "$GITHUB_OUTPUT"
+          # Inspect the parsed YAML node so the extra YAML 1.1 boolean words (yes/no/on/off)
+          # do not diverge from the YAML 1.2 parser used by `tend init`.
+          require "psych"
+
+          path = ARGV.fetch(0)
+          documents = Psych.parse_stream(File.read(path, mode: "r:bom|utf-8")).children
+          unless documents.length == 1
+            abort "tend config must contain exactly one YAML document"
+          end
+
+          mapping = documents.first.root
+          unless mapping.is_a?(Psych::Nodes::Mapping)
+            abort "tend config must contain a YAML mapping"
+          end
+
+          def has_yaml_merge_key?(node)
+            case node
+            when Psych::Nodes::Mapping
+              node.children.each_slice(2).any? do |key, value|
+                (key.is_a?(Psych::Nodes::Scalar) && key.plain && key.value == "<<") ||
+                  has_yaml_merge_key?(key) || has_yaml_merge_key?(value)
+              end
+            when Psych::Nodes::Sequence
+              node.children.any? { |value| has_yaml_merge_key?(value) }
+            else
+              false
+            end
+          end
+
+          if has_yaml_merge_key?(mapping)
+            abort "tend config: YAML merge keys (<<) are not supported"
+          end
+
+          matches = mapping.children.each_slice(2).select do |key, _value|
+            key.is_a?(Psych::Nodes::Scalar) && key.value == "enabled"
+          end
+          abort "tend config: enabled must appear at most once" if matches.length > 1
+
+          value = matches.dig(0, 1)
+          enabled = true
+          if value
+            bool_tag = value.respond_to?(:tag) && value.tag == "tag:yaml.org,2002:bool"
+            literal = value.value.downcase if value.is_a?(Psych::Nodes::Scalar)
+            unless value.is_a?(Psych::Nodes::Scalar) &&
+                (value.plain || bool_tag) &&
+                ["true", "false"].include?(literal)
+              abort "tend config: enabled must be true or false"
+            end
+            enabled = literal == "true"
+          end
+
+          puts "enabled=#{enabled}"
+
+          unless enabled
+            warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
+          end
+          RUBY
       - uses: astral-sh/setup-uv@v10.0.1
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           version: "0.12.7"
           ignore-empty-workdir: true
       - name: Verify bot engagement
         id: check
+        if: steps.tend_enabled.outputs.enabled == 'true'
         run: |
           uv run --script - <<'TEND_PY'
           # /// script
@@ -334,6 +473,73 @@ jobs:
       actions: read
       issues: write
     steps:
+      - name: Check whether tend is enabled
+        id: tend_enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/$GITHUB_REPOSITORY/contents/.config/tend.yaml" \
+            > "$RUNNER_TEMP/tend.yaml"
+          ruby - "$RUNNER_TEMP/tend.yaml" <<'RUBY' >> "$GITHUB_OUTPUT"
+          # Inspect the parsed YAML node so the extra YAML 1.1 boolean words (yes/no/on/off)
+          # do not diverge from the YAML 1.2 parser used by `tend init`.
+          require "psych"
+
+          path = ARGV.fetch(0)
+          documents = Psych.parse_stream(File.read(path, mode: "r:bom|utf-8")).children
+          unless documents.length == 1
+            abort "tend config must contain exactly one YAML document"
+          end
+
+          mapping = documents.first.root
+          unless mapping.is_a?(Psych::Nodes::Mapping)
+            abort "tend config must contain a YAML mapping"
+          end
+
+          def has_yaml_merge_key?(node)
+            case node
+            when Psych::Nodes::Mapping
+              node.children.each_slice(2).any? do |key, value|
+                (key.is_a?(Psych::Nodes::Scalar) && key.plain && key.value == "<<") ||
+                  has_yaml_merge_key?(key) || has_yaml_merge_key?(value)
+              end
+            when Psych::Nodes::Sequence
+              node.children.any? { |value| has_yaml_merge_key?(value) }
+            else
+              false
+            end
+          end
+
+          if has_yaml_merge_key?(mapping)
+            abort "tend config: YAML merge keys (<<) are not supported"
+          end
+
+          matches = mapping.children.each_slice(2).select do |key, _value|
+            key.is_a?(Psych::Nodes::Scalar) && key.value == "enabled"
+          end
+          abort "tend config: enabled must appear at most once" if matches.length > 1
+
+          value = matches.dig(0, 1)
+          enabled = true
+          if value
+            bool_tag = value.respond_to?(:tag) && value.tag == "tag:yaml.org,2002:bool"
+            literal = value.value.downcase if value.is_a?(Psych::Nodes::Scalar)
+            unless value.is_a?(Psych::Nodes::Scalar) &&
+                (value.plain || bool_tag) &&
+                ["true", "false"].include?(literal)
+              abort "tend config: enabled must be true or false"
+            end
+            enabled = literal == "true"
+          end
+
+          puts "enabled=#{enabled}"
+
+          unless enabled
+            warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
+          end
+          RUBY
       # Both halves of the reaction belong to this job, so the eyes can only
       # go on once the job that takes them off has started. Put them in
       # `verify` and `handle` respectively and the routine burst case strands
@@ -347,9 +553,9 @@ jobs:
       # arrived directly. The job's own `if` already carries `should_run`.
       - name: React with eyes
         if: |
-          ((github.event.comment && contains(github.event.comment.body, '@test-bot'))
+          (steps.tend_enabled.outputs.enabled == 'true') && (((github.event.comment && contains(github.event.comment.body, '@test-bot'))
               || (github.event.client_payload.kind == 'pull_request_review_comment'
-                  && needs.verify.outputs.reason == 'mention'))
+                  && needs.verify.outputs.reason == 'mention')))
         run: |
           gh api "repos/$REPO/$TARGET/reactions" -f content=eyes --silent \
             || echo "::warning::could not add the eyes reaction"
@@ -361,6 +567,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
 
       - uses: actions/checkout@v7
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -368,8 +575,9 @@ jobs:
 
       - name: Check out PR branch
         if: |
-          (github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
-          github.event_name == 'repository_dispatch'
+          steps.tend_enabled.outputs.enabled == 'true' &&
+          ((github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
+          github.event_name == 'repository_dispatch')
         run: |
           PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
           if [ "$PR_STATE" = "OPEN" ]; then
@@ -383,6 +591,7 @@ jobs:
 
       - name: Compute queue delay
         id: delay
+        if: steps.tend_enabled.outputs.enabled == 'true'
         run: |
           if [ -z "$EVENT_TS" ]; then
             echo "seconds=" >> "$GITHUB_OUTPUT"
@@ -396,6 +605,7 @@ jobs:
           EVENT_TS: ${{ github.event.comment.updated_at || needs.verify.outputs.ts || github.event.issue.updated_at }}
 
       - uses: max-sixty/tend/claude@X.Y.Z
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -436,9 +646,10 @@ jobs:
       - name: Remove the eyes reaction
         if: |
           always()
-          && ((github.event.comment && contains(github.event.comment.body, '@test-bot'))
+          && (steps.tend_enabled.outputs.enabled == 'true')
+          && (((github.event.comment && contains(github.event.comment.body, '@test-bot'))
               || (github.event.client_payload.kind == 'pull_request_review_comment'
-                  && needs.verify.outputs.reason == 'mention'))
+                  && needs.verify.outputs.reason == 'mention')))
         run: |
           REACTION_ID=$(gh api --paginate \
             "repos/$REPO/$TARGET/reactions?content=eyes&per_page=100" \

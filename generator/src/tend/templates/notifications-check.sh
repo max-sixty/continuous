@@ -6,9 +6,9 @@
 # env: GITHUB_REPOSITORY, GITHUB_OUTPUT, GITHUB_TOKEN
 
 # Activity newer than this belongs to an event workflow that may still be
-# running. The same cutoff is passed to the agent and, once every older item has
-# a semantic outcome, to GitHub's repository-level mark-read endpoint. Newer
-# activity therefore cannot be acknowledged by this run.
+# running. The cutoff bounds the snapshot below and is the value passed to the
+# agent, which takes its own snapshot with it and acknowledges each thread it
+# resolves individually — so this run acknowledges only threads it examined.
 CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
 echo "cutoff=$CUTOFF" >> "$GITHUB_OUTPUT"
 
@@ -39,6 +39,7 @@ echo "count=$COUNT" >> "$GITHUB_OUTPUT"
 # boot gate; the agent test-merges every candidate before changing a branch.
 # Read the newest comments: a deferral is normally the PR's latest activity.
 # An older marker can waste boots, but the resolver paginates before acting.
+# shellcheck disable=SC2016  # $q is a GraphQL variable, not a shell variable.
 if BOT_LOGIN=$(gh api user --jq .login 2>/dev/null) \
   && PRS=$(gh api graphql -f query='
     query($q: String!) {
