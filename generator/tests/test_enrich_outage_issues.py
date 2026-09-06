@@ -219,14 +219,13 @@ def test_the_step_boundary_bom_does_not_defeat_the_timestamp_strip(
     assert "\ufeff" not in body
 
 
-def test_an_oversized_batch_is_truncated_rather_than_rejected(
-    env: dict[str, str],
-) -> None:
-    """A body over GitHub's 65536-char limit is refused with a 422, and under
-    `set -e` that takes the whole pass down. No marker is written for any run in
-    the batch, so the next night rebuilds the identical batch and fails the same
-    way — the enrichment jams permanently."""
-    runs = [str(int(RUN_ID) + i) for i in range(6)]
+def _fence_lines(body: str) -> list[str]:
+    return [line for line in body.splitlines() if line.startswith("```")]
+
+
+def _many_runs(env: dict[str, str], count: int) -> list[str]:
+    """Point the tracker at `count` unenriched runs."""
+    runs = [str(int(RUN_ID) + i) for i in range(count)]
     Path(env["ISSUE_JSON"]).write_text(
         json.dumps(
             {
@@ -237,6 +236,17 @@ def test_an_oversized_batch_is_truncated_rather_than_rejected(
             }
         )
     )
+    return runs
+
+
+def test_an_oversized_batch_is_truncated_rather_than_rejected(
+    env: dict[str, str],
+) -> None:
+    """A body over GitHub's 65536-char limit is refused with a 422, and under
+    `set -e` that takes the whole pass down. No marker is written for any run in
+    the batch, so the next night rebuilds the identical batch and fails the same
+    way — the enrichment jams permanently."""
+    runs = _many_runs(env, 6)
     Path(env["LOG_TXT"]).write_text(
         _log(*(["x" * 600] * 30), "##[error]Process completed with exit code 1.")
     )
@@ -247,3 +257,99 @@ def test_an_oversized_batch_is_truncated_rather_than_rejected(
     assert "_Truncated" in body
     assert f"<!-- enriched-run:{runs[0]} -->" in body
     assert f"<!-- enriched-run:{runs[-1]} -->" not in body
+
+
+def test_truncation_keeps_whole_sections(env: dict[str, str]) -> None:
+    """Cutting the batch at a byte offset lands mid-section: the body ends on an
+    unclosed fence, the note renders inside the code block, and the run whose
+    section was cut loses its marker. Cutting between runs keeps each posted
+    section — fences, marker and all — intact."""
+    runs = _many_runs(env, 6)
+    Path(env["LOG_TXT"]).write_text(
+        _log(*(["x" * 600] * 30), "##[error]Process completed with exit code 1.")
+    )
+
+    body = _run(env)
+
+    assert len(_fence_lines(body)) % 2 == 0
+    for run in runs:
+        section = f"### [Run {run}]"
+        if section in body:
+            assert f"<!-- enriched-run:{run} -->" in body
+    assert body.rstrip().endswith(
+        "_Truncated; the remaining runs are enriched by a later batch._"
+    )
+
+
+def test_one_huge_annotation_cannot_fill_the_body(env: dict[str, str]) -> None:
+    """A linter annotates per finding, so a single job's message is unbounded.
+    Left that way it fills the batch on its own — and a batch cut inside that
+    one section posts a body with no marker at all, so the next night rebuilds
+    it and posts the identical comment, every night."""
+    Path(env["ANNOTATIONS_JSON"]).write_text(
+        json.dumps(
+            [
+                {
+                    "annotation_level": "failure",
+                    "message": "E501 line too long " * 4000,
+                },
+                {"annotation_level": "failure", "message": "\n".join(["F401"] * 4000)},
+            ]
+        )
+    )
+
+    body = _run(env)
+
+    assert len(body) < 65536
+    assert f"<!-- enriched-run:{RUN_ID} -->" in body
+    assert "E501 line too long" in body
+    assert len(_fence_lines(body)) % 2 == 0
+
+
+def test_a_matrix_of_failed_jobs_cannot_fill_the_body(env: dict[str, str]) -> None:
+    """One run's section is the unit the batch cap keeps whole, and a matrix
+    contributes one job section per failed leg."""
+    Path(env["JOBS_JSON"]).write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {
+                        "id": int(JOB_ID) + i,
+                        "name": f"test ({i})",
+                        "conclusion": "failure",
+                    }
+                    for i in range(40)
+                ]
+            }
+        )
+    )
+    Path(env["ANNOTATIONS_JSON"]).write_text(
+        json.dumps(
+            [{"annotation_level": "failure", "message": "\n".join(["y" * 600] * 30)}]
+        )
+    )
+
+    body = _run(env)
+
+    assert len(body) < 65536
+    assert f"<!-- enriched-run:{RUN_ID} -->" in body
+    assert "_Remaining failed jobs omitted._" in body
+    assert len(_fence_lines(body)) % 2 == 0
+
+
+def test_an_issue_with_nothing_new_posts_nothing_and_exits_clean(
+    env: dict[str, str],
+) -> None:
+    """Every run already enriched leaves an empty batch. As the last command of
+    the loop body, a bare `[ -s ... ] && gh issue comment` returns non-zero
+    there and ends the whole pass under `set -e`."""
+    Path(env["ISSUE_JSON"]).write_text(
+        json.dumps(
+            {
+                "body": f"https://github.com/owner/repo/actions/runs/{RUN_ID}",
+                "comments": [{"body": f"<!-- enriched-run:{RUN_ID} -->"}],
+            }
+        )
+    )
+
+    assert _run(env) == ""

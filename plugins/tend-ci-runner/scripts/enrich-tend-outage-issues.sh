@@ -41,6 +41,21 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
       | while read -r RUN_ID; do
         [ -z "$RUN_ID" ] && continue
 
+        # GitHub rejects a comment body over 65536 characters with a 422, and
+        # under `set -e` that rejection takes the whole nightly pass down —
+        # then, because the `enriched-run` markers land only with the comment,
+        # the next night rebuilds the identical batch and fails identically.
+        # Stop between runs instead, so every posted section keeps its fences
+        # and its marker; the runs that fall off here carry no marker and are
+        # enriched by a later, smaller batch. A run's own section is bounded
+        # above (30 lines x 500 characters per job, at most ~15 KB of jobs),
+        # so the finished body cannot exceed roughly 60 KB.
+        if [ "$(wc -c < /tmp/enrich-batch.md)" -gt 30000 ]; then
+          printf '_Truncated; the remaining runs are enriched by a later batch._\n' \
+            >> /tmp/enrich-batch.md
+          break
+        fi
+
         : > /tmp/enrich-errors.md
         # Capture jobs first so a 404 (deleted/expired run) doesn't trip
         # `set -e` via the pipe's exit status.
@@ -49,10 +64,18 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
           2>/dev/null || true)
         while IFS=$'\t' read -r JOB_ID JOB_NAME; do
           [ -z "$JOB_ID" ] && continue
+          # One run's own section has to fit the headroom the batch cap below
+          # leaves, and a matrix run's failed jobs are otherwise unbounded.
+          if [ "$(wc -c < /tmp/enrich-errors.md)" -gt 15000 ]; then
+            printf '_Remaining failed jobs omitted._\n\n' >> /tmp/enrich-errors.md
+            break
+          fi
+          # A linter annotates per finding, so bound the message the same way
+          # the log tail below is bounded: 30 lines of at most 500 characters.
           MSG=$(gh api "repos/$REPO/check-runs/$JOB_ID/annotations" \
             --jq '[.[] | select(.annotation_level == "failure") | .message
                   | select(test("^Process completed") | not)] | join("\n\n")' \
-            2>/dev/null || true)
+            2>/dev/null | head -n 30 | cut -c -500 || true)
           [ -n "$MSG" ] && printf '#### %s\n\n```\n%s\n```\n\n' "$JOB_NAME" "$MSG" \
             >> /tmp/enrich-errors.md
         done <<< "$JOBS"
@@ -109,21 +132,10 @@ gh issue list --label "$LABEL" --state open --json number --jq '.[].number' \
         fi
       done
 
-    # GitHub rejects a comment body over 65536 characters with a 422. Under
-    # `set -e` that rejection takes the whole nightly pass down — and because
-    # the `enriched-run` markers land only with the comment, the next night
-    # rebuilds the identical oversized batch and fails the same way. Truncate instead: the runs that fall off
-    # keep no marker and are enriched by a later, smaller batch.
+    # An `if` rather than `[ -s ... ] && gh ...`: a false test there is the last
+    # command of the loop body, so an issue whose runs are all already enriched
+    # would end the pipeline non-zero and take the pass down under `set -e`.
     if [ -s /tmp/enrich-batch.md ]; then
-      if [ "$(wc -c < /tmp/enrich-batch.md)" -gt 60000 ]; then
-        # `sed '$d'` drops the line `head -c` cut mid-way, so the body can't end
-        # on half a UTF-8 character.
-        head -c 60000 /tmp/enrich-batch.md | sed '$d' > /tmp/enrich-post.md
-        printf '\n_Truncated; the remaining runs are enriched by a later batch._\n' \
-          >> /tmp/enrich-post.md
-      else
-        cp /tmp/enrich-batch.md /tmp/enrich-post.md
-      fi
-      gh issue comment "$ISSUE" --repo "$REPO" -F /tmp/enrich-post.md
+      gh issue comment "$ISSUE" --repo "$REPO" -F /tmp/enrich-batch.md
     fi
   done
