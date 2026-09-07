@@ -1,6 +1,6 @@
 ---
 name: ci-fix
-description: Debug and fix failing CI on the default branch. Use when CI fails on main.
+description: Debug unsuccessful CI on the default branch. Use when CI fails or is cancelled on main.
 argument-hint: "[run-id and context]"
 metadata:
   internal: true
@@ -8,9 +8,10 @@ metadata:
 
 # Fix CI on Default Branch
 
-CI has failed on the default branch. Diagnose the root cause, fix it, and create a PR.
+CI ended unsuccessfully on the default branch. Diagnose the result, fix any
+durable cause, and create a PR when code or configuration needs to change.
 
-**Failed run:** $ARGUMENTS
+**Run:** $ARGUMENTS
 
 ## Workflow
 
@@ -41,11 +42,21 @@ gh issue list --state open --author "$BOT_LOGIN" --search "ci-fix: in:title" \
 
 ### 2. Diagnose and fix
 
-1. Get failure logs: `gh run view <run-id> --log-failed`
-2. Identify the failing job and root cause — don't just fix the symptom
-3. Search for the same pattern elsewhere in the codebase
-4. Reproduce locally using test commands from the project's CLAUDE.md
-5. Fix at the right level (shared helper > per-file fix)
+1. Read the run's conclusion and jobs: `gh run view <run-id> --json conclusion,jobs,url`
+2. For a failure, read its logs: `gh run view <run-id> --log-failed`
+3. For a cancellation, use the job and step conclusions from step 1. Its log
+   archive may not exist; a failed job inside the cancelled run is the signal
+   to diagnose, not a log fetch.
+4. Identify the root cause — don't just fix the symptom
+5. Search for the same pattern elsewhere in the codebase
+6. Reproduce locally using test commands from the project's CLAUDE.md
+7. Fix at the right level (shared helper > per-file fix)
+
+A cancellation takes this same diagnostic path; do not presume it is transient
+or ignore it. First establish why it stopped. If concurrency replacement or a
+deliberate cancellation stopped a run that had no failure, exit silently — do
+not use the transient-tracker path below. Otherwise diagnose the completed
+steps and current branch normally.
 
 ### 3. Create PR
 

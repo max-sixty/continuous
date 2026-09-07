@@ -1,6 +1,6 @@
 ---
 name: install-tend
-description: Sets up tend — an autonomous junior maintainer for a GitHub repo, powered by Claude or OpenAI Codex — that reviews PRs, triages issues, and fixes CI. Creates config, generates workflows, configures secrets and branch protection via API, creates the bot account, and provisions the harness auth token (Claude OAuth or OpenAI API key). Use when installing tend, when clearing a failing `tend check`, and when changing an installed repo's tend config, generated workflows, secrets, environments, branch protection, or bot access.
+description: Sets up tend — an autonomous junior maintainer for a GitHub repo, powered by Claude or OpenAI Codex — that reviews PRs, triages issues, and fixes CI. Creates config, generates workflows, configures secrets and branch protection via API, creates the bot account, and provisions harness authentication. Use when installing tend, when clearing a failing `tend check`, and when changing an installed repo's tend config, generated workflows, secrets, environments, branch protection, or bot access.
 ---
 
 # Install Tend
@@ -92,10 +92,10 @@ itself the go-ahead.
      Fits when there's no subscription to draw on, or the user wants a
      dedicated billing surface and per-key revocation.
    - **Codex — Plus/Pro subscription** — experimental. Concurrent jobs receive
-     an access-only token; one serialized weekly workflow owns renewal.
-     OpenAI does not support this path for public CI; detail in
+     an access-only token; one serialized weekly workflow owns renewal. It
+     depends on Codex's internal auth mode; detail in
      ${CLAUDE_SKILL_DIR}/references/security-model.md.
-   - **Codex — OpenAI API key** — supported pay-per-token path.
+   - **Codex — OpenAI API key** — standard pay-per-token path.
 2. **Bot name** — the available candidates, recommended first. "Other"
    takes a custom name; check its availability before using it. The tool
    needs 2–4 options, so generate more candidates whenever fewer than two
@@ -446,6 +446,15 @@ Bot-deleting an admin-pushed tag is brief availability damage at worst;
 repos that need stronger protection against published-tag deletion can
 add a no-bypass `deletion` ruleset (see the publisher uplift below).
 
+**Immutable releases.** Enable this before the next release. It locks that
+release, its assets, and its associated tag; GitHub does not apply the setting
+retroactively:
+
+```bash
+gh api "repos/$REPO/immutable-releases" \
+  -H 'X-GitHub-Api-Version: 2026-03-10' --method PUT
+```
+
 **Environment gates.** A new Environment admits every ref and requires no
 approval — `deployment_branch_policy: null`, no reviewers — so a bot-pushed
 branch or tag reaches its secrets and mints its OIDC token. Survey what
@@ -756,10 +765,10 @@ mode, keep it rather than prompting again:
 gh secret list --repo "$REPO" --env tend --json name --jq '.[].name'
 ```
 
-For **Plus/Pro subscription**, first repeat the unsupported-path warning from
-${CLAUDE_SKILL_DIR}/references/security-model.md. Use an isolated Codex login:
-the weekly workflow will rotate its refresh-token chain, so copying the user's
-ordinary `~/.codex/auth.json` would eventually break their local Codex login.
+For **Plus/Pro subscription**, explain that the path is experimental because it
+depends on Codex's internal auth mode. Use an isolated Codex login: the weekly
+workflow will rotate its refresh-token chain, so copying the user's ordinary
+`~/.codex/auth.json` would eventually break their local Codex login.
 
 Run `codex login --device-auth` with a fresh temporary `CODEX_HOME`, then verify
 that it produced a normal refreshable ChatGPT bundle without displaying it:
@@ -1047,6 +1056,7 @@ line picks the row that matches the chosen harness):
 - [ ] Config: `.config/tend.yaml` created (with `harness` set if Codex)
 - [ ] Workflows: generated in `.github/workflows/`
 - [ ] Rulesets: merge restriction on default branch (admin bypass), tag operations on all tags (admin bypass)
+- [ ] Immutable releases: enabled before the next release
 - [ ] Release/deploy secrets: environment-protected; the environment's deployment-branch-policies list only the admin-gated refs from §3 (default branch and/or all tags)
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
 - [ ] Badge: added to README (unless skipped, or no README)

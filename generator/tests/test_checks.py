@@ -24,12 +24,16 @@ from tend.checks import (
     check_credential_environments,
     check_environment,
     check_environment_deployments,
+    check_immutable_releases,
     check_memory_gist_repository,
     check_repo_secret_allowlist,
     check_secrets,
+    check_tag_protection,
     detect_canonical_owner,
     detect_repo,
     fix_environment,
+    fix_immutable_releases,
+    fix_tag_protection,
     run_all_checks,
 )
 from tend.cli import main
@@ -1159,6 +1163,81 @@ def test_run_all_checks_no_repo() -> None:
 _BRANCH_HAS_UPDATE_RULE = _make_branch_rules("update")
 
 
+@pytest.mark.parametrize(("enabled", "expected"), [(True, True), (False, False)])
+def test_check_immutable_releases_reads_setting(enabled: bool, expected: bool) -> None:
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(json.dumps({"enabled": enabled})),
+    ) as gh:
+        result = check_immutable_releases("owner/repo")
+
+    assert result.passed is expected
+    assert gh.call_args.args == (
+        "api",
+        "-H",
+        "X-GitHub-Api-Version: 2026-03-10",
+        "repos/owner/repo/immutable-releases",
+    )
+
+
+def test_check_immutable_releases_404_is_unverified() -> None:
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(returncode=1, stderr="gh: Not Found (HTTP 404)"),
+    ):
+        result = check_immutable_releases("owner/repo")
+
+    assert result.passed is None
+    assert "admin" in result.message
+
+
+def test_check_immutable_releases_other_api_error_is_unknown() -> None:
+    with patch(
+        "tend.checks._gh",
+        return_value=_make_completed(returncode=1, stderr="HTTP 403"),
+    ):
+        result = check_immutable_releases("owner/repo")
+
+    assert result.passed is None
+
+
+def test_fix_immutable_releases_uses_versioned_endpoint() -> None:
+    with patch("tend.checks._gh", return_value=_make_completed()) as gh:
+        result = fix_immutable_releases("owner/repo")
+
+    assert result.passed is True
+    assert gh.call_args.args == (
+        "api",
+        "-X",
+        "PUT",
+        "-H",
+        "X-GitHub-Api-Version: 2026-03-10",
+        "repos/owner/repo/immutable-releases",
+    )
+
+
+@pytest.mark.parametrize(
+    ("verdict", "expected"), [(True, True), (False, False), (None, None)]
+)
+def test_check_tag_protection(verdict: bool | None, expected: bool | None) -> None:
+    with patch("tend.checks._tags_admin_gated", return_value=verdict):
+        result = check_tag_protection("owner/repo", "bot")
+
+    assert result.passed is expected
+
+
+def test_fix_tag_protection_creates_admin_gated_all_tags_ruleset() -> None:
+    with patch("tend.checks._gh", return_value=_make_completed()) as gh:
+        result = fix_tag_protection("owner/repo")
+
+    assert result.passed is True
+    body = json.loads(gh.call_args.kwargs["input"])
+    assert body["target"] == "tag"
+    assert body["conditions"]["ref_name"] == {"include": ["~ALL"], "exclude": []}
+    assert {rule["type"] for rule in body["rules"]} == {"creation", "update"}
+    assert body["bypass_actors"] == [_role_actor(ROLE_ID_ADMIN)]
+
+
 def _gh_all_pass(*admitted: str, environment_secrets: tuple[str, ...] | None = None):
     """A gh CLI where every check passes, for a repo whose environment admits
     `admitted` (default `main`). The admitted set is a parameter because the
@@ -1186,6 +1265,22 @@ def _gh_all_pass(*admitted: str, environment_secrets: tuple[str, ...] | None = N
             return _make_completed("".join(f"{n}\n" for n in names))
         if url == "repos/owner/repo" and "--jq" in args and ".default_branch" in args:
             return _make_completed("main\n")
+        if url.endswith("/immutable-releases"):
+            return _make_completed('{"enabled": true, "enforced_by_owner": false}\n')
+        if url.endswith("/rulesets"):
+            return _make_completed("7\n")
+        if url.endswith("/rulesets/7"):
+            return _make_completed(
+                json.dumps(
+                    {
+                        "conditions": {
+                            "ref_name": {"include": ["~ALL"], "exclude": []}
+                        },
+                        "rules": [{"type": "creation"}, {"type": "update"}],
+                        "bypass_actors": [_role_actor(ROLE_ID_ADMIN)],
+                    }
+                )
+            )
         if "rules/branches" in url:
             return _make_completed(_BRANCH_HAS_UPDATE_RULE)
         if "/rulesets/" in url:
@@ -1389,8 +1484,9 @@ def test_run_all_checks_with_protected_branches() -> None:
             repo="owner/repo",
         )
     # default + v1 + v2 + bot-permission + environment + environment-deployments
-    # + credential-environments + secrets + claude-auth + allowlist = 10
-    assert len(results) == 10
+    # + tag protection + immutable releases + credential-environments + secrets
+    # + claude-auth + allowlist = 12
+    assert len(results) == 12
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 3
     assert {r.name for r in bp_results} == {
@@ -1585,8 +1681,9 @@ def test_run_all_checks_deduplicates_default_branch() -> None:
             repo="owner/repo",
         )
     # main (deduped) + v1 + bot-permission + environment + environment-deployments
-    # + credential-environments + secrets + claude-auth + allowlist = 9
-    assert len(results) == 9
+    # + tag protection + immutable releases + credential-environments + secrets
+    # + claude-auth + allowlist = 11
+    assert len(results) == 11
     bp_results = [r for r in results if r.name.startswith("branch-protection:")]
     assert len(bp_results) == 2
     assert {r.name for r in bp_results} == {
@@ -1657,6 +1754,38 @@ def test_cli_check_skips_exit_0(
         result = CliRunner().invoke(main, ["check"])
     assert result.exit_code == 0
     assert "SKIP" in result.output
+
+
+def test_cli_check_fix_repairs_tag_and_release_protection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    failures = [
+        CheckResult("tag-protection", False, "tag gap"),
+        CheckResult("immutable-releases", False, "release gap"),
+    ]
+    passes = [
+        CheckResult("tag-protection", True, "tags protected"),
+        CheckResult("immutable-releases", True, "releases protected"),
+    ]
+    with (
+        patch("tend.cli.run_all_checks", side_effect=[failures, passes]),
+        patch("tend.cli.detect_default_branch", return_value="main"),
+        patch(
+            "tend.cli.fix_tag_protection",
+            return_value=CheckResult("tag-protection", True, "fixed"),
+        ) as fix_tags,
+        patch(
+            "tend.cli.fix_immutable_releases",
+            return_value=CheckResult("immutable-releases", True, "fixed"),
+        ) as fix_releases,
+    ):
+        result = CliRunner().invoke(main, ["check", "--fix", "--repo", "owner/repo"])
+
+    assert result.exit_code == 0, result.output
+    fix_tags.assert_called_once_with("owner/repo")
+    fix_releases.assert_called_once_with("owner/repo")
 
 
 # ---------------------------------------------------------------------------

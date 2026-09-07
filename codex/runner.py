@@ -12,11 +12,14 @@ instructions, and preserving the final message around ``codex exec``.
 
 from __future__ import annotations
 
-import base64
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/steps"))
+
+import _sandbox
 
 PLUGIN_ROOT_PREFIX = "Installed plugin root: "
 
@@ -26,14 +29,14 @@ def _run(
     *,
     capture: bool = False,
     check: bool = True,
-    env: dict[str, str] | None = None,
+    input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
+        input=input,
         stdout=subprocess.PIPE if capture else None,
         text=True,
         check=check,
-        env=env,
     )
 
 
@@ -44,31 +47,94 @@ def _required_path(name: str) -> Path:
     return Path(value)
 
 
-def _append_environment(name: str, value: str) -> None:
-    with _required_path("GITHUB_ENV").open("a", encoding="utf-8") as stream:
+def _append_agent_environment(name: str, value: str) -> None:
+    with _required_path("AGENT_ENV_FILE").open("a", encoding="utf-8") as stream:
         stream.write(f"{name}={value}\n")
+
+
+def _sandbox_command(*args: str, github_context: bool = False) -> list[str]:
+    environment = (
+        _sandbox.launch_env(_required_path("AGENT_ENV_FILE"))
+        if github_context
+        else _sandbox.agent_env(_required_path("AGENT_ENV_FILE"))
+    )
+    return [
+        "/usr/bin/sudo",
+        "-u",
+        os.environ.get("SANDBOX", ""),
+        "/usr/bin/env",
+        *environment,
+        *args,
+    ]
 
 
 def install_plugin() -> int:
     """Install tend-ci-runner and export its root for skill scripts."""
-    marketplace_root = _required_path("ACTION_PATH").resolve().parent
-    _run(["codex", "plugin", "marketplace", "add", str(marketplace_root)])
-    installed = _run(["codex", "plugin", "add", "tend-ci-runner@tend"], capture=True)
+    sandbox = os.environ.get("SANDBOX", "")
+    if not sandbox:
+        raise ValueError("SANDBOX is unset")
+    action_path = _required_path("ACTION_PATH").resolve()
+    marketplace_source = action_path.parent
+    agent_home = _required_path("AGENT_HOME").resolve()
+    marketplace_root = agent_home / "tend-marketplace"
+    _run(["/usr/bin/sudo", "/usr/bin/rm", "-rf", "--", str(marketplace_root)])
+    _run(["/usr/bin/sudo", "/usr/bin/mkdir", "-p", str(marketplace_root)])
+    _run(
+        [
+            "/usr/bin/sudo",
+            "/usr/bin/cp",
+            "-a",
+            str(marketplace_source / ".agents"),
+            str(marketplace_source / "plugins"),
+            f"{marketplace_root}/",
+        ]
+    )
+    _run(
+        [
+            "/usr/bin/sudo",
+            "/usr/bin/chown",
+            "-R",
+            f"{sandbox}:{sandbox}",
+            str(marketplace_root),
+        ]
+    )
+    codex = str(_required_path("CODEX_BIN"))
+    _run(_sandbox_command(codex, "plugin", "marketplace", "add", str(marketplace_root)))
+    installed = _run(
+        _sandbox_command(codex, "plugin", "add", "tend-ci-runner@tend"),
+        capture=True,
+    )
     stdout = installed.stdout or ""
     sys.stdout.write(stdout)
     roots = [
-        Path(line.removeprefix(PLUGIN_ROOT_PREFIX))
+        Path(line.removeprefix(PLUGIN_ROOT_PREFIX)).resolve()
         for line in stdout.splitlines()
         if line.startswith(PLUGIN_ROOT_PREFIX)
     ]
-    if len(roots) != 1 or not roots[0].is_dir():
+    valid = (
+        len(roots) == 1
+        and roots[0].is_relative_to(agent_home)
+        and _run(
+            [
+                "/usr/bin/sudo",
+                "-u",
+                sandbox,
+                "/usr/bin/test",
+                "-d",
+                str(roots[0]),
+            ],
+            check=False,
+        ).returncode
+        == 0
+    )
+    if not valid:
         print(
-            "::error::Failed to parse one existing "
+            "::error::Failed to parse one sandbox-owned "
             "'Installed plugin root: <path>' from codex plugin add output"
         )
         return 1
-    _append_environment("CLAUDE_PLUGIN_ROOT", str(roots[0]))
-    _run(["codex", "plugin", "list"], check=False)
+    _append_agent_environment("CLAUDE_PLUGIN_ROOT", str(roots[0]))
+    _run(_sandbox_command(codex, "plugin", "list"), check=False)
     return 0
 
 
@@ -91,28 +157,58 @@ def stage_agents() -> int:
         + _substitute_bot_name(tail, bot_name).rstrip("\n")
         + "\n"
     )
-    agents = _required_path("HOME") / ".codex/AGENTS.md"
-    agents.parent.mkdir(parents=True, exist_ok=True)
-    agents.write_text(body)
+    sandbox = os.environ.get("SANDBOX", "")
+    if not sandbox:
+        raise ValueError("SANDBOX is unset")
+    agents = _required_path("AGENT_HOME") / ".codex/AGENTS.md"
+    _run(["/usr/bin/sudo", "-u", sandbox, "/usr/bin/mkdir", "-p", str(agents.parent)])
+    _run(
+        ["/usr/bin/sudo", "-u", sandbox, "/usr/bin/tee", str(agents)],
+        capture=True,
+        input=body,
+    )
     print(f"Staged AGENTS.md at {agents} ({len(body.splitlines())} lines)")
     return 0
 
 
 def run_codex() -> int:
     """Run Codex and export its final message even when the process fails."""
-    runner_temp = _required_path("RUNNER_TEMP")
-    output_file = runner_temp / "codex-final-message.md"
-    output_file.unlink(missing_ok=True)
+    sandbox = os.environ.get("SANDBOX", "")
+    if not sandbox:
+        raise ValueError("SANDBOX is unset")
+    codex = str(_required_path("CODEX_BIN"))
+    auth_mode = os.environ.get("AUTH_MODE", "")
+    auth_args: list[str]
+    if auth_mode == "api-key":
+        proxy_url = os.environ.get("CODEX_PROXY_URL", "")
+        if not proxy_url:
+            raise ValueError("CODEX_PROXY_URL is unset")
+        auth_args = [
+            "--config",
+            (
+                "model_providers.tend-openai={ name = 'Tend OpenAI proxy', "
+                f"base_url = '{proxy_url}/v1', wire_api = 'responses' }}"
+            ),
+            "--config",
+            'model_provider="tend-openai"',
+        ]
+    elif auth_mode == "subscription":
+        auth_args = []
+    else:
+        raise ValueError(f"unknown AUTH_MODE: {auth_mode or '<unset>'}")
+    output_file = _required_path("TEND_RUN_DIR") / "codex-final-message.md"
+    _run(["/usr/bin/sudo", "-u", sandbox, "/usr/bin/rm", "-f", "--", str(output_file)])
     args = [
-        "codex",
+        codex,
         "exec",
         *(arg for arg in os.environ.get("EXTRA_ARGS", "").splitlines() if arg),
         "--model",
         os.environ.get("MODEL", ""),
         "--sandbox",
-        os.environ.get("SANDBOX", ""),
+        os.environ.get("CODEX_SANDBOX_MODE", ""),
         "--output-last-message",
         str(output_file),
+        *auth_args,
         "--config",
         'cli_auth_credentials_store="file"',
     ]
@@ -120,16 +216,46 @@ def run_codex() -> int:
     if effort:
         args.extend(["--config", f'model_reasoning_effort="{effort}"'])
     args.append(os.environ.get("PROMPT", ""))
-    env = os.environ.copy()
-    if env.get("AUTH_MODE") == "subscription":
-        env.pop("OPENAI_API_KEY", None)
-    env["PATH"] = env.get("PATH", "") + os.pathsep + str(runner_temp / "tend-agent-uv")
-    result = _run(args, check=False, env=env)
+    launch = _sandbox_command(
+        *args,
+        github_context=True,
+    )
+    insert_at = launch.index(codex)
+    launch[insert_at:insert_at] = [
+        f"BOT_NAME={os.environ.get('BOT_NAME', '')}",
+        f"BOT_ID={os.environ.get('BOT_ID', '')}",
+        f"CI={os.environ.get('CI') or 'true'}",
+    ]
+    result = _run(launch, check=False)
 
-    if output_file.is_file():
-        encoded = base64.b64encode(output_file.read_bytes()).decode("ascii")
+    exists = _run(
+        [
+            "/usr/bin/sudo",
+            "-u",
+            sandbox,
+            "/usr/bin/test",
+            "-f",
+            str(output_file),
+        ],
+        check=False,
+    )
+    encoded = None
+    if exists.returncode == 0:
+        encoded = _run(
+            [
+                "/usr/bin/sudo",
+                "-u",
+                sandbox,
+                "/usr/bin/base64",
+                "-w0",
+                str(output_file),
+            ],
+            capture=True,
+            check=False,
+        )
+    if encoded and encoded.returncode == 0:
         with _required_path("GITHUB_OUTPUT").open("a", encoding="utf-8") as stream:
-            stream.write(f"final_message={encoded}\n")
+            stream.write(f"final_message={encoded.stdout or ''}\n")
     return result.returncode
 
 

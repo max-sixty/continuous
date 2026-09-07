@@ -141,6 +141,10 @@ RESERVED_SANDBOX_ENV = {
     "CLAUDE_CODE_REMOTE",
     "ANTHROPIC_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_AUTH_JSON",
+    "CODEX_HOME",
 }
 
 
@@ -243,12 +247,11 @@ class Config:
     # (gh unavailable, or no default repo configured).
     repo_owner: str = ""
     allowed_repo_secrets: list[str] = field(default_factory=list)
-    # Adopter levers that reach *inside* the Claude sandbox, before the
+    # Adopter levers that reach inside either harness's sandbox, before the
     # agent launches (runner-side `setup:` doesn't — it runs as the runner user
     # around the composite action). `sandbox_path` prepends dirs to the sandbox
     # PATH; `sandbox_env` adds NAME=VALUE pairs to the agent's launch env;
-    # `sandbox_setup` runs shell commands as the sandbox user. Inert for the
-    # codex harness, whose agent already runs on the runner and sees `setup:`.
+    # `sandbox_setup` runs shell commands as the sandbox user.
     sandbox_path: list[str] = field(default_factory=list)
     sandbox_env: dict[str, str] = field(default_factory=dict)
     sandbox_setup: list[str] = field(default_factory=list)
@@ -676,25 +679,9 @@ class Config:
             else:
                 workflows[name] = WorkflowConfig(enabled=bool(wf_raw))
 
-        # The sandbox_* levers reach inside the Claude proxy sandbox and
-        # no-op under codex (whose agent runs on the runner, already reachable
-        # via `setup:`). Warn only when they'd be fully inert — i.e. no enabled
-        # workflow's *effective* harness is Claude. This mirrors the
-        # render gate (macros.yaml.j2 emits them per effective harness): a
-        # top-level `codex` with a per-workflow `claude` override does apply
-        # them, so don't warn there.
+        # Both harnesses run behind the same credential-isolation sandbox;
+        # these levers therefore apply to either one.
         enabled_harnesses = _enabled_harnesses(harness, workflows)
-        if (
-            sandbox_path or sandbox_env or sandbox_setup
-        ) and "claude" not in enabled_harnesses:
-            click.echo(
-                "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
-                "to the Claude harness (the proxy sandbox). The "
-                "codex harness runs the agent on the runner, where the "
-                "`setup:` section already reaches its environment.",
-                err=True,
-            )
-
         if memory_gist and "claude" not in enabled_harnesses:
             raise click.ClickException(
                 "memory_gist is experimental and requires at least one enabled "

@@ -496,7 +496,8 @@ runs:
       shell: bash
       run: |
         if [ -f /tmp/claude/step-summary.md ]; then
-          cat /tmp/claude/step-summary.md >> "$GITHUB_STEP_SUMMARY"
+          sudo -u "$SANDBOX" cat /tmp/claude/step-summary.md \
+            | tee -a "$GITHUB_STEP_SUMMARY" >/dev/null
           echo "" >> "$GITHUB_STEP_SUMMARY"
         fi
 

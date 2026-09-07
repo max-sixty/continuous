@@ -4,10 +4,11 @@
 # ///
 """Prepare the non-sudo agent user and its credential-injecting proxy.
 
-This program runs as the privileged Actions runner.  It exports the sandbox
+This program runs as the privileged Actions runner. It exports the sandbox
 paths through ``GITHUB_ENV``, removes checkout's persisted GitHub credential,
-hands the worktree to ``tend-sandbox``, and starts mitmproxy with the real model
-and GitHub credentials.  The agent receives only dummy credentials.
+hands the worktree to ``tend-sandbox``, and starts mitmproxy with the real
+GitHub credential and, for Claude, the real model credential. The agent
+receives only dummy credentials.
 """
 
 from __future__ import annotations
@@ -60,6 +61,10 @@ RESERVED_SANDBOX_ENV = {
     "CLAUDE_CODE_REMOTE",
     "ANTHROPIC_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_AUTH_JSON",
+    "CODEX_HOME",
 }
 BLOCKED_COMMAND = """#!/bin/sh
 printf "tend: %s came from the runner home and is unavailable; install it into ~/.local/bin with sandbox_setup, or point sandbox_path at a copy outside the runner home\n" "${0##*/}" >&2
@@ -274,7 +279,9 @@ def install_blocked_commands(plan: PathPlan) -> None:
         )
 
 
-def base_agent_env(agent_path: str, anthropic_dummy: tuple[str, str]) -> list[str]:
+def base_agent_env(
+    agent_path: str, anthropic_dummy: tuple[str, str] | None
+) -> list[str]:
     """Return the newline-delimited assignments passed across the UID boundary."""
     values = {
         "HOME": str(AGENT_HOME),
@@ -295,8 +302,9 @@ def base_agent_env(agent_path: str, anthropic_dummy: tuple[str, str]) -> list[st
         "GH_TOKEN": GITHUB_DUMMY,
         "GITHUB_TOKEN": GITHUB_DUMMY,
         "CLAUDE_CODE_REMOTE": "1",
-        anthropic_dummy[0]: anthropic_dummy[1],
     }
+    if anthropic_dummy:
+        values[anthropic_dummy[0]] = anthropic_dummy[1]
     if not values.keys() <= RESERVED_SANDBOX_ENV:
         raise AssertionError("agent environment contains an unreserved key")
     return [f"{name}={value}" for name, value in values.items()]
@@ -318,7 +326,7 @@ def adopter_env(raw: str) -> list[str]:
 
 
 def write_agent_environment(
-    *, paths: Paths, plan: PathPlan, anthropic_dummy: tuple[str, str]
+    *, paths: Paths, plan: PathPlan, anthropic_dummy: tuple[str, str] | None
 ) -> str:
     agent_path = os.pathsep.join(plan.agent_path)
     assignments = base_agent_env(agent_path, anthropic_dummy)
@@ -578,7 +586,12 @@ def main() -> int:
 
     ensure_sandbox_user()
     configure_global_gitignore()
-    if os.environ.get("TEND_ANTHROPIC_OAUTH_TOKEN"):
+    github_only = os.environ.get("TEND_GITHUB_ONLY") == "1"
+    if github_only:
+        os.environ.pop("TEND_ANTHROPIC_OAUTH_TOKEN", None)
+        os.environ.pop("TEND_ANTHROPIC_API_KEY", None)
+        anthropic_dummy = None
+    elif os.environ.get("TEND_ANTHROPIC_OAUTH_TOKEN"):
         os.environ.pop("TEND_ANTHROPIC_API_KEY", None)
         anthropic_dummy = ("CLAUDE_CODE_OAUTH_TOKEN", OAUTH_DUMMY)
     else:
@@ -616,7 +629,8 @@ def main() -> int:
         return 1
     if not start_proxy(paths, version=version):
         return 1
-    log(f"done; agent runs as {SANDBOX}, GitHub + Anthropic auth via the proxy")
+    auth = "GitHub" if github_only else "GitHub + Anthropic"
+    log(f"done; agent runs as {SANDBOX}, {auth} auth via the proxy")
     return 0
 
 

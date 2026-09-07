@@ -143,6 +143,27 @@ is empty — `git diff --quiet` returns 0 for untracked paths, so the
 first-run case would no-op. Code search is 10 req/min — one call covers
 the whole list.
 
+## Weekly: review harness release notes
+
+Browse the stable releases since the previous weekly run (normally one week) for
+[Claude Code](https://github.com/anthropics/claude-code/releases) and
+[Codex](https://github.com/openai/codex/releases). Most notes are internal and
+need no Tend response. Only investigate changes to behavior Tend depends on:
+headless execution and output, permissions and sandboxing, plugin and skill
+loading and invocation, model selection, or session-log formats.
+
+Changes that have required Tend work include:
+
+- Claude Code ignored `defaultMode: bypassPermissions` in project settings, so
+  Tend had to pass `--permission-mode` on argv.
+- Codex added non-interactive plugin installation. Tend's action consumes its
+  `Installed plugin root:` output to locate plugin scripts.
+
+For any similarly relevant note, search the code, issues, and PRs first. Open a
+PR when the change is small enough to make and verify in this run; reserve an
+issue for what needs a maintainer decision or verification CI can't reach,
+linking the release and proposing the change.
+
 ## Weekly: bump pinned versions
 
 Every dependency pin in the repo is in scope — no bot watches this repo, so a
@@ -216,10 +237,9 @@ swamped run finishes nothing.
 | `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh` and that `wt config approvals add --yes` still records approvals without a TTY |
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
-target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
-between the two versions for anything touching the agent paths (first-run
-onboarding, `--model` alias resolution, headless `-p` result events, Stop-hook
-behavior, slash-command or Skill-tool handling) and note it in the PR.
+target, so drift silently downgrades the model. In a bump PR, report the
+release notes between the old and new pins that affect the integration surfaces
+in the release-note pass above.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
@@ -234,8 +254,7 @@ bump, use an isolated Plus/Pro login to run the refresh action and require both
 the full and access-only credentials to rotate. Inspect Codex's auth manager
 too: an unparsable access token must fall through to the stale `last_refresh`,
 and that refresh must use the refresh token without requiring the old access
-token. Skim the codex CHANGELOG across the bump for model availability, sandbox
-behavior, and `--output-last-message`, and note what you find in the PR.
+token. Report the relevant release notes crossed by the bump in its PR.
 
 ### `uses:` refs
 

@@ -71,17 +71,15 @@ artifact retention either way.
 ## Auth: GitHub App alternatives to PAT — not planned
 
 **Not planned (2026-06-14).** Both alternatives below replace the classic
-PAT (long-lived, leak-permanent) with a GitHub App installation token (~1 h
-lifetime, repo-scoped), the single highest-impact change for token-leak risk
-on its own merits. Neither is being pursued: both require tend to stand up
+PAT with a GitHub App installation token (~1 h lifetime, repo-scoped). This
+would reduce the impact of a token stolen through a compromised runner or
+credential proxy. Neither is being pursued: both require tend to stand up
 and operate a hosted service (a token-minting endpoint or a full webhook
 handler), which gives up tend's defining property of stamping workflow files
 into the adopter's repo and running nothing of its own. The credential proxy
-keeps the PAT out of the agent on the Claude harness, and the environment gate
-keeps it out of any workflow the bot can start on its own. What remains is that
-the PAT is long-lived, and that the Codex harness still passes it directly; both
-are accepted, and `docs/security-model.md` records them. The analysis is kept
-for the record.
+keeps the PAT out of the agent on both harnesses, and the environment gate keeps
+it out of any workflow the bot can start on its own. Cross-repository GitHub
+access through the live proxy is intended behavior, not part of this analysis.
 
 ### Model A: token-minting service
 
@@ -176,12 +174,6 @@ implemented yet:
 - **Network isolation.** Self-hosted runners with outbound traffic
   restricted to GitHub and Anthropic API endpoints. Not viable on
   GitHub-hosted runners; significant infra overhead self-hosted.
-- **Workflow dispatch isolation.** Split each workflow into an analysis
-  job (`GITHUB_TOKEN` only, reads the diff, produces a plan) and a push
-  job (bot token, separate workflow triggered by `workflow_run`). The bot
-  token never enters a job that touches attacker-controlled code.
-  Significant complexity — every workflow becomes two with artifact
-  passing between them.
 
 ## Security channel for `tend check` drift (PVR)
 

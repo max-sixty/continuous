@@ -1121,7 +1121,7 @@ def test_sandbox_setup_non_list_rejected(tmp_path: Path) -> None:
         Config.load(path)
 
 
-def test_sandbox_levers_warn_on_codex(
+def test_sandbox_levers_apply_to_codex(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = _write_config(
@@ -1135,15 +1135,12 @@ def test_sandbox_levers_warn_on_codex(
     """),
     )
     Config.load(path)
-    assert "apply only to the Claude harness" in capsys.readouterr().err
+    assert "apply only to the Claude harness" not in capsys.readouterr().err
 
 
 def test_sandbox_levers_no_warn_with_claude_override(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Top-level codex, but a per-workflow claude override means the levers
-    # DO apply to that workflow (macros render per effective harness), so the
-    # inert-under-codex warning must not fire.
     path = _write_config(
         tmp_path,
         dedent("""\

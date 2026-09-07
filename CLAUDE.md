@@ -244,9 +244,12 @@ across runs. The `user` scope lets `install-tend` set the bot's profile
 bio (`PATCH /user`) so the account's authorization stance is discoverable
 on the bot's user page.
 
-Classic PATs are all-or-nothing — `public_repo` grants full write to every
-public repo the user can access. Fine-grained PATs allow per-category
-scoping but don't support outside collaborators ([GitHub roadmap
+The agent may use PAT-backed GitHub API and git access for any repository the
+bot account can reach; this cross-repository access is intentional. Credential
+isolation keeps the PAT itself out of the agent process. If the PAT is stolen
+by compromising the runner or proxy, its `public_repo` scope grants full write
+to every public repository the bot can access. Fine-grained PATs allow
+per-category scoping but don't support outside collaborators ([GitHub roadmap
 #601](https://github.com/github/roadmap/issues/601), not shipped).
 
 **Current privilege model: write + branch protection + environment gate.**
@@ -322,8 +325,8 @@ timestamp and job start) into the prompt — over ~40 s indicates the job was
 queued behind another run, making conversation drift more likely.
 Notifications stay unread until a poll records an outcome, so the newest
 pending run covers a replaced poll. ci-fix keeps the default too, and wants
-it: while a session works a red branch, the newest failure carries that
-branch's current state, so replacing the pending run loses nothing.
+it: while a session works a red branch, the newest unsuccessful run carries
+that branch's current state, so replacing the pending run loses nothing.
 
 ## Skill design: bundled for everyone, overlay for one
 
