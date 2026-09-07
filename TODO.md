@@ -226,9 +226,9 @@ method and costs the usual: it drifts silently, and nothing re-checks it
 against the binary.
 
 That drift is no longer hypothetical. 2.1.226 restructured the built-in without
-touching those texts, and `claude/action.yaml` has been pinned past it ever
-since, so the copy is behind the binary CI runs — and the thing that changed is
-exactly what decides this question.
+touching those texts, and `claude/action.yaml` has been pinned at or beyond
+2.1.226 ever since, so the copy is behind the binary CI runs — and the thing
+that changed is exactly what decides this question.
 
 Reaching the built-in is possible. It carries `disable-model-invocation`,
 which the `Skill` tool waives for a turn whose own user message names the
