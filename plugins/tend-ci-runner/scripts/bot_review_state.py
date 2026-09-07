@@ -2,7 +2,16 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""Reduce bot reviews and timeline events to canonical coverage and recovery state."""
+"""Reduce bot reviews and timeline events to canonical coverage and recovery state.
+
+GitHub's native review fields carry author, commit, state, and submission time.
+A submitted bot review covers its commit when it has reader-facing content, an
+inline finding, an approval, or Tend's marker for a deliberately silent pass.
+Pending reviews never cover. A later dismissed bot review invalidates earlier
+coverage on the same commit, so a failed replacement remains recoverable.
+Ready-for-review is a separate generation latch: only a submitted bot review
+naming the exact timeline event acknowledges it.
+"""
 
 from __future__ import annotations
 
@@ -17,12 +26,13 @@ from typing import Any
 import github_cli
 
 _READY_REVIEW_RE = re.compile(r"<!-- tend:ready-review:([1-9][0-9]*) -->")
+_REVIEW_COMPLETE_RE = re.compile(r"<!-- tend:review-complete -->")
 _REVIEW_OPERATION_RE = re.compile(
     r"<!-- tend:review-operation:([0-9a-f]{32}):(draft|full) -->"
 )
 _RESERVED_REVIEW_MARKER_RE = re.compile(
     r"<!--[ \t]*tend:(?:draft-review(?:[ \t]*-->|:.*?-->)|"
-    r"(?:ready-review|review-operation):.*?-->)",
+    r"review-complete[ \t]*-->|(?:ready-review|review-operation):.*?-->)",
     re.DOTALL,
 )
 FEEDBACK_QUERY = """
@@ -72,6 +82,11 @@ def ready_review_marker(event_id: int) -> str:
     return f"<!-- tend:ready-review:{event_id} -->"
 
 
+def review_complete_marker() -> str:
+    """Return the marker recording an intentionally silent completed pass."""
+    return "<!-- tend:review-complete -->"
+
+
 def review_operation_marker(operation_id: str, review_mode: str) -> str:
     """Return the marker identifying one private pending-review operation."""
     marker = f"<!-- tend:review-operation:{operation_id}:{review_mode} -->"
@@ -92,6 +107,13 @@ def strip_review_metadata(body: str) -> str:
 
 def _ready_review_ids(body: str) -> set[int]:
     return {int(match) for match in _READY_REVIEW_RE.findall(body)}
+
+
+def _is_completed_review(body: str) -> bool:
+    return any(
+        _REVIEW_COMPLETE_RE.fullmatch(line.strip()) is not None
+        for line in body.splitlines()
+    )
 
 
 def _review_operation(body: str) -> tuple[str, str] | None:
@@ -168,13 +190,34 @@ def review_state(
     substantive = [
         review
         for review in mine
-        if (
+        if review.get("state") != "DISMISSED"
+        and (
             public_body(review)
             or review.get("id") in substantive_ids
             or review.get("state") == "APPROVED"
         )
     ]
     last_substantive = substantive[-1] if substantive else None
+    completed = [
+        review
+        for review in mine
+        if review.get("state") != "DISMISSED"
+        and _is_completed_review(review.get("body") or "")
+    ]
+    coverage_candidates = [
+        review for review in mine if review in substantive or review in completed
+    ]
+    covered = [
+        review
+        for index, review in enumerate(mine)
+        if review in coverage_candidates
+        if not any(
+            later.get("state") == "DISMISSED"
+            and later.get("commit_id") == review.get("commit_id")
+            for later in mine[index + 1 :]
+        )
+    ]
+    last_covered = covered[-1] if covered else None
     approvals = [review for review in mine if review.get("state") == "APPROVED"]
     last_approval = approvals[-1] if approvals else None
     last_force_push_at = max(force_push_times, default="")
@@ -187,7 +230,7 @@ def review_state(
 
     at_head = [
         review
-        for review in substantive
+        for review in covered
         if review.get("commit_id") == head_sha and after_rewrite(review)
     ]
     fresh_approvals = [review for review in approvals if after_rewrite(review)]
@@ -241,9 +284,17 @@ def review_state(
             if last_substantive
             else None
         ),
-        "force_pushed_since": bool(
-            last_substantive and not after_rewrite(last_substantive)
+        "last_covered": (
+            {
+                "id": last_covered["id"],
+                "sha": last_covered["commit_id"],
+                "state": last_covered["state"],
+                "at": last_covered.get("submitted_at"),
+            }
+            if last_covered
+            else None
         ),
+        "force_pushed_since": bool(last_covered and not after_rewrite(last_covered)),
         "at_head": (
             {
                 "id": at_head[-1]["id"],

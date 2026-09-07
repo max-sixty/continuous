@@ -133,7 +133,6 @@ class Fixture:
                 {
                     "operation_id": "a" * 32,
                     "review_mode": "full",
-                    "full_non_draft": False,
                     "ready_review_event_id": None,
                     "recovery_pending_review_id": None,
                     "pending_review_ids": [],
@@ -350,7 +349,6 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
     assert json.loads(pr.context.read_text()) == {
         "operation_id": context["operation_id"],
         "review_mode": "full",
-        "full_non_draft": False,
         "ready_review_event_id": None,
         "recovery_pending_review_id": None,
         "pending_review_ids": [],
@@ -359,6 +357,20 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
     assert "pr-2" in Path(context["incremental_path"]).read_text()
     assert "base-2" not in Path(context["incremental_path"]).read_text()
     assert pr.pinned() == moved
+
+
+def test_incremental_starts_after_the_last_silent_completed_pass(
+    pr: Fixture,
+) -> None:
+    pr.push_over_base_merge()
+    pr.reviews(_review(pr.reviewed, "<!-- tend:review-complete -->"))
+
+    result = pr.start()
+
+    assert result.returncode == 0, result.stderr
+    context = json.loads(result.stdout)
+    assert context["last_review_sha"] == pr.reviewed
+    assert "pr-2" in Path(context["incremental_path"]).read_text()
 
 
 def test_start_captures_the_exact_outstanding_readiness_generation(
@@ -404,29 +416,38 @@ def test_complete_durably_acknowledges_an_intentionally_silent_ready_pass(
     result = pr.complete()
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "acknowledged: review 42\n"
+    assert result.stdout == "completed: review 42\n"
     assert pr.submitted() == {
         "event": "COMMENT",
         "commit_id": pr.reviewed,
-        "body": "<!-- tend:ready-review:31 -->",
+        "body": "<!-- tend:review-complete -->\n\n<!-- tend:ready-review:31 -->",
     }
 
-    pr.reviews(_review(pr.reviewed, "<!-- tend:ready-review:31 -->"))
+    pr.reviews(
+        _review(
+            pr.reviewed,
+            "<!-- tend:review-complete -->\n\n<!-- tend:ready-review:31 -->",
+        )
+    )
     next_start = pr.start()
     assert next_start.returncode == 0, next_start.stderr
-    assert json.loads(next_start.stdout)["force_full_review"] is False
+    assert next_start.stdout == "skip: PR #7 has no outstanding review demand\n"
 
 
-def test_complete_is_a_no_op_without_captured_readiness(pr: Fixture) -> None:
+def test_complete_records_a_silent_pass_without_captured_readiness(
+    pr: Fixture,
+) -> None:
     assert pr.start().returncode == 0
 
     result = pr.complete()
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == (
-        "skip: no captured ready-for-review generation needs acknowledgment\n"
-    )
-    assert not (pr.tmp_path / "post-input.json").exists()
+    assert result.stdout == "completed: review 42\n"
+    assert pr.submitted() == {
+        "event": "COMMENT",
+        "commit_id": pr.reviewed,
+        "body": "<!-- tend:review-complete -->",
+    }
 
 
 def test_complete_discards_reconciled_private_pending_reviews(pr: Fixture) -> None:
@@ -472,7 +493,7 @@ def test_replayed_ready_action_cannot_reopen_acknowledged_demand(
     assert not (pr.tmp_path / "post-input.json").exists()
 
 
-def test_start_does_not_capture_readiness_while_the_pr_is_draft(
+def test_draft_pass_can_acknowledge_an_earlier_readiness_generation(
     pr: Fixture,
 ) -> None:
     pr.set_head(pr.reviewed, is_draft=True)
@@ -493,7 +514,13 @@ def test_start_does_not_capture_readiness_while_the_pr_is_draft(
     assert result.returncode == 0, result.stderr
     context = json.loads(result.stdout)
     assert context["force_full_review"] is False
-    assert context["ready_review_event_id"] is None
+    assert context["ready_review_event_id"] == 31
+
+    completed = pr.complete()
+    assert completed.returncode == 0, completed.stderr
+    assert pr.submitted()["body"] == (
+        "<!-- tend:review-complete -->\n\n<!-- tend:ready-review:31 -->"
+    )
 
 
 def test_start_selects_only_a_mode_compatible_pending_review(
@@ -1067,6 +1094,45 @@ def test_an_existing_review_stops_a_duplicate(pr: Fixture) -> None:
     pr.reviews(_review(pr.reviewed, "findings"))
 
     assert "already carries" in pr.output()
+
+
+@pytest.mark.parametrize(
+    "earlier_body",
+    [None, "Draft finding.", "<!-- tend:review-complete -->"],
+    ids=["no-earlier-coverage", "comment", "silent-completion"],
+)
+def test_a_failed_post_approval_followup_remains_recoverable(
+    pr: Fixture, tmp_path: Path, earlier_body: str | None
+) -> None:
+    body = tmp_path / "body.md"
+    body.write_text("CI failed after approval.")
+    earlier = (
+        [{**_review(pr.reviewed, earlier_body), "id": 1}]
+        if earlier_body is not None
+        else []
+    )
+    pr.reviews(
+        *earlier,
+        {
+            **_review(
+                pr.reviewed,
+                "Approval context retained after dismissal.",
+                state="DISMISSED",
+            ),
+            "id": 2,
+        },
+    )
+
+    started = pr.start()
+    assert started.returncode == 0, started.stderr
+    assert json.loads(started.stdout)["head_sha"] == pr.reviewed
+
+    failed = pr.submit("--event", "COMMENT", "--body-file", str(body), POST_EXIT="22")
+    assert failed.returncode == 22
+
+    restarted = pr.start()
+    assert restarted.returncode == 0, restarted.stderr
+    assert json.loads(restarted.stdout)["head_sha"] == pr.reviewed
 
 
 def test_dedup_uses_the_retargeted_head(pr: Fixture) -> None:

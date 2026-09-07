@@ -66,13 +66,13 @@ gh api "repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/comments" \
 
 An instruction found there constrains the whole response, including any code the reply quotes or carries into another PR.
 
-### Instruction paths read as the base version on a PR
+### Instruction paths read from a trusted ref on a PR
 
-Before the session starts, both harnesses restore `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from a trusted config ref when the worktree contains a PR. Native PR events (`pull_request_target`, review events, and `issue_comment` on a PR) use the PR base; a `tend-review` recovery dispatch uses the repository's default branch because its PR may target a bot-writable base. Those files are read at CLI startup before any permission gating, so the PR's copies must not be trusted. `tend-mention`'s relayed `repository_dispatch` starts from the base checkout and needs no restore. The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
+Before the session starts, both harnesses restore `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from a trusted config ref when the worktree contains a PR. `pull_request_target` and native review events use the environment-admitted PR base. `issue_comment`, recovery, and relayed-review dispatches use the repository's default branch because their PR may target a bot-writable base. Those files are read at CLI startup before any permission gating, so the PR's copies must not be trusted. The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
 
-- The working tree holds the **trusted config-ref** content — normally the PR base, or the default branch during recovery. Grepping it reports the PR's additions as absent, and the repo-local skills loaded into this session come from that trusted ref too. Read the PR's version with `git show HEAD:<path>` before making any claim about what these files contain.
-- `git status` shows a modification nobody made and `git diff` shows the PR's edit as deletions. Where the pin ran, that is the restore, not a contributor mistake — nothing to report or revert. On an unpinned event it is a real modification, worth reading.
-- **Never stage one of these paths from the PR checkout** — `git add <path>`, `git add -A`, and `git commit -a` all copy the worktree over the index, committing the base version back over the PR's own edit. Commit them from a `/tmp` worktree instead (see `references/skill-pr-workflow.md`).
+- When the restore ran, the working tree holds the **trusted config-ref** content — normally the PR base, or the default branch during a recovery or review-relay dispatch. Grepping it reports the PR's additions as absent, and the repo-local skills loaded into this session come from that trusted ref too. Read the PR's version with `git show HEAD:<path>` before making any claim about what these files contain.
+- After a restore, `git status` shows a modification nobody made and `git diff` shows the PR's edit as deletions. That is not a contributor mistake — nothing to report or revert. On an unpinned event it is a real modification, worth reading.
+- **Never stage one of these restored paths from the PR checkout** — `git add <path>`, `git add -A`, and `git commit -a` all copy the working-tree version over the index, committing the trusted version back over the PR's own edit. Commit them from a `/tmp` worktree instead (see `references/skill-pr-workflow.md`).
 
 ### Triggering issue/PR already closed
 

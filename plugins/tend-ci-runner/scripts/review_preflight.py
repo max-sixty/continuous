@@ -8,8 +8,9 @@
 whether a narrative review may proceed, and requires a second call to accept a
 queued delta after the agent reads it. ``submit`` is the final boundary for
 GitHub review API writes and never retargets onto a head the session did not
-inspect. ``complete`` durably acknowledges a ready-for-review generation when
-a completed pass deliberately publishes no reader-facing review.
+inspect. ``complete`` durably records a completed pass which deliberately
+publishes no reader-facing review, including any ready-for-review generation it
+observed.
 
 Keeping snapshotting, re-targeting, completion, and submission in one review-
 domain command makes their shared state explicit without turning unrelated
@@ -201,9 +202,7 @@ def _start(pr: str) -> int:
 
     outstanding = review_state.get("outstanding_ready_for_review")
     ready_review_event_id = (
-        int(outstanding["id"])
-        if not bool(initial["isDraft"]) and isinstance(outstanding, dict)
-        else None
+        int(outstanding["id"]) if isinstance(outstanding, dict) else None
     )
     force_full_review = not bool(initial["isDraft"]) and (
         ready_review_event_id is not None
@@ -222,7 +221,7 @@ def _start(pr: str) -> int:
         int(compatible_pending[-1]["id"]) if compatible_pending else None
     )
     force_pushed = bool(review_state.get("force_pushed_since"))
-    last_review_sha = str((review_state.get("last_substantive") or {}).get("sha") or "")
+    last_review_sha = str((review_state.get("last_covered") or {}).get("sha") or "")
     incremental_path: str | None = None
     if (
         last_review_sha
@@ -264,7 +263,6 @@ def _start(pr: str) -> int:
         {
             "operation_id": context["operation_id"],
             "review_mode": "draft" if bool(initial["isDraft"]) else "full",
-            "full_non_draft": force_full_review,
             "ready_review_event_id": ready_review_event_id,
             "recovery_pending_review_id": recovery_pending_review_id,
             "pending_review_ids": [
@@ -279,7 +277,7 @@ def _start(pr: str) -> int:
 
 def _captured_readiness_is_outstanding(review_state: dict[str, Any]) -> bool:
     context = _read_context()
-    if context is None or context.get("full_non_draft") is not True:
+    if context is None:
         return False
     event_id = context.get("ready_review_event_id")
     if not isinstance(event_id, int) or event_id <= 0:
@@ -451,9 +449,13 @@ def _read_body(path: str) -> str | None:
         return None
 
 
-def _body_with_markers(body: str, *, readiness_marker: str | None) -> str:
+def _body_with_markers(
+    body: str, *, readiness_marker: str | None, complete: bool = False
+) -> str:
     public = bot_review_state.strip_review_metadata(body).rstrip()
     markers = []
+    if complete:
+        markers.append(bot_review_state.review_complete_marker())
     if readiness_marker is not None:
         markers.append(readiness_marker)
     return "\n\n".join([part for part in (public, *markers) if part])
@@ -461,7 +463,7 @@ def _body_with_markers(body: str, *, readiness_marker: str | None) -> str:
 
 def _readiness_marker(snapshot: dict[str, Any]) -> str | None:
     context = _read_context()
-    if context is None or context.get("full_non_draft") is not True:
+    if context is None:
         return None
     event_id = context.get("ready_review_event_id")
     if not isinstance(event_id, int) or event_id <= 0:
@@ -575,8 +577,7 @@ def _complete(args: list[str]) -> int:
     if discard_status:
         return discard_status
     marker = _readiness_marker(snapshot)
-    if marker is None:
-        return _skip("no captured ready-for-review generation needs acknowledgment")
+    body = _body_with_markers("", readiness_marker=marker, complete=True)
     try:
         posted = _review_id(
             _review_api(
@@ -585,7 +586,7 @@ def _complete(args: list[str]) -> int:
                 payload={
                     "event": "COMMENT",
                     "commit_id": str(snapshot["reviewed"]),
-                    "body": marker,
+                    "body": body,
                 },
             )
         )
@@ -593,7 +594,7 @@ def _complete(args: list[str]) -> int:
         return _report_api_error(error)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         return _error(str(error))
-    print(f"acknowledged: review {posted}")
+    print(f"completed: review {posted}")
     return 0
 
 

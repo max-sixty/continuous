@@ -33,6 +33,7 @@ BOT = "tend-bot"
 HEAD = "head000"
 DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
 READY_REVIEW_MARKER = "<!-- tend:ready-review:101 -->"
+REVIEW_COMPLETE_MARKER = "<!-- tend:review-complete -->"
 REVIEW_OPERATION_MARKER = (
     "<!-- tend:review-operation:12345678123442348234123456789abc:full -->"
 )
@@ -164,6 +165,7 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["head_sha"] == HEAD
     assert state["bot_login"] == BOT
     assert state["last_substantive"] is None
+    assert state["last_covered"] is None
     assert state["at_head"] is None
     assert state["fresh_approval_sha"] == ""
     assert state["stale_approval_id"] == ""
@@ -546,6 +548,59 @@ def test_a_review_with_content_anchors(
     assert _state(env)["at_head"]["id"] == 1, kind
 
 
+def test_a_dismissed_review_no_longer_covers_even_when_its_body_remains(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-01T00:00:00Z",
+                body="Approval context that GitHub retains after dismissal.",
+                state="DISMISSED",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["last_substantive"] is None
+    assert state["last_covered"] is None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+@pytest.mark.parametrize(
+    "earlier_body",
+    ["Draft finding.", REVIEW_COMPLETE_MARKER],
+    ids=["comment", "silent-completion"],
+)
+def test_a_later_dismissal_invalidates_earlier_coverage_on_the_same_head(
+    env: dict[str, str], earlier_body: str
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", body=earlier_body),
+            _review(
+                2,
+                "2026-01-02T00:00:00Z",
+                body=READY_REVIEW_MARKER,
+                state="DISMISSED",
+            ),
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["last_covered"] is None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
 def test_at_head_uses_native_review_fields_not_prose_identity(
     env: dict[str, str],
 ) -> None:
@@ -687,7 +742,7 @@ def test_only_a_finalized_bot_review_acknowledges_readiness(
     assert state["outstanding_ready_for_review"]["id"] == 101
 
 
-def test_a_marker_only_review_acknowledges_without_becoming_coverage(
+def test_a_readiness_marker_alone_acknowledges_without_becoming_coverage(
     env: dict[str, str],
 ) -> None:
     _ready_at(env, (101, "2026-01-02T00:00:00Z"))
@@ -703,6 +758,32 @@ def test_a_marker_only_review_acknowledges_without_becoming_coverage(
     assert state["outstanding_ready_for_review"] is None
     assert state["last_substantive"] is None
     assert state["at_head"] is None
+
+
+def test_a_completion_marker_is_durable_coverage_without_public_feedback(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                4,
+                "2026-01-03T00:00:00Z",
+                body=f"{REVIEW_COMPLETE_MARKER}\n\n{READY_REVIEW_MARKER}",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["last_substantive"] is None
+    assert state["last_covered"]["id"] == 4
+    assert state["at_head"]["id"] == 4
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+    assert state["needs_review"] is False
 
 
 def test_a_finalized_inline_review_acknowledges_readiness(
@@ -835,7 +916,8 @@ def test_review_metadata_is_not_public_feedback(
                     "state": "COMMENTED",
                     "submittedAt": "2026-01-02T00:00:00Z",
                     "body": (
-                        f"Finding.\n\n{READY_REVIEW_MARKER}\n{DRAFT_REVIEW_MARKER}"
+                        f"Finding.\n\n{REVIEW_COMPLETE_MARKER}\n"
+                        f"{READY_REVIEW_MARKER}\n{DRAFT_REVIEW_MARKER}"
                     ),
                 },
             ],

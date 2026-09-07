@@ -303,10 +303,12 @@ SHA) bounds that trust to a reviewed, immutable point.
 
 **Config pinning.** Before the agent starts, both harnesses restore every
 `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, and `.agents/` at any
-depth from a trusted config ref: the PR base for native PR events, or the
-repository default branch for a recovery dispatch whose PR base may be bot-
-writable. Their CLIs load nearby instruction files and skills from those
-directories. Both harnesses also restore RCE-relevant config at the root:
+depth from a trusted config ref: the environment-admitted PR base for
+`pull_request_target` and native review events, or the repository default
+branch for `issue_comment`, recovery, and relayed-review dispatches whose PR
+bases may be bot-writable. Their CLIs load nearby instruction files and skills
+from those directories. Both harnesses also restore RCE-relevant config at the
+root:
 `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`, and `.husky`. A
 malicious PR's `SessionStart` hook, MCP server, or injected skill is reverted
 before an agent reads it. The restoration is `git restore --source=<trusted>`
@@ -322,10 +324,10 @@ never see, such as the checkout credential in `.git/config`.
 user, which holds sudo and, until the sandbox setup strips it, the checkout
 PAT in `.git/config`. So every generated workflow checks out reviewed code
 before running them — the default branch, or for a native `tend-review` event
-the PR's base branch — and lands the PR's tree only afterwards. A recovery
-dispatch also uses the default branch because its PR base is not itself the
-event's environment-admitted ref. A contributor's build
-backend, added dependencies, and local `uses: ./` actions therefore execute
+the PR's base branch — and lands the PR's tree only afterwards. Issue-comment,
+recovery, and relayed-review dispatches use the default branch because their PR
+bases are not themselves the event's environment-admitted ref. A contributor's
+build backend, added dependencies, and local `uses: ./` actions therefore execute
 under the agent, inside the sandbox, rather than ahead of it. `sandbox_setup:`
 is the lever for project setup that must see the PR's own manifests. Both
 harnesses run it as the non-sudo sandbox user.

@@ -2,9 +2,10 @@
 # On a PR, the head checkout contains attacker-controlled files that the CLI
 # reads at startup BEFORE any permission gating — SessionStart hooks, env-var
 # overrides (NODE_OPTIONS, LD_PRELOAD, PATH), MCP servers, apiKeyHelper shell
-# commands. Restore them from a trusted configuration ref: the PR base for a
-# native PR event, or the environment-admitted workflow ref for a recovery
-# dispatch. Used by both harness actions.
+# commands. Restore them from a trusted configuration ref: the environment-
+# admitted PR base for pull_request_target and review events, or the repository
+# default branch for issue-comment, recovery, and review-relay events. Used by
+# both harness actions.
 #
 # The root list is claude-code-action's restore-config.ts set
 # (src/github/operations/restore-config.ts) minus the instruction files, which
@@ -41,11 +42,13 @@ case "$GITHUB_EVENT_NAME" in
       echo "issue_comment on issue (not PR); nothing to restore"
       exit 0
     fi
-    BASE_REF=$(gh api "${PR_URL#https://api.github.com/}" --jq '.base.ref')
+    BASE_REF=$(jq -er \
+      '.repository.default_branch | select(type == "string" and length > 0)' \
+      "$GITHUB_EVENT_PATH")
     ;;
   repository_dispatch)
     ACTION=$(jq -r '.action // empty' "$GITHUB_EVENT_PATH")
-    if [ "$ACTION" != "tend-review" ]; then
+    if [ "$ACTION" != "tend-review" ] && [ "$ACTION" != "tend-mention-review" ]; then
       echo "Repository dispatch $ACTION does not start on a PR tree; nothing to restore"
       exit 0
     fi

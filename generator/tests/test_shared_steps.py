@@ -248,19 +248,21 @@ def test_restore_sensitive_config_matches_base_for_every_instruction_path(
     assert staged.stdout == "", staged.stdout
 
 
-def test_review_recovery_restores_sensitive_config_from_the_workflow_ref(
+@pytest.mark.parametrize("action", ["tend-review", "tend-mention-review"])
+def test_pr_dispatch_restores_sensitive_config_from_the_workflow_ref(
     tmp_path: Path,
+    action: str,
 ) -> None:
-    """A recovery dispatch starts on a PR checkout without a PR event payload.
+    """A PR dispatch starts on a PR checkout without a PR event payload.
 
-    The generated workflow passes its own environment-admitted ref, so a PR
-    targeting a bot-writable branch cannot choose startup config for recovery.
+    The trusted default branch comes from GitHub's top-level event metadata, so
+    a bot-writable PR cannot choose startup config for recovery or review relay.
     """
     repo, outside, event = _tampered_checkout(tmp_path)
     event.write_text(
         json.dumps(
             {
-                "action": "tend-review",
+                "action": action,
                 "client_payload": {"pr_number": 7},
                 "repository": {"default_branch": "main"},
             }
@@ -289,9 +291,12 @@ def test_review_recovery_restores_sensitive_config_from_the_workflow_ref(
     assert not calls.exists()
 
 
-def test_review_recovery_refuses_a_missing_default_branch(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["tend-review", "tend-mention-review"])
+def test_pr_dispatch_refuses_a_missing_default_branch(
+    tmp_path: Path, action: str
+) -> None:
     repo, _, event = _tampered_checkout(tmp_path)
-    event.write_text(json.dumps({"action": "tend-review"}))
+    event.write_text(json.dumps({"action": action}))
     result = subprocess.run(
         [BASH, str(RESTORE_SENSITIVE_CONFIG)],
         cwd=repo,
@@ -308,6 +313,46 @@ def test_review_recovery_refuses_a_missing_default_branch(tmp_path: Path) -> Non
 
     assert result.returncode != 0
     assert (repo / "CLAUDE.md").read_text() == "EVIL root\n"
+
+
+def test_pr_issue_comment_restores_from_default_not_bot_writable_base(
+    tmp_path: Path,
+) -> None:
+    repo, outside, event = _tampered_checkout(tmp_path)
+    _git(repo, "push", "origin", "HEAD:bot-writable")
+    event.write_text(
+        json.dumps(
+            {
+                "issue": {
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/owner/repo/pulls/7"
+                    }
+                },
+                "repository": {"default_branch": "main"},
+            }
+        )
+    )
+    bindir = fake_bin(
+        tmp_path,
+        gh=GH_PREAMBLE + 'emit \'{"base":{"ref":"bot-writable"}}\'\n',
+    )
+    result = subprocess.run(
+        [BASH, str(RESTORE_SENSITIVE_CONFIG)],
+        cwd=repo,
+        env={
+            "PATH": tool_path(bindir),
+            "GH_CALLS": str(tmp_path / "gh-calls"),
+            "GITHUB_EVENT_NAME": "issue_comment",
+            "GITHUB_EVENT_PATH": str(event),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tree(repo) == _PINNED
+    assert _tree(outside) == _OUTSIDE
 
 
 @pytest.mark.parametrize(

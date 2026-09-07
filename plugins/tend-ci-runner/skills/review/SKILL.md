@@ -44,10 +44,10 @@ actually completed and intentionally has no reader-facing review to publish:
   complete <number>
 ```
 
-Normally this exits silently. When `start` captured a ready-for-review generation,
-it submits a marker-only COMMENT review: no reader-facing prose, but durable
-state proves that the requested full pass deliberately completed without a
-verdict. Never substitute a visible “looks fine” comment.
+This submits a marker-only COMMENT review: no reader-facing prose, but durable
+state records that the pinned head was deliberately reviewed without a verdict.
+When `start` captured a ready-for-review generation, the same record acknowledges
+that exact generation. Never substitute a visible “looks fine” comment.
 
 Do not run `complete` when deferring work, abandoning an unread retargeting
 delta, or stopping on an error. Those outcomes leave review demand outstanding
@@ -64,7 +64,7 @@ increment shortcuts: becoming ready asks for a full non-draft review.
 
 If `force_pushed_since` is `true`, the commit the bot reviewed was rewritten away: ignore `last_review_sha` entirely and review `head_sha` in full. The incremental can't run either — `last_review_sha` now names the current head rather than anything the bot read, so the range is empty and every trivial-skip heuristic keyed on it under-reports. A prior `APPROVED` is re-anchored onto the rewritten head too, so it reads as an approval of code nothing reviewed — step 6's dismissal rule clears it, along with the ordinary-push case below.
 
-Otherwise, if `last_review_sha == head_sha` and `force_full_review` is false, this commit has already been reviewed — finish without posting. An unanswered conversation question directed at the bot (check below) is the exception: proceed so the review can answer it.
+Otherwise, if `last_review_sha == head_sha` and `force_full_review` is false, this commit has already been reviewed — finish without posting. The notifications poll answers later conversation questions directly; they do not reopen code-review demand on a covered head.
 
 If the bot reviewed a previous commit (`last_review_sha` exists but differs from `head_sha`), judge what was pushed since. Read two signals, both leak-free against base-merges:
 
@@ -221,7 +221,7 @@ The failure message still names the removed local path, so it directs users to a
 </good>
 </example>
 
-**A findings review never supersedes a standing approval — dismiss it.** GitHub moves `reviewDecision` only on an `APPROVED` or a `CHANGES_REQUESTED`, so a COMMENT posted over the bot's own earlier approval leaves the PR reading as bot-approved and mergeable over the findings you just posted. How the head moved makes no difference: an ordinary push leaves the approval standing exactly as a rewrite does. So whenever this round posts a COMMENT that withholds the verdict, dismiss the approval that still decides the PR — after the review POST lands, so a failed post doesn't leave the PR with neither a verdict nor findings. Findings are the common case, but the withheld-merge-readiness COMMENT above is reachable with an approval already standing, and it leaves the same wrong signal: the PR reads bot-approved while the review names a blocker. A COMMENT that withholds nothing does not qualify — step 1's unanswered-question exception posts one at a head the approval already covers, and dismissing there withdraws a verdict the code still earns.
+**A findings review never supersedes a standing approval — dismiss it.** GitHub moves `reviewDecision` only on an `APPROVED` or a `CHANGES_REQUESTED`, so a COMMENT posted over the bot's own earlier approval leaves the PR reading as bot-approved and mergeable over the findings you just posted. How the head moved makes no difference: an ordinary push leaves the approval standing exactly as a rewrite does. So whenever this round posts a COMMENT that withholds the verdict, dismiss the approval that still decides the PR — after the review POST lands, so a failed post doesn't leave the PR with neither a verdict nor findings. Step 7 is the exception: once CI has disproved this run's approval, dismiss it before the fallible follow-up post so an API failure cannot leave the known-wrong verdict standing. Findings are the common case, but the withheld-merge-readiness COMMENT above is reachable with an approval already standing, and it leaves the same wrong signal: the PR reads bot-approved while the review names a blocker. A COMMENT that withholds nothing does not qualify; dismissing after a purely conversational reply withdraws a verdict the code still earns.
 
 ```bash
 # Re-read rather than reusing step 1's blob — a whole review has passed since.
@@ -407,11 +407,17 @@ If you **approved**, the dismissal-on-failure is a gated follow-up. Foreground-p
 Then handle the outcome:
 
 - **All required checks passed** -> done.
-- **A check failed** and it's related to the PR -> post a follow-up COMMENT review with analysis and inline suggestions, then dismiss the bot's approval:
+- **A check failed** and it's related to the PR -> dismiss the bot's approval,
+  then post a follow-up COMMENT review with analysis and inline suggestions.
+  Dismissing first removes the known-wrong verdict and its review coverage, so
+  any failed COMMENT submission remains recoverable through the ordinary queue:
+
   ```bash
   uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
     dismiss <number> "CI failed — <reason>"
   ```
+
+  Then submit the COMMENT through step 6's standard body or inline-payload path.
   On **human-authored PRs**, do not push fixes — post the analysis and offer to fix, then wait for the author to accept. On **third-party bot PRs** (Dependabot, renovate, etc.), don't stop at analysis: apply the fix per step 9 so the PR can go green, since no author will act on the offer. On PRs this bot authored, step 9's rule holds: the follow-up COMMENT review dispatches the author session, which applies the fix.
 - **A check was cancelled** (conclusion `cancelled`) -> do nothing. Cancellations are almost always caused by concurrency groups — a new workflow run (often triggered by your own approval event) replaces the in-progress one. The replacement run will cover the cancelled checks. **Do not re-run cancelled jobs** — that creates another run that gets cancelled again, wasting time in a loop.
 - **A check failed** (conclusion `failure`, not `cancelled`) and it's a transient flake (unrelated to the PR changes) ->
