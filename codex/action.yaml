@@ -31,12 +31,12 @@ inputs:
   model:
     default: gpt-5.5
     description: >-
-      Codex model to use. Current visible models per Codex's model cache:
-      gpt-6-astra, gpt-5.5 (this input's default), gpt-5.4, gpt-5.4-mini,
-      gpt-5.3-codex, gpt-5.2. Codex 0.153.4 made gpt-6-astra the bundled
-      default when no model is configured; the action always passes
-      `--model`, so that default never applies here — moving to it is a
-      deliberate change to this value.
+      Codex model to use. The set of models a run can select is server-side
+      and per-account, so it is not enumerated here — read the account CI
+      runs as, whose visible models are the `"visibility": "list"` entries
+      in its `~/.codex/models_cache.json`. The action always passes
+      `--model`, so whatever Codex bundles as its no-model default never
+      applies; this value is what runs.
   effort:
     default: ""
     description: >-
