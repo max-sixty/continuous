@@ -9,13 +9,13 @@ Reads (env):
   MODEL             - model name, copied through to the record; may be empty
   STREAM_JSON       - claude: the headless run's stream-json (NDJSON of SDK
                       message events); may be empty or name a missing file
-  AGENT_HOME        - claude: the sandbox user's home, exported by
+  AGENT_HOME        - the sandbox user's home, exported by
                       setup_sandbox.py via ``$GITHUB_ENV``. Unset when setup
                       died early, which is why consolidation tolerates it
-  RUNNER_TEMP       - claude: parent of the consolidated log dir, and where
-                      the agent's stderr log was written
-  HOME              - codex: parent of ``.codex/sessions`` and
-                      ``.codex/projects``
+  RUNNER_TEMP       - parent of the consolidated log dir, and where Claude's
+                      stderr log was written
+  SANDBOX_REAPED    - ``true`` after the harness has stopped every sandbox
+                      process; agent-owned session trees are copied only then
   GITHUB_REPOSITORY - the record's ``repo``; on claude it also gates the raw
                       stream-json copy to tend's own repo
   GITHUB_WORKFLOW, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_EVENT_NAME,
@@ -66,8 +66,8 @@ have. A ``0`` there would repeat the bug the fallback exists to fix, one field
 down; ``partial`` is what keeps a reconstructed total distinguishable from a
 run that really cost nothing.
 
-Codex has one path: sum ``token_count`` across
-``~/.codex/sessions/**/rollout-*.jsonl``. That schema isn't versioned, so a
+Codex has one path: consolidate the sandbox user's rollouts, then sum
+``sessions/**/rollout-*.jsonl``. That schema isn't versioned, so a
 missing field counts as zero — and no rollouts at all is the same computation
 over no events, which yields the all-zero record on its own. Cost stays 0: the
 Codex CLI doesn't surface API list prices and computing them here would mean
@@ -194,10 +194,13 @@ def claude_step(model: str) -> tuple[dict[str, Any], Path]:
 
 
 def codex_step(model: str) -> tuple[dict[str, Any], Path]:
-    home = Path(_common.require_env("HOME")["HOME"])
-    logs_dir = home / ".codex" / "projects"
+    runner_temp = Path(_common.require_env("RUNNER_TEMP")["RUNNER_TEMP"])
+    logs_dir = runner_temp / "tend-codex-logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    rollouts = sorted((home / ".codex" / "sessions").rglob("rollout-*.jsonl"))
+    agent_home = Path(os.environ.get("AGENT_HOME") or "/nonexistent")
+    if os.environ.get("SANDBOX_REAPED") == "true":
+        copy_agent_tree(agent_home / ".codex" / "sessions", logs_dir / "sessions")
+    rollouts = sorted((logs_dir / "sessions").rglob("rollout-*.jsonl"))
     return codex_usage(read_all(rollouts), model), logs_dir
 
 

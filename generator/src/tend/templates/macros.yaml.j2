@@ -44,7 +44,6 @@
 {% if cfg.args %}
           <<block_input('args', cfg.args|join('\n'))>>
 {% endif %}
-{% if cfg.harness == 'claude' %}
 {% if cfg.sandbox_path %}
           <<block_input('sandbox_path', cfg.sandbox_path|join('\n'))>>
 {% endif %}
@@ -53,7 +52,6 @@
 {% endif %}
 {% if cfg.sandbox_setup %}
           <<block_input('sandbox_setup', cfg.sandbox_setup|join('\n'))>>
-{% endif %}
 {% endif %}
           <<prompt_body>>
 {%- endmacro %}

@@ -83,10 +83,10 @@ jobs:
   # real, against the new boundary: shared paths cross, runner-home paths do
   # not, same-name system fallbacks are blocked, Tend preserves a shared uv,
   # and sandbox_setup can install a required home-scoped tool explicitly. It
-  # then runs the agent launch
-  # itself against a stub `claude`, which is the only place shared/steps/
-  # run_claude.py crosses the uid boundary at all — the unit tests replace
-  # subprocess.run, and an adopter first runs the launch after a release.
+  # then runs both harness launchers against stub agents. Those are the only
+  # places run_claude.py and codex/runner.py cross the uid boundary at all —
+  # the unit tests replace subprocess.run, and an adopter otherwise first runs
+  # either crossing after a release.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
@@ -99,6 +99,8 @@ jobs:
         run: bash proxy/test-setup-sandbox.sh install-agent-uv
       - name: Verify the boundary and sandbox_setup
         run: bash proxy/test-setup-sandbox.sh verify
+      - name: Verify the Codex credential crossing
+        run: bash proxy/test-setup-sandbox.sh verify-codex-launch
       - name: Launch, supervise and tear down the agent
         run: bash proxy/test-setup-sandbox.sh verify-launch
       - name: Refuse unsafe sandbox configuration
@@ -108,7 +110,9 @@ jobs:
         run: bash proxy/test-setup-sandbox.sh cleanup
 
   # Gate Codex version bumps on the credential-free parts of the action's CLI
-  # contract. Live model behavior needs an authenticated integration test.
+  # and Responses-proxy contracts. Live model behavior needs an authenticated
+  # integration test; restricted Linux modes do not run on GitHub's hosted
+  # Ubuntu runner, so that behavior is documented rather than probed here.
   test-codex-surface:
     runs-on: ubuntu-24.04
     steps:
@@ -119,8 +123,11 @@ jobs:
       - name: Install the pinned Codex CLI
         run: |
           v=$(yq -e '.inputs.codex_version.default' codex/action.yaml)
-          npm install -g "@openai/codex@$v"
+          npm install -g \
+            "@openai/codex@$v" \
+            "@openai/codex-responses-api-proxy@$v"
           codex --version
+          codex-responses-api-proxy --help >/dev/null
       - name: Verify the pinned Codex CLI surface
         run: /usr/bin/python3 -E -s shared/steps/codex_surface.py
 

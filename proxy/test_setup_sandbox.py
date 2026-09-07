@@ -108,6 +108,19 @@ def test_every_fixed_agent_assignment_is_reserved() -> None:
     )
 
 
+def test_github_only_agent_environment_has_no_model_credential() -> None:
+    assignments = setup_sandbox.base_agent_env("/usr/bin", None)
+
+    assert not any(
+        line.startswith(("ANTHROPIC_API_KEY=", "CLAUDE_CODE_OAUTH_TOKEN="))
+        for line in assignments
+    )
+    assert "OPENAI_API_KEY" in setup_sandbox.RESERVED_SANDBOX_ENV
+    assert "CODEX_API_KEY" in setup_sandbox.RESERVED_SANDBOX_ENV
+    assert "CODEX_AUTH_JSON" in setup_sandbox.RESERVED_SANDBOX_ENV
+    assert "CODEX_HOME" in setup_sandbox.RESERVED_SANDBOX_ENV
+
+
 def test_proxy_uvx_isolated_from_adopter_python_and_uv_configuration(
     tmp_path: Path,
 ) -> None:

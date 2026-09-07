@@ -33,6 +33,11 @@ The two admin-gated operations are:
   by `creation`, so a deleted tag can't be substituted with malicious
   code; the only damage is brief availability of the tag itself.
 
+GitHub's immutable-releases setting closes the adjacent Releases API path:
+once a release is published, its record, assets, and associated tag are
+locked. The setting is prospective, so install-tend enables it before the
+next release and `tend check` verifies it directly.
+
 The "all tags" scope is deliberate: matching every tag removes a per-repo
 pattern choice and keeps the chain a single uniform rule. Adopters that
 need a narrower or layered configuration (per-pattern rulesets,
@@ -120,13 +125,11 @@ every other runner with invalid state. Tend instead stores two projections:
 with `Environments: write`; the workflow needs it because `GITHUB_TOKEN` cannot
 rewrite Actions environment secrets. It is never passed to an agent session.
 
-The consumer path is unsupported and may break when OpenAI changes Codex: it
-depends on an internal auth mode. The serialized weekly job follows OpenAI's
-official [CI/CD auth guide](https://learn.chatgpt.com/docs/auth/ci-cd-auth) by
-running Codex's built-in refresh and persisting its updated `auth.json`. The
-same guide says not to use ChatGPT-account auth for public or open-source
-repositories. Use a dedicated ChatGPT account and treat this as an experiment;
-`OPENAI_API_KEY` remains the supported path.
+The consumer path is experimental and may break when OpenAI changes Codex
+because it depends on an internal auth mode. The serialized weekly job runs
+Codex's built-in refresh and persists its updated `auth.json`. Use a dedicated
+ChatGPT account so the workflow's token rotation is independent of a
+maintainer's local Codex login.
 
 ## Token assignment
 

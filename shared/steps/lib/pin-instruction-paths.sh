@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Shared machinery for pinning a PR's instruction files to the base branch:
-# restore-sensitive-config.sh (Claude harness) and pin-instruction-files.sh
-# (Codex harness). Sourced, not executed.
+# Shared machinery used by restore-sensitive-config.sh to pin a PR's
+# instruction files to the base branch under both harnesses. Sourced, not
+# executed.
 #
 # Instruction files are trusted repo guidance at any depth, not only the root.
 # Claude Code loads the CLAUDE.md, CLAUDE.local.md, or AGENTS.md nearest the

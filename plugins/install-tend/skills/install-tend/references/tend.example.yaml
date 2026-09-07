@@ -86,7 +86,7 @@ bot_name: my-project-bot
 # `CODEX_REFRESH_AUTH_JSON` (the full rotating bundle, refresh job only), and
 # `CODEX_REFRESH_PAT` (a repo-scoped GitHub PAT with Environments: write). A
 # generated serialized workflow refreshes the pair weekly. This relies on
-# internal Codex auth behavior that OpenAI does not support for public CI; see
+# internal Codex auth behavior and may break when that behavior changes; see
 # README.md and the install-tend security model before selecting it.
 #
 # The Claude action prefers the subscription token
@@ -136,8 +136,7 @@ bot_name: my-project-bot
 # Setup runs against reviewed code — the default branch, or in `tend-review`
 # the PR's base branch, checked out before the PR's own tree lands. Project
 # setup that must see the PR's manifests (installing its dependencies) goes in
-# `sandbox_setup:` below, which runs inside the Claude harness's sandbox. Under
-# codex there is no such lever; the agent installs what it needs itself.
+# `sandbox_setup:` below, which runs inside either harness's sandbox.
 #
 # `tend-notifications` decides up front whether the agent needs to boot and
 # injects an `if:` guard on every setup step so a run with no unread
@@ -196,10 +195,10 @@ bot_name: my-project-bot
 #     #     env:
 #     #       RUSTFLAGS: -D warnings
 
-# ## Sandbox setup (Claude harness)
+# ## Sandbox setup (both harnesses)
 #
 # `setup:` above runs as the RUNNER user, around the composite action. The
-# `claude` harness runs the agent as a separate, non-sudo sandbox user with a
+# harness runs the agent as a separate, non-sudo sandbox user with a
 # fixed env allowlist. Shared system/hosted-toolcache paths and independently
 # seeded paths already present under the sandbox home carry over. Changes that
 # `setup:` makes under the runner's home do not: that home may contain
@@ -227,8 +226,9 @@ bot_name: my-project-bot
 #   - proxy routing — `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `http_proxy`,
 #     `https_proxy`, `no_proxy`
 #   - CA trust — `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`
-#   - dummy credentials — `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`,
-#     `CLAUDE_CODE_OAUTH_TOKEN`
+#   - credential and Codex configuration variables — `GH_TOKEN`,
+#     `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+#     `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_AUTH_JSON`, `CODEX_HOME`
 #   - prompt suppression — `CLAUDE_CODE_REMOTE`
 #   - the sandbox's own locations — `HOME`, `PATH`, `XDG_CONFIG_HOME`,
 #     `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`
@@ -341,8 +341,8 @@ bot_name: my-project-bot
 
 # ### ci-fix
 #
-# Triggers when a watched CI workflow fails on the default branch. Reads failure
-# logs, identifies root cause, opens a fix PR.
+# Triggers when a watched CI workflow fails or is cancelled on the default
+# branch. Diagnoses the run and opens a fix PR when needed.
 #
 # workflows:
 #   ci-fix:

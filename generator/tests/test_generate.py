@@ -394,7 +394,7 @@ def test_sandbox_levers_rendered_for_claude(tmp_path: Path) -> None:
 
 
 def _agent_step_inputs(content: str) -> list[set[str]]:
-    """The `with:` keys of each composite-action step in a generated workflow.
+    """The `with:` keys of each operational agent action in a workflow.
 
     Structural rather than a substring search over the file, so workflow
     comments naming a config key don't read as the input being threaded.
@@ -404,7 +404,8 @@ def _agent_step_inputs(content: str) -> list[set[str]]:
         set(step.get("with", {}))
         for job in data["jobs"].values()
         for step in job.get("steps", [])
-        if step.get("uses", "").startswith("max-sixty/tend/")
+        if step.get("uses", "").split("@", 1)[0]
+        in {"max-sixty/tend/claude", "max-sixty/tend/codex"}
     ]
 
 
@@ -463,9 +464,8 @@ def test_memory_gist_follows_a_per_workflow_claude_override(
     assert "memory_gist:" not in workflows["tend-review.yaml"]
 
 
-def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
-    """Codex runs on the runner (no proxy sandbox), so the sandbox_* inputs are
-    not threaded — a codex adopter uses `setup:` instead."""
+def test_sandbox_levers_rendered_for_codex(tmp_path: Path) -> None:
+    """Codex shares the proxy sandbox, so its action receives the levers."""
     extra = dedent("""\
         harness: codex
         model: gpt-5.5
@@ -475,7 +475,7 @@ def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path, extra))
     for wf in generate_all(cfg):
         for inputs in _agent_step_inputs(wf.content):
-            assert "sandbox_path" not in inputs
+            assert "sandbox_path" in inputs
 
 
 def test_setup_uses_with_parameters_gets_if_guard(tmp_path: Path) -> None:
@@ -912,6 +912,21 @@ def test_ci_fix_custom_branches(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     ci_fix = workflows["tend-ci-fix.yaml"]
     assert 'branches: ["main", "release"]' in ci_fix.content
+
+
+def test_ci_fix_runs_for_failures_and_cancellations(tmp_path: Path) -> None:
+    cfg = Config.load(_minimal_config(tmp_path, _extra_for("ci-fix")))
+    generated = next(
+        wf for wf in generate_all(cfg) if wf.filename == "tend-ci-fix.yaml"
+    )
+    workflow = yaml.safe_load(generated.content)
+    assert workflow["jobs"]["fix-ci"]["if"] == (
+        'contains(fromJSON(\'["failure", "cancelled"]\'), '
+        "github.event.workflow_run.conclusion)"
+    )
+    assert "- Conclusion: ${{ github.event.workflow_run.conclusion }}" in agent_prompt(
+        generated.content
+    )
 
 
 def test_ci_fix_serializes_per_branch_and_watched_workflow(tmp_path: Path) -> None:
@@ -1461,11 +1476,11 @@ def test_fork_guard_omitted_when_repo_owner_empty(tmp_path: Path) -> None:
                 f"{filename} job '{job_name}' must not contain the guard "
                 "when repo_owner is unset"
             )
-    # ci-fix's pre-existing conclusion check must survive even without the guard
+    # ci-fix's conclusion check must survive even without the guard.
     ci_fix = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
-    assert (
-        ci_fix["jobs"]["fix-ci"]["if"]
-        == "github.event.workflow_run.conclusion == 'failure'"
+    assert ci_fix["jobs"]["fix-ci"]["if"] == (
+        'contains(fromJSON(\'["failure", "cancelled"]\'), '
+        "github.event.workflow_run.conclusion)"
     )
 
 
