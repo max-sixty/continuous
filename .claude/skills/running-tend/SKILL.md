@@ -150,7 +150,7 @@ Browse the stable releases since the previous weekly run (normally one week) for
 [Codex](https://github.com/openai/codex/releases). Most notes are internal and
 need no Tend response. Only investigate changes to behavior Tend depends on:
 headless execution and output, permissions and sandboxing, plugin and skill
-loading, model selection, or session-log formats.
+loading and invocation, model selection, or session-log formats.
 
 Changes that have required Tend work include:
 
@@ -159,9 +159,10 @@ Changes that have required Tend work include:
 - Codex added non-interactive plugin installation. Tend's action consumes its
   `Installed plugin root:` output to locate plugin scripts.
 
-For any similarly relevant note, search the code, issues, and PRs first. Open
-an issue only when it reveals a concrete, uncovered change for Tend; link the
-release and propose the change and its verification.
+For any similarly relevant note, search the code, issues, and PRs first. Open a
+PR when the change is small enough to make and verify in this run; reserve an
+issue for what needs a maintainer decision or verification CI can't reach,
+linking the release and proposing the change.
 
 ## Weekly: bump pinned versions
 
