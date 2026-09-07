@@ -147,11 +147,18 @@ jobs:
       ts: ${{ steps.check.outputs.ts }}
     steps:
 <<check_tend_enabled(cfg)>>
+      - uses: astral-sh/setup-uv@v10.0.1
+        if: <<tend_enabled_condition>>
+        with:
+          version: "<<uv_version>>"
+          ignore-empty-workdir: true
       - name: Verify bot engagement
         id: check
         if: <<tend_enabled_condition>>
         run: |
+          uv run --script - <<heredoc>>'TEND_PY'
 <<check_script|indent(10, first=True)>>
+          TEND_PY
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           BOT_NAME: <<cfg.bot_name>>

@@ -19,6 +19,9 @@ credential header replaced here with the real one.
   ``Authorization``); this addon only swaps the dummy secret value for the real
   one. OAuth wins when both are set, matching the action's input precedence.
 
+The Codex harness sets ``TEND_GITHUB_ONLY=1`` because OpenAI's purpose-built
+Responses API proxy owns model authentication there.
+
 Security boundary: the injection allowlist below is exact-match on
 ``flow.request.host`` — the real connection target, NOT ``pretty_host``, which
 mitmproxy derives from the spoofable client-supplied Host header. A request to
@@ -51,7 +54,7 @@ from mitmproxy import http
 # download; that host stays an untouched tunnel.
 #
 # These frozensets are the credential boundary. The proxy's --allow-hosts regex
-# in setup-sandbox.sh scopes TLS interception and must list the same hosts —
+# in setup_sandbox.py scopes TLS interception and must list the same hosts —
 # keep the two in sync (a host here but not in the regex is never intercepted,
 # so its dummy is never swapped and auth 401s). The
 # `test_allow_hosts_regex_*` tests in test_inject_credentials.py read that
@@ -82,7 +85,8 @@ class CredentialInjector:
         # precedence (OAuth wins when both are present).
         self._anthropic_oauth = os.environ.get("TEND_ANTHROPIC_OAUTH_TOKEN", "")
         self._anthropic_api_key = os.environ.get("TEND_ANTHROPIC_API_KEY", "")
-        if not (self._anthropic_oauth or self._anthropic_api_key):
+        github_only = os.environ.get("TEND_GITHUB_ONLY") == "1"
+        if not github_only and not (self._anthropic_oauth or self._anthropic_api_key):
             raise RuntimeError(
                 "Neither TEND_ANTHROPIC_OAUTH_TOKEN nor TEND_ANTHROPIC_API_KEY "
                 "is set — refusing to start the credential proxy with no "
@@ -109,7 +113,9 @@ class CredentialInjector:
             headers["Authorization"] = f"token {self._gh_token}"
         elif host in BASIC_HOSTS:
             headers["Authorization"] = self._gh_basic
-        elif host in ANTHROPIC_HOSTS:
+        elif host in ANTHROPIC_HOSTS and (
+            self._anthropic_oauth or self._anthropic_api_key
+        ):
             # Normalize to exactly the active scheme so the injected credential
             # is the one Anthropic honors, even if the agent crafted both.
             if self._anthropic_oauth:

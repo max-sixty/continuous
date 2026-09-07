@@ -121,7 +121,7 @@ def test_verdict_survives_a_stream_json_that_was_never_written(
 def test_verdict_names_the_cause_in_the_annotation(verdict: Verdict) -> None:
     """The last non-blank assistant text is what a maintainer triages from.
 
-    enrich-tend-outage-issues.sh carries the annotation into the tend-outage
+    enrich_tend_outage_issues.py carries the annotation into the tend-outage
     issue, so "session limit" versus "auth failure" has to survive into it
     rather than being left in an artifact nobody downloads.
     """
@@ -162,7 +162,7 @@ def test_verdict_keeps_a_multi_line_reason_on_one_line(verdict: Verdict) -> None
 def test_verdict_bounds_the_reason_it_quotes(verdict: Verdict) -> None:
     """The reason is a whole assistant text block, so it can be the whole answer.
 
-    `enrich-tend-outage-issues.sh` pastes these annotations into one batched
+    `enrich_tend_outage_issues.py` pastes these annotations into one batched
     issue comment under a 64 KiB cap; unbounded, one run's closing summary
     crowds out the rows for every other run in the batch.
     """
@@ -474,6 +474,8 @@ def launch(
             "RUNNER_TEMP": str(runner_temp),
             "GITHUB_WORKSPACE": str(workspace),
             "TEND_MODEL": "opus",
+            "TEND_EFFORT": "",
+            "TEND_ARGS": "",
             "TEND_ALLOWED_TOOLS": "Bash, Read",
             "TEND_SYSTEM_PROMPT": "tend directives",
             "TEND_PROMPT": "review the PR",
@@ -546,6 +548,30 @@ def test_launch_steers_the_agent_entirely_through_argv(launch: Launcher) -> None
         "--verbose",
         "review the PR",
     ]
+
+
+def test_launch_passes_extra_args_before_tend_managed_args(launch: Launcher) -> None:
+    argv = (
+        launch(
+            stream=_ev_result(),
+            TEND_ARGS="--max-turns\n40\n--plugin-dir\n/path with spaces",
+            TEND_EFFORT="xhigh",
+        )
+        .command("claude")
+        .argv
+    )
+
+    assert argv[argv.index("claude") : argv.index("--permission-mode")] == [
+        "claude",
+        "-p",
+        "--max-turns",
+        "40",
+        "--plugin-dir",
+        "/path with spaces",
+        "--model",
+        "opus",
+    ]
+    assert argv[-3:] == ["--effort", "xhigh", "review the PR"]
 
 
 def test_launch_adds_the_restored_auto_memory_settings(launch: Launcher) -> None:

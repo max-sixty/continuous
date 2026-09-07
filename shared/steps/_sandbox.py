@@ -47,8 +47,30 @@ WITHHELD = frozenset(
 )
 
 
+def agent_env(agent_env_file: str | os.PathLike[str]) -> list[str]:
+    """Read the fixed sandbox environment as ``NAME=VALUE`` arguments."""
+    # Split on newlines alone: a carried value may hold a character `str`
+    # considers a line break (\v, \f, U+2028) and the file does not.
+    # `newline=""` for the same reason, one layer down: the default translates
+    # a lone \r to \n before anything here sees it, so a \r in a `sandbox_env:`
+    # value — which the config layer does not reject — would split one
+    # NAME=VALUE into two `env` arguments, and `env` execs a trailing argument
+    # that is not an assignment as the command to run.
+    # `surrogateescape` because the shell that wrote the file was byte
+    # transparent: a non-UTF-8 byte in an adopter's `sandbox_env:` value must
+    # reach the sandbox as it was written, not fail the step before the launch.
+    # `subprocess` re-encodes it with `os.fsencode`, which round-trips it back.
+    with Path(agent_env_file).open(
+        encoding="utf-8", errors="surrogateescape", newline=""
+    ) as handle:
+        lines = handle.read().split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def launch_env(agent_env_file: str | os.PathLike[str]) -> list[str]:
-    """The ``NAME=VALUE`` arguments for ``sudo -u "$SANDBOX" env``.
+    """The ``NAME=VALUE`` arguments for adopter code in the sandbox.
 
     The file's lines (proxy routing, CA trust, dummy credentials, and the
     adopter's own ``sandbox_env:`` additions) come first, then the GitHub
@@ -67,24 +89,7 @@ def launch_env(agent_env_file: str | os.PathLike[str]) -> list[str]:
 
     Reads the environment when called, so call it in the step that forwards it.
     """
-    # Split on newlines alone: a carried value may hold a character `str`
-    # considers a line break (\v, \f, U+2028) and the file does not.
-    # `newline=""` for the same reason, one layer down: the default translates
-    # a lone \r to \n before anything here sees it, so a \r in a `sandbox_env:`
-    # value — which the config layer does not reject — would split one
-    # NAME=VALUE into two `env` arguments, and `env` execs a trailing argument
-    # that is not an assignment as the command to run.
-    # `surrogateescape` because the shell that wrote the file was byte
-    # transparent: a non-UTF-8 byte in an adopter's `sandbox_env:` value must
-    # reach the sandbox as it was written, not fail the step before the launch.
-    # `subprocess` re-encodes it with `os.fsencode`, which round-trips it back.
-    with Path(agent_env_file).open(
-        encoding="utf-8", errors="surrogateescape", newline=""
-    ) as handle:
-        lines = handle.read().split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    return lines + [
+    return agent_env(agent_env_file) + [
         f"{name}={value}"
         for name, value in os.environ.items()
         if name.startswith("GITHUB_") and name not in WITHHELD

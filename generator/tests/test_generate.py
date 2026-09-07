@@ -17,6 +17,9 @@ from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
     BOT_TOKEN_SECRET,
     CLAUDE_TOKEN_SECRET,
+    CODEX_AUTH_SECRET,
+    CODEX_REFRESH_AUTH_SECRET,
+    CODEX_REFRESH_PAT_SECRET,
     MEMORY_GIST_SECRET,
     OPENAI_KEY_SECRET,
     STANDARD_WORKFLOWS,
@@ -25,7 +28,9 @@ from tend.config import (
 from tend.workflows import (
     GENERATORS,
     _deep_merge,
+    _inline_script,
     generate_all,
+    generate_codex_auth_refresh,
     generate_install_test,
     generate_mention,
 )
@@ -389,7 +394,7 @@ def test_sandbox_levers_rendered_for_claude(tmp_path: Path) -> None:
 
 
 def _agent_step_inputs(content: str) -> list[set[str]]:
-    """The `with:` keys of each composite-action step in a generated workflow.
+    """The `with:` keys of each operational agent action in a workflow.
 
     Structural rather than a substring search over the file, so workflow
     comments naming a config key don't read as the input being threaded.
@@ -399,7 +404,8 @@ def _agent_step_inputs(content: str) -> list[set[str]]:
         set(step.get("with", {}))
         for job in data["jobs"].values()
         for step in job.get("steps", [])
-        if step.get("uses", "").startswith("max-sixty/tend/")
+        if step.get("uses", "").split("@", 1)[0]
+        in {"max-sixty/tend/claude", "max-sixty/tend/codex"}
     ]
 
 
@@ -458,9 +464,8 @@ def test_memory_gist_follows_a_per_workflow_claude_override(
     assert "memory_gist:" not in workflows["tend-review.yaml"]
 
 
-def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
-    """Codex runs on the runner (no proxy sandbox), so the sandbox_* inputs are
-    not threaded — a codex adopter uses `setup:` instead."""
+def test_sandbox_levers_rendered_for_codex(tmp_path: Path) -> None:
+    """Codex shares the proxy sandbox, so its action receives the levers."""
     extra = dedent("""\
         harness: codex
         model: gpt-5.5
@@ -470,7 +475,7 @@ def test_sandbox_levers_not_rendered_for_codex(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path, extra))
     for wf in generate_all(cfg):
         for inputs in _agent_step_inputs(wf.content):
-            assert "sandbox_path" not in inputs
+            assert "sandbox_path" in inputs
 
 
 def test_setup_uses_with_parameters_gets_if_guard(tmp_path: Path) -> None:
@@ -597,7 +602,23 @@ def test_setup_step_env_must_be_table(tmp_path: Path) -> None:
 def test_empty_setup_no_blank_lines(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path))
     for wf in generate_all(cfg):
-        assert "\n\n\n" not in wf.content, f"{wf.filename} has triple blank lines"
+        # Python formatters require two blank lines between top-level
+        # definitions. Ignore the inlined script while retaining this guard
+        # against empty setup macros adding whitespace to the workflow itself.
+        structural = re.sub(
+            r"(?ms)^ {10}# /// script\n.*?^ {10}TEND_PY\n",
+            "",
+            wf.content,
+        )
+        assert "\n\n\n" not in structural, f"{wf.filename} has triple blank lines"
+
+
+def test_inline_script_preserves_python_source() -> None:
+    source = (
+        importlib.resources.files("tend") / "templates" / "mention_verify.py"
+    ).read_text()
+
+    assert _inline_script("mention_verify.py") == source.rstrip("\n")
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -610,14 +631,19 @@ def test_workflows_read_only_the_operational_secrets(
     the failure this guards is a template naming a secret that nothing
     provisions — which surfaces only as an empty token at run time. The set
     is per harness because the checks are: `check_claude_auth` verifies the
-    Claude pair and `check_codex_auth` the OpenAI key, so a claude workflow
+    Claude pair and `check_codex_auth` the API/subscription set, so a Claude workflow
     reading `secrets.OPENAI_API_KEY` is unprovisioned as surely as one
     reading a name nothing defines. `secrets.GITHUB_TOKEN` is
     workflow-scoped rather than stored, so it is outside the set."""
     verified = {BOT_TOKEN_SECRET} | (
         {CLAUDE_TOKEN_SECRET, ANTHROPIC_API_KEY_SECRET}
         if harness == "claude"
-        else {OPENAI_KEY_SECRET}
+        else {
+            OPENAI_KEY_SECRET,
+            CODEX_AUTH_SECRET,
+            CODEX_REFRESH_AUTH_SECRET,
+            CODEX_REFRESH_PAT_SECRET,
+        }
     )
     cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}\n"))
     for wf in generate_all(cfg):
@@ -626,7 +652,8 @@ def test_workflows_read_only_the_operational_secrets(
             f"{wf.filename} reads a secret the {harness} harness does not "
             f"provision: {sorted(read - {'GITHUB_TOKEN'} - verified)}"
         )
-        assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
+        if wf.filename != "tend-codex-auth-refresh.yaml":
+            assert BOT_TOKEN_SECRET in read, f"{wf.filename} missing the bot token"
 
 
 def test_claude_workflows_emit_both_auth_inputs(tmp_path: Path) -> None:
@@ -885,6 +912,21 @@ def test_ci_fix_custom_branches(tmp_path: Path) -> None:
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     ci_fix = workflows["tend-ci-fix.yaml"]
     assert 'branches: ["main", "release"]' in ci_fix.content
+
+
+def test_ci_fix_runs_for_failures_and_cancellations(tmp_path: Path) -> None:
+    cfg = Config.load(_minimal_config(tmp_path, _extra_for("ci-fix")))
+    generated = next(
+        wf for wf in generate_all(cfg) if wf.filename == "tend-ci-fix.yaml"
+    )
+    workflow = yaml.safe_load(generated.content)
+    assert workflow["jobs"]["fix-ci"]["if"] == (
+        'contains(fromJSON(\'["failure", "cancelled"]\'), '
+        "github.event.workflow_run.conclusion)"
+    )
+    assert "- Conclusion: ${{ github.event.workflow_run.conclusion }}" in agent_prompt(
+        generated.content
+    )
 
 
 def test_ci_fix_serializes_per_branch_and_watched_workflow(tmp_path: Path) -> None:
@@ -1248,13 +1290,13 @@ def test_mention_verify_wires_every_variable_the_gate_reads(tmp_path: Path) -> N
     # And the mapping is complete: every name the script reads without first
     # assigning it is either wired above or supplied by the runner.
     source = (
-        importlib.resources.files("tend") / "templates" / "mention-verify.sh"
+        importlib.resources.files("tend") / "templates" / "mention_verify.py"
     ).read_text()
-    read = set(re.findall(r"\$\{?([A-Z][A-Z0-9_]*)\}?", source))
-    assigned = set(re.findall(r"\b([A-Z][A-Z0-9_]*)=", source))
+    read = set(re.findall(r'env\.get\("([A-Z][A-Z0-9_]*)"', source))
+    read |= set(re.findall(r'os\.environ\["([A-Z][A-Z0-9_]*)"\]', source))
     supplied = set(check_step["env"]) | {"GITHUB_OUTPUT", "GITHUB_REPOSITORY"}
-    assert read - assigned <= supplied, (
-        f"the gate reads {sorted(read - assigned - supplied)}, which nothing sets"
+    assert read <= supplied, (
+        f"the gate reads {sorted(read - supplied)}, which nothing sets"
     )
 
 
@@ -1370,6 +1412,7 @@ def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
 # once Actions is enabled there. Without the guard, the `tend` action step fails
 # noisily because the bot/Claude secrets are empty in the fork's secret store.
 _GUARDED_WORKFLOWS = [
+    "tend-codex-auth-refresh.yaml",
     "tend-ci-fix.yaml",
     "tend-nightly.yaml",
     "tend-weekly.yaml",
@@ -1421,7 +1464,9 @@ def test_fork_guard_absent_for_unguarded(tmp_path: Path, filename: str) -> None:
 def test_fork_guard_omitted_when_repo_owner_empty(tmp_path: Path) -> None:
     """When auto-detection fails (non-github remote, no remote, etc.), no
     guard is rendered and workflows behave as they did pre-change."""
-    cfg = Config.load(_minimal_config(tmp_path, _extra_for("ci-fix")))
+    cfg = Config.load(
+        _minimal_config(tmp_path, _extra_for("ci-fix") + "harness: codex\n")
+    )
     # cfg.repo_owner is "" by default — Config.load does not auto-detect.
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     for filename in _GUARDED_WORKFLOWS:
@@ -1431,11 +1476,11 @@ def test_fork_guard_omitted_when_repo_owner_empty(tmp_path: Path) -> None:
                 f"{filename} job '{job_name}' must not contain the guard "
                 "when repo_owner is unset"
             )
-    # ci-fix's pre-existing conclusion check must survive even without the guard
+    # ci-fix's conclusion check must survive even without the guard.
     ci_fix = yaml.safe_load(workflows["tend-ci-fix.yaml"].content)
-    assert (
-        ci_fix["jobs"]["fix-ci"]["if"]
-        == "github.event.workflow_run.conclusion == 'failure'"
+    assert ci_fix["jobs"]["fix-ci"]["if"] == (
+        'contains(fromJSON(\'["failure", "cancelled"]\'), '
+        "github.event.workflow_run.conclusion)"
     )
 
 
@@ -1738,6 +1783,8 @@ def test_unknown_job_warns(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
 def _extra_for(name: str) -> str:
     """Return extra config needed for a specific generator (e.g. ci-fix)."""
+    if name == "codex-auth-refresh":
+        return "harness: codex\n"
     if name == "ci-fix":
         return 'workflows:\n  ci-fix:\n    watched_workflows: ["ci"]\n'
     return ""
@@ -1876,7 +1923,12 @@ def test_codex_action_ref(tmp_path: Path) -> None:
     """Codex workflows reference max-sixty/tend/codex@<release tag>."""
     cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
     for wf in generate_all(cfg):
-        assert f"max-sixty/tend/codex@{ACTION_VERSION}" in wf.content, (
+        action = (
+            "max-sixty/tend/codex/refresh"
+            if wf.filename == "tend-codex-auth-refresh.yaml"
+            else "max-sixty/tend/codex"
+        )
+        assert f"{action}@{ACTION_VERSION}" in wf.content, (
             f"{wf.filename} missing codex action ref"
         )
         assert f"max-sixty/tend/claude@{ACTION_VERSION}" not in wf.content, (
@@ -1885,33 +1937,156 @@ def test_codex_action_ref(tmp_path: Path) -> None:
 
 
 def test_codex_workflows_use_openai_secrets_not_claude(tmp_path: Path) -> None:
-    """Codex agent step references OPENAI_API_KEY, not Claude or auth.json."""
+    """Codex consumers receive API-key and access-only subscription paths."""
     cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
     for wf in generate_all(cfg):
+        if wf.filename == "tend-codex-auth-refresh.yaml":
+            continue
         assert "openai_api_key: ${{ secrets.OPENAI_API_KEY }}" in wf.content, (
             f"{wf.filename} missing openai_api_key input"
         )
-        assert "codex_auth_json" not in wf.content, (
-            f"{wf.filename} should not reference codex_auth_json"
+        assert "codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}" in wf.content, (
+            f"{wf.filename} missing access-only subscription input"
         )
         assert "claude_code_oauth_token" not in wf.content, (
             f"{wf.filename} should not reference claude_code_oauth_token under codex"
         )
 
 
-def test_codex_effort_only_when_set(tmp_path: Path) -> None:
-    """effort: renders only when configured."""
-    cfg_default = Config.load(_minimal_config(tmp_path, "harness: codex"))
-    for wf in generate_all(cfg_default):
-        assert "effort:" not in wf.content, (
-            f"{wf.filename} should omit effort when unset"
-        )
+def test_codex_generates_one_serialized_weekly_auth_refresher(tmp_path: Path) -> None:
+    cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
 
-    cfg_with_effort = Config.load(
-        _minimal_config(tmp_path, "harness: codex\neffort: high")
+    refresh = yaml.safe_load(workflows["tend-codex-auth-refresh.yaml"].content)
+    assert refresh["on"]["schedule"] == [{"cron": "17 3 * * 0"}]
+    assert refresh["concurrency"] == {
+        "group": "tend-codex-auth-refresh",
+        "cancel-in-progress": False,
+    }
+    step = refresh["jobs"]["refresh"]["steps"][0]
+    assert step["with"] == {
+        "codex_auth_json": "${{ secrets.CODEX_AUTH_JSON }}",
+        "codex_refresh_auth_json": "${{ secrets.CODEX_REFRESH_AUTH_JSON }}",
+        "refresh_pat": "${{ secrets.CODEX_REFRESH_PAT }}",
+    }
+
+
+def test_codex_auth_refresher_honors_workflow_config(tmp_path: Path) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                harness: codex
+                workflows:
+                  codex-auth-refresh:
+                    jobs:
+                      refresh:
+                        runs-on: ubuntu-22.04
+            """),
+        )
     )
-    for wf in generate_all(cfg_with_effort):
-        assert "effort: high" in wf.content, f"{wf.filename} missing effort: high"
+
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    refresh = yaml.safe_load(workflows["tend-codex-auth-refresh.yaml"].content)
+    assert refresh["jobs"]["refresh"]["runs-on"] == "ubuntu-22.04"
+
+
+def test_codex_auth_refresher_can_be_disabled(tmp_path: Path) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            "harness: codex\nworkflows:\n  codex-auth-refresh:\n    enabled: false\n",
+        )
+    )
+
+    assert "tend-codex-auth-refresh.yaml" not in {
+        wf.filename for wf in generate_all(cfg)
+    }
+
+
+def test_codex_auth_refresh_regtest(regtest: object, tmp_path: Path) -> None:
+    cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
+    print(generate_codex_auth_refresh(cfg).content, end="", file=regtest)  # type: ignore[arg-type]
+
+
+def test_claude_does_not_generate_codex_auth_refresher(tmp_path: Path) -> None:
+    cfg = Config.load(_minimal_config(tmp_path))
+    assert "tend-codex-auth-refresh.yaml" not in {
+        wf.filename for wf in generate_all(cfg)
+    }
+
+
+def test_codex_auth_refresher_follows_a_per_workflow_override(tmp_path: Path) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                workflows:
+                  nightly:
+                    harness: codex
+                    model: gpt-5.5
+            """),
+        )
+    )
+
+    names = {wf.filename for wf in generate_all(cfg)}
+    assert "tend-codex-auth-refresh.yaml" in names
+
+
+HARNESS_ACTIONS = {"max-sixty/tend/claude", "max-sixty/tend/codex"}
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ("effort: max", "max"),
+        ("harness: codex\neffort: high", "high"),
+    ],
+    ids=["claude", "codex"],
+)
+def test_effort_renders_for_both_harnesses(
+    tmp_path: Path, config: str, expected: str
+) -> None:
+    cfg = Config.load(_minimal_config(tmp_path, config))
+    for wf in generate_all(cfg):
+        inputs = [
+            step["with"]
+            for job in yaml.safe_load(wf.content)["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").partition("@")[0] in HARNESS_ACTIONS
+        ]
+        for action_inputs in inputs:
+            assert action_inputs["effort"] == expected
+
+
+def test_effort_is_omitted_at_the_harness_default(tmp_path: Path) -> None:
+    for harness in ("claude", "codex"):
+        cfg = Config.load(_minimal_config(tmp_path, f"harness: {harness}"))
+        for wf in generate_all(cfg):
+            assert "effort:" not in wf.content
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_args_render_as_exact_action_arguments(tmp_path: Path, harness: str) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent(f"""\
+                harness: {harness}
+                args:
+                  - --max-turns
+                  - "40"
+                  - argument with spaces
+            """),
+        )
+    )
+    for wf in generate_all(cfg):
+        for job in yaml.safe_load(wf.content)["jobs"].values():
+            for step in job.get("steps", []):
+                if step.get("uses", "").partition("@")[0] in HARNESS_ACTIONS:
+                    assert step["with"]["args"] == (
+                        "--max-turns\n40\nargument with spaces\n"
+                    )
 
 
 def test_codex_default_model(tmp_path: Path) -> None:
@@ -2088,14 +2263,102 @@ def test_unknown_claude_model_rejected(tmp_path: Path) -> None:
         Config.load(_minimal_config(tmp_path, "model: opus-3"))
 
 
-def test_effort_rejected_for_claude(tmp_path: Path) -> None:
-    """effort is Codex-only — Claude has no reasoning-effort knob."""
+@pytest.mark.parametrize(
+    "config",
+    ["effort: turbo", "harness: codex\neffort: max", "effort: [high]"],
+)
+def test_effort_rejected_when_unsupported_or_malformed(
+    tmp_path: Path, config: str
+) -> None:
+    with pytest.raises(click.ClickException, match="effort .* is not recognized"):
+        Config.load(_minimal_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    ("config", "match"),
+    [
+        (
+            "model: haiku\neffort: low",
+            "effort is not supported for Claude model 'haiku'",
+        ),
+        (
+            dedent("""\
+                effort: high
+                workflows:
+                  nightly:
+                    model: haiku
+            """),
+            (
+                r"effort \(inherited by workflows\.nightly\) is not supported .* "
+                r"set `workflows\.nightly\.effort: \"\"`"
+            ),
+        ),
+    ],
+)
+def test_effort_rejected_for_claude_models_without_effort(
+    tmp_path: Path, config: str, match: str
+) -> None:
+    with pytest.raises(click.ClickException, match=match):
+        Config.load(_minimal_config(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        'args: "--max-turns 40"',
+        'args: ["--max-turns", ""]',
+        "args: [--max-turns, 40]",
+    ],
+)
+def test_args_rejected_unless_each_list_item_is_one_argument(
+    tmp_path: Path, config: str
+) -> None:
+    with pytest.raises(click.ClickException, match="args must be a list"):
+        Config.load(_minimal_config(tmp_path, config))
+
+
+def test_per_workflow_effort_and_args_override_the_top_level(tmp_path: Path) -> None:
+    cfg = Config.load(
+        _minimal_config(
+            tmp_path,
+            dedent("""\
+                effort: high
+                args: [--max-turns, "40"]
+                workflows:
+                  nightly:
+                    effort: max
+                    args: []
+            """),
+        )
+    )
+    workflows = {wf.filename: yaml.safe_load(wf.content) for wf in generate_all(cfg)}
+
+    nightly_steps = workflows["tend-nightly.yaml"]["jobs"]["nightly"]["steps"]
+    nightly = next(step for step in nightly_steps if "/claude@" in step.get("uses", ""))
+    assert nightly["with"]["effort"] == "max"
+    assert "args" not in nightly["with"]
+
+    weekly_steps = workflows["tend-weekly.yaml"]["jobs"]["weekly"]["steps"]
+    weekly = next(step for step in weekly_steps if "/claude@" in step.get("uses", ""))
+    assert weekly["with"]["effort"] == "high"
+    assert weekly["with"]["args"] == "--max-turns\n40\n"
+
+
+def test_cross_harness_workflow_validates_inherited_effort(tmp_path: Path) -> None:
     with pytest.raises(
-        click.ClickException, match="effort is only valid for harness = 'codex'"
+        click.ClickException,
+        match=r"effort \(inherited by workflows\.nightly\) 'max' is not recognized "
+        r"for harness 'codex'",
     ):
-        Config.load(_minimal_config(tmp_path, "effort: high"))
-
-
-def test_unknown_effort_rejected(tmp_path: Path) -> None:
-    with pytest.raises(click.ClickException, match="effort 'turbo' is not recognized"):
-        Config.load(_minimal_config(tmp_path, "harness: codex\neffort: turbo"))
+        Config.load(
+            _minimal_config(
+                tmp_path,
+                dedent("""\
+                    effort: max
+                    workflows:
+                      nightly:
+                        harness: codex
+                        model: gpt-5.5
+                """),
+            )
+        )

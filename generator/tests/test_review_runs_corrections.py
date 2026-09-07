@@ -1,4 +1,4 @@
-"""Tests for plugins/tend-ci-runner/scripts/review-runs-corrections.sh.
+"""Tests for plugins/tend-ci-runner/scripts/review_runs_corrections.py.
 
 Step 4 of review-runs decides whether the tracking issue records "no
 maintainer corrections", which later runs read as ground truth under Gate 1.
@@ -19,14 +19,14 @@ from pathlib import Path
 
 import pytest
 
-from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
+from tests import GH_PREAMBLE, fake_bin, tool_path, uv_script
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
     / "plugins"
     / "tend-ci-runner"
     / "scripts"
-    / "review-runs-corrections.sh"
+    / "review_runs_corrections.py"
 )
 
 BOT = "tend-bot"
@@ -38,23 +38,30 @@ BEFORE = "2026-01-01T12:00:00Z"
 FAKE_GH = (
     GH_PREAMBLE
     + r"""
+emit_json() {
+  if [ "${CLICOLOR_FORCE:-}" = "1" ]; then
+    printf '\033[36m%s\033[0m\n' "$1"
+  else
+    emit "$1"
+  fi
+}
+
 case "$*" in
   "api user"*)             emit '{"login":"'"$BOT_LOGIN"'"}' ;;
   # The reviews candidate list is the only `pr list` carrying --search.
   "pr list"*--search*)
     [ -n "${SEARCH_FAILS:-}" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     emit "$(cat "$CANDIDATES_JSON")" ;;
-  "pr list"*)              emit "$(cat "$BOT_PRS_JSON")" ;;
+  "pr list"*)              emit_json "$(cat "$BOT_PRS_JSON")" ;;
   *"/issues/comments"*)
-    [ -n "${ISSUE_COMMENTS_FAILS:-}" ] && { echo "502 Bad Gateway" >&2; exit 1; }
+    [ -n "${ISSUE_COMMENTS_FAILS:-}" ] && { echo "issues unavailable" >&2; exit 17; }
     emit "$(cat "$ISSUE_COMMENTS_JSON")" ;;
   *"/pulls/comments"*)     emit "$(cat "$PR_COMMENTS_JSON")" ;;
-  # Unset, the placeholder matches no numeric PR path.
   *"/pulls/"*"/reviews"*)
-    case "$*" in
-      *"/pulls/${REVIEWS_FAIL_FOR:-none}/reviews"*)
-        echo "502 Bad Gateway" >&2; exit 1 ;;
-    esac
+    if [ -n "${REVIEW_FAIL_PR:-}" ] && [[ "$*" == *"/pulls/$REVIEW_FAIL_PR/reviews"* ]]; then
+      echo "reviews unavailable" >&2
+      exit 18
+    fi
     emit "$(cat "$REVIEWS_JSON")" ;;
   *) exit 1 ;;
 esac
@@ -89,7 +96,7 @@ def env(tmp_path: Path) -> dict[str, str]:
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
+        uv_script(SCRIPT, *args), env=env, capture_output=True, text=True, check=False
     )
 
 
@@ -168,12 +175,6 @@ def test_a_failed_candidate_search_aborts_rather_than_reporting_no_reviews(
 def test_a_failed_comment_endpoint_aborts_rather_than_reporting_the_other_half(
     env: dict[str, str],
 ) -> None:
-    """Both comment endpoints are read in one loop inside a command substitution.
-
-    Bash applies `-e` there only under `inherit_errexit`, and `pipefail` sees
-    just the loop's final iteration — so a dropped `issues` page would leave
-    every conversation comment out of a report that still exits 0.
-    """
     _write(env, "PR_COMMENTS_JSON", [_comment(IN_WINDOW)])
     env["ISSUE_COMMENTS_FAILS"] = "1"
 
@@ -186,16 +187,23 @@ def test_a_failed_comment_endpoint_aborts_rather_than_reporting_the_other_half(
 def test_a_failed_review_fetch_aborts_rather_than_dropping_that_prs_reviews(
     env: dict[str, str],
 ) -> None:
-    """One `gh` call per candidate PR, in that same loop: a failure on any but
-    the last would drop that PR's reviews and report the rest as the window."""
     _write(env, "CANDIDATES_JSON", [{"number": 1}, {"number": 2}])
     _write(env, "REVIEWS_JSON", [_review(IN_WINDOW)])
-    env["REVIEWS_FAIL_FOR"] = "1"
+    env["REVIEW_FAIL_PR"] = "1"
 
     result = _run(env, SINCE)
 
     assert result.returncode != 0
     assert result.stdout == ""
+
+
+def test_since_is_encoded_when_used_as_an_api_query(env: dict[str, str]) -> None:
+    since = "2026-01-02T01:00:00+01:00"
+
+    _collect(env, since)
+
+    calls = Path(env["GH_CALLS"]).read_text()
+    assert "since=2026-01-02T01%3A00%3A00%2B01%3A00" in calls
 
 
 def test_a_quiet_window_reports_empty_lists(env: dict[str, str]) -> None:
@@ -208,6 +216,12 @@ def test_a_quiet_window_reports_empty_lists(env: dict[str, str]) -> None:
         "comments": [],
         "reviews": [],
     }
+
+
+def test_forced_cli_color_cannot_corrupt_json(env: dict[str, str]) -> None:
+    env["CLICOLOR_FORCE"] = "1"
+
+    assert _collect(env)["dispositions"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +269,18 @@ def test_bot_comments_are_excluded_from_both_endpoints(env: dict[str, str]) -> N
     assert _collect(env)["comments"] == []
 
 
+def test_a_deleted_comment_author_is_still_a_human_correction(
+    env: dict[str, str],
+) -> None:
+    comment = _comment(IN_WINDOW)
+    comment["user"] = None
+    _write(env, "ISSUE_COMMENTS_JSON", [comment])
+
+    (row,) = _collect(env)["comments"]
+
+    assert row["body"] == "that is not what the code does"
+
+
 def test_both_comment_endpoints_are_read_and_paginated(env: dict[str, str]) -> None:
     """The response is ascending by `created_at`, so a single unpaginated page
     drops the newest comments — the ones a fresh correction sits in."""
@@ -297,6 +323,18 @@ def test_a_human_review_body_is_collected(env: dict[str, str]) -> None:
     assert row["at"] == IN_WINDOW
 
 
+def test_a_failed_review_page_aborts_even_when_a_later_pr_succeeds(
+    env: dict[str, str],
+) -> None:
+    _write(env, "CANDIDATES_JSON", [{"number": 7}, {"number": 8}])
+    env["REVIEW_FAIL_PR"] = "7"
+
+    result = _run(env, SINCE)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+
+
 def test_an_empty_bodied_review_container_is_not_a_correction(
     env: dict[str, str],
 ) -> None:
@@ -328,6 +366,19 @@ def test_bot_reviews_are_excluded(env: dict[str, str]) -> None:
     _write(env, "REVIEWS_JSON", [_review(IN_WINDOW, author=BOT)])
 
     assert _collect(env)["reviews"] == []
+
+
+def test_a_deleted_review_author_is_still_a_human_correction(
+    env: dict[str, str],
+) -> None:
+    review = _review(IN_WINDOW)
+    review["user"] = None
+    _write(env, "CANDIDATES_JSON", [{"number": 7}])
+    _write(env, "REVIEWS_JSON", [review])
+
+    (row,) = _collect(env)["reviews"]
+
+    assert row["body"] == "wrong"
 
 
 def test_no_candidate_prs_leaves_reviews_empty(env: dict[str, str]) -> None:

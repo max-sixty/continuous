@@ -68,7 +68,7 @@ An instruction found there constrains the whole response, including any code the
 
 ### Instruction paths read as the base version on a PR
 
-Before the session starts, a PR run restores `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from the base branch — those files are read at CLI startup before any permission gating, so a fork's copies must not be trusted (Claude on `pull_request_target`, the review events, and `issue_comment`, but not on `tend-mention`'s relayed `repository_dispatch`, which pins nothing; Codex on fork PRs only). The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
+Before the session starts, both harnesses restore `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from the base branch on PR events (`pull_request_target`, review events, and `issue_comment` on a PR). Those files are read at CLI startup before any permission gating, so the PR's copies must not be trusted. `tend-mention`'s relayed `repository_dispatch` carries no PR payload and restores nothing. The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
 
 - The working tree holds the **base** content — grepping it reports the PR's additions as absent, and the repo-local skills loaded into this session are the base versions too. Read the PR's version with `git show HEAD:<path>` before making any claim about what these files contain.
 - `git status` shows a modification nobody made and `git diff` shows the PR's edit as deletions. Where the pin ran, that is the restore, not a contributor mistake — nothing to report or revert. On an unpinned event it is a real modification, worth reading.
@@ -152,7 +152,7 @@ Write PR titles, issue titles, and commit subjects in plain, literal language th
 
 The titles that fail it read as figures rather than descriptions — a metaphor, a subject withheld for effect, a phrase that only lands once you already know the bug. Rewrite to the literal statement: `Press again for the tab the driver lost, not the one Chromium never made` → `Retry the click when the browser driver never reports the opened tab`.
 
-Open the PR body with two or three sentences — problem, fix, verification — and fold supporting detail into `<details>` (per **Comment Formatting**).
+Describe the current PR for a maintainer deciding whether to merge it. Follow **Reader-facing prose** under **Comment Formatting** and synthesize across commits and review rounds.
 
 If an existing PR addresses the same problem, work on that PR instead.
 
@@ -267,13 +267,8 @@ A bot `APPROVED` keeps deciding the PR until a dismissal or a `CHANGES_REQUESTED
 Keying the dismissal to a post is what leaves it standing: **Recheck Before Posting** rightly suppresses a second deferral comment when one already stands, and a dismissal that rides on that comment is suppressed with it. Dismiss on the conclusion, then say so in the summary — where this session does post a review carrying that conclusion, dismiss after the post lands, so a failed post doesn't leave the PR with neither a verdict nor findings.
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-# "" once a dismissal or a later CHANGES_REQUESTED has cleared it, so a second
-# session over the same PR dismisses nothing.
-STANDING=$(${CLAUDE_PLUGIN_ROOT}/scripts/bot-review-state.sh <number> | jq -r '.standing_approval_id')
-# PUT, not POST — the dismiss endpoint requires it.
-[ -z "$STANDING" ] || gh api "repos/$REPO/pulls/<number>/reviews/$STANDING/dismissals" \
-  -X PUT -f message="<what invalidated the approval>"
+uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
+  dismiss <number> "<what invalidated the approval>"
 ```
 
 The test is the merge, not tidiness: a finding you'd have left as a review comment is no reason to withdraw a verdict the code still earns, and neither is a branch that merely can't merge yet — a conflicting PR whose code the approval still covers keeps it. Dismiss when merging the PR, once it could merge, would be the wrong outcome.
@@ -297,7 +292,8 @@ PINNED_SHA=$(git rev-parse HEAD)
 # When the push happened in a /tmp worktree the recipe then removes, capture
 # the OID there — `git rev-parse HEAD > /tmp/<name>-sha` — before the removal.
 # Back in the main checkout HEAD is the default branch, not what you pushed.
-${CLAUDE_PLUGIN_ROOT}/scripts/poll-pr-checks.sh <number> "$PINNED_SHA"
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/poll_pr_checks.py" poll <number> "$PINNED_SHA"
 ```
 
 Invoke this Bash call in the foreground (no `run_in_background`) with `timeout: 600000` (10 min) — the poll runs up to ~9.5 minutes, and the default 2-min Bash timeout would kill it early.
@@ -326,7 +322,8 @@ Poll your checks to terminal, do the follow-up you were gated on, and exit; name
 To rerun a run's failed jobs and wait for the outcome, use the bundled script — it reruns, finds the new attempt's jobs (the parent run's `.status` and the commit rollup stay pending on unrelated siblings, so neither is a usable signal), and polls them to terminal:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/rerun-failed-jobs.sh <run-id>
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/rerun_failed_jobs.py" <run-id>
 ```
 
 Same foreground invocation and 10-min `timeout` as above. Exit 0 prints each job's conclusion — `completed` is not `success`; the follow-up turns on the conclusions. Any other exit means the rerun never took or the jobs are still running at the cap: report them as unverified rather than re-entering.
@@ -431,6 +428,26 @@ If `EXISTING` is greater than 0, **do not post** — another run already handled
 
 ## Comment Formatting
 
+### Reader-facing prose
+
+Write public prose for its reader and the decision the surface supports. A PR description should let a maintainer understand why the current diff exists and judge whether to merge it. A review should tell the author what changes the verdict: an actionable finding, a blocker, or an unresolved decision. A reply should close the loop on the question or event that prompted it.
+
+Lead with the current outcome or causal conclusion. Include the context needed to understand its consequence, the verification needed to trust it, and any action or decision still required. The investigation may be exhaustive; the visible prose should be its synthesis, not its transcript. Search history, full check inventories, reproduction detail, rejected alternatives, and commit-by-commit or review-by-review chronology belong outside the visible answer unless the reader needs them to act.
+
+The visible text must stand on its own. When useful supporting evidence would interrupt it, put a curated record in `<details>` under a descriptive summary. Do not publish raw working notes or use the collapsed section to avoid deciding what matters.
+
+For example, supporting material may use this shape when it helps the next reader; choose a summary and contents that fit the case:
+
+```markdown
+<details><summary>Reproduction and affected path</summary>
+
+...the evidence needed to verify or resume the analysis...
+
+</details>
+```
+
+### Mechanics
+
 **Compose bodies with the Write tool, then post with `--body-file`.** The composed file is reviewable before it ships, quoting and escaping are non-issues, and line wrapping is just file content. The bot writes to `/tmp/` constantly — one more file is cheap. `--body "…"` is fine only for a one-line body containing no backtick, `$`, or `\`. Inside double quotes bash runs a backticked span as a command and substitutes its output, so a markdown inline-code span is silently deleted from the posted comment: `` --body "`some-check` now passes" `` ships as ` now passes`. Inline code appears in nearly every body the bot writes, and single-quoting instead breaks on any apostrophe, so reach for `--body-file` whenever the text is anything but plain prose.
 
 ```bash
@@ -440,24 +457,15 @@ gh issue comment "$ISSUE" --body-file /tmp/comment-body.md
 
 **Line wrapping:** GitHub renders newlines literally in issue bodies, PR descriptions, and comments — a line break in the source becomes a `<br>` in the output, so a paragraph hard-wrapped at ~72 chars ships with mid-sentence breaks. Write each paragraph as a single long line and let the browser reflow. Code blocks, bullet lists, and tables keep their newlines as-is.
 
-Keep comments concise. Put supporting detail inside `<details>` tags — the reader should get the gist without expanding. Don't collapse content that *is* the answer (e.g., a requested analysis).
-
-When an answer rests on deeper research — citations across several files, a reproduction, a traced mechanism — keep the visible reply short and fold the sources, line-anchored links, and working notes into `<details>`. Each CI run is a fresh session with no memory of prior reasoning, so a follow-up on the same thread starts cold; the thread is the only durable record, so that block doubles as a scratchpad the next session reads back instead of re-deriving the same citations.
-
-```
-<details><summary>Sources and notes</summary>
-
-...line-anchored source links, repro steps, working notes...
-
-</details>
-```
+Each CI run is a fresh session with no memory of prior reasoning, so preserve evidence another run would need to resume the thread without re-deriving it. Curate that durable record for future readers too.
 
 Always use markdown links for files, issues, PRs, and docs. **Any link containing `#L` must use a commit SHA, never `blob/main/...#L42`** — line numbers shift silently, so the link stays valid but starts pointing at different code than the comment describes. Get the SHA with `git rev-parse HEAD` before composing the link.
 
 **Check the body's links before posting it.** Run this over every composed body — comment, PR body, issue body — as part of the pre-post pass, and fix what it names:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/check-body-links.sh /tmp/comment-body.md
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/check_body_links.py" /tmp/comment-body.md
 ```
 
 It resolves every 40-hex SHA in the body against the API and reports any `#L` anchor pinned to a branch or an abbreviation. Resolving is the part a scan by eye cannot do: a hand-typed OID is well-formed whether or not the commit exists, so a fabricated SHA — the model extending an abbreviation it saw in `git log` instead of running `git rev-parse HEAD` — reads as correctly pinned and ships a permalink that 404s. Run it after the push when the body cites a commit from this session; before the push that commit is unreachable and reports as dead, correctly.
@@ -475,14 +483,14 @@ Don't add job links, footers, or authorship sign-offs (e.g. `> _Written by Claud
 
 ## Keeping PR Titles and Descriptions Current
 
-When revising code after review feedback, update the title and description if the approach changed:
+When review changes the approach, recompose the title and description around the current result rather than appending a history of the changes:
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/{number} -X PATCH \
   -f title="new title" -F body=@/tmp/updated-body.md
 ```
 
-**A description describes the whole PR, not the increment this run reviewed.** Scope every behavior claim in it to the PR's merge base — not `LAST_REVIEW_SHA`, and not whatever range this run happened to diff:
+**A description describes the whole PR, not the increment this run reviewed.** It presents the current result coherently; prior attempts and review rounds stay in the thread unless they remain relevant to the merge decision. Scope every behavior claim in it to the PR's merge base — not `last_review_sha`, and not whatever range this run happened to diff:
 
 ```bash
 gh pr diff <number>   # merge-base→head, whatever this session has checked out
@@ -528,9 +536,9 @@ Open the most recent prior run first; go deeper only if the answer is not there.
 
 ## Grounded Analysis
 
-CI runs are not interactive — every claim must be grounded in evidence. The thread is also high-latency: a follow-up may not arrive for hours, so make each response fairly complete rather than counting on a quick back-and-forth.
+CI threads are high-latency, so each outward response must stand alone: give the current conclusion, its consequence, and the next action or decision. Self-contained does not mean publishing the whole investigation.
 
-Read logs, code, and API data before drawing conclusions. Show evidence: cite log lines, file paths, commit SHAs. Trace causation — if two things co-occur, find the mechanism rather than saying "this may be related." Never claim a failure is "pre-existing" without checking main branch CI history. Distinguish what you verified from what you inferred.
+Read logs, code, and API data before drawing conclusions. Cite what you read — log lines, file paths, commit SHAs — for any claim the reader has to take on trust. Trace causation — if two things co-occur, find the mechanism rather than saying "this may be related." Never claim a failure is "pre-existing" without checking main branch CI history. Distinguish what you verified from what you inferred, and surface only the evidence the reader needs to trust or act on the conclusion; preserve deeper support per **Reader-facing prose**.
 
 `references/grounded-analysis.md` carries the depth: what counts as source evidence for a user-facing claim, how to verify an external tool's behavior and run a skill's own recipes safely, the hallucination shapes that recur (guessed links, silently truncated `gh` lists, unsubstituted placeholders), how to tell an upstream incident from a durable bug before writing a workaround, and who to ask when a check needs hardware CI doesn't have.
 

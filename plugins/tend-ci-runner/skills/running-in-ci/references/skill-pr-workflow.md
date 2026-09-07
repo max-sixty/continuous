@@ -144,8 +144,9 @@ workaround, since bundled skills live under `plugins/` rather than
 
 4. **Open as a separate PR.** Follow the repo's PR title conventions
    (conventional commits, Jira prefix, or whatever the repo uses — check
-   recent merged PRs or `CONTRIBUTING.md`). The body quotes the triggering
-   feedback and links the thread (PR/issue/comment URL).
+   recent merged PRs or `CONTRIBUTING.md`). The body states the generalized
+   behavior gap and the outcome the new guidance should produce, then links
+   the triggering thread as evidence. Do not quote or reconstruct the exchange.
 
 5. **Open and exit — don't merge, don't wait.** The PR itself is the review
    request; a maintainer lands it (or doesn't) in their own time. Don't post

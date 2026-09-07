@@ -3,7 +3,7 @@
 # reads at startup BEFORE any permission gating — SessionStart hooks, env-var
 # overrides (NODE_OPTIONS, LD_PRELOAD, PATH), MCP servers, apiKeyHelper shell
 # commands. Restore them from the PR base branch, which a maintainer reviewed
-# and merged. Used by the Claude harness action.
+# and merged. Used by both harness actions.
 #
 # The root list is claude-code-action's restore-config.ts set
 # (src/github/operations/restore-config.ts) minus the instruction files, which
@@ -18,7 +18,7 @@
 # claude-code-action makes — narrow UX cost for closing the RCE surface.
 #
 # Runs before the credential-isolation handoff: it needs the git credential
-# actions/checkout persisted, which setup-sandbox.sh strips.
+# actions/checkout persisted, which setup_sandbox.py strips.
 #
 # Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME, GITHUB_EVENT_PATH
 # (from Actions).

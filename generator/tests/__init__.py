@@ -28,6 +28,14 @@ def agent_prompt(content: str) -> str:
 BASH = shutil.which("bash")
 assert BASH, "bash is required for these tests"
 
+UV = shutil.which("uv")
+assert UV, "uv is required for these tests"
+
+
+def uv_script(path: Path, *args: str) -> list[str]:
+    """Command for the same PEP 723 script surface production invokes."""
+    return [UV, "run", "--script", str(path), *args]
+
 
 def tool_path(*fakes: Path | str) -> str:
     """PATH for a script under test: *fakes* first, then jq, then coreutils.

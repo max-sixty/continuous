@@ -1,10 +1,11 @@
-"""Behavior tests for review-preflight.sh."""
+"""Behavior tests for review_preflight.py."""
 
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,11 +13,12 @@ import pytest
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PREFLIGHT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "review-preflight.sh"
+PREFLIGHT = REPO_ROOT / "plugins" / "tend-ci-runner" / "scripts" / "review_preflight.py"
 
 BOT = "tend-bot"
 PR = "7"
-DRAFT_REVIEW_LINE = (
+DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
+LEGACY_DRAFT_REVIEW_LINE = (
     "Reviewing as a draft — flagging anything that looks worth a quick fix. "
     "Mark ready for a full review."
 )
@@ -27,6 +29,8 @@ FAKE_GH = (
 case "$*" in
   "api user"*)              emit '{"login":"'"$BOT_LOGIN"'"}' ;;
   "pr view "*"--json headRefOid,state,baseRefOid"*)
+                              emit "$(cat "$PR_JSON")" ;;
+  "pr view "*"--json headRefOid,state,baseRefOid,author,isDraft"*)
                               emit "$(cat "$PR_JSON")" ;;
   "pr view "*"--json headRefOid,state"*)
                               emit "$(cat "$FINAL_PR_JSON")" ;;
@@ -81,7 +85,6 @@ class Fixture:
         self.bindir = fake_bin(tmp_path, gh=FAKE_GH)
         self.git = Path(git)
         self.git_dir = Path(git).parent
-
         self.origin.mkdir()
         _git(self.origin, "init", "-b", "main", "-q")
         _git(self.origin, "config", "uploadpack.allowReachableSHA1InWant", "true")
@@ -123,7 +126,13 @@ class Fixture:
 
     def set_head(self, sha: str, state: str = "OPEN") -> None:
         self.head = sha
-        view = {"headRefOid": sha, "state": state, "baseRefOid": self.base}
+        view = {
+            "headRefOid": sha,
+            "state": state,
+            "baseRefOid": self.base,
+            "author": {"login": "author"},
+            "isDraft": False,
+        }
         self.write("PR_JSON", view)
         self.write("FINAL_PR_JSON", view)
         self.write("BOT_HEAD_JSON", {"headRefOid": sha})
@@ -164,7 +173,7 @@ class Fixture:
 
     def run(self, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [BASH, str(PREFLIGHT), PR, *args],
+            [sys.executable, "-E", "-s", str(PREFLIGHT), "post", PR, *args],
             cwd=self.work,
             env=self.env(**extra),
             capture_output=True,
@@ -176,6 +185,16 @@ class Fixture:
         result = self.run(*args, **extra)
         assert result.returncode == 0, result.stderr
         return result.stdout
+
+    def start(self, **extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-E", "-s", str(PREFLIGHT), "start", PR],
+            cwd=self.work,
+            env=self.env(**extra),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def pinned(self) -> str:
         return self.pin.read_text().strip()
@@ -219,6 +238,29 @@ def _delta(output: str) -> str:
 def test_an_unreviewed_unchanged_head_posts(pr: Fixture) -> None:
     assert pr.output() == f"post: {pr.reviewed} is still the head you reviewed\n"
     assert pr.pinned() == pr.reviewed
+
+
+def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) -> None:
+    moved = pr.push_over_base_merge()
+    pr.reviews(_review(pr.reviewed, "earlier finding"))
+
+    result = pr.start()
+
+    assert result.returncode == 0, result.stderr
+    context = json.loads(result.stdout)
+    assert context == {
+        "head_sha": moved,
+        "author": "author",
+        "bot_login": BOT,
+        "is_draft": False,
+        "force_full_review": False,
+        "last_review_sha": pr.reviewed,
+        "force_pushed_since": False,
+        "incremental_path": context["incremental_path"],
+    }
+    assert "pr-2" in Path(context["incremental_path"]).read_text()
+    assert "base-2" not in Path(context["incremental_path"]).read_text()
+    assert pr.pinned() == moved
 
 
 @pytest.mark.parametrize("state", ["CLOSED", "MERGED"])
@@ -353,7 +395,7 @@ def test_ready_for_review_does_not_override_edit_review_identity(
 ) -> None:
     marker = tmp_path / "edited"
     event = _event(tmp_path / "event.json", "ready_for_review")
-    pr.reviews(_review(pr.reviewed, DRAFT_REVIEW_LINE))
+    pr.reviews(_review(pr.reviewed, LEGACY_DRAFT_REVIEW_LINE))
 
     result = pr.run(
         "--edit-review",
@@ -458,9 +500,10 @@ def test_dedup_uses_the_retargeted_head(pr: Fixture) -> None:
 @pytest.mark.parametrize(
     ("action", "body", "expected"),
     [
-        ("ready_for_review", DRAFT_REVIEW_LINE, "post:"),
+        ("ready_for_review", DRAFT_REVIEW_MARKER, "post:"),
+        ("ready_for_review", LEGACY_DRAFT_REVIEW_LINE, "post:"),
         ("ready_for_review", "A landing concern.", "skip:"),
-        ("synchronize", DRAFT_REVIEW_LINE, "skip:"),
+        ("synchronize", DRAFT_REVIEW_MARKER, "skip:"),
     ],
 )
 def test_only_ready_for_review_replaces_a_draft_review(
@@ -507,7 +550,18 @@ def test_a_failed_status_write_preserves_the_delta_for_retry(pr: Fixture) -> Non
     moved = pr.push_over_base_merge()
 
     result = subprocess.run(
-        [BASH, "-c", 'exec 1>&-; exec "$@"', "_", BASH, str(PREFLIGHT), PR],
+        [
+            BASH,
+            "-c",
+            'exec 1>&-; exec "$@"',
+            "_",
+            sys.executable,
+            "-E",
+            "-s",
+            str(PREFLIGHT),
+            "post",
+            PR,
+        ],
         cwd=pr.work,
         env=pr.env(),
         capture_output=True,

@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "tend"
-version = "0.1.24"
+version = "0.2.0"
 description = "An autonomous junior maintainer for GitHub repos, powered by Claude or OpenAI Codex — reviews PRs, triages issues, fixes CI"
 license = "MIT"
 requires-python = ">=3.11"

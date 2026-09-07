@@ -57,124 +57,31 @@ Use `-R $ARGUMENTS` for commands that access the target repo (querying runs, PRs
 
 ## Evidence accumulation
 
-Each run only sees a window of CI sessions, but patterns emerge over days or weeks. Evidence for this skill lives in **secret gists owned by the bot** — one per `(target repo, month)` pair. A monthly tracking issue on tend labeled `review-reviewers-tracking` lists the gists via bot comments, so maintainers can discover them.
-
-Secret gists are URL-unlisted but readable by anyone with the URL; they are at least as private as the current public tracking issues, and give a single structured file that accumulates per-target findings without hitting the 65 KB comment limit.
-
-### Setup
+Evidence lives in one secret gist per target repo and month, indexed by the
+monthly `review-reviewers-tracking` issue on Tend. Prepare it and read the
+current and previous month's evidence:
 
 ```bash
-MONTH=$(date +%Y-%m)
-TRACKING_LABEL="review-reviewers-tracking"
-TARGET="$ARGUMENTS"
-GIST_DESC="review-reviewers evidence: $TARGET $MONTH"
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/review_reviewers.py" \
+  prepare-evidence "$ARGUMENTS"
 ```
 
-### Finding or creating the tracking issue
+The command finds or creates both index and gist, announces a new gist once,
+persists their ids, and prints both evidence windows.
 
-The tracking issue lives on tend (the current repo). It indexes gists via one comment per new gist — no per-run comments, no body edits.
-
-The workflow's `init-tracking` job runs before the matrix and creates the monthly tracking issue if absent, so on a normal tick matrix legs find an existing one. It is not a precondition — the matrix runs even when that job fails or never gets a runner, so the find-or-create logic below is a live code path on the first tick of a month, not only a fallback for ad-hoc invocations. Sort lowest-numbered first so a lost race degrades to a duplicate rather than a crash. `gh issue create` prints the new issue's URL; parse the number from its basename.
+After applying the gates, write this run's findings in the format from
+`@review-gates.md` to `/tmp/findings.md`. Append a `## Run
+$GITHUB_RUN_ID` heading every run, including an all-clear window; the heading
+is the audit trail future runs use. Then append it:
 
 ```bash
-TRACKING_NUMBER=$(gh issue list --state open --label "$TRACKING_LABEL" \
-  --json number,title --jq ".[] | select(.title | contains(\"$MONTH\")) | .number" \
-  | sort -n | head -1)
-
-if [ -z "$TRACKING_NUMBER" ]; then
-  cat > /tmp/tracking-body.md << 'EOF'
-Monthly tracking issue for `review-reviewers`. Per-target evidence lives in secret gists owned by the bot. A comment below is posted when each target's gist is first created.
-
-**Do not close manually** — a new issue is created each month.
-EOF
-  TRACKING_URL=$(gh issue create \
-    --title "$TRACKING_LABEL: $MONTH" \
-    --label "$TRACKING_LABEL" \
-    -F /tmp/tracking-body.md)
-  if [ -z "$TRACKING_URL" ]; then
-    echo "ERROR: gh issue create failed" >&2
-    exit 1
-  fi
-  TRACKING_NUMBER=$(basename "$TRACKING_URL")
-fi
+uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/review_reviewers.py" append-evidence
 ```
 
-### Finding or creating the evidence gist
-
-Search the bot's own gists by description. Descriptions are our stable key — GitHub does not let us pick gist IDs.
-
-```bash
-GIST_ID=$(gh api /gists --paginate \
-  --jq ".[] | select(.description == \"$GIST_DESC\") | .id" | head -1)
-
-if [ -z "$GIST_ID" ]; then
-  # The gist file takes its name from the local file's basename; later reads
-  # and PATCHes target `findings.md`, so the seed must live at that basename.
-  mkdir -p /tmp/gist-seed
-  # Use the Write tool to author /tmp/gist-seed/findings.md (substituting
-  # $TARGET and $MONTH from the environment). Content:
-  #
-  #   # review-reviewers evidence — <target> — <YYYY-MM>
-  #
-  #   Secret gist. Append-only log of below-threshold findings used for gate evaluation.
-  GIST_URL=$(gh gist create --desc "$GIST_DESC" /tmp/gist-seed/findings.md)
-  if [ -z "$GIST_URL" ]; then
-    echo "ERROR: gh gist create failed — TEND_BOT_TOKEN likely lacks 'gist' scope (see install-tend)" >&2
-    exit 1
-  fi
-  GIST_ID=$(basename "$GIST_URL")
-  # First time this month for this target — announce the gist on the tracking issue
-  # printf, not an inline --body: the backticks are literal inside single
-  # quotes, so nothing needs escaping and bash can't run the span.
-  printf 'Evidence gist for `%s`: %s\n' "$TARGET" "$GIST_URL" \
-    > /tmp/gist-announce.md
-  gh issue comment "$TRACKING_NUMBER" --body-file /tmp/gist-announce.md
-else
-  GIST_URL="https://gist.github.com/$GIST_ID"
-fi
-```
-
-The TEND_BOT_TOKEN needs `gist` scope (see install-tend). Without it, `gh gist create` fails with `403 Forbidden` and the skill exits before posting a broken tracking-issue comment.
-
-### Reading historical evidence
-
-Before applying the gates, read the current month's gist for this target. Pass `--raw` so `gh` emits the file content verbatim instead of a TTY-rendered form. The recording step below appends to this same file, so fetch once:
-
-```bash
-gh gist view "$GIST_ID" -f findings.md --raw > /tmp/current.md
-```
-
-Also check last month's gist for recent carry-over. Compute last month by subtracting a day from the first of the current month — `date -d 'last month'` on the 31st can return the current month on GNU date, silently skipping the prior month's evidence:
-
-```bash
-FIRST=$(date -u +%Y-%m-01)
-LAST_MONTH=$(date -u -d "$FIRST -1 day" +%Y-%m 2>/dev/null || date -u -v-1d -jf %Y-%m-%d "$FIRST" +%Y-%m)
-LAST_DESC="review-reviewers evidence: $TARGET $LAST_MONTH"
-LAST_GIST_ID=$(gh api /gists --paginate \
-  --jq ".[] | select(.description == \"$LAST_DESC\") | .id" | head -1)
-[ -n "$LAST_GIST_ID" ] && gh gist view "$LAST_GIST_ID" -f findings.md --raw > /tmp/last-month-findings.md
-```
-
-### Recording below-threshold findings
-
-**Append a `## Run <RUN_ID>` heading every run**, even when no problem finding exceeded a gate threshold. For an all-clear window, record a single Low-evidence "all-clear" entry as the body — window analyzed, runs and outcomes checked, no concerning signals. The heading per run is the audit trail that prior runs read to count cumulative occurrences and confirm which spans were analyzed; missing entries leave gaps that erode gate evaluation across runs.
-
-After applying the gates, write each run's new findings (format in `@review-gates.md`) to `/tmp/findings.md`, then append them to the gist's `findings.md`. Reuse the current content already fetched into `/tmp/current.md` in "Reading historical evidence", concatenate, and PATCH via the API (`--rawfile` preserves trailing newlines that command substitution would strip):
-
-```bash
-# Verify the run heading references this run's $GITHUB_RUN_ID literally —
-# fabricated round numbers produce dead Workflow links, see @review-gates.md.
-grep -qF "$GITHUB_RUN_ID" /tmp/findings.md || {
-  echo "ERROR: /tmp/findings.md does not contain \$GITHUB_RUN_ID=$GITHUB_RUN_ID — refusing to PATCH gist" >&2
-  exit 1
-}
-cat /tmp/current.md /tmp/findings.md > /tmp/combined.md
-jq -n --rawfile content /tmp/combined.md \
-  '{files: {"findings.md": {content: $content}}}' \
-  | gh api "/gists/$GIST_ID" -X PATCH --input -
-```
-
-Never replace wholesale — prior entries contain per-run evidence needed for gate evaluation. See `@review-gates.md` for the per-finding format.
+The command refuses a findings file that does not name this run, fetches the
+latest gist content, and appends without replacing prior evidence.
 
 ## Step 1: Setup
 
@@ -203,7 +110,8 @@ If the file doesn't exist, try common alternatives (`.claude/skills/running-tend
 Then list recently completed tend CI runs on the target repo:
 
 ```bash
-TARGET_REPO=$ARGUMENTS ${CLAUDE_PLUGIN_ROOT}/scripts/list-recent-runs.sh
+TARGET_REPO=$ARGUMENTS uv run --script \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/list_recent_runs.py" review-reviewers
 ```
 
 The script discovers `tend-*` workflows by default. Pass additional prefixes as arguments to include other workflows (e.g., `review-reviewers` when analyzing tend itself).
@@ -427,7 +335,7 @@ Search titles AND bodies for related keywords. Only comment on existing issues i
 
 **Prefer PRs over issues.** A PR with a clear description is immediately actionable.
 
-- **PR** (default): Branch `review-reviewers/$GITHUB_RUN_ID-<target-repo-name>-<topic-slug>`, fix, commit, push, create with label `claude-behavior`. `$GITHUB_RUN_ID` alone is not a unique branch name: every matrix leg of a run carries the same one, and a single leg may open two PRs (see the 2-PR limit below). The target's repo name (the part after the `/`) keeps two legs from racing the same ref; the topic slug keeps one leg's two PRs from doing the same. Lead the PR description with two or three sentences — problem, fix, verification — and put the full analysis (run ID, outcome evidence, root cause, **gate assessment** including historical evidence count) inside `<details>`. Don't also create a separate issue.
+- **PR** (default): Branch `review-reviewers/$GITHUB_RUN_ID-<target-repo-name>-<topic-slug>`, fix, commit, push, create with label `claude-behavior`. `$GITHUB_RUN_ID` alone is not a unique branch name: every matrix leg of a run carries the same one, and a single leg may open two PRs (see the 2-PR limit below). The target's repo name (the part after the `/`) keeps two legs from racing the same ref; the topic slug keeps one leg's two PRs from doing the same. Write the description for a maintainer deciding whether the current change fixes the general behavior gap, following **Reader-facing prose** in `running-in-ci`. The evidence gist already carries the run history, outcome evidence, and gate assessment; link it and include only what the reader needs to understand this change. Don't also create a separate issue.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly. Include run ID, outcome evidence, root cause analysis.
 
 Group multiple findings by broad theme. **Limit to at most 2 PRs per run** — if you have more findings, pick the highest-confidence ones and record the rest in the evidence gist.

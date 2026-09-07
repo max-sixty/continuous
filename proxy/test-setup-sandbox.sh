@@ -46,7 +46,7 @@ plant() {
   printf '#!/bin/sh\necho shared\n' | sudo tee "$shared/tend-shared" >/dev/null
   printf '#!/bin/sh\necho adopter-uv\n' | sudo tee "$shared/uv" >/dev/null
   sudo chmod +x "$shared/tend-shared" "$shared/uv"
-  # setup-sandbox must capture this PATH entry as tool data without resolving
+  # setup_sandbox.py must capture this PATH entry as tool data without resolving
   # its privileged utilities through an adopter-controlled directory.
   printf '#!/bin/sh\nexit 99\n' >"$bin/sudo"
   chmod +x "$bin/sudo"
@@ -58,7 +58,7 @@ plant() {
 }
 
 setup() {
-  local action_run agent_path path_entry
+  local action_run agent_path hostile_python hostile_site path_entry
   set_inputs
   # The workspace path leads; a literal `~` exercises expansion against the
   # sandbox home. The configured directory may be populated later.
@@ -68,19 +68,38 @@ setup() {
   # context, so this entry is accepted and lands in $AGENT_ENV_FILE. That the
   # real workflow name then beats it is _sandbox.py's
   # postcondition, unit-tested there; what this adds is the whole path — a
-  # config value threaded through setup-sandbox.sh into the file, composed by
+  # config value threaded through setup_sandbox.py into the file, composed by
   # the lib, landing in a real sandbox under a real uid.
   export TEND_SANDBOX_ENV="GITHUB_WORKFLOW=spoofed-by-sandbox-env"
   MITMPROXY_VERSION=$(yq -e '.inputs.mitmproxy_version.default' claude/action.yaml)
   export MITMPROXY_VERSION
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml) \
     UV_INSTALL_DIR="$TEND_UV_DIR" bash shared/steps/install-uv.sh
+  # The setup step receives both real credentials. Repository-controlled
+  # Python and uv environment variables must not execute code before the
+  # runner-owned script has established the sandbox boundary.
+  hostile_python="$RUNNER_TEMP/tend-hostile-python"
+  hostile_site="$RUNNER_TEMP/tend-hostile-site"
+  mkdir -p "$hostile_site"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    "touch '$RUNNER_TEMP/uv-python-used'" \
+    'exec /usr/bin/python3 "$@"' >"$hostile_python"
+  chmod +x "$hostile_python"
+  printf '%s\n' \
+    'from pathlib import Path' \
+    "Path('$RUNNER_TEMP/pythonpath-used').touch()" \
+    >"$hostile_site/sitecustomize.py"
+  export UV_PYTHON="$hostile_python"
+  export PYTHONPATH="$hostile_site"
   # Exercise the composite action's entrypoint rather than calling the setup
   # script directly. The boundary depends on the PATH the action passes in.
   action_run=$(yq -er '.runs.steps[] | select(.name == "Set up credential-isolation sandbox") | .run' claude/action.yaml)
   action_run=${action_run//'${{ github.action_path }}'/"$GITHUB_WORKSPACE/claude"}
   /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run" \
     | tee "$RUNNER_TEMP/setup.log"
+  test ! -e "$RUNNER_TEMP/uv-python-used"
+  test ! -e "$RUNNER_TEMP/pythonpath-used"
 
   agent_path=$(sed -n 's/^\[setup-sandbox\] sandbox PATH: //p' "$RUNNER_TEMP/setup.log")
   test -n "$agent_path"
@@ -190,7 +209,8 @@ verify_refusals() {
   set_inputs
   export MITMPROXY_VERSION=0
   TEND_SANDBOX_PATH="$RUNNER_TEMP/tend-runner-home-alias" \
-    bash proxy/setup-sandbox.sh >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
+    "$TEND_UV_DIR/uv" run --script proxy/setup_sandbox.py \
+    >"$RUNNER_TEMP/refused.log" 2>&1 && rc=0 || rc=$?
   # Actions parses workflow commands out of step output; don't annotate this
   # passing refusal test with the error it deliberately provokes.
   sed 's/^::error::/refused: /' "$RUNNER_TEMP/refused.log"
@@ -198,10 +218,70 @@ verify_refusals() {
   grep -q "::error::sandbox_path entry .* is under the runner's home" \
     "$RUNNER_TEMP/refused.log"
 
-  GITHUB_WORKSPACE='' bash proxy/setup-sandbox.sh \
+  GITHUB_WORKSPACE='' "$TEND_UV_DIR/uv" run --script proxy/setup_sandbox.py \
     >"$RUNNER_TEMP/empty-workspace.log" 2>&1 && empty_rc=0 || empty_rc=$?
   test "${empty_rc:-0}" -ne 0
   grep -q '::error::GITHUB_WORKSPACE must name' "$RUNNER_TEMP/empty-workspace.log"
+}
+
+# Exercise codex/runner.py across the real uid boundary with a stub binary. The
+# Python tests replace subprocess.run; this pins the actual sudo/env crossing
+# and proves the runner's GitHub and OpenAI credentials do not reach Codex.
+verify_codex_launch() {
+  local stub launch_env argv_file github_output dummy_token
+  stub="$GITHUB_WORKSPACE/.tend-explicit/bin/codex-stub"
+  launch_env="$TEND_RUN_DIR/codex-launch-env.txt"
+  argv_file="$TEND_RUN_DIR/codex-argv.txt"
+  github_output="$RUNNER_TEMP/codex-github-output"
+  dummy_token=$(sed -n 's/^GITHUB_TOKEN=//p' "$AGENT_ENV_FILE")
+  test -n "$dummy_token"
+
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    "env > '$launch_env'" \
+    "printf '%s\\n' \"\$@\" > '$argv_file'" \
+    'while [ "$#" -gt 0 ]; do' \
+    '  if [ "$1" = --output-last-message ]; then' \
+    '    printf "codex final\n" > "$2"' \
+    '    break' \
+    '  fi' \
+    '  shift' \
+    'done' \
+    | sudo -u "$SANDBOX" tee "$stub" >/dev/null
+  sudo -u "$SANDBOX" chmod +x "$stub"
+  rm -f "$github_output"
+
+  CODEX_BIN="$stub" AUTH_MODE=api-key \
+    CODEX_PROXY_URL=http://127.0.0.1:1234 \
+    CODEX_SANDBOX_MODE=danger-full-access MODEL=stub-model EFFORT=high \
+    PROMPT='stub prompt' BOT_NAME=stub-bot BOT_ID=123 \
+    GITHUB_TOKEN=runner-token-must-not-cross \
+    OPENAI_API_KEY=runner-openai-key-must-not-cross \
+    GITHUB_OUTPUT="$github_output" \
+    python3 codex/runner.py run
+
+  sudo cp "$launch_env" "$RUNNER_TEMP/codex-launch-env.txt"
+  sudo cp "$argv_file" "$RUNNER_TEMP/codex-argv.txt"
+  grep -q "^GITHUB_TOKEN=$dummy_token$" "$RUNNER_TEMP/codex-launch-env.txt"
+  grep -q "^GITHUB_REPOSITORY=$GITHUB_REPOSITORY$" \
+    "$RUNNER_TEMP/codex-launch-env.txt"
+  grep -q '^BOT_NAME=stub-bot$' "$RUNNER_TEMP/codex-launch-env.txt"
+  grep -q '^BOT_ID=123$' "$RUNNER_TEMP/codex-launch-env.txt"
+  if grep -qE 'runner-token-must-not-cross|runner-openai-key-must-not-cross' \
+    "$RUNNER_TEMP/codex-launch-env.txt"; then
+    echo "::error::a runner credential crossed into Codex"
+    exit 1
+  fi
+  if grep -qE '^GITHUB_(ENV|PATH|OUTPUT|STATE|STEP_SUMMARY)=' \
+    "$RUNNER_TEMP/codex-launch-env.txt"; then
+    echo "::error::a runner command-file path crossed into Codex"
+    exit 1
+  fi
+  grep -qxF danger-full-access "$RUNNER_TEMP/codex-argv.txt"
+  grep -qxF 'model_provider="tend-openai"' "$RUNNER_TEMP/codex-argv.txt"
+  test "$(sed -n 's/^final_message=//p' "$github_output" | base64 -d)" = \
+    'codex final'
+  echo "[test-setup-sandbox] Codex credential crossing verified"
 }
 
 # The agent launch itself: shared/steps/run_claude.py composes the settings and
@@ -356,10 +436,11 @@ case "${1:-}" in
   install-agent-uv) install_agent_uv ;;
   verify) verify ;;
   verify-refusals) verify_refusals ;;
+  verify-codex-launch) verify_codex_launch ;;
   verify-launch) verify_launch ;;
   cleanup) cleanup ;;
   *)
-    echo "usage: $0 {plant|setup|install-agent-uv|verify|verify-refusals|verify-launch|cleanup}" >&2
+    echo "usage: $0 {plant|setup|install-agent-uv|verify|verify-refusals|verify-codex-launch|verify-launch|cleanup}" >&2
     exit 2
     ;;
 esac

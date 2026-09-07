@@ -49,10 +49,10 @@ Four pieces:
 
 1. **Plugins** — `install-tend` (user-facing setup) and `tend-ci-runner` (CI
    skills). Both ship from the same marketplace.
-2. **Composite action(s)** — the stable interface, pinned to an immutable
-   release tag (`max-sixty/tend/<harness>@X.Y.Z`, the generator's own version
-   — no floating `v1`). Every harness lives under a harness-named path; there
-   is no bare-root default. One per harness:
+2. **Composite actions** — the stable interface, pinned to an immutable
+   release tag (`max-sixty/tend/<action-path>@X.Y.Z`, the generator's own version
+   — no floating `v1`). Every action lives under a harness-named path; there
+   is no bare-root default. The two harness runners are:
    - `max-sixty/tend/claude@X.Y.Z` (Claude) — runs the official `claude`
      binary headless (`claude -p`) as a non-sudo sandbox user behind the
      credential-injecting proxy; completion is the process exit code.
@@ -63,9 +63,14 @@ Four pieces:
      `/tend-ci-runner:NAME` slash commands. Inputs in `codex/action.yaml`.
      Shares the cross-harness preflight/teardown scripts under `shared/steps/`.
 
-   All actions resolve the bot's numeric ID at runtime, run security and
-   rate-limit preflight, and upload session logs. The actions don't know
-   or care about triggers, checkout, or project setup.
+   Both harness runners resolve the bot's numeric ID at runtime, run security
+   and rate-limit preflight, and upload session logs. They don't know or care
+   about triggers, checkout, or project setup.
+
+   `max-sixty/tend/codex/refresh@X.Y.Z` is the Codex support action. A generated
+   serialized workflow runs it weekly to rotate Plus/Pro credentials and
+   publish the full and access-only bundles. It holds no bot token and does not
+   inspect adopter code. Inputs in `codex/refresh/action.yaml`.
 
    Removed: `claude-interactive`, a PTY-supervised variant of the same binary
    that existed only to dodge the 2026-06-15 Agent SDK metering (which covered
@@ -110,11 +115,14 @@ tend/
 │   └── action.yaml       # Claude harness composite action (default, headless)
 ├── codex/
 │   ├── action.yaml       # Codex harness composite action
+│   ├── refresh/
+│   │   └── action.yaml   # Serialized Plus/Pro credential refresh action
+│   ├── runner.py         # Codex harness commands (plugin, prompt, execution)
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
 ├── shared/
 │   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
 │   └── system-prompt.md  # Harness-neutral system prompt base
-├── proxy/                # Credential-injection proxy (setup-sandbox.sh, addon)
+├── proxy/                # Credential-injection proxy (setup_sandbox.py, addon)
 ├── generator/            # Python package (uvx tend@latest), uv_build backend
 │   ├── src/tend/
 │   │   ├── config.py     # Reads .config/tend.yaml
@@ -236,9 +244,12 @@ across runs. The `user` scope lets `install-tend` set the bot's profile
 bio (`PATCH /user`) so the account's authorization stance is discoverable
 on the bot's user page.
 
-Classic PATs are all-or-nothing — `public_repo` grants full write to every
-public repo the user can access. Fine-grained PATs allow per-category
-scoping but don't support outside collaborators ([GitHub roadmap
+The agent may use PAT-backed GitHub API and git access for any repository the
+bot account can reach; this cross-repository access is intentional. Credential
+isolation keeps the PAT itself out of the agent process. If the PAT is stolen
+by compromising the runner or proxy, its `public_repo` scope grants full write
+to every public repository the bot can access. Fine-grained PATs allow
+per-category scoping but don't support outside collaborators ([GitHub roadmap
 #601](https://github.com/github/roadmap/issues/601), not shipped).
 
 **Current privilege model: write + branch protection + environment gate.**
@@ -314,14 +325,17 @@ timestamp and job start) into the prompt — over ~40 s indicates the job was
 queued behind another run, making conversation drift more likely.
 Notifications stay unread until a poll records an outcome, so the newest
 pending run covers a replaced poll. ci-fix keeps the default too, and wants
-it: while a session works a red branch, the newest failure carries that
-branch's current state, so replacing the pending run loses nothing.
+it: while a session works a red branch, the newest unsuccessful run carries
+that branch's current state, so replacing the pending run loses nothing.
 
 ## Skill design: bundled for everyone, overlay for one
 
 Bundled skills in `plugins/tend-ci-runner/skills/` supply defaults. Consumer
 repos overlay them at `.claude/skills/running-tend/SKILL.md`; where the two
 conflict, the overlay wins.
+
+`.agents/skills` links to `.claude/skills`, so Claude and Codex discover the
+same repo-local skills.
 
 When writing a bundled skill, keep the content universal — it applies to
 every consumer. Repo-specific policy, taste, or convention (PR title

@@ -33,6 +33,11 @@ The two admin-gated operations are:
   by `creation`, so a deleted tag can't be substituted with malicious
   code; the only damage is brief availability of the tag itself.
 
+GitHub's immutable-releases setting closes the adjacent Releases API path:
+once a release is published, its record, assets, and associated tag are
+locked. The setting is prospective, so install-tend enables it before the
+next release and `tend check` verifies it directly.
+
 The "all tags" scope is deliberate: matching every tag removes a per-repo
 pattern choice and keeps the chain a single uniform rule. Adopters that
 need a narrower or layered configuration (per-pattern rulesets,
@@ -98,26 +103,33 @@ in depth.
 | Bot token (App) | ~1 hour | Same as PAT, until the token expires | Same, plus auto-expiry |
 | Claude OAuth | Long-lived | Run Claude sessions billed to the account | Access GitHub |
 | `OPENAI_API_KEY` | Until revoked | Run Codex/OpenAI calls billed to the account | Access GitHub |
+| `CODEX_AUTH_JSON` | Current access-token lifetime | Run Codex against the ChatGPT account | Refresh itself or access GitHub |
+| `CODEX_REFRESH_AUTH_JSON` | Rotating, effectively long-lived | Mint new ChatGPT access and refresh tokens | Access GitHub |
+| `CODEX_REFRESH_PAT` | Until revoked | Rewrite secrets and configuration in this repo's `tend` environment | Read secret values or push code |
 
-## Codex auth.json is not supported
+## Experimental Codex subscription auth
 
-`harness: codex` accepts only `OPENAI_API_KEY`. The subscription
-`auth.json` path is not exposed because Codex rotates that refresh
-token on every API call and invalidates the prior one after a short
-grace window. Tend runs multiple workflows concurrently
-(review/mention/triage/nightly/…), so each in-flight job's call
-invalidates the credential the other in-flight jobs are using — a
-scheduled refresher works around the ~8-day full-rotation schedule
-but cannot solve the per-call collision between concurrent jobs.
-OpenAI's own
-[CI/CD auth guide](https://developers.openai.com/codex/auth/ci-cd-auth)
-forbids sharing one `auth.json` across concurrent jobs and
-discourages it for public repos.
+Sharing Codex's normal `auth.json` does not work: a consumer near access-token
+expiry, or one recovering from a 401, can rotate the refresh token and leave
+every other runner with invalid state. Tend instead stores two projections:
 
-If `auth.json` was previously installed, replace it with an
-`OPENAI_API_KEY` secret and delete the `CODEX_AUTH_JSON` and
-`CODEX_REFRESH_PAT` secrets plus any `codex-auth-refresh.yaml`
-workflow.
+- `CODEX_AUTH_JSON` uses Codex's internal `chatgptAuthTokens` mode and has an
+  empty refresh token. Every consumer may reuse its bearer token concurrently,
+  but none can rotate the chain.
+- `CODEX_REFRESH_AUTH_JSON` is the normal full `chatgpt` bundle. Only the
+  serialized `tend-codex-auth-refresh` workflow reads it. Once OpenAI rotates
+  the token, that workflow writes the full replacement first and the derived
+  access-only bundle second.
+
+`CODEX_REFRESH_PAT` is a fine-grained maintainer token scoped to this repository
+with `Environments: write`; the workflow needs it because `GITHUB_TOKEN` cannot
+rewrite Actions environment secrets. It is never passed to an agent session.
+
+The consumer path is experimental and may break when OpenAI changes Codex
+because it depends on an internal auth mode. The serialized weekly job runs
+Codex's built-in refresh and persists its updated `auth.json`. Use a dedicated
+ChatGPT account so the workflow's token rotation is independent of a
+maintainer's local Codex login.
 
 ## Token assignment
 
@@ -133,7 +145,8 @@ harness-auth credential whose form depends on `harness` in
 | Bot token (PAT or App) | GitHub API and git operations. Consistent bot identity. |
 | Harness auth (one of, per harness) | Authenticates the agent runtime. |
 | ↳ Claude OAuth token | `harness: claude`: authenticates Claude Code to the Anthropic API. |
-| ↳ `OPENAI_API_KEY` | `harness: codex`: standard OpenAI API key, per-token billing. The subscription `auth.json` path is not supported (see above). |
+| ↳ Codex subscription trio | `harness: codex`: access-only consumer auth plus one weekly rotating writer (experimental; see above). |
+| ↳ `OPENAI_API_KEY` | `harness: codex`: standard OpenAI API key, per-token billing. |
 
 A single bot token is safe across workflows because the merge restriction
 caps the blast radius. One token also gives consistent bot identity for

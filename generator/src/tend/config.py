@@ -48,6 +48,9 @@ STANDARD_WORKFLOWS = {
 }
 KNOWN_WORKFLOWS = {
     *STANDARD_WORKFLOWS,
+    # Generated whenever at least one workflow uses Codex. It still honors
+    # the common workflow enabled/override contract.
+    "codex-auth-refresh",
     # install-test is opt-in via `tend init --with-install-test` but still
     # honors workflow_extra / jobs overrides from .config/tend.yaml.
     "install-test",
@@ -59,6 +62,7 @@ KNOWN_TOP_LEVEL = {
     "harness",
     "model",
     "effort",
+    "args",
     "protected_branches",
     "secrets",
     "setup",
@@ -72,13 +76,17 @@ KNOWN_SECRETS_KEYS = {"allowed"}
 
 # The operational secrets, by fixed name. Claude reads the OAuth token
 # (subscription) or the API key (console.anthropic.com) — adopters set one;
-# Codex reads the OpenAI key. Not configurable: `install-tend` creates the
+# Codex reads either the OpenAI key or an access-only ChatGPT auth bundle.
+# Not configurable: `install-tend` creates the
 # `tend` environment and fills it from scratch, so there is no pre-existing
 # secret whose name an adopter would want to keep.
 BOT_TOKEN_SECRET = "TEND_BOT_TOKEN"
 CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"
 ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY"
 OPENAI_KEY_SECRET = "OPENAI_API_KEY"
+CODEX_AUTH_SECRET = "CODEX_AUTH_JSON"
+CODEX_REFRESH_AUTH_SECRET = "CODEX_REFRESH_AUTH_JSON"
+CODEX_REFRESH_PAT_SECRET = "CODEX_REFRESH_PAT"
 MEMORY_GIST_SECRET = "TEND_MEMORY_GIST_ID"
 OPERATIONAL_SECRETS = {
     MEMORY_GIST_SECRET,
@@ -86,6 +94,9 @@ OPERATIONAL_SECRETS = {
     CLAUDE_TOKEN_SECRET,
     ANTHROPIC_API_KEY_SECRET,
     OPENAI_KEY_SECRET,
+    CODEX_AUTH_SECRET,
+    CODEX_REFRESH_AUTH_SECRET,
+    CODEX_REFRESH_PAT_SECRET,
 }
 # Keys that once renamed those secrets. A leftover one is refused rather
 # than warned past: ignoring it would generate workflows reading the fixed
@@ -107,7 +118,7 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # redirect the agent's traffic off the injecting proxy or clobber the dummy
 # credentials the proxy swaps for the real secrets. `PATH` is reserved too:
 # use `sandbox_path` (which prepends to the fixed base) instead of replacing it.
-# Kept in sync with the `case "$name"` guard in proxy/setup-sandbox.sh — the
+# Kept in sync with RESERVED_SANDBOX_ENV in proxy/setup_sandbox.py — the
 # `sandbox-env-reserved-parity` pre-commit hook fails the commit on drift.
 RESERVED_SANDBOX_ENV = {
     "HOME",
@@ -130,6 +141,10 @@ RESERVED_SANDBOX_ENV = {
     "CLAUDE_CODE_REMOTE",
     "ANTHROPIC_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_AUTH_JSON",
+    "CODEX_HOME",
 }
 
 
@@ -182,6 +197,10 @@ class WorkflowConfig:
     # overrides — top-level `model` may not be valid for the new harness.
     # None means inherit from top-level `model`.
     model: str | None = None
+    # Per-workflow effort and CLI argument overrides. None means inherit from
+    # the top level; an empty args list clears top-level arguments.
+    effort: str | None = None
+    args: list[str] | None = None
 
 
 # Claude model allowlist — the set is small and stable enough that a
@@ -198,10 +217,11 @@ DEFAULT_MODEL_BY_HARNESS = {
     "claude": "opus",
     "codex": "gpt-5.5",
 }
-# Codex `--config model_reasoning_effort=...` values, per the supported
-# levels Codex's models_cache advertises for every current model. Claude does
-# not use this field. Empty string means "leave at Codex CLI default".
-KNOWN_EFFORTS = {"", "low", "medium", "high", "xhigh"}
+# Empty string leaves effort at the harness CLI's model-specific default.
+KNOWN_EFFORTS_BY_HARNESS = {
+    "claude": {"", "low", "medium", "high", "xhigh", "max"},
+    "codex": {"", "low", "medium", "high", "xhigh"},
+}
 
 
 @dataclass
@@ -214,6 +234,8 @@ class Config:
     effort: str
     setup: list[SetupStep]
     workflows: dict[str, WorkflowConfig]
+    # Exact additional argv elements passed to the selected harness CLI.
+    args: list[str] = field(default_factory=list)
     # Runtime kill switch. Generated workflows stay installed and read this
     # value from the default branch at the start of every operational job.
     enabled: bool = True
@@ -225,12 +247,11 @@ class Config:
     # (gh unavailable, or no default repo configured).
     repo_owner: str = ""
     allowed_repo_secrets: list[str] = field(default_factory=list)
-    # Adopter levers that reach *inside* the Claude sandbox, before the
+    # Adopter levers that reach inside either harness's sandbox, before the
     # agent launches (runner-side `setup:` doesn't — it runs as the runner user
     # around the composite action). `sandbox_path` prepends dirs to the sandbox
     # PATH; `sandbox_env` adds NAME=VALUE pairs to the agent's launch env;
-    # `sandbox_setup` runs shell commands as the sandbox user. Inert for the
-    # codex harness, whose agent already runs on the runner and sees `setup:`.
+    # `sandbox_setup` runs shell commands as the sandbox user.
     sandbox_path: list[str] = field(default_factory=list)
     sandbox_env: dict[str, str] = field(default_factory=dict)
     sandbox_setup: list[str] = field(default_factory=list)
@@ -307,16 +328,9 @@ class Config:
                 f"(known: {', '.join(sorted(known_models))})"
             )
 
-        effort = raw.get("effort", "")
-        if effort not in KNOWN_EFFORTS:
-            raise click.ClickException(
-                f"effort '{effort}' is not recognized "
-                f"(known: {', '.join(sorted(e for e in KNOWN_EFFORTS if e))})"
-            )
-        if effort and harness != "codex":
-            raise click.ClickException(
-                f"effort is only valid for harness = 'codex' (got harness = '{harness}')"
-            )
+        effort = _parse_effort(raw.get("effort", ""), harness, model, "effort")
+
+        args = _parse_args(raw.get("args", []), "args")
 
         memory_gist = raw.get("memory_gist", False)
         if not isinstance(memory_gist, bool):
@@ -538,11 +552,26 @@ class Config:
                     )
                 wf_harness = wf_raw.get("harness")
                 wf_model = wf_raw.get("model")
+                wf_args = (
+                    _parse_args(wf_raw["args"], f"workflows.{name}.args")
+                    if "args" in wf_raw
+                    else None
+                )
                 if wf_harness is not None and wf_harness not in KNOWN_HARNESSES:
                     raise click.ClickException(
                         f"workflows.{name}.harness '{wf_harness}' is not recognized "
                         f"(known: {', '.join(sorted(KNOWN_HARNESSES))})"
                     )
+                wf_effort = (
+                    _parse_effort(
+                        wf_raw["effort"],
+                        wf_harness or harness,
+                        wf_model or model,
+                        f"workflows.{name}.effort",
+                    )
+                    if "effort" in wf_raw
+                    else None
+                )
                 # Validate the effective (harness, model) pair this workflow
                 # will run with. Three cases to cover, all gated on "the
                 # user overrode something at the workflow level":
@@ -589,6 +618,18 @@ class Config:
                         f"allowlist and likely won't apply to {wf_harness}. "
                         f"Set `workflows.{name}.model:` to a valid {wf_harness} model."
                     )
+                if wf_effort is None and (
+                    wf_harness is not None or wf_model is not None
+                ):
+                    eff_harness = wf_harness or harness
+                    eff_model = wf_model or model
+                    _parse_effort(
+                        effort,
+                        eff_harness,
+                        eff_model,
+                        "effort",
+                        inherited_by=f"workflows.{name}",
+                    )
                 wf_prompt = wf_raw.get("prompt", "")
                 if wf_prompt is None:  # `prompt:` with nothing after it
                     wf_prompt = ""
@@ -632,29 +673,15 @@ class Config:
                     jobs=jobs_raw,
                     harness=wf_harness,
                     model=wf_model,
+                    effort=wf_effort,
+                    args=wf_args,
                 )
             else:
                 workflows[name] = WorkflowConfig(enabled=bool(wf_raw))
 
-        # The sandbox_* levers reach inside the Claude proxy sandbox and
-        # no-op under codex (whose agent runs on the runner, already reachable
-        # via `setup:`). Warn only when they'd be fully inert — i.e. no enabled
-        # workflow's *effective* harness is Claude. This mirrors the
-        # render gate (macros.yaml.j2 emits them per effective harness): a
-        # top-level `codex` with a per-workflow `claude` override does apply
-        # them, so don't warn there.
+        # Both harnesses run behind the same credential-isolation sandbox;
+        # these levers therefore apply to either one.
         enabled_harnesses = _enabled_harnesses(harness, workflows)
-        if (
-            sandbox_path or sandbox_env or sandbox_setup
-        ) and "claude" not in enabled_harnesses:
-            click.echo(
-                "Warning: sandbox_path/sandbox_env/sandbox_setup apply only "
-                "to the Claude harness (the proxy sandbox). The "
-                "codex harness runs the agent on the runner, where the "
-                "`setup:` section already reaches its environment.",
-                err=True,
-            )
-
         if memory_gist and "claude" not in enabled_harnesses:
             raise click.ClickException(
                 "memory_gist is experimental and requires at least one enabled "
@@ -691,6 +718,7 @@ class Config:
             harness=harness,
             model=model,
             effort=effort,
+            args=args,
             setup=setup,
             sandbox_path=sandbox_path,
             sandbox_env=sandbox_env,
@@ -700,6 +728,54 @@ class Config:
             workflows=workflows,
             allowed_repo_secrets=allowed,
         )
+
+
+def _parse_args(raw: object, key: str) -> list[str]:
+    """Validate exact CLI argument elements from one config key."""
+    if not isinstance(raw, list) or not all(
+        isinstance(arg, str)
+        and arg.strip()
+        and "\n" not in arg
+        and "\r" not in arg
+        and arg == arg.rstrip()
+        for arg in raw
+    ):
+        raise click.ClickException(
+            f"{key} must be a list of non-blank, single-line strings "
+            "without trailing whitespace "
+            '(e.g. ["--max-turns", "50"])'
+        )
+    return list(raw)
+
+
+def _parse_effort(
+    raw: object,
+    harness: str,
+    model: str,
+    key: str,
+    *,
+    inherited_by: str | None = None,
+) -> str:
+    """Validate an effort value against the CLI and model selected for it."""
+    source = key if inherited_by is None else f"{key} (inherited by {inherited_by})"
+    known = KNOWN_EFFORTS_BY_HARNESS[harness]
+    if not isinstance(raw, str) or raw not in known:
+        raise click.ClickException(
+            f"{source} '{raw}' is not recognized for harness '{harness}' "
+            f"(known: {', '.join(sorted(e for e in known if e))})"
+        )
+    if raw and harness == "claude" and model == "haiku":
+        if inherited_by is not None:
+            raise click.ClickException(
+                f"{source} is not supported for Claude model 'haiku'; "
+                f'set `{inherited_by}.effort: ""` to use that model\'s default '
+                "or drop the top-level `effort:`"
+            )
+        raise click.ClickException(
+            f"{key} is not supported for Claude model 'haiku'; "
+            "drop the key to use that model"
+        )
+    return raw
 
 
 def _enabled_harnesses(harness: str, workflows: dict[str, WorkflowConfig]) -> set[str]:

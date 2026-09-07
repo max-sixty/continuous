@@ -33,7 +33,7 @@ per-repo `tend-review-runs` carries the routine loop; the workflow file's header
 explains the pause.
 
 A dispatched run's window opens at the **previous successful `review-reviewers`
-run**, floored 6h back (`list-recent-runs.sh`). With no cron, dispatches usually
+run**, floored 6h back (`list_recent_runs.py`). With no cron, dispatches usually
 sit further apart than that, so the floor is the normal case: the run covers the
 last 6h and warns on stderr that the rest is a coverage gap. Dispatch it within
 ~6h of whatever you want it to see.
@@ -51,8 +51,9 @@ workflows are included:
 ```bash
 # Claude leaves this unset in the shell; Codex exports it.
 SCRIPTS="${CLAUDE_PLUGIN_ROOT:-/home/tend-sandbox/tend-marketplace/plugins/tend-ci-runner}/scripts"
-"$SCRIPTS/token-report.sh" "${HOURS:-24}" "review-"
-TARGET_REPO=max-sixty/tend "$SCRIPTS/list-recent-runs.sh" "tend-" "review-"
+uv run --script "$SCRIPTS/token_report.py" "${HOURS:-24}" "review-"
+TARGET_REPO=max-sixty/tend uv run --script \
+  "$SCRIPTS/list_recent_runs.py" review-reviewers "tend-" "review-"
 ```
 
 Under `review-runs`, `$HOURS` is the lookback derived from its Step 1 anchor —
@@ -127,55 +128,41 @@ currently-tending dot, activity feed, and stat strip. Needs no opt-in
 because the workflow files are public.
 
 ```bash
-# 1. Discover consumer repos via code search. Generated workflows pin a
-#    version tag (`max-sixty/tend/claude@X.Y.Z`, or `/codex@X.Y.Z`), so
-#    search the bare `max-sixty/tend` token (version-agnostic; GitHub code
-#    search does not index `@` or `/`, so this matches both the Claude and
-#    Codex refs).
-#    `--extension yaml` is required: without it, README/CLAUDE.md/TODO.md
-#    hits on `max-sixty/tend` itself crowd out tend's own workflow files
-#    past the 100-result cap, dropping tend from its own consumers.json.
-#    The `.github/workflows/tend-` path filter below bounds precision.
-mapfile -t DISCOVERED < <(
-  gh search code 'max-sixty/tend' --extension yaml --limit 100 --json repository,path \
-    | jq -r '.[] | select(.path | startswith(".github/workflows/tend-")) | .repository.nameWithOwner' \
-    | sort -u
-)
-
-# 2. Union with the repos already listed. Code search recall is partial — a
-#    repo carrying a full set of tend-*.yaml files can return zero hits — so
-#    rebuilding from the search alone deletes live consumers from the file the
-#    website renders. The search finds *new* consumers; step 3 decides who stays.
-mapfile -t REPOS < <(
-  { printf '%s\n' "${DISCOVERED[@]}"
-    jq -r '.[].repo' data/consumers.json 2>/dev/null; } | sort -u
-)
-
-# 3. Keep a repo while it still has generated tend workflows, and resolve
-#    bot_name from its .config/tend.yaml. An uninstall drops out here rather
-#    than by going missing from a search — but so does a repo whose `gh api`
-#    call hit a 403 or a 5xx, and nothing re-adds a repo the code index can't
-#    see. Never land a removal without re-checking that repo by hand.
-mkdir -p data
-{
-  for repo in "${REPOS[@]}"; do
-    workflows=$(gh api "repos/$repo/contents/.github/workflows" \
-      --jq '[.[] | select(.name | startswith("tend-"))] | length' 2>/dev/null) || workflows=0
-    [ "${workflows:-0}" -gt 0 ] || continue
-    bot=$(gh api "repos/$repo/contents/.config/tend.yaml" --jq '.content' 2>/dev/null \
-      | base64 -d 2>/dev/null \
-      | yq '.bot_name // ""' 2>/dev/null)
-    [ -n "$bot" ] || continue
-    jq -nc --arg repo "$repo" --arg bot "$bot" '{repo: $repo, bot_name: $bot}'
-  done
-} | jq -s . > data/consumers.json
+uv run --script \
+  .claude/skills/running-tend/scripts/refresh_consumers.py
 ```
+
+The command unions code-search results with the current index, verifies each
+repository, and leaves the existing file untouched if a GitHub read fails.
+Confirm every repository listed under `removed` no longer has generated Tend
+workflows before publishing the change.
 
 Open a PR titled `chore: refresh consumers.json` if the file changed. Skip
 the PR (no diff to land) when `git status --porcelain data/consumers.json`
 is empty — `git diff --quiet` returns 0 for untracked paths, so the
 first-run case would no-op. Code search is 10 req/min — one call covers
 the whole list.
+
+## Weekly: review harness release notes
+
+Browse the stable releases since the previous weekly run (normally one week) for
+[Claude Code](https://github.com/anthropics/claude-code/releases) and
+[Codex](https://github.com/openai/codex/releases). Most notes are internal and
+need no Tend response. Only investigate changes to behavior Tend depends on:
+headless execution and output, permissions and sandboxing, plugin and skill
+loading and invocation, model selection, or session-log formats.
+
+Changes that have required Tend work include:
+
+- Claude Code ignored `defaultMode: bypassPermissions` in project settings, so
+  Tend had to pass `--permission-mode` on argv.
+- Codex added non-interactive plugin installation. Tend's action consumes its
+  `Installed plugin root:` output to locate plugin scripts.
+
+For any similarly relevant note, search the code, issues, and PRs first. Open a
+PR when the change is small enough to make and verify in this run; reserve an
+issue for what needs a maintainer decision or verification CI can't reach,
+linking the release and proposing the change.
 
 ## Weekly: bump pinned versions
 
@@ -187,7 +174,7 @@ it here.
 ```bash
 # Composite-action inputs
 yq -r '.inputs | to_entries[] | select(.key | test("_version$"))
-  | "\(filename) \(.key) = \(.value.default)"' */action.yaml
+  | "\(filename) \(.key) = \(.value.default)"' */action.yaml */*/action.yaml
 
 # Python: `==` and upper bounds freeze a version. Floors (`click>=8.0`) state
 # compatibility instead and stay put — raising one only narrows adopter support.
@@ -226,11 +213,11 @@ where CI can't. Split PRs by who runs the result, and take what fits in one
 session rather than clearing a backlog at once — an unswept pin waits a week, a
 swamped run finishes nothing.
 
-- **Ships to adopters** — `claude/action.yaml` and `codex/action.yaml` run in
-  every adopter's job from the next release; `generator/src/tend/templates/`
-  and `workflows.py` render into their workflow files. One PR each, titled
-  `chore: bump <name> to <version>` (the uv-plus-mitmproxy PR names both), its
-  body naming what changed.
+- **Ships to adopters** — `claude/action.yaml`, `codex/action.yaml`, and
+  `codex/refresh/action.yaml` run in adopter jobs from the next release;
+  `generator/src/tend/templates/` and `workflows.py` render into their workflow
+  files. One PR each, titled `chore: bump <name> to <version>` (the
+  uv-plus-mitmproxy PR names both), its body naming what changed.
 - **Ours alone** — everything else: pre-commit revs, the workspace dev pins,
   the `uv_build` backend, npm devDependencies, `WORKTRUNK_VERSION`, the
   hand-maintained `.github/workflows/` files and `.config/tend.yaml`. One PR
@@ -245,29 +232,29 @@ swamped run finishes nothing.
 | `claude_version` | `claude/action.yaml` | npm's `latest` dist-tag, not `stable` |
 | `mitmproxy_version` | `claude/action.yaml` | move the root `pyproject.toml` `==` pin with it and `uv lock` |
 | `uv_version` | both harness `action.yaml` files | move both defaults together, with `mitmproxy_version` |
-| `codex_version` | `codex/action.yaml` | `latest`; `alpha` only for a fix not yet released |
+| `codex_version` | `codex/action.yaml`, `codex/refresh/action.yaml` | move both defaults together; `alpha` only for a fix not yet released |
 | `uv_build` | `generator/pyproject.toml` | its range must contain the uv doing the build; a stale one only warns during `uv build`, so only this sweep catches it |
 | `WORKTRUNK_VERSION` | `.config/codex-cloud/environment.sh` | nothing in CI runs the script, and it dies under `set -euo pipefail` — confirm the release still ships `worktrunk-installer.sh` and that `wt config approvals add --yes` still records approvals without a TTY |
 
 A stale `claude` binary resolves `--model opus`/`sonnet` to a superseded alias
-target, so drift silently downgrades the model. Skim the claude-code CHANGELOG
-between the two versions for anything touching the agent paths (first-run
-onboarding, `--model` alias resolution, headless `-p` result events, Stop-hook
-behavior, slash-command or Skill-tool handling) and note it in the PR.
+target, so drift silently downgrades the model. In a bump PR, report the
+release notes between the old and new pins that affect the integration surfaces
+in the release-note pass above.
 
 `mitmproxy_version` pins the process that holds the real PAT and model
 credential, so a security fix there matters here. Check anything security- or
 addon-related in its CHANGELOG against the `mitmdump` flags in
-`proxy/setup-sandbox.sh`, and report the comparison in the PR. `uv_version`
+`proxy/setup_sandbox.py`, and report the comparison in the PR. `uv_version`
 also supplies the agent fallback in both harnesses. CI smokes the installer and
 proxy together, so move uv and mitmproxy in one PR.
 
 For `codex_version`, CI's `test-codex-surface` job installs whatever is pinned
-and asserts the CLI surface the action depends on, so a bump that breaks it
-fails on its own PR. No `OPENAI_API_KEY` reaches this repo's runs, so a live
-agent session stays unverified — skim the codex CHANGELOG across the bump for
-model availability, sandbox behavior, and `--output-last-message`, and note what
-you find in the PR.
+and asserts the credential-free CLI surface the action depends on. Before a
+bump, use an isolated Plus/Pro login to run the refresh action and require both
+the full and access-only credentials to rotate. Inspect Codex's auth manager
+too: an unparsable access token must fall through to the stale `last_refresh`,
+and that refresh must use the refresh token without requiring the old access
+token. Report the relevant release notes crossed by the bump in its PR.
 
 ### `uses:` refs
 

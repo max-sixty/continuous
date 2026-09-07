@@ -39,6 +39,16 @@ inputs:
   model:
     default: "opus"
     description: Claude model to use
+  effort:
+    default: ""
+    description: >-
+      Claude effort level — low, medium, high, xhigh, or max. Empty leaves
+      effort at the model's Claude Code default.
+  args:
+    default: ""
+    description: >-
+      Additional Claude CLI arguments, one exact argument per line. They are
+      passed before Tend's managed arguments; Claude validates conflicts.
   allowed_tools:
     default: "Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch,Task,Skill"
     description: Comma-separated list of allowed tools
@@ -54,7 +64,7 @@ inputs:
     default: "false"
     description: Include the rendered Claude transcript in the workflow step summary.
   claude_version:
-    default: "2.1.251"
+    default: "2.1.263"
     description: >-
       Version of the `claude` binary to install via
       `https://claude.ai/install.sh`, pinned to a specific
@@ -77,7 +87,7 @@ inputs:
       Pinned `mitmproxy` version for the credential-injection proxy. Pinned
       so the uv download cache key is stable; bump to upgrade.
   uv_version:
-    default: "0.12.7"
+    default: "0.12.10"
     description: >-
       Pinned `uv` version. The credential-injection proxy always uses a private
       copy off $PATH. The agent gets a separate fallback after the adopter PATH,
@@ -139,12 +149,13 @@ runs:
     # one level deep).
     # A step receiving a real credential pins both its shell and child PATH;
     # adopter setup may have prepended arbitrary commands to the job PATH. Every
-    # Python body is pinned to `/usr/bin/python3` and started isolated: `-E`
-    # ignores every `PYTHON*` variable (a `PYTHONPATH` shadowing `json`, a
-    # `PYTHONSAFEPATH`) and `-s` drops the user site dir, so a
-    # `usercustomize.py` or `.pth` under the runner's `~/.local` cannot run
-    # first. Not `-I`, which implies `-P`: that removes the script's own
-    # directory from `sys.path` and breaks `import _common`.
+    # Ordinary Python bodies are pinned to `/usr/bin/python3` and started
+    # isolated: `-E` ignores every `PYTHON*` variable (a `PYTHONPATH` shadowing
+    # `json`, a `PYTHONSAFEPATH`) and `-s` drops the user site dir. The sandbox
+    # setup's PEP 723 body instead launches through pinned uv under `env -i`,
+    # with config and interpreter discovery disabled. Not `-I`, which implies
+    # `-P`: that removes the script's own directory from `sys.path` and breaks
+    # `import _common` in the shared step bodies.
     - name: Security preflight
       id: security
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
@@ -186,7 +197,7 @@ runs:
     # Restore PR-authored sensitive config (.claude, CLAUDE.md, …) from the
     # reviewed base branch to close the startup-RCE surface. Runs before the
     # credential handoff — it needs the git credential actions/checkout
-    # persisted, which setup-sandbox.sh strips. Full rationale in the script.
+    # persisted, which setup_sandbox.py strips. Full rationale in the script.
     - name: Restore sensitive config from base branch (PRs)
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sensitive-config.sh"
@@ -201,7 +212,7 @@ runs:
     - name: Compose system prompt
       id: prompt
       shell: bash
-      run: bash "${{ github.action_path }}/../shared/steps/compose-system-prompt.sh"
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/compose_system_prompt.py"
       env:
         SYSTEM_PROMPT_FILE: ${{ github.action_path }}/../shared/system-prompt.md
         BOT_NAME: ${{ steps.bot.outputs.login }}
@@ -219,9 +230,9 @@ runs:
     #     auth never reaches the agent's env or disk.
     # The proxy machinery lives at the top-level proxy/, shared with the
     # codex harness's step scripts under shared/steps/.
-    # ACTION_PATH points at the repo root so setup-sandbox.sh's
-    # `${ACTION_PATH}/proxy/inject_credentials.py` resolves.
-    # See ../proxy/setup-sandbox.sh and ../proxy/inject_credentials.py.
+    # ACTION_PATH points at the repo root so setup_sandbox.py's proxy addon
+    # path resolves. See ../proxy/setup_sandbox.py and
+    # ../proxy/inject_credentials.py.
     #
     # Runs after "Restore sensitive config" (which needs the persisted git
     # credential for its base fetch) and before the claude lifecycle — install,
@@ -242,6 +253,9 @@ runs:
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
         BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
         TEND_GH_TOKEN: ${{ inputs.github_token }}
         # The real Anthropic credential goes ONLY to the proxy (this runner-
         # owned step), never to the sandbox. The proxy injects it for
@@ -259,11 +273,34 @@ runs:
         # the agent env file. sandbox_setup (commands) runs in a later step.
         TEND_SANDBOX_PATH: ${{ inputs.sandbox_path }}
         TEND_SANDBOX_ENV: ${{ inputs.sandbox_env }}
-      run: /usr/bin/env TEND_RUNNER_TOOL_PATH="$PATH" PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../proxy/setup-sandbox.sh"
+      run: |
+        set +x
+        /usr/bin/env -i \
+          TEND_RUNNER_TOOL_PATH="$PATH" \
+          PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+          HOME="$RUNNER_TEMP" \
+          LANG=C.UTF-8 \
+          GITHUB_ENV="$GITHUB_ENV" \
+          GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+          RUNNER_TEMP="$RUNNER_TEMP" \
+          TEND_GH_TOKEN="$TEND_GH_TOKEN" \
+          TEND_ANTHROPIC_OAUTH_TOKEN="$TEND_ANTHROPIC_OAUTH_TOKEN" \
+          TEND_ANTHROPIC_API_KEY="$TEND_ANTHROPIC_API_KEY" \
+          ACTION_PATH="$ACTION_PATH" \
+          MITMPROXY_VERSION="$MITMPROXY_VERSION" \
+          TEND_UV_DIR="$TEND_UV_DIR" \
+          UV_CACHE_DIR="$UV_CACHE_DIR" \
+          UV_NO_CONFIG=1 \
+          PYTHONNOUSERSITE=1 \
+          TEND_SANDBOX_PATH="$TEND_SANDBOX_PATH" \
+          TEND_SANDBOX_ENV="$TEND_SANDBOX_ENV" \
+          "${TEND_UV_DIR}/uv" run --no-cache --no-config \
+            --no-python-downloads --python /usr/bin/python3 --script \
+            "${{ github.action_path }}/../proxy/setup_sandbox.py"
 
     # Install the claude binary into the sandbox user's home. Nothing else —
     # a language toolchain here would shadow the adopter's on the sandbox PATH.
-    # SANDBOX/AGENT_HOME come from setup-sandbox.sh via $GITHUB_ENV.
+    # SANDBOX/AGENT_HOME come from setup_sandbox.py via $GITHUB_ENV.
     - name: Install claude binary (sandbox)
       shell: bash
       run: bash "${{ github.action_path }}/../shared/steps/install-claude-binary.sh"
@@ -357,13 +394,15 @@ runs:
     # sentinel. The step body is shared/steps/run_claude.py; keeping it out of
     # this file is what lets the suite drive it (nothing lints or runs an inline
     # `run:` block in a composite action).
-    #   - settings.local.json sets `permissions.defaultMode: bypassPermissions`
-    #     plus skipDangerousModePermissionPrompt. bypassPermissions lets the bot
-    #     write Claude Code's protected paths (.devcontainer/, .github/, .husky/,
-    #     .cargo/, dotfiles) that every other mode hard-denies — which blocked
-    #     autonomous fixes. Safe here: the run is sandboxed and can only land via
-    #     reviewed PRs. No Stop/StopFailure hooks — headless completion is the
-    #     process exit.
+    #   - `--permission-mode bypassPermissions` on argv sets the mode.
+    #     settings.local.json restates it alongside
+    #     skipDangerousModePermissionPrompt, but only the flag is load-bearing:
+    #     Claude Code 2.1.257 ignores `defaultMode: bypassPermissions` in a
+    #     project settings file. That mode lets the bot write Claude Code's
+    #     protected paths (.devcontainer/, .github/, .husky/, .cargo/, dotfiles)
+    #     that every other mode hard-denies — which blocked autonomous fixes.
+    #     Safe here: the run is sandboxed and can only land via reviewed PRs.
+    #     No Stop/StopFailure hooks — headless completion is the process exit.
     #     TODO: research a more hawkish posture that keeps this write capability —
     #     e.g. an auto-mode classifier, or scoped overrides of specific protected
     #     paths — without reintroducing hard blocks.
@@ -387,6 +426,8 @@ runs:
         BOT_NAME: ${{ steps.bot.outputs.login }}
         BOT_ID: ${{ steps.bot.outputs.id }}
         TEND_MODEL: ${{ inputs.model }}
+        TEND_EFFORT: ${{ inputs.effort }}
+        TEND_ARGS: ${{ inputs.args }}
         TEND_ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
         TEND_SYSTEM_PROMPT: ${{ steps.prompt.outputs.value }}
         TEND_PROMPT: ${{ inputs.prompt }}
@@ -430,7 +471,7 @@ runs:
     # The sandbox owned the workspace during the run. Hand it back to the runner
     # so actions/checkout's post-job credential cleanup — which runs as the
     # runner and writes .git/config — doesn't warn on dubious ownership /
-    # permission. Always, so a failed run cleans up too: setup-sandbox.sh
+    # permission. Always, so a failed run cleans up too: setup_sandbox.py
     # exports SANDBOX before its first fallible step, so the guard holds even
     # when setup died mid-way (chown to self is an idempotent no-op if the
     # handoff never happened).
@@ -455,7 +496,8 @@ runs:
       shell: bash
       run: |
         if [ -f /tmp/claude/step-summary.md ]; then
-          cat /tmp/claude/step-summary.md >> "$GITHUB_STEP_SUMMARY"
+          sudo -u "$SANDBOX" cat /tmp/claude/step-summary.md \
+            | tee -a "$GITHUB_STEP_SUMMARY" >/dev/null
           echo "" >> "$GITHUB_STEP_SUMMARY"
         fi
 

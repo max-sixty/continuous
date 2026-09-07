@@ -2,6 +2,7 @@
     `block_input` indents the whole thing, so the prompt may span lines. #}
 {%- set full_prompt %}<<prompt>>
 - Run URL: ${{ github.event.workflow_run.html_url }}
+- Conclusion: ${{ github.event.workflow_run.conclusion }}
 - Commit: ${{ github.event.workflow_run.head_sha }}
 - Commit message: ${{ github.event.workflow_run.head_commit.message }}{% endset -%}
 <<header>>
@@ -14,7 +15,7 @@ on:
 
 jobs:
   fix-ci:
-    if: <<fork_guard_prefix(cfg)>>github.event.workflow_run.conclusion == 'failure'
+    if: <<fork_guard_prefix(cfg)>>contains(fromJSON('["failure", "cancelled"]'), github.event.workflow_run.conclusion)
     concurrency:
       # A red branch fails every push that follows, each on its own commit, so
       # one session per branch — not per commit — is what collapses the burst.

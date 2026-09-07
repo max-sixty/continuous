@@ -3,6 +3,29 @@
 Deferred work and unimplemented options. Each entry should justify the cost
 of building it if revisited.
 
+## Re-evaluate reader-focused public prose after release
+
+The bundled skills now give the model the reader's context and decision goal,
+while keeping a small number of output shapes as optional examples. After a
+release has accumulated a sample comparable to the baseline below, review PR
+descriptions, top-level reviews, and issue replies separately. Visible word
+counts and long paragraphs are useful alerts, but the judgment is whether the
+visible text states the conclusion, consequence, and required action without
+replaying the investigation, and whether optional examples have become de
+facto templates again.
+
+PR baseline (2026-09-01 through 2026-09-06, six consumers on 0.1.24): 93 PRs
+had a median 243 visible words; 40% had at least 300 visible words, and 39% had
+a visible paragraph of at least 100 words. Comment baseline (2026-08-20 through
+2026-09-06, seven active consumers): 629 review bodies had a median 1,984
+characters, 500 general PR comments had a median 1,734, and 164 issue, triage,
+and mention comments had a median 2,179. The comment sample excludes run
+trackers and enrichment payloads.
+
+If the new guidance improves synthesis without dropping useful context, keep
+the examples. If it does not, use the observed failures to remove an example
+or sharpen the goal rather than adding a hard length limit.
+
 ## Cut tend over to harness = "codex" (post-release)
 
 The Codex harness landed but tend itself still runs on Claude. The cutover
@@ -48,17 +71,15 @@ artifact retention either way.
 ## Auth: GitHub App alternatives to PAT — not planned
 
 **Not planned (2026-06-14).** Both alternatives below replace the classic
-PAT (long-lived, leak-permanent) with a GitHub App installation token (~1 h
-lifetime, repo-scoped), the single highest-impact change for token-leak risk
-on its own merits. Neither is being pursued: both require tend to stand up
+PAT with a GitHub App installation token (~1 h lifetime, repo-scoped). This
+would reduce the impact of a token stolen through a compromised runner or
+credential proxy. Neither is being pursued: both require tend to stand up
 and operate a hosted service (a token-minting endpoint or a full webhook
 handler), which gives up tend's defining property of stamping workflow files
 into the adopter's repo and running nothing of its own. The credential proxy
-keeps the PAT out of the agent on the Claude harness, and the environment gate
-keeps it out of any workflow the bot can start on its own. What remains is that
-the PAT is long-lived, and that the Codex harness still passes it directly; both
-are accepted, and `docs/security-model.md` records them. The analysis is kept
-for the record.
+keeps the PAT out of the agent on both harnesses, and the environment gate keeps
+it out of any workflow the bot can start on its own. Cross-repository GitHub
+access through the live proxy is intended behavior, not part of this analysis.
 
 ### Model A: token-minting service
 
@@ -153,12 +174,6 @@ implemented yet:
 - **Network isolation.** Self-hosted runners with outbound traffic
   restricted to GitHub and Anthropic API endpoints. Not viable on
   GitHub-hosted runners; significant infra overhead self-hosted.
-- **Workflow dispatch isolation.** Split each workflow into an analysis
-  job (`GITHUB_TOKEN` only, reads the diff, produces a plan) and a push
-  job (bot token, separate workflow triggered by `workflow_run`). The bot
-  token never enters a job that touches attacker-controlled code.
-  Significant complexity — every workflow becomes two with artifact
-  passing between them.
 
 ## Security channel for `tend check` drift (PVR)
 

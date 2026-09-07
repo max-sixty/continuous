@@ -65,6 +65,7 @@ IN_PROGRESS=$(gh api \
       '[.workflow_runs[]
         | select(.name | startswith("tend-"))
         | select(.id != $own and .display_title == $title)] | length')
+echo "in_progress=$IN_PROGRESS"
 ```
 
 Issue deduplication includes bot-authored PRs that cross-reference the issue. A PR with `Refs #N` may be the bot's response even when it posted no issue comment. Pad the notification time by 60 seconds because GitHub's notification index can trail the event that produced it:

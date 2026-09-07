@@ -5,10 +5,11 @@ user, supervises it to exit or timeout, then turns the finished stream-json into
 the step's exit code and ``::error::`` annotation.
 
 Reads (env): ``SANDBOX`` and ``AGENT_ENV_FILE`` (exported by
-``proxy/setup-sandbox.sh`` via ``$GITHUB_ENV``), ``RUNNER_TEMP``,
+``proxy/setup_sandbox.py`` via ``$GITHUB_ENV``), ``RUNNER_TEMP``,
 ``GITHUB_WORKSPACE``, ``GITHUB_OUTPUT``, ``TEND_MODEL``,
-``TEND_ALLOWED_TOOLS``, ``TEND_SYSTEM_PROMPT``, ``TEND_PROMPT``,
-``TEND_TIMEOUT_SEC``, ``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``, optional
+``TEND_EFFORT``, ``TEND_ARGS``, ``TEND_ALLOWED_TOOLS``,
+``TEND_SYSTEM_PROMPT``, ``TEND_PROMPT``, ``TEND_TIMEOUT_SEC``,
+``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``, optional
 ``TEND_AUTO_MEMORY_SETTINGS``, ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB``, plus the
 ``GITHUB_*`` context from Actions. ``GITHUB_STEP_SUMMARY`` is read only when
 rendering the transcript.
@@ -56,7 +57,7 @@ STDERR_TAIL_BYTES = 64 * 1024
 
 #: Characters of the agent's own reason quoted in the failure annotation.
 #: The reason is a whole assistant text block, which can be the agent's entire
-#: final answer, and ``enrich-tend-outage-issues.sh`` pastes these annotations
+#: final answer, and ``enrich_tend_outage_issues.py`` pastes these annotations
 #: into one batched issue comment under a 64 KiB cap — so an unbounded reason
 #: crowds out the other runs' rows.
 REASON_MAX_CHARS = 500
@@ -66,10 +67,12 @@ def settings(allowed_tools: str) -> dict[str, Any]:
     """``.claude/settings.local.json`` for the run.
 
     ``permissions.allow`` is built from the comma-separated ``allowed_tools``
-    input. With ``defaultMode: bypassPermissions`` the allow list is largely
-    moot (every tool is permitted), but it is retained so the listed tools stay
-    granted via the layered settings if an adopter overrides ``defaultMode`` to
-    a stricter mode.
+    input. The mode itself comes from ``--permission-mode`` on argv, not from
+    here: Claude Code 2.1.257 ignores ``defaultMode: bypassPermissions`` in a
+    project ``settings.json``/``settings.local.json`` and names the flag as the
+    way to set it. The key is left in place as the declaration of intent that
+    the flag carries out; the allow list is what a user- or managed-settings
+    layer would still narrow against.
 
     ``skipDangerousModePermissionPrompt`` pre-accepts the one-time bypass-mode
     "I accept the risks" disclaimer — the key the dialog's accept button writes,
@@ -94,6 +97,8 @@ def launch_argv(
     sandbox: str,
     agent_env_file: str,
     model: str,
+    effort: str = "",
+    extra_args: str = "",
     allowed_tools: str,
     system_prompt: str,
     prompt: str,
@@ -110,9 +115,9 @@ def launch_argv(
     assignments are the caller-appended names that docstring allows for.
 
     The model, tools and prompts are argv rather than environment: nothing on
-    the far side reads them, and ``--permission-mode`` restates what
-    ``settings.local.json`` already says so the mode survives an adopter
-    overriding that file.
+    the far side reads them, and ``--permission-mode`` is what actually sets
+    the mode — a project ``settings.local.json`` cannot, since Claude Code
+    2.1.257 ignores ``defaultMode: bypassPermissions`` there.
     """
     agent_env = _sandbox.launch_env(agent_env_file)
     if settings_file:
@@ -137,6 +142,7 @@ def launch_argv(
         f"CI={ci}",
         "claude",
         "-p",
+        *(arg for arg in extra_args.split("\n") if arg),
         "--model",
         model,
         "--permission-mode",
@@ -149,6 +155,8 @@ def launch_argv(
         "stream-json",
         "--verbose",
     ]
+    if effort:
+        argv.extend(["--effort", effort])
     if settings_file:
         argv.extend(["--settings", settings_file])
     argv.append(prompt)
@@ -316,7 +324,7 @@ def failure_reason(events: Iterable[dict[str, Any]]) -> str:
 
     A session-limit exit is non-zero and emits a ``<synthetic>`` assistant
     message ("You've hit your session limit · resets 8:30am (UTC)"), so the last
-    assistant text names the cause; ``enrich-tend-outage-issues.sh`` carries the
+    assistant text names the cause; ``enrich_tend_outage_issues.py`` carries the
     annotation into the tend-outage issue. A ``tool_use`` block is not text and
     a tool name is not a failure cause, so only ``text`` blocks are considered,
     and a blank one is no reason at all.
@@ -477,7 +485,7 @@ def main() -> int:
 
     # Written as the sandbox user so the agent can read it back. It lands in the
     # adopter's checkout untracked, next to the `.claude/skills/` they do track;
-    # setup-sandbox.sh's global gitignore for the sandbox user keeps a broad
+    # setup_sandbox.py's global gitignore for the sandbox user keeps a broad
     # `git add -A` from committing `bypassPermissions` into the session's PR.
     # `stdin` is closed on every `sudo` here: without a tty a `sudo` that needs
     # a password fails instead of waiting for one on the step's stdin. The `tee`
@@ -495,7 +503,7 @@ def main() -> int:
         check=True,
     )
 
-    # The agent's launch env is $AGENT_ENV_FILE (written by setup-sandbox.sh;
+    # The agent's launch env is $AGENT_ENV_FILE (written by setup_sandbox.py;
     # shared with the plugin-install step so the two can't drift): proxy
     # routing, CA trust for every client family, and DUMMY GitHub + Anthropic
     # credentials in the production schemes — the proxy replaces them with the
@@ -505,6 +513,8 @@ def main() -> int:
         sandbox=sandbox,
         agent_env_file=env["AGENT_ENV_FILE"],
         model=env["TEND_MODEL"],
+        effort=os.environ.get("TEND_EFFORT", ""),
+        extra_args=os.environ.get("TEND_ARGS", ""),
         allowed_tools=env["TEND_ALLOWED_TOOLS"],
         system_prompt=env["TEND_SYSTEM_PROMPT"],
         prompt=env["TEND_PROMPT"],

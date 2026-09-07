@@ -14,6 +14,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+import setup_sandbox
 from inject_credentials import (
     ANTHROPIC_HOSTS,
     BASIC_HOSTS,
@@ -26,7 +27,7 @@ from ruamel.yaml import YAML
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_pinned_mitmproxy_matches_the_action() -> None:
+def test_pinned_mitmproxy_matches_the_actions() -> None:
     # The addon imports mitmproxy.test, an internal helper, so these tests only
     # mean anything run against the version production runs. That version is
     # named twice — the workspace dev group installs it, claude/action.yaml
@@ -34,10 +35,13 @@ def test_pinned_mitmproxy_matches_the_action() -> None:
     # this suite while every adopter's proxy breaks. Assert on the installed
     # distribution rather than the pyproject text, so a lock that resolved to
     # something else fails here too.
-    action = YAML(typ="safe", pure=True).load(
-        (REPO_ROOT / "claude" / "action.yaml").read_text()
-    )
-    assert version("mitmproxy") == action["inputs"]["mitmproxy_version"]["default"]
+    pins = {
+        YAML(typ="safe", pure=True).load(
+            (REPO_ROOT / harness / "action.yaml").read_text()
+        )["inputs"]["mitmproxy_version"]["default"]
+        for harness in ("claude", "codex")
+    }
+    assert pins == {version("mitmproxy")}
 
 
 def test_proxy_starts_and_finishes_its_empty_replay(tmp_path: Path) -> None:
@@ -79,17 +83,12 @@ def test_proxy_starts_and_finishes_its_empty_replay(tmp_path: Path) -> None:
 
 
 def _allow_hosts_regex() -> re.Pattern[str]:
-    setup = (REPO_ROOT / "proxy" / "setup-sandbox.sh").read_text()
-    # `[^']*` spans newlines, so a stray example in a comment would silently
-    # win the first match — require exactly one occurrence.
-    found = re.findall(r"--allow-hosts '([^']*)'", setup)
-    assert len(found) == 1, "expected one --allow-hosts flag in proxy/setup-sandbox.sh"
     # mitmproxy compiles --allow-hosts with re.IGNORECASE; model that here.
-    return re.compile(found[0], re.IGNORECASE)
+    return re.compile(setup_sandbox.ALLOW_HOSTS, re.IGNORECASE)
 
 
 def test_allow_hosts_regex_covers_every_injected_host() -> None:
-    # The frozensets scope injection; the --allow-hosts regex in setup-sandbox.sh
+    # The frozensets scope injection; the allow-hosts regex in setup_sandbox.py
     # scopes TLS interception. A host in a frozenset the regex misses is never
     # intercepted, so its dummy is never swapped for the real secret and every
     # call to it 401s — with the proxy alive, the CA trusted and both files
@@ -158,6 +157,7 @@ def injector(monkeypatch: pytest.MonkeyPatch) -> CredentialInjector:
     monkeypatch.setenv("TEND_GH_TOKEN", "ghp_REALTOKEN")
     monkeypatch.setenv("TEND_ANTHROPIC_OAUTH_TOKEN", "sk-ant-oat01-REAL")
     monkeypatch.delenv("TEND_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("TEND_GITHUB_ONLY", raising=False)
     return CredentialInjector()
 
 
@@ -167,6 +167,7 @@ def api_key_injector(monkeypatch: pytest.MonkeyPatch) -> CredentialInjector:
     monkeypatch.setenv("TEND_GH_TOKEN", "ghp_REALTOKEN")
     monkeypatch.setenv("TEND_ANTHROPIC_API_KEY", "sk-ant-api03-REAL")
     monkeypatch.delenv("TEND_ANTHROPIC_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TEND_GITHUB_ONLY", raising=False)
     return CredentialInjector()
 
 
@@ -373,5 +374,19 @@ def test_no_anthropic_credential_refuses_to_start(
     monkeypatch.setenv("TEND_GH_TOKEN", "ghp_REALTOKEN")
     monkeypatch.delenv("TEND_ANTHROPIC_OAUTH_TOKEN", raising=False)
     monkeypatch.delenv("TEND_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("TEND_GITHUB_ONLY", raising=False)
     with pytest.raises(RuntimeError, match="Anthropic credential"):
         CredentialInjector()
+
+
+def test_github_only_mode_needs_no_anthropic_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEND_GH_TOKEN", "ghp_REALTOKEN")
+    monkeypatch.setenv("TEND_GITHUB_ONLY", "1")
+    monkeypatch.delenv("TEND_ANTHROPIC_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TEND_ANTHROPIC_API_KEY", raising=False)
+    github_only = CredentialInjector()
+    flow = _flow("api.anthropic.com", {"x-api-key": "dummy"})
+    github_only.request(flow)
+    assert flow.request.headers["x-api-key"] == "dummy"
