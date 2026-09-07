@@ -88,17 +88,24 @@ As a daily backstop for delayed notifications, retention, edited activity, and r
 
 - an open issue with no bot response to the latest human activity;
 - an open PR whose live head has no bot review, or whose latest comment, review, or inline review comment directed at the bot has no response; this includes replies to the bot's review on a fork PR;
-- failing default-branch CI with no bot fix in progress. A live-state check, like the two bullets above it: scoped neither to `ci-fix`'s watched workflows — Dependabot security updates, cron releases and doc builds fail on the default branch with no PR attached, and nothing else looks for them — nor to this run's window. Each red conclusion filters server-side under its own query, so the pages reach past a busy repo's green runs, and a run that never started (`startup_failure`, which a bad workflow file produces) or was killed at its cap is red with no PR attached like the rest. `cancelled` is left out: concurrency cancels dominate it and are not failures.
+- failing default-branch CI with no bot fix in progress. A live-state check like the two above it: scoped neither to `ci-fix`'s watched workflows — Dependabot security updates, cron releases and doc builds fail there with no PR attached, and nothing else looks for them — nor to this run's window.
 
   ```bash
   DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
+  # One server-side filter per red conclusion, to reach past a busy repo's green
+  # runs. `cancelled` is left out: concurrency cancels dominate it.
   for status in failure startup_failure timed_out; do
     gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$DEFAULT_BRANCH&status=$status&per_page=50" \
       --jq '.workflow_runs[] | {id, name, path, event, conclusion, created_at}'
   done
+  # Closure: for each distinct `path` above that is a real workflow file, its
+  # latest green default-branch run closes that path's older red rows.
+  # `dynamic/dependabot/...` paths are not files and 404 here.
+  gh api "repos/$GITHUB_REPOSITORY/actions/workflows/<basename of path>/runs?branch=$DEFAULT_BRANCH&status=success&per_page=1" \
+    --jq '.workflow_runs[0] | {name, conclusion, created_at}'
   ```
 
-  Deliberately unwindowed: a failure nobody fixed is still live on the nights after it ran, so anchoring this on `/tmp/review-runs-since` would surface each one on the single night it happened and report the rest as an all-clear. A row is closed out by a fix — a later green run of the same `name`, a fix PR, an open tracker — not by age. Key that on `name`, not `path`: Dependabot's security updates share one path, so a green sibling update would close a live advisory, while each update's own `name` carries a per-update ID and never recurs — those rows close only through a fix PR or a tracker. Tend's own failures are already in Step 1's census; the news here is every other row. Report the branch at the scope you checked: "`main` is green" is read later as covering every workflow, so name the workflows the claim rests on and how far back the page reached.
+  Unwindowed on purpose: a failure nobody fixed is still live on the nights after it ran, so anchoring on `/tmp/review-runs-since` would surface each one the night it happened and read as an all-clear afterwards. The page reaches back weeks, so most rows are already fixed and the closure call is what separates them. What it cannot close stays live: Dependabot's security updates have no workflow file, and each run's `name` carries a per-update ID that never recurs, so those rows close only through a fix PR or a tracker. Tend's own failures are already in Step 1's census; the news here is every other row. Report the scope the claim rests on — "`main` is green" is read later as covering every workflow — naming the workflows checked and how far back the page reached.
 
 Handle live work through the normal triage, review, or CI-fix guidance. Keep
 failed runs in the report as diagnostic evidence.
