@@ -32,11 +32,11 @@ Before reading the diff, run the initial snapshot. It pins the open head, resolv
 On `skip`, finish. The JSON fields replace the shell variables named below;
 `incremental_path` is either null or a file containing the commits and per-file
 line counts authored since the last review, excluding base-branch churn.
-`recovery_review_id` is the one current-head incomplete COMMENT compatible with
-this review mode, or null.
+`recovery_pending_review_id` is the one current-head private PENDING review
+compatible with this review mode, or null.
 
-After a successful `start`, every instruction below to finish without posting
-or stay silent first runs:
+After a successful `start`, run the command below only when the review pass has
+actually completed and intentionally has no reader-facing review to publish:
 
 ```bash
 /usr/bin/python3 -E -s \
@@ -44,14 +44,20 @@ or stay silent first runs:
   complete <number>
 ```
 
-Normally this is a no-op. When `start` captured a ready-for-review generation,
+Normally this exits silently. When `start` captured a ready-for-review generation,
 it submits a marker-only COMMENT review: no reader-facing prose, but durable
 state proves that the requested full pass deliberately completed without a
 verdict. Never substitute a visible “looks fine” comment.
 
-When `recovery_review_id` is non-null, bypass the already-reviewed and
-trivial-increment silent exits below. The incomplete review has outward comments
-to reconcile but does not count as a finalized verdict.
+Do not run `complete` when deferring work, abandoning an unread retargeting
+delta, or stopping on an error. Those outcomes leave review demand outstanding
+for recovery. Review runs never acknowledge a PR notification themselves;
+the notifications poll decides whether the whole conversation, including
+questions and replies outside the code review, has a current outcome.
+
+When `recovery_pending_review_id` is non-null, bypass the already-reviewed and
+trivial-increment silent exits below. The private pending review has comments to
+reconcile but does not count as a finalized verdict.
 
 When `force_full_review` is true, bypass both the already-reviewed and trivial-
 increment shortcuts: becoming ready asks for a full non-draft review.
@@ -78,19 +84,18 @@ uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
   feedback <number>
 ```
 
-`incomplete_inline_comments` are already visible on the PR but belong to a
-review whose final body was never published. Verify them against the current
-diff, but do not repeat them in a new inline comment and do not let them trigger
-the ordinary “prior feedback already covers it” silent exit.
+`pending_reviews` and `pending_inline_comments` are private to the bot and
+belong to a review GitHub accepted but Tend did not submit. Verify their prose
+and comments against the current diff and recreate every still-valid finding
+in this pass's payload; do not let them trigger the ordinary “prior feedback
+already covers it” silent exit.
 
-If `recovery_review_id` is non-null, finish or supersede that incomplete review
-in step 6. When its existing inline comments cover the review, compose the
-public body (use “See the existing inline findings.” if no other prose is
-needed) and finalize that exact ID with the recovery edit command. If the new
-pass needs additional inline comments, submit one new COMMENT containing only
-the new comments; its finalized coverage makes the older incomplete record
-inert. In either case, do not finish silently. Incomplete comments from other
-review modes remain visible context but cannot satisfy this run's verdict.
+If `recovery_pending_review_id` is non-null, rebuild or supersede that pending
+review in step 6. The publication commands delete captured pending records only
+at the final boundary. Do not take an ordinary prior-feedback silent exit: either
+recreate every still-valid finding, or, after verifying none remain, use
+`complete`. Pending comments from other review modes remain private context but
+cannot satisfy this run's verdict.
 
 **Apply the sibling-workflow dedup rule from `running-in-ci`** to both the review body and inline comments. If a prior bot comment in the conversation already covers a point — a previous review on this or an earlier commit, a `tend-mention` reply, a `tend-triage` post, anything from a tend workflow — omit it from this review and stick to diff-grounded findings. If that leaves no new diff-grounded finding on the incremental changes and the only outstanding concern is a still-unresolved thread from an earlier bot review, do not post a new review: that thread already blocks the PR, and restating "the prior thread still applies" on every push is noise. Resolve any bot threads the new commits addressed (step 8), then finish without posting. A fresh review is warranted only when the incremental diff introduces a new finding, or resolves the last open one (then approve with an empty body — the author-readiness gate under step 6 applies here too, since these are the bot's own findings closing out rather than the author's). When concurrent runs race (a new push while the first run is still responding), both see the same unanswered question — check whether a bot reply exists after the question's timestamp before answering. Address remaining unanswered questions in the review body (not via `gh pr comment`).
 
@@ -102,7 +107,7 @@ If `is_draft` is true, run a lighter review:
 - Skip the duplication scan in step 4 — the author is still shaping the design.
 - Submit as **COMMENT only**, never APPROVE. GitHub blocks approving drafts, and the author hasn't asked for a verdict yet.
 - Make the review's context clear: this is feedback on work in progress, not a merge verdict, and the author can mark it ready to request the full review.
-- Include the exact hidden marker `<!-- tend:draft-review -->` anywhere in the review body. Posting mechanics uses it to replace this COMMENT with a full verdict when the PR becomes ready; it is not part of the reader-facing prose. The submit command preserves it across a re-target or recovery edit.
+- Do not add Tend metadata to the body. The submit command uses the captured draft mode itself and strips caller-supplied Tend metadata, even if the PR becomes ready before publication.
 - Skip step 7 (CI monitoring) — drafts churn; CI failures are the author's to chase.
 - Skip step 9 (push fixes) — never push to a WIP branch.
 
@@ -249,7 +254,11 @@ Before composing the final payload, run the preflight without a command. It chec
   "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" post <number>
 ```
 
-On `skip`, post nothing and finish. A re-targeted result also prints `delta: <path>` and updates `/tmp/reviewed-head`. Read that entire file in chunks, update the review without dropping the draft marker when one is present, then run the preflight again. Do not post from the re-targeting pass.
+On `skip`, post nothing and finish. A new candidate head prints `delta: <path>`
+but does not update `/tmp/reviewed-head`. Read that entire file in chunks,
+update the review, then run `post` again. Only that second successful call
+accepts the delta and advances the reviewed-head pin. Do not publish or run
+`complete` after only the candidate pass.
 
 A non-zero exit from this commandless check means nothing was decided. Fix the
 error and re-run it. Publish only through `review_preflight.py submit`: it
@@ -264,7 +273,7 @@ prints instead of blindly submitting again.
 - Run step 5 again over the updated merged tree. The second pass must see the delta before step 6 can post against the new head.
 - Findings the delta left alone stand. Post them.
 - Findings the delta fixed drop out. If that empties the review and the delta itself reads clean, approve the new head: an empty-body approval is a verdict here, not the absence of one.
-- Finish without posting only when you can't judge the delta — it rewrites what you just reviewed, or it is a review's worth of new code in its own right. The queued run then reviews the new head in full.
+- Defer without posting only when you can't judge the delta — it rewrites what you just reviewed, or it is a review's worth of new code in its own right. Do not run `complete`; the queued or recovery run must review the new head in full.
 - Inline comments resolve against the commit the review pins, so re-verify each one against the current `gh pr diff`, which now returns the new head's. On a file the delta didn't touch, the line is unchanged and the comment stands. On one it did, move the comment to the line the code sits on now; where the line no longer falls inside a hunk, put the finding in the review body as a fenced quote with its path, as under **Recovering from inline comment 422 errors**.
 - **Read both halves of the delta file as a pair.** It contains two logs in sequence: the scoped one is the author's new code; the `base merge:` lines are base merges, and are the only place they appear. The two together distinguish an empty delta from an "Update branch" click. When a `base merge:` line appears, re-verify every inline comment against the new `gh pr diff` even if the scoped log printed nothing — the merge re-scopes hunks in files the scoped delta cannot show, so the "file the delta didn't touch" shortcut above does not hold.
 - **Also read `git show --cc <merge sha>` on a base merge**, for what the merge itself changed. Where it conflicted, the author's resolution is committed *inside* the merge, and both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. A finding the resolution already fixed must drop out. `--cc` prints only hunks differing from every parent, so a resolution that took the base side prints nothing at all — it tells you what a merge changed, never that a merge changed nothing, which is why re-verification above is unconditional.
@@ -360,41 +369,32 @@ jq --arg body "$BODY" '.body = $body' \
 
 #### Recovering from inline comment errors
 
-GitHub can persist a review body before rejecting one of its inline comments.
-The submit command makes that partial state explicit: its initial review body is
-an operation-specific hidden marker, and it replaces that marker with the
-public body only after GitHub accepts the inline comments. Partial records never
-count as coverage or readiness acknowledgment.
+The submit command creates inline feedback as a native PENDING review, which is
+visible only to the bot, and submits it only after GitHub accepts the complete
+body and comment set. Pending records never count as coverage, readiness
+acknowledgment, or reader-facing feedback.
 
 When inline submission fails, look for this exact status line:
 
 ```text
-recover: incomplete review <id>
+recover: pending review <id>
 ```
 
-If it appears, use its literal ID below; shell variables do not
-survive between agent tool calls. Move the failed inline comments into the
-review body as fenced code blocks with file paths. The command verifies that
-this ID is a marked incomplete review on the still-current head before editing
-it:
-
-```bash
-/usr/bin/python3 -E -s \
-  "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" \
-  submit <number> --edit-review <id> \
-  --body-file /tmp/updated-review-body.md
-```
+If it appears, stop this run. The next serialized review pass receives that
+literal ID and the private body/comments through `start` and `feedback`,
+revalidates them, and rebuilds the complete review. Do not submit a second
+review in this run.
 
 If the command instead prints `uncertain: review submission outcome unknown`,
 do not submit again: GitHub may have accepted the review even though the
 follow-up lookup could not observe it. Stop this run. The next PR event or the
 daily `review-runs` live-work reconciliation re-enters the normal review path,
-which reconstructs whether an incomplete review exists and either finalizes,
-supersedes, or publishes the still-uncovered review.
+which reconstructs whether a pending review exists and rebuilds or supersedes
+the still-uncovered review.
 
-If finalizing an incomplete review fails, do not create another review. Retry
-the exact edit after fixing the transient error; the hidden marker keeps the
-partial record from acting as public coverage in the meantime.
+If submitting a pending review fails, do not create another review. Its native
+PENDING state keeps the body and comments private and out of coverage until a
+serialized recovery pass rebuilds it.
 
 Prevention: before writing any inline comment, verify the target line falls inside one of the PR's diff hunks. For fixes outside the diff, use the "push a fix commit" path instead of an inline suggestion (see above).
 

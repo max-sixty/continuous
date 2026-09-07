@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -15,12 +16,14 @@ from typing import Any
 
 import github_cli
 
-DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
-LEGACY_DRAFT_REVIEW_PREFIX = "Reviewing as a draft —"
 _READY_REVIEW_RE = re.compile(r"<!-- tend:ready-review:([1-9][0-9]*) -->")
-_INCOMPLETE_REVIEW_RE = re.compile(r"<!-- tend:review-incomplete:([0-9a-f]{32}) -->")
+_REVIEW_OPERATION_RE = re.compile(
+    r"<!-- tend:review-operation:([0-9a-f]{32}):(draft|full) -->"
+)
 _RESERVED_REVIEW_MARKER_RE = re.compile(
-    r"<!--[ \t]*tend:(?:ready-review|review-incomplete):.*?-->", re.DOTALL
+    r"<!--[ \t]*tend:(?:draft-review(?:[ \t]*-->|:.*?-->)|"
+    r"(?:ready-review|review-operation):.*?-->)",
+    re.DOTALL,
 )
 FEEDBACK_QUERY = """
 query($owner:String!,$repo:String!,$number:Int!) {
@@ -69,32 +72,37 @@ def ready_review_marker(event_id: int) -> str:
     return f"<!-- tend:ready-review:{event_id} -->"
 
 
-def incomplete_review_marker(operation_id: str) -> str:
-    """Return the marker identifying one unfinished inline-review submission."""
-    marker = f"<!-- tend:review-incomplete:{operation_id} -->"
-    if _INCOMPLETE_REVIEW_RE.fullmatch(marker) is None:
-        raise ValueError("review operation ID must be 32 lowercase hexadecimal digits")
+def review_operation_marker(operation_id: str, review_mode: str) -> str:
+    """Return the marker identifying one private pending-review operation."""
+    marker = f"<!-- tend:review-operation:{operation_id}:{review_mode} -->"
+    if _REVIEW_OPERATION_RE.fullmatch(marker) is None:
+        raise ValueError(
+            "review operation needs a 32-digit lowercase hexadecimal ID and "
+            "draft or full mode"
+        )
     return marker
 
 
 def strip_review_metadata(body: str) -> str:
-    """Remove Tend's private submission markers from a public review body."""
-    return _RESERVED_REVIEW_MARKER_RE.sub("", body).strip()
+    """Remove Tend's reserved metadata from reader-facing review prose."""
+    # Keep a separator at each deletion boundary: deleting an inner marker
+    # must not join its surrounding text into a new, valid reserved marker.
+    return _RESERVED_REVIEW_MARKER_RE.sub(" ", body).strip()
 
 
 def _ready_review_ids(body: str) -> set[int]:
     return {int(match) for match in _READY_REVIEW_RE.findall(body)}
 
 
-def _incomplete_operation_id(body: str) -> str | None:
-    matches = _INCOMPLETE_REVIEW_RE.findall(body)
+def _review_operation(body: str) -> tuple[str, str] | None:
+    matches = _REVIEW_OPERATION_RE.findall(body)
     return matches[0] if len(matches) == 1 else None
 
 
-def _review_incomplete_operation_id(review: dict[str, Any]) -> str | None:
-    if review.get("state") != "COMMENTED":
+def _pending_review_operation(review: dict[str, Any]) -> tuple[str, str] | None:
+    if review.get("state") != "PENDING" or review.get("submitted_at") is not None:
         return None
-    return _incomplete_operation_id(review.get("body") or "")
+    return _review_operation(review.get("body") or "")
 
 
 def _submitted_bot_reviews(
@@ -108,13 +116,15 @@ def _submitted_bot_reviews(
     ]
 
 
-def _incomplete_reviews(
-    reviews: list[dict[str, Any]],
-) -> list[tuple[dict[str, Any], str]]:
+def _pending_reviews(
+    reviews: list[dict[str, Any]], bot: str
+) -> list[tuple[dict[str, Any], str, str]]:
     return [
-        (review, operation_id)
+        (review, operation_id, review_mode)
         for review in reviews
-        if (operation_id := _review_incomplete_operation_id(review)) is not None
+        if github_cli.actor_login(review.get("user")) == bot
+        if (operation := _pending_review_operation(review)) is not None
+        for operation_id, review_mode in [operation]
     ]
 
 
@@ -150,8 +160,7 @@ def review_state(
 ) -> dict[str, Any]:
     """Reduce GitHub review records to the state used by Tend's skills."""
     mine = _submitted_bot_reviews(reviews, bot)
-    incomplete = _incomplete_reviews(mine)
-    incomplete_ids = {review["id"] for review, _operation_id in incomplete}
+    pending = _pending_reviews(reviews, bot)
 
     def public_body(review: dict[str, Any]) -> str:
         return strip_review_metadata(review.get("body") or "")
@@ -159,8 +168,7 @@ def review_state(
     substantive = [
         review
         for review in mine
-        if review.get("id") not in incomplete_ids
-        and (
+        if (
             public_body(review)
             or review.get("id") in substantive_ids
             or review.get("state") == "APPROVED"
@@ -194,21 +202,11 @@ def review_state(
         else None
     )
 
-    def is_draft_review(review: dict[str, Any]) -> bool:
-        body = public_body(review)
-        # TODO(2026-12-01): Drop the prose-prefix fallback after pre-marker
-        # reviews have aged out.
-        return review.get("state") == "COMMENTED" and (
-            DRAFT_REVIEW_MARKER in body or body.startswith(LEGACY_DRAFT_REVIEW_PREFIX)
-        )
-
     latest_ready = _latest_ready_for_review(ready_for_review_events)
     acknowledged_ready_ids = sorted(
         {
             event_id
             for review in mine
-            if review.get("id") not in incomplete_ids
-            if not is_draft_review(review)
             for event_id in _ready_review_ids(review.get("body") or "")
         }
     )
@@ -217,17 +215,16 @@ def review_state(
         if latest_ready and latest_ready["id"] not in acknowledged_ready_ids
         else None
     )
-    incomplete_at_head = [
+    pending_records = [
         {
             "id": review["id"],
             "sha": review.get("commit_id"),
-            "at": review.get("submitted_at"),
             "operation_id": operation_id,
-            "draft_mode": is_draft_review(review),
+            "draft_mode": review_mode == "draft",
             "ready_review_ids": sorted(_ready_review_ids(review.get("body") or "")),
+            "body": public_body(review),
         }
-        for review, operation_id in incomplete
-        if review.get("commit_id") == head_sha and after_rewrite(review)
+        for review, operation_id, review_mode in pending
     ]
 
     return {
@@ -240,22 +237,18 @@ def review_state(
                 "sha": last_substantive["commit_id"],
                 "state": last_substantive["state"],
                 "at": last_substantive.get("submitted_at"),
-                "draft_mode": is_draft_review(last_substantive),
             }
             if last_substantive
             else None
         ),
         "force_pushed_since": bool(
-            last_substantive
-            and last_force_push_at
-            and last_force_push_at > (last_substantive.get("submitted_at") or "")
+            last_substantive and not after_rewrite(last_substantive)
         ),
         "at_head": (
             {
                 "id": at_head[-1]["id"],
                 "state": at_head[-1]["state"],
                 "at": at_head[-1].get("submitted_at"),
-                "draft_mode": is_draft_review(at_head[-1]),
             }
             if at_head
             else None
@@ -263,15 +256,14 @@ def review_state(
         "latest_ready_for_review": latest_ready,
         "acknowledged_ready_ids": acknowledged_ready_ids,
         "outstanding_ready_for_review": outstanding_ready,
-        "incomplete_reviews": incomplete_at_head,
+        "pending_reviews": pending_records,
+        "needs_review": not at_head or outstanding_ready is not None,
         "fresh_approval_sha": (
             (fresh_approvals[-1].get("commit_id") or "") if fresh_approvals else ""
         ),
         "stale_approval_id": (
             last_approval["id"]
-            if last_approval
-            and last_force_push_at
-            and (last_approval.get("submitted_at") or "") < last_force_push_at
+            if last_approval and last_force_push_at and not after_rewrite(last_approval)
             else ""
         ),
         "standing_approval_id": (standing_approval["id"] if standing_approval else ""),
@@ -316,6 +308,30 @@ def fetch_review_state(pr: str, *, repo: str | None = None) -> dict[str, Any]:
         ready_for_review_events=ready_for_review_events,
         reviews=reviews,
     )
+
+
+def request_review(pr: str) -> None:
+    """Dispatch the serialized review workflow when canonical demand remains."""
+    repo = github_cli.repository()
+    state = fetch_review_state(pr, repo=repo)
+    if not state["needs_review"]:
+        print(f"skip: PR #{pr} has no outstanding review demand")
+        return
+    github_cli.run(
+        "api",
+        f"repos/{repo}/dispatches",
+        "--method",
+        "POST",
+        "--input",
+        "-",
+        input=json.dumps(
+            {
+                "event_type": "tend-review",
+                "client_payload": {"pr_number": int(pr)},
+            }
+        ),
+    )
+    print(f"requested: review for PR #{pr}")
 
 
 def dismiss_standing_approval(pr: str, message: str) -> None:
@@ -386,6 +402,10 @@ def feedback(pr: str) -> dict[str, Any]:
     """Return prior public bot feedback and the PR conversation."""
     repo = github_cli.repository()
     bot = str(github_cli.json_call("api", "user")["login"])
+    reviews = github_cli.paginated(
+        "api", "--paginate", f"repos/{repo}/pulls/{pr}/reviews?per_page=100"
+    )
+    pending = _pending_reviews(reviews, bot)
     pr_view = github_cli.json_call(
         "pr", "view", pr, "--repo", repo, "--json", "comments,reviews"
     )
@@ -396,10 +416,11 @@ def feedback(pr: str) -> dict[str, Any]:
         if github_cli.actor_login(comment.get("author")) == bot
     ]
 
-    def incomplete_parent(review: dict[str, Any]) -> bool:
+    def pending_parent(review: dict[str, Any]) -> bool:
         return (
             github_cli.actor_login(review.get("author")) == bot
-            and _review_incomplete_operation_id(review) is not None
+            and review.get("state") == "PENDING"
+            and _review_operation(review.get("body") or "") is not None
         )
 
     previous_reviews = []
@@ -407,7 +428,7 @@ def feedback(pr: str) -> dict[str, Any]:
         body = strip_review_metadata(review.get("body") or "")
         if (
             github_cli.actor_login(review.get("author")) == bot
-            and _review_incomplete_operation_id(review) is None
+            and review.get("state") != "PENDING"
             and body
         ):
             previous_reviews.append(
@@ -417,6 +438,21 @@ def feedback(pr: str) -> dict[str, Any]:
                     "body": body,
                 }
             )
+    pending_inline = [
+        {
+            "review_id": review["id"],
+            "path": comment.get("path"),
+            "line": comment.get("line"),
+            "created_at": comment.get("created_at"),
+            "body": comment.get("body"),
+        }
+        for review, _operation_id, _review_mode in pending
+        for comment in github_cli.paginated(
+            "api",
+            "--paginate",
+            f"repos/{repo}/pulls/{pr}/reviews/{review['id']}/comments?per_page=100",
+        )
+    ]
     return {
         "previous_reviews": previous_reviews,
         "conversation": [
@@ -435,19 +471,19 @@ def feedback(pr: str) -> dict[str, Any]:
                 "body": comment.get("body"),
             }
             for comment, review in inline
-            if not incomplete_parent(review)
+            if not pending_parent(review)
         ],
-        "incomplete_inline_comments": [
+        "pending_reviews": [
             {
-                "review_id": review.get("fullDatabaseId"),
-                "path": comment.get("path"),
-                "line": comment.get("line"),
-                "created_at": comment.get("createdAt"),
-                "body": comment.get("body"),
+                "review_id": review["id"],
+                "sha": review.get("commit_id"),
+                "review_mode": review_mode,
+                "ready_review_ids": sorted(_ready_review_ids(review.get("body") or "")),
+                "body": strip_review_metadata(review.get("body") or ""),
             }
-            for comment, review in inline
-            if incomplete_parent(review)
+            for review, _operation_id, review_mode in pending
         ],
+        "pending_inline_comments": pending_inline,
     }
 
 
@@ -492,6 +528,9 @@ def main(argv: list[str] | None = None) -> int:
     if len(args) == 2 and args[0] == "state" and args[1].isdigit():
         github_cli.dump(fetch_review_state(args[1]))
         return 0
+    if len(args) == 2 and args[0] == "request" and args[1].isdigit():
+        request_review(args[1])
+        return 0
     if len(args) == 3 and args[0] == "dismiss" and args[1].isdigit() and args[2]:
         dismiss_standing_approval(args[1], args[2])
         return 0
@@ -511,7 +550,8 @@ def main(argv: list[str] | None = None) -> int:
         resolve_thread(args[1])
         return 0
     print(
-        f"usage: {sys.argv[0]} state|feedback|threads|prepare-approval <pr-number> | "
+        f"usage: {sys.argv[0]} state|request|feedback|threads|prepare-approval "
+        "<pr-number> | "
         "dismiss|dismiss-stale <pr-number> <message> | resolve-thread <thread-id>",
         file=sys.stderr,
     )

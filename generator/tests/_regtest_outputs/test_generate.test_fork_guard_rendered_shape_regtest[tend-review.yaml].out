@@ -21,6 +21,7 @@ jobs:
       # pending run; after it acquires the lock, the review session reconstructs
       # live state instead of depending on the event that happened to survive.
       cancel-in-progress: false
+    if: github.repository_owner == 'test-owner'
     runs-on: ubuntu-24.04
     environment:
       name: tend
@@ -119,19 +120,6 @@ jobs:
           TARGET: issues/${{ steps.pr.outputs.number }}
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
 
-      # Two checkouts: `setup:` runs against the trusted event tree, and the
-      # PR's own tree lands after it. Setup executes as the runner user,
-      # outside the containment the harness builds for contributor code.
-      - uses: actions/checkout@v7
-        if: steps.tend_enabled.outputs.enabled == 'true'
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          token: ${{ secrets.TEND_BOT_TOKEN }}
-
-      - uses: astral-sh/setup-uv@v6
-        if: steps.tend_enabled.outputs.enabled == 'true'
-
       # GitHub only materializes refs/pull/N/merge for mergeable PRs ? on
       # conflicting PRs it 404s and every downstream step cascades as skipped.
       # Probe first and fall back to /head so review always runs; on fallback
@@ -155,7 +143,6 @@ jobs:
         with:
           ref: ${{ steps.pr_ref.outputs.ref }}
           allow-unsafe-pr-checkout: true
-          clean: false
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}

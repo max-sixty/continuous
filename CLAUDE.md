@@ -291,16 +291,16 @@ Concurrency groups:
 | nightly / weekly | none | cron-serialized |
 | codex-auth-refresh (codex only) | `tend-codex-auth-refresh` | **no** — only this workflow may rotate the refresh-token chain, so a second refresher must never race it |
 
-**Fork guard.** Workflows whose triggers can fire from a fork's own
-Actions (`schedule`, `workflow_dispatch`, `workflow_run`, `issues`) carry
-`if: github.repository_owner == '<owner>'` so a fork that's enabled
-Actions but doesn't have the bot/Claude secrets no-ops cleanly. The
-canonical owner is detected at `init` time (via `gh repo view`, walking
-`source.owner.login` if the local repo is itself a fork) and pinned in
-the generated workflow. `tend-review` uses `pull_request_target` (base
-repo only) and `tend-mention`'s review-event paths already filter forks
-via `head.repo.full_name == github.repository`, so neither needs the
-guard.
+**Fork guard.** Jobs reachable from a fork's own Actions admit only the
+canonical repository. Most workflows triggered by `schedule`,
+`workflow_dispatch`, `workflow_run`, `repository_dispatch`, or `issues` carry
+`if: github.repository_owner == '<owner>'`, so a fork with Actions enabled but
+without the bot/Claude secrets no-ops cleanly. The canonical owner is detected
+at `init` time (via `gh repo view`, walking `source.owner.login` if the local
+repo is itself a fork) and pinned in the generated workflow. `tend-review`
+carries the guard because its recovery path uses `repository_dispatch`;
+`tend-mention` filters its review-event paths directly with
+`head.repo.full_name == github.repository`.
 
 **Red branches.** A red default branch fails every push that follows it, each
 on its own commit, so ci-fix keys its group on the branch — a commit-keyed

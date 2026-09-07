@@ -33,12 +33,8 @@ BOT = "tend-bot"
 HEAD = "head000"
 DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
 READY_REVIEW_MARKER = "<!-- tend:ready-review:101 -->"
-INCOMPLETE_REVIEW_MARKER = (
-    "<!-- tend:review-incomplete:12345678123442348234123456789abc -->"
-)
-LEGACY_DRAFT_REVIEW_LINE = (
-    "Reviewing as a draft — flagging anything that looks worth a quick fix. "
-    "Mark ready for a full review."
+REVIEW_OPERATION_MARKER = (
+    "<!-- tend:review-operation:12345678123442348234123456789abc:full -->"
 )
 OLD = "old0000"
 
@@ -52,6 +48,7 @@ case "$*" in
   *"/pulls/"*"/comments"*) emit "$(cat "$INLINE_JSON")" ;;
   *"/issues/"*"/timeline"*) emit "$(cat "$TIMELINE_JSON")" ;;
   *"/dismissals"*)          emit '{}' ;;
+  *"/dispatches --method POST --input -"*) cat > "$DISPATCH_INPUT" ;;
   *"/pulls/"*"/reviews"*)   emit "$(cat "$REVIEWS_JSON")" ;;
   *) exit 1 ;;
 esac
@@ -87,6 +84,7 @@ def env(tmp_path: Path) -> dict[str, str]:
         "GITHUB_REPOSITORY": "owner/repo",
         "BOT_LOGIN": BOT,
         "CHECKED_HEAD_DIR": str(tmp_path),
+        "DISPATCH_INPUT": str(tmp_path / "dispatch-input.json"),
         **paths,
     }
 
@@ -174,7 +172,33 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["latest_ready_for_review"] is None
     assert state["acknowledged_ready_ids"] == []
     assert state["outstanding_ready_for_review"] is None
-    assert state["incomplete_reviews"] == []
+    assert state["pending_reviews"] == []
+    assert state["needs_review"] is True
+
+
+def test_request_dispatches_only_canonical_outstanding_demand(
+    env: dict[str, str],
+) -> None:
+    requested = _run_cli(env, "request", "7")
+
+    assert requested.returncode == 0, requested.stderr
+    assert requested.stdout == "requested: review for PR #7\n"
+    assert json.loads(Path(env["DISPATCH_INPUT"]).read_text()) == {
+        "event_type": "tend-review",
+        "client_payload": {"pr_number": 7},
+    }
+
+    Path(env["DISPATCH_INPUT"]).unlink()
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", body="Complete review.")],
+    )
+    covered = _run_cli(env, "request", "7")
+
+    assert covered.returncode == 0, covered.stderr
+    assert covered.stdout == "skip: PR #7 has no outstanding review demand\n"
+    assert not Path(env["DISPATCH_INPUT"]).exists()
 
 
 def test_prepare_approval_pins_only_an_unapproved_head(env: dict[str, str]) -> None:
@@ -297,11 +321,12 @@ def test_feedback_combines_conversation_reviews_and_inline_comments(
                 "body": "inline",
             }
         ],
-        "incomplete_inline_comments": [],
+        "pending_inline_comments": [],
+        "pending_reviews": [],
     }
 
 
-def test_feedback_excludes_comments_from_incomplete_reviews(
+def test_feedback_separates_comments_from_private_pending_reviews(
     env: dict[str, str],
 ) -> None:
     _write(
@@ -310,12 +335,25 @@ def test_feedback_excludes_comments_from_incomplete_reviews(
         [
             _review(
                 7,
-                "2026-01-01T00:00:00Z",
-                body=INCOMPLETE_REVIEW_MARKER,
+                None,
+                state="PENDING",
+                body=f"Unsubmitted narrative.\n\n{REVIEW_OPERATION_MARKER}",
             )
         ],
     )
     _write(env, "PR_HEAD_JSON", {"comments": [], "reviews": []})
+    _write(
+        env,
+        "INLINE_JSON",
+        [
+            {
+                "path": "incomplete.py",
+                "line": 3,
+                "created_at": "2026-01-01T01:00:00Z",
+                "body": "partial finding",
+            }
+        ],
+    )
     _write(
         env,
         "GRAPHQL_JSON",
@@ -336,8 +374,8 @@ def test_feedback_excludes_comments_from_incomplete_reviews(
                                                 "body": "partial finding",
                                                 "pullRequestReview": {
                                                     "author": {"login": BOT},
-                                                    "body": INCOMPLETE_REVIEW_MARKER,
-                                                    "state": "COMMENTED",
+                                                    "body": REVIEW_OPERATION_MARKER,
+                                                    "state": "PENDING",
                                                     "fullDatabaseId": 7,
                                                 },
                                             },
@@ -362,7 +400,7 @@ def test_feedback_excludes_comments_from_incomplete_reviews(
                                                 "body": "bot reply",
                                                 "pullRequestReview": {
                                                     "author": {"login": "human"},
-                                                    "body": INCOMPLETE_REVIEW_MARKER,
+                                                    "body": REVIEW_OPERATION_MARKER,
                                                     "state": "COMMENTED",
                                                     "fullDatabaseId": 9,
                                                 },
@@ -386,13 +424,22 @@ def test_feedback_excludes_comments_from_incomplete_reviews(
         "published finding",
         "bot reply",
     ]
-    assert feedback["incomplete_inline_comments"] == [
+    assert feedback["pending_inline_comments"] == [
         {
             "review_id": 7,
             "path": "incomplete.py",
             "line": 3,
             "created_at": "2026-01-01T01:00:00Z",
             "body": "partial finding",
+        }
+    ]
+    assert feedback["pending_reviews"] == [
+        {
+            "review_id": 7,
+            "sha": HEAD,
+            "review_mode": "full",
+            "ready_review_ids": [],
+            "body": "Unsubmitted narrative.",
         }
     ]
     assert (
@@ -499,35 +546,7 @@ def test_a_review_with_content_anchors(
     assert _state(env)["at_head"]["id"] == 1, kind
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        f"Feedback on this work in progress.\n\n{DRAFT_REVIEW_MARKER}",
-        LEGACY_DRAFT_REVIEW_LINE,
-    ],
-)
-def test_at_head_identifies_a_tend_draft_review(env: dict[str, str], body: str) -> None:
-    """A ready-for-review pass may replace its earlier draft COMMENT, while
-    ordinary duplicate runs still stop on every other substantive review."""
-    _write(
-        env,
-        "REVIEWS_JSON",
-        [
-            _review(
-                1,
-                "2026-01-01T00:00:00Z",
-                body=body,
-            )
-        ],
-    )
-
-    state = _state(env)
-
-    assert state["at_head"]["draft_mode"] is True
-    assert state["last_substantive"]["draft_mode"] is True
-
-
-def test_at_head_does_not_call_an_ordinary_comment_draft_mode(
+def test_at_head_uses_native_review_fields_not_prose_identity(
     env: dict[str, str],
 ) -> None:
     _write(
@@ -536,7 +555,11 @@ def test_at_head_does_not_call_an_ordinary_comment_draft_mode(
         [_review(1, "2026-01-01T00:00:00Z", body="One landing concern.")],
     )
 
-    assert _state(env)["at_head"]["draft_mode"] is False
+    assert _state(env)["at_head"] == {
+        "id": 1,
+        "state": "COMMENTED",
+        "at": "2026-01-01T00:00:00Z",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +636,7 @@ def test_submission_time_does_not_acknowledge_a_ready_generation(
     assert state["outstanding_ready_for_review"]["id"] == 101
 
 
-def test_a_draft_review_cannot_acknowledge_readiness(env: dict[str, str]) -> None:
+def test_a_pending_review_cannot_acknowledge_readiness(env: dict[str, str]) -> None:
     _ready_at(env, (101, "2026-01-02T00:00:00Z"))
     _write(
         env,
@@ -621,15 +644,19 @@ def test_a_draft_review_cannot_acknowledge_readiness(env: dict[str, str]) -> Non
         [
             _review(
                 1,
-                "2026-01-03T00:00:00Z",
-                body=f"{DRAFT_REVIEW_MARKER}\n{READY_REVIEW_MARKER}",
+                None,
+                state="PENDING",
+                body=(
+                    f"Work-in-progress finding.\n{REVIEW_OPERATION_MARKER}\n"
+                    f"{READY_REVIEW_MARKER}"
+                ),
             )
         ],
     )
 
     state = _state(env)
 
-    assert state["at_head"]["draft_mode"] is True
+    assert state["at_head"] is None
     assert state["acknowledged_ready_ids"] == []
     assert state["outstanding_ready_for_review"]["id"] == 101
 
@@ -650,11 +677,6 @@ def test_only_a_finalized_bot_review_acknowledges_readiness(
                 body=READY_REVIEW_MARKER,
             ),
             _review(2, None, state="PENDING", body=READY_REVIEW_MARKER),
-            _review(
-                4,
-                "2026-01-03T00:00:00Z",
-                body=f"{INCOMPLETE_REVIEW_MARKER}\n{READY_REVIEW_MARKER}",
-            ),
         ],
     )
 
@@ -701,7 +723,7 @@ def test_a_finalized_inline_review_acknowledges_readiness(
     assert state["outstanding_ready_for_review"] is None
 
 
-def test_incomplete_inline_review_is_recoverable_but_never_coverage(
+def test_pending_inline_review_is_recoverable_but_never_coverage(
     env: dict[str, str],
 ) -> None:
     _ready_at(env, (101, "2026-01-02T00:00:00Z"))
@@ -711,8 +733,9 @@ def test_incomplete_inline_review_is_recoverable_but_never_coverage(
         [
             _review(
                 7,
-                "2026-01-03T00:00:00Z",
-                body=f"{INCOMPLETE_REVIEW_MARKER}\n{READY_REVIEW_MARKER}",
+                None,
+                state="PENDING",
+                body=f"{REVIEW_OPERATION_MARKER}\n{READY_REVIEW_MARKER}",
             )
         ],
     )
@@ -720,14 +743,14 @@ def test_incomplete_inline_review_is_recoverable_but_never_coverage(
 
     state = _state(env)
 
-    assert state["incomplete_reviews"] == [
+    assert state["pending_reviews"] == [
         {
             "id": 7,
             "sha": HEAD,
-            "at": "2026-01-03T00:00:00Z",
             "operation_id": "12345678123442348234123456789abc",
             "draft_mode": False,
             "ready_review_ids": [101],
+            "body": "",
         }
     ]
     assert state["last_substantive"] is None
@@ -735,20 +758,37 @@ def test_incomplete_inline_review_is_recoverable_but_never_coverage(
     assert state["acknowledged_ready_ids"] == []
 
 
-def test_incomplete_review_before_a_force_push_is_not_recoverable(
+def test_pending_review_on_another_head_remains_visible_for_cleanup(
     env: dict[str, str],
 ) -> None:
     _write(
         env,
         "REVIEWS_JSON",
-        [_review(7, "2026-01-01T00:00:00Z", body=INCOMPLETE_REVIEW_MARKER)],
+        [
+            _review(
+                7,
+                None,
+                state="PENDING",
+                body=REVIEW_OPERATION_MARKER,
+                sha=OLD,
+            )
+        ],
     )
     _rewrite_at(env, "2026-01-02T00:00:00Z")
 
-    assert _state(env)["incomplete_reviews"] == []
+    assert _state(env)["pending_reviews"] == [
+        {
+            "id": 7,
+            "sha": OLD,
+            "operation_id": "12345678123442348234123456789abc",
+            "draft_mode": False,
+            "ready_review_ids": [],
+            "body": "",
+        }
+    ]
 
 
-def test_only_submitted_bot_comments_are_incomplete_reviews(
+def test_only_bot_pending_reviews_with_operation_ids_are_recoverable(
     env: dict[str, str],
 ) -> None:
     _write(
@@ -757,21 +797,22 @@ def test_only_submitted_bot_comments_are_incomplete_reviews(
         [
             _review(
                 1,
-                "2026-01-01T00:00:00Z",
+                None,
                 author="human",
-                body=INCOMPLETE_REVIEW_MARKER,
+                state="PENDING",
+                body=REVIEW_OPERATION_MARKER,
             ),
-            _review(2, None, state="PENDING", body=INCOMPLETE_REVIEW_MARKER),
+            _review(2, None, state="PENDING", body="unowned pending review"),
             _review(
                 3,
                 "2026-01-01T00:00:00Z",
                 state="APPROVED",
-                body=INCOMPLETE_REVIEW_MARKER,
+                body=REVIEW_OPERATION_MARKER,
             ),
         ],
     )
 
-    assert _state(env)["incomplete_reviews"] == []
+    assert _state(env)["pending_reviews"] == []
 
 
 def test_review_metadata_is_not_public_feedback(
@@ -785,9 +826,9 @@ def test_review_metadata_is_not_public_feedback(
             "reviews": [
                 {
                     "author": {"login": BOT},
-                    "state": "COMMENTED",
-                    "submittedAt": "2026-01-01T00:00:00Z",
-                    "body": INCOMPLETE_REVIEW_MARKER,
+                    "state": "PENDING",
+                    "submittedAt": None,
+                    "body": REVIEW_OPERATION_MARKER,
                 },
                 {
                     "author": {"login": BOT},
@@ -813,7 +854,7 @@ def test_review_metadata_is_not_public_feedback(
         {
             "state": "COMMENTED",
             "submitted_at": "2026-01-02T00:00:00Z",
-            "body": f"Finding.\n\n\n{DRAFT_REVIEW_MARKER}",
+            "body": "Finding.",
         }
     ]
 
@@ -832,7 +873,7 @@ def test_malformed_reserved_markers_cannot_become_public_metadata(
                 "2026-01-03T00:00:00Z",
                 body=(
                     "Finding.\n\n<!-- tend:ready-review:not-an-id -->\n"
-                    "<!-- tend:review-incomplete:NOT-A-UUID -->"
+                    "<!-- tend:review-operation:NOT-A-UUID -->"
                 ),
             )
         ],
@@ -842,7 +883,28 @@ def test_malformed_reserved_markers_cannot_become_public_metadata(
 
     assert state["at_head"]["id"] == 7
     assert state["acknowledged_ready_ids"] == []
-    assert state["incomplete_reviews"] == []
+
+
+def test_metadata_sanitization_cannot_synthesize_a_reserved_marker(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                "2026-01-03T00:00:00Z",
+                body="<!-- tend:ready-<!-- tend:ready-review:999 -->review:42 -->",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == [999]
+    assert state["pending_reviews"] == []
+    assert state["pending_reviews"] == []
 
 
 def test_a_review_owning_a_fresh_inline_comment_anchors(env: dict[str, str]) -> None:
@@ -905,6 +967,22 @@ def test_a_rewrite_after_the_review_invalidates_its_anchor(env: dict[str, str]) 
     assert state["force_pushed_since"] is True
     assert state["at_head"] is None, "a rewritten-away review must not gate a re-review"
     assert state["last_substantive"]["id"] == 1
+
+
+def test_a_rewrite_tied_with_the_review_timestamp_wins_conservatively(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", body="findings")],
+    )
+    _rewrite_at(env, "2026-01-01T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["force_pushed_since"] is True
+    assert state["at_head"] is None
 
 
 def test_a_rewrite_before_the_review_leaves_it_standing(env: dict[str, str]) -> None:
@@ -1147,7 +1225,7 @@ def test_review_skill_preserves_the_status_free_queue_contract() -> None:
         "If `force_full_review` is false and the incremental changes are trivial"
         in skill
     )
-    assert f"Include the exact hidden marker `{DRAFT_REVIEW_MARKER}`" in skill
+    assert "submit command uses the captured draft mode itself" in skill
     assert "Open the review body with this exact line" not in skill
     assert "Post at most one review per run." in skill
     assert "exception to one review per run" not in skill

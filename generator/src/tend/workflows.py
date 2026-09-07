@@ -298,7 +298,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("review", WorkflowConfig())
     eff = _effective_cfg(cfg, wf)
     prompt = (wf.prompt or eff.default_prompt("review", "{pr_number}")).replace(
-        "{pr_number}", "${{ github.event.pull_request.number }}"
+        "{pr_number}", "${{ steps.pr.outputs.number }}"
     )
 
     content = _REVIEW_TMPL.render(

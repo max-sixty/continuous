@@ -102,8 +102,19 @@ def test_review_runs_pins_current_state_recovery() -> None:
     assert "complete **Reconcile live work** below, then exit" in skill
     assert "Do not replay historical workflow runs" in skill
     assert "an open issue with no bot response to the latest human activity" in skill
-    assert "whose live head has no finalized bot review" in skill
+    assert "open PR with outstanding review demand" in skill
     assert "failing default-branch CI with no bot fix in progress" in skill
+
+
+def test_recovery_skills_dispatch_reviews_through_the_serialized_workflow() -> None:
+    callers = [
+        _read("plugins", "tend-ci-runner", "skills", name, "SKILL.md")
+        for name in ("notifications", "review-runs")
+    ]
+
+    for skill in callers:
+        assert 'bot_review_state.py" request "$NUMBER"' in skill
+        assert "/tend-ci-runner:review" not in skill
 
 
 def test_outage_tracker_title_stays_in_sync() -> None:
@@ -161,21 +172,21 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     # metadata, and API request. Arbitrary commands cannot bypass that contract.
     assert '"commit_id": reviewed' in preflight
     assert "review_preflight.py submit" in skill
-    assert skill.count("submit <number>") == 3
+    assert skill.count("submit <number>") == 2
     assert "post <number> --" not in skill
     direct_launches = re.findall(
         r"/usr/bin/python3 -E -s\s+(?:\\\n\s*)?"
         r'"\$\{CLAUDE_PLUGIN_ROOT\}/scripts/review_preflight\.py"',
         skill,
     )
-    assert len(direct_launches) == 6
+    assert len(direct_launches) == 5
     assert (
         'uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py"'
         not in skill
     )
-    assert "--edit-review <id>" in skill
-    assert "recover: incomplete review <id>" in skill
-    assert "shell variables do not\nsurvive between agent tool calls" in skill
+    assert "--edit-review <id>" not in skill
+    assert "recover: pending review <id>" in skill
+    assert "native PENDING review" in skill
 
     # Both logs reach the session in one stream, so the skill names both halves.
     assert "**Read both halves of the delta file as a pair.**" in skill
@@ -262,19 +273,20 @@ def test_review_second_pass_is_a_submit_precondition() -> None:
     assert "Run step 5 again over the updated merged tree" in skill
 
 
-def test_incomplete_reviews_have_a_survivor_and_a_daily_backstop() -> None:
+def test_pending_reviews_have_a_serialized_daily_backstop() -> None:
     review = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
     review_runs = _read(
         "plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md"
     )
 
-    assert "`recovery_review_id`" in review
-    assert "`incomplete_inline_comments`" in review
+    assert "`recovery_pending_review_id`" in review
+    assert "`pending_inline_comments`" in review
     assert "bypass the already-reviewed and\ntrivial-increment silent exits" in review
-    assert "do not finish silently" in review
+    assert "Do not take an ordinary prior-feedback silent exit" in review
     assert "daily `review-runs` live-work reconciliation" in review
     assert "no finalized bot review" in review_runs
-    assert "`tend:review-incomplete` record is not finalized" in review_runs
+    assert 'bot_review_state.py" request "$NUMBER"' in review_runs
+    assert "per-PR concurrency group" in review_runs
 
 
 def test_review_reviewers_matrix_covers_consumers() -> None:

@@ -15,6 +15,10 @@ Decisions this encodes:
   the thread to the scheduled poll.
 - The agent run already succeeded, so nothing here may fail the step: a
   transient API error warns and returns 0.
+- A ``tend-review`` run never marks a PR notification read. Review completion
+  covers code state, while one notification thread can also contain a later
+  question or review reply the run never saw. The notifications poll owns the
+  semantic decision that all activity in that conversation was handled.
 - ``issue_comment`` fires for both issues and PR conversation comments, but a
   PR notification's ``subject.url`` always names ``/pulls/N``; the issue's
   ``pull_request`` field is what tells the two apart.
@@ -102,6 +106,12 @@ def main() -> int:
     repo = env["GITHUB_REPOSITORY"]
 
     event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+    if env["GITHUB_EVENT_NAME"] == "pull_request_target" or (
+        env["GITHUB_EVENT_NAME"] == "repository_dispatch"
+        and isinstance(event, dict)
+        and event.get("action") == "tend-review"
+    ):
+        return 0
     url = subject_url(repo, env["GITHUB_EVENT_NAME"], event)
     if url is None:
         return 0

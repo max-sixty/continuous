@@ -24,6 +24,7 @@ def event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(path))
     monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
     monkeypatch.setenv("GITHUB_RUN_ID", RUN_ID)
+    monkeypatch.setenv("GITHUB_WORKFLOW", "tend-triage")
     return path
 
 
@@ -90,6 +91,24 @@ def _patch_calls(fake_gh: FakeGh) -> list[str]:
             f"https://api.github.com/repos/{REPO}/pulls/4",
             id="comment-on-a-pr",
         ),
+        pytest.param(
+            "repository_dispatch",
+            {"action": "tend-review", "client_payload": {"pr_number": 4}},
+            None,
+            id="review-recovery",
+        ),
+        pytest.param(
+            "repository_dispatch",
+            {"action": "something-else", "client_payload": {"pr_number": 4}},
+            None,
+            id="unrelated-dispatch",
+        ),
+        pytest.param(
+            "repository_dispatch",
+            {"action": "tend-review", "client_payload": {"pr_number": "4"}},
+            None,
+            id="malformed-review-recovery",
+        ),
         pytest.param("schedule", {}, None, id="nothing-to-mark"),
     ],
 )
@@ -113,6 +132,47 @@ def test_marks_a_thread_whose_activity_predates_the_run(
 
     assert mark_notification_read.main() == 0
     assert ("api", "notifications/threads/999", "-X", "PATCH") in fake_gh.calls
+
+
+def test_successful_review_dispatch_leaves_conversation_for_notifications_poll(
+    event: Path,
+    fake_gh: FakeGh,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event.write_text(
+        json.dumps({"action": "tend-review", "client_payload": {"pr_number": 4}})
+    )
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "repository_dispatch")
+    monkeypatch.setenv("GITHUB_WORKFLOW", "tend-review")
+    assert mark_notification_read.main() == 0
+    assert fake_gh.calls == []
+
+
+def test_deferred_review_dispatch_leaves_its_pr_notification_unread(
+    event: Path,
+    fake_gh: FakeGh,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event.write_text(
+        json.dumps({"action": "tend-review", "client_payload": {"pr_number": 4}})
+    )
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "repository_dispatch")
+    monkeypatch.setenv("GITHUB_WORKFLOW", "tend-review")
+    assert mark_notification_read.main() == 0
+    assert fake_gh.calls == []
+
+
+def test_native_review_leaves_conversation_for_notifications_poll(
+    event: Path,
+    fake_gh: FakeGh,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event.write_text(json.dumps({"pull_request": {"number": 4}}))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request_target")
+    monkeypatch.setenv("GITHUB_WORKFLOW", "custom-review-name")
+
+    assert mark_notification_read.main() == 0
+    assert fake_gh.calls == []
 
 
 def test_leaves_activity_newer_than_the_run(event: Path, fake_gh: FakeGh) -> None:

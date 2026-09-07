@@ -1,6 +1,7 @@
-{#- The base checkout exists to give `setup:` a reviewed tree, so it renders
-    only alongside it. With no setup nothing runs between the checkouts, and a
-    lone PR checkout into an empty workspace never reaches `clean` — the
+{#- The first checkout exists to give `setup:` a trusted tree: the PR base for
+    native events, or the default branch for recovery dispatches. It renders
+    only alongside setup. With no setup nothing runs between the checkouts,
+    and a lone PR checkout into an empty workspace never reaches `clean` — the
     action only consults it on the existing-repo path. #}
 {%- set has_setup = setup != '' -%}
 <<header>>
@@ -8,27 +9,40 @@ name: tend-review
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
+  repository_dispatch:
+    types: [tend-review]
 
 jobs:
   review:
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
       # Runs stay serial so outward actions cannot race. GitHub keeps the newest
       # pending run; after it acquires the lock, the review session reconstructs
       # live state instead of depending on the event that happened to survive.
       cancel-in-progress: false
-    runs-on: ubuntu-24.04
+<<fork_guard_if(cfg)>>    runs-on: ubuntu-24.04
 <<environment()>>
     permissions:
 <<permissions()>>
     steps:
 <<check_tend_enabled(cfg)>>
-<<react_eyes('issues/${{ github.event.pull_request.number }}', if_condition=tend_enabled_condition)>>
+      - name: Resolve PR number
+        id: pr
+        if: <<tend_enabled_condition>>
+        env:
+          PR: ${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
+        run: |
+          if [[ ! "$PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::review event did not supply a valid PR number"
+            exit 1
+          fi
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+<<react_eyes('issues/${{ steps.pr.outputs.number }}', if_condition=tend_enabled_condition)>>
 
 {% if has_setup %}
-      # Two checkouts: `setup:` runs against the base tree, and the PR's own
-      # tree lands after it. Setup executes as the runner user, outside the
-      # containment the harness builds for the contributor's code.
+      # Two checkouts: `setup:` runs against the trusted event tree, and the
+      # PR's own tree lands after it. Setup executes as the runner user,
+      # outside the containment the harness builds for contributor code.
 <<checkout(cfg, if_condition=tend_enabled_condition)>>
 <<setup>>
 {% endif %}
@@ -42,7 +56,7 @@ jobs:
         if: <<tend_enabled_condition>>
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ steps.pr.outputs.number }}
         run: |
           if gh api "repos/${{ github.repository }}/git/ref/pull/$PR/merge" --silent 2>/dev/null; then
             echo "ref=refs/pull/$PR/merge" >> "$GITHUB_OUTPUT"
@@ -54,4 +68,4 @@ jobs:
 
 <<agent_step(cfg, block_input('prompt', prompt), if_condition=tend_enabled_condition)>><<restore_local_actions(local_actions, if_condition=tend_enabled_condition)>>
 
-<<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")")>>
+<<unreact_eyes(cfg, 'issues/${{ steps.pr.outputs.number }}', if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")\n&& steps.pr.outputs.number != ''")>>

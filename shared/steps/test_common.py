@@ -120,6 +120,10 @@ def test_subject_number_is_an_int_whatever_the_payload_calls_it(
     actions_env.write_text(json.dumps({"client_payload": {"pr": "99"}}))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "repository_dispatch")
     assert _common.subject_number() == 99
+    actions_env.write_text(
+        json.dumps({"action": "tend-review", "client_payload": {"pr_number": 100}})
+    )
+    assert _common.subject_number() == 100
 
 
 @pytest.mark.parametrize(

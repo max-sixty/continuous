@@ -7,7 +7,11 @@ metadata:
 
 # Check Notifications and Bot PRs
 
-Unread notifications are the recovery queue. Event workflows are the fast path; after a successful run they mark the notification that triggered them read. This poll handles whatever remains and repairs conflicts on the configured bot's PRs.
+Unread notifications are the recovery queue. Event workflows are the fast path;
+most mark their triggering notification read after success. Review runs leave
+PR notifications here because code coverage cannot prove that a later question
+or review reply was handled. This poll handles them and repairs conflicts on
+the configured bot's PRs.
 
 The workflow prompt supplies the **notification snapshot cutoff**. This run owns whatever the snapshot returned; anything the snapshot did not return belongs to the next poll.
 
@@ -48,7 +52,18 @@ Process the snapshot oldest first. Read the live issue or PR and decide what it 
 
 - If a dedicated tend workflow is still running for the subject, defer it. Step 4 leaves it unread for the next poll.
 - If the bot already handled the latest activity, record it as handled without posting again.
-- Otherwise use the normal live workflow: `/tend-ci-runner:triage` for an issue, `/tend-ci-runner:review` for an unreviewed PR head, or answer a comment or review thread that asks the bot for something.
+- Otherwise use `/tend-ci-runner:triage` for an issue, or answer a comment or review thread that asks the bot for something. For an open PR, request its review through the serialized review workflow:
+
+  ```bash
+  /usr/bin/python3 -E -s \
+    "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" request "$NUMBER"
+  ```
+
+  The command re-reads the PR's canonical review state and dispatches only
+  outstanding work. A requested review is deferred and stays unread until the
+  review workflow succeeds. On `skip`, continue classifying the activity that
+  caused the notification. A successful review also leaves the notification
+  to this poll; acknowledge it only after checking the whole conversation.
 - A closed thread or a human conversation that needs nothing from the bot has the semantic outcome “no action”.
 - A non-conversational subject, such as a release or check suite, also has the outcome “no action”. Default-branch CI recovery belongs to the daily current-state scan.
 - A subject with no readable target — a `Discussion`, whose `subject.url` is null, or a deleted issue or PR, whose `subject.url` 404s — also has the outcome “no action”. Nothing makes it readable on a later poll, so leaving it unresolved would hand it to every later poll to re-examine. A read that fails for any other reason — a 5xx, a rate limit — leaves the item unresolved.
@@ -91,7 +106,10 @@ Acknowledge a thread as soon as it has an outcome, one call per thread, same rep
 gh api "notifications/threads/$THREAD_ID" -X PATCH --silent
 ```
 
-Never acknowledge a thread before it has an outcome. A deferred or unresolved thread is left alone and the next poll picks it up.
+Never acknowledge a thread before it has an outcome. A deferred or unresolved
+thread, including a dispatched review, is left alone. A later poll re-reads the
+conversation after the review finishes and acknowledges it when every activity
+has an outcome.
 
 Never acknowledge repository-wide (`PUT /repos/{owner}/{repo}/notifications`). It marks threads by timestamp rather than by outcome, so it acts on threads this run never examined — and REST has no "mark unread" to walk an overshoot back.
 
@@ -102,5 +120,5 @@ If the prompt reports possible conflicted PRs, load
 only. The count is a boot signal; the conflict skill re-reads and test-merges the
 current PR heads before changing a branch.
 
-Report the notifications handled, responses posted, items deferred, threads
-acknowledged, and conflict outcomes.
+Report the notifications handled, responses posted, reviews dispatched, items
+deferred, threads acknowledged, and conflict outcomes.

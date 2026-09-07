@@ -33,6 +33,7 @@ from tend.workflows import (
     generate_codex_auth_refresh,
     generate_install_test,
     generate_mention,
+    generate_review,
 )
 
 from tests import ACTION_VERSION, agent_prompt
@@ -749,7 +750,7 @@ def test_custom_prompt(tmp_path: Path) -> None:
 # composes its prompt from the triggering event, and `Config.load` refuses an
 # override rather than accepting a key that renders nowhere.
 _PROMPT_WORKFLOWS = {
-    "review": ("{pr_number}", "${{ github.event.pull_request.number }}"),
+    "review": ("{pr_number}", "${{ steps.pr.outputs.number }}"),
     "triage": ("{issue_number}", "${{ github.event.issue.number }}"),
     "ci-fix": ("{run_id}", "${{ github.event.workflow_run.id }}"),
     "nightly": ("", ""),
@@ -1073,7 +1074,10 @@ def test_review_uses_the_newest_pending_event_to_reconcile_live_state(
     job = data["jobs"]["review"]
 
     assert job["concurrency"] == {
-        "group": "${{ github.workflow }}-${{ github.event.pull_request.number }}",
+        "group": (
+            "${{ github.workflow }}-${{ github.event.pull_request.number || "
+            "github.event.client_payload.pr_number }}"
+        ),
         "cancel-in-progress": False,
     }
 
@@ -1085,6 +1089,26 @@ def test_review_uses_the_newest_pending_event_to_reconcile_live_state(
     )
     for step in steps[enabled_idx + 1 :]:
         assert run_condition in step["if"], step
+
+
+def test_review_recovery_dispatch_uses_the_serialized_review_job(
+    tmp_path: Path,
+) -> None:
+    """Recovery requests enter the same per-PR job as event-driven reviews."""
+    cfg = Config.load(_minimal_config(tmp_path))
+    workflow = yaml.safe_load(generate_review(cfg).content)
+    job = workflow["jobs"]["review"]
+
+    assert workflow["on"]["repository_dispatch"] == {"types": ["tend-review"]}
+    resolve = next(step for step in job["steps"] if step.get("id") == "pr")
+    assert resolve["env"]["PR"] == (
+        "${{ github.event.pull_request.number || "
+        "github.event.client_payload.pr_number }}"
+    )
+    assert "^[1-9][0-9]*$" in resolve["run"]
+    assert agent_prompt(generate_review(cfg).content).strip() == (
+        "/tend-ci-runner:review ${{ steps.pr.outputs.number }}"
+    )
 
 
 def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
@@ -1107,7 +1131,7 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
 
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
     react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
-    assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
+    assert react["env"]["TARGET"] == "issues/${{ steps.pr.outputs.number }}"
     assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
 
 
@@ -1411,24 +1435,24 @@ def test_mention_prompt_omits_delay_when_empty(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Filenames whose only triggers are `schedule`, `workflow_dispatch`,
-# `workflow_run`, or `issues` — events that can fire from a fork's own Actions
-# once Actions is enabled there. Without the guard, the `tend` action step fails
-# noisily because the bot/Claude secrets are empty in the fork's secret store.
+# Workflows with a trigger that can fire from a fork's own Actions once Actions
+# is enabled there. Without the guard, the `tend` action step fails noisily
+# because the bot/Claude secrets are empty in the fork's secret store.
 _GUARDED_WORKFLOWS = [
     "tend-codex-auth-refresh.yaml",
     "tend-ci-fix.yaml",
     "tend-nightly.yaml",
     "tend-weekly.yaml",
+    "tend-review.yaml",
     "tend-review-runs.yaml",
     "tend-notifications.yaml",
     "tend-triage.yaml",
 ]
-# tend-review uses pull_request_target (base repo only); tend-mention's
-# review-event paths already filter forks, and `issues`/`issue_comment` events
-# are unguarded by design (forks rarely enable Issues, and gating here would
-# silently drop legitimate same-repo activity if the owner is misconfigured).
-_UNGUARDED_WORKFLOWS = ["tend-review.yaml", "tend-mention.yaml"]
+# tend-mention's review-event paths already filter forks. Its `issues` and
+# `issue_comment` paths are unguarded by design because forks rarely enable
+# Issues; gating them could silently drop same-repo activity when owner
+# detection fails.
+_UNGUARDED_WORKFLOWS = ["tend-mention.yaml"]
 
 
 @pytest.mark.parametrize("filename", _GUARDED_WORKFLOWS)
@@ -1451,9 +1475,7 @@ def test_fork_guard_present_when_repo_owner_set(tmp_path: Path, filename: str) -
 
 @pytest.mark.parametrize("filename", _UNGUARDED_WORKFLOWS)
 def test_fork_guard_absent_for_unguarded(tmp_path: Path, filename: str) -> None:
-    """tend-review (pull_request_target) and tend-mention (own filtering) must
-    not get a job-level repo_owner guard — adding one would drop legitimate
-    activity on those workflows if owner is misconfigured."""
+    """tend-mention's own event filters make a repo-owner guard redundant."""
     cfg = Config.load(_minimal_config(tmp_path))
     cfg.repo_owner = "test-owner"
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
