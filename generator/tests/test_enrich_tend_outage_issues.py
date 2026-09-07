@@ -190,6 +190,48 @@ def test_a_run_with_no_recoverable_detail_still_records_the_marker(
     assert f"<!-- enriched-run:{RUN_ID} -->" in body
 
 
+def test_a_rerun_that_went_green_is_enriched_from_the_failed_attempt(
+    env: dict[str, str],
+) -> None:
+    # The row is recorded when the run fails; a rerun that then succeeds leaves
+    # the default `latest` job view with nothing failed and no failed log, so
+    # the only copy of the diagnosis lives on the earlier attempt.
+    Path(env["JOBS_JSON"]).write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {
+                        "id": int(JOB_ID),
+                        "name": "review",
+                        "conclusion": "failure",
+                        "run_attempt": 1,
+                    },
+                    {
+                        "id": 102,
+                        "name": "review",
+                        "conclusion": "success",
+                        "run_attempt": 2,
+                    },
+                ]
+            }
+        )
+    )
+    Path(env["LOG_TXT"]).write_text("")
+
+    body = _run(env)
+
+    assert "filter=all" in Path(env["GH_CALLS"]).read_text()
+    assert "#### review (attempt 1)\n\n```\nassertion failed\n```" in body
+    assert "No failure details could be extracted." not in body
+
+
+def test_a_single_attempt_job_heading_carries_no_attempt(env: dict[str, str]) -> None:
+    body = _run(env)
+
+    assert "#### tests\n\n" in body
+    assert "attempt" not in body
+
+
 def test_an_unavailable_log_does_not_abort_the_batch(env: dict[str, str]) -> None:
     Path(env["ANNOTATIONS_JSON"]).write_text(json.dumps(EXIT_ONLY))
     env["LOG_FAILS"] = "1"

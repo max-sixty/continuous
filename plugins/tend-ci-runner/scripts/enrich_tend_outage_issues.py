@@ -70,18 +70,33 @@ def bounded_message(messages: list[str]) -> str:
     )
 
 
+def job_heading(job: dict[str, Any], label_attempt: bool) -> str:
+    """Name a failed job, distinguishing it from its siblings on other attempts."""
+    if not label_attempt:
+        return str(job["name"])
+    return f"{job['name']} (attempt {job.get('run_attempt') or 1})"
+
+
 def annotation_details(repo: str, run_id: str) -> list[str]:
-    """Render bounded failure annotations for one run."""
+    """Render bounded failure annotations for one run.
+
+    ``filter=all`` reads every attempt, not just the latest. A row is recorded
+    when the run fails, and a rerun that then goes green leaves the default
+    ``latest`` view with no failed job at all — so the attempt carrying the
+    diagnosis is exactly the one that view drops.
+    """
     try:
         response = github_cli.json_call(
-            "api", f"repos/{repo}/actions/runs/{run_id}/jobs", quiet=True
+            "api", f"repos/{repo}/actions/runs/{run_id}/jobs?filter=all", quiet=True
         )
     except (subprocess.CalledProcessError, ValueError):
         return []
 
+    jobs = response.get("jobs", [])
+    label_attempt = len({job.get("run_attempt") or 1 for job in jobs}) > 1
     details: list[str] = []
     rendered_bytes = 0
-    for job in response.get("jobs", []):
+    for job in jobs:
         if job.get("conclusion") != "failure":
             continue
         if rendered_bytes > MAX_RUN_BYTES:
@@ -101,7 +116,8 @@ def annotation_details(repo: str, run_id: str) -> list[str]:
         ]
         messages = [message for message in messages if message]
         if messages:
-            detail = f"#### {job['name']}\n\n{fenced(bounded_message(messages))}"
+            heading = job_heading(job, label_attempt)
+            detail = f"#### {heading}\n\n{fenced(bounded_message(messages))}"
             details.append(detail)
             rendered_bytes += len(detail.encode())
     return details
