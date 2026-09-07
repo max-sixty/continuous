@@ -88,7 +88,15 @@ As a daily backstop for delayed notifications, retention, edited activity, and r
 
 - an open issue with no bot response to the latest human activity;
 - an open PR whose live head has no bot review, or whose latest comment, review, or inline review comment directed at the bot has no response; this includes replies to the bot's review on a fork PR;
-- failing default-branch CI with no bot fix in progress.
+- failing default-branch CI with no bot fix in progress. This is **not** scoped to `ci-fix`'s watched workflows — Dependabot security updates, cron releases and doc builds fail on the default branch with no PR attached, and nothing else looks for them. `status=failure` filters server-side, so the page reaches past a busy repo's green runs:
+
+  ```bash
+  DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
+  gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$DEFAULT_BRANCH&status=failure&per_page=50" \
+    --jq ".workflow_runs[] | select(.created_at >= \"$(cat /tmp/review-runs-since)\") | {id, name, path, event, created_at}"
+  ```
+
+  Tend's own failures are already in Step 1's census; the news here is every other row. Report the branch at the scope you checked — "`main` is green" is read later as covering every workflow, so name the workflows the claim rests on.
 
 Handle live work through the normal triage, review, or CI-fix guidance. Keep
 failed runs in the report as diagnostic evidence.
