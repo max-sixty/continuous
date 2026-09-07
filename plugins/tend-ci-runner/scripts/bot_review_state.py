@@ -2,11 +2,12 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""Resolve which bot review, if any, anchors a pull request's current head."""
+"""Reduce bot reviews and timeline events to canonical coverage and recovery state."""
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,11 @@ import github_cli
 
 DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
 LEGACY_DRAFT_REVIEW_PREFIX = "Reviewing as a draft —"
+_READY_REVIEW_RE = re.compile(r"<!-- tend:ready-review:([1-9][0-9]*) -->")
+_INCOMPLETE_REVIEW_RE = re.compile(r"<!-- tend:review-incomplete:([0-9a-f]{32}) -->")
+_RESERVED_REVIEW_MARKER_RE = re.compile(
+    r"<!--[ \t]*tend:(?:ready-review|review-incomplete):.*?-->", re.DOTALL
+)
 FEEDBACK_QUERY = """
 query($owner:String!,$repo:String!,$number:Int!) {
   repository(owner:$owner,name:$repo) {
@@ -23,6 +29,7 @@ query($owner:String!,$repo:String!,$number:Int!) {
       reviewThreads(first:100) {
         nodes { comments(first:100) { nodes {
           author { login } path line body createdAt
+          pullRequestReview { author { login } body state fullDatabaseId }
         } } }
       }
     }
@@ -55,27 +62,109 @@ mutation($threadId: ID!) {
 """
 
 
+def ready_review_marker(event_id: int) -> str:
+    """Return the marker acknowledging one exact ready-for-review event."""
+    if isinstance(event_id, bool) or not isinstance(event_id, int) or event_id <= 0:
+        raise ValueError("ready-for-review event ID must be a positive integer")
+    return f"<!-- tend:ready-review:{event_id} -->"
+
+
+def incomplete_review_marker(operation_id: str) -> str:
+    """Return the marker identifying one unfinished inline-review submission."""
+    marker = f"<!-- tend:review-incomplete:{operation_id} -->"
+    if _INCOMPLETE_REVIEW_RE.fullmatch(marker) is None:
+        raise ValueError("review operation ID must be 32 lowercase hexadecimal digits")
+    return marker
+
+
+def strip_review_metadata(body: str) -> str:
+    """Remove Tend's private submission markers from a public review body."""
+    return _RESERVED_REVIEW_MARKER_RE.sub("", body).strip()
+
+
+def _ready_review_ids(body: str) -> set[int]:
+    return {int(match) for match in _READY_REVIEW_RE.findall(body)}
+
+
+def _incomplete_operation_id(body: str) -> str | None:
+    matches = _INCOMPLETE_REVIEW_RE.findall(body)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _review_incomplete_operation_id(review: dict[str, Any]) -> str | None:
+    if review.get("state") != "COMMENTED":
+        return None
+    return _incomplete_operation_id(review.get("body") or "")
+
+
+def _submitted_bot_reviews(
+    reviews: list[dict[str, Any]], bot: str
+) -> list[dict[str, Any]]:
+    return [
+        review
+        for review in reviews
+        if github_cli.actor_login(review.get("user")) == bot
+        and review.get("submitted_at") is not None
+    ]
+
+
+def _incomplete_reviews(
+    reviews: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], str]]:
+    return [
+        (review, operation_id)
+        for review in reviews
+        if (operation_id := _review_incomplete_operation_id(review)) is not None
+    ]
+
+
+def _latest_ready_for_review(
+    events: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    parsed = []
+    for event in events:
+        event_id = event.get("id")
+        created_at = event.get("created_at")
+        if (
+            isinstance(event_id, bool)
+            or not isinstance(event_id, int)
+            or event_id <= 0
+            or not isinstance(created_at, str)
+            or not created_at
+        ):
+            raise ValueError(
+                "ready_for_review timeline event is missing a valid id/time"
+            )
+        parsed.append({"id": event_id, "at": created_at})
+    return max(parsed, key=lambda event: (event["at"], event["id"])) if parsed else None
+
+
 def review_state(
     *,
     head_sha: str,
     bot: str,
     substantive_ids: set[int],
     force_push_times: list[str],
+    ready_for_review_events: list[dict[str, Any]],
     reviews: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Reduce GitHub review records to the state used by Tend's skills."""
-    mine = [
-        review
-        for review in reviews
-        if github_cli.actor_login(review.get("user")) == bot
-        and review.get("submitted_at") is not None
-    ]
+    mine = _submitted_bot_reviews(reviews, bot)
+    incomplete = _incomplete_reviews(mine)
+    incomplete_ids = {review["id"] for review, _operation_id in incomplete}
+
+    def public_body(review: dict[str, Any]) -> str:
+        return strip_review_metadata(review.get("body") or "")
+
     substantive = [
         review
         for review in mine
-        if review.get("body")
-        or review.get("id") in substantive_ids
-        or review.get("state") == "APPROVED"
+        if review.get("id") not in incomplete_ids
+        and (
+            public_body(review)
+            or review.get("id") in substantive_ids
+            or review.get("state") == "APPROVED"
+        )
     ]
     last_substantive = substantive[-1] if substantive else None
     approvals = [review for review in mine if review.get("state") == "APPROVED"]
@@ -93,7 +182,6 @@ def review_state(
         for review in substantive
         if review.get("commit_id") == head_sha and after_rewrite(review)
     ]
-    body_at_head = [review for review in at_head if review.get("body")]
     fresh_approvals = [review for review in approvals if after_rewrite(review)]
     decisions = [
         review
@@ -107,12 +195,39 @@ def review_state(
     )
 
     def is_draft_review(review: dict[str, Any]) -> bool:
-        body = review.get("body") or ""
+        body = public_body(review)
         # TODO(2026-12-01): Drop the prose-prefix fallback after pre-marker
         # reviews have aged out.
         return review.get("state") == "COMMENTED" and (
             DRAFT_REVIEW_MARKER in body or body.startswith(LEGACY_DRAFT_REVIEW_PREFIX)
         )
+
+    latest_ready = _latest_ready_for_review(ready_for_review_events)
+    acknowledged_ready_ids = sorted(
+        {
+            event_id
+            for review in substantive
+            if not is_draft_review(review)
+            for event_id in _ready_review_ids(review.get("body") or "")
+        }
+    )
+    outstanding_ready = (
+        latest_ready
+        if latest_ready and latest_ready["id"] not in acknowledged_ready_ids
+        else None
+    )
+    incomplete_at_head = [
+        {
+            "id": review["id"],
+            "sha": review.get("commit_id"),
+            "at": review.get("submitted_at"),
+            "operation_id": operation_id,
+            "draft_mode": is_draft_review(review),
+            "ready_review_ids": sorted(_ready_review_ids(review.get("body") or "")),
+        }
+        for review, operation_id in incomplete
+        if review.get("commit_id") == head_sha and after_rewrite(review)
+    ]
 
     return {
         "head_sha": head_sha,
@@ -124,6 +239,7 @@ def review_state(
                 "sha": last_substantive["commit_id"],
                 "state": last_substantive["state"],
                 "at": last_substantive.get("submitted_at"),
+                "draft_mode": is_draft_review(last_substantive),
             }
             if last_substantive
             else None
@@ -143,7 +259,10 @@ def review_state(
             if at_head
             else None
         ),
-        "orphan_id": body_at_head[-1]["id"] if body_at_head else None,
+        "latest_ready_for_review": latest_ready,
+        "acknowledged_ready_ids": acknowledged_ready_ids,
+        "outstanding_ready_for_review": outstanding_ready,
+        "incomplete_reviews": incomplete_at_head,
         "fresh_approval_sha": (
             (fresh_approvals[-1].get("commit_id") or "") if fresh_approvals else ""
         ),
@@ -182,6 +301,9 @@ def fetch_review_state(pr: str, *, repo: str | None = None) -> dict[str, Any]:
         for event in timeline
         if event.get("event") == "head_ref_force_pushed"
     ]
+    ready_for_review_events = [
+        event for event in timeline if event.get("event") == "ready_for_review"
+    ]
     reviews = github_cli.paginated(
         "api", "--paginate", f"repos/{repo}/pulls/{pr}/reviews"
     )
@@ -190,6 +312,7 @@ def fetch_review_state(pr: str, *, repo: str | None = None) -> dict[str, Any]:
         bot=bot,
         substantive_ids=substantive_ids,
         force_push_times=force_push_times,
+        ready_for_review_events=ready_for_review_events,
         reviews=reviews,
     )
 
@@ -259,29 +382,42 @@ def _review_threads(pr: str, repo: str, query: str) -> list[dict[str, Any]]:
 
 
 def feedback(pr: str) -> dict[str, Any]:
-    """Return prior conversation plus every inline comment written by the bot."""
+    """Return prior public bot feedback and the PR conversation."""
     repo = github_cli.repository()
     bot = str(github_cli.json_call("api", "user")["login"])
     pr_view = github_cli.json_call(
         "pr", "view", pr, "--repo", repo, "--json", "comments,reviews"
     )
     inline = [
-        comment
+        (comment, comment.get("pullRequestReview") or {})
         for thread in _review_threads(pr, repo, FEEDBACK_QUERY)
         for comment in thread["comments"]["nodes"]
         if github_cli.actor_login(comment.get("author")) == bot
     ]
+
+    def incomplete_parent(review: dict[str, Any]) -> bool:
+        return (
+            github_cli.actor_login(review.get("author")) == bot
+            and _review_incomplete_operation_id(review) is not None
+        )
+
+    previous_reviews = []
+    for review in pr_view["reviews"]:
+        body = strip_review_metadata(review.get("body") or "")
+        if (
+            github_cli.actor_login(review.get("author")) == bot
+            and _review_incomplete_operation_id(review) is None
+            and body
+        ):
+            previous_reviews.append(
+                {
+                    "state": review.get("state"),
+                    "submitted_at": review.get("submittedAt"),
+                    "body": body,
+                }
+            )
     return {
-        "previous_reviews": [
-            {
-                "state": review.get("state"),
-                "submitted_at": review.get("submittedAt"),
-                "body": review.get("body"),
-            }
-            for review in pr_view["reviews"]
-            if github_cli.actor_login(review.get("author")) == bot
-            and review.get("body")
-        ],
+        "previous_reviews": previous_reviews,
         "conversation": [
             {
                 "author": github_cli.actor_login(comment.get("author")),
@@ -297,7 +433,19 @@ def feedback(pr: str) -> dict[str, Any]:
                 "created_at": comment.get("createdAt"),
                 "body": comment.get("body"),
             }
-            for comment in inline
+            for comment, review in inline
+            if not incomplete_parent(review)
+        ],
+        "incomplete_inline_comments": [
+            {
+                "review_id": review.get("fullDatabaseId"),
+                "path": comment.get("path"),
+                "line": comment.get("line"),
+                "created_at": comment.get("createdAt"),
+                "body": comment.get("body"),
+            }
+            for comment, review in inline
+            if incomplete_parent(review)
         ],
     }
 

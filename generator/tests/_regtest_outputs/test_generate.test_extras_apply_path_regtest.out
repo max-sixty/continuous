@@ -15,11 +15,9 @@ jobs:
   review:
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-      # Preserve pending PR events within GitHub's queue limit: a push must not
-      # replace a ready-for-review run. Runs stay serial so outward actions
-      # cannot race. An override setting `cancel-in-progress: true` must set
-      # `queue: null` too ? GitHub rejects the pair as an invalid workflow file.
-      queue: max
+      # Runs stay serial so outward actions cannot race. GitHub keeps the newest
+      # pending run; after it acquires the lock, the preflight reconciles live
+      # state instead of depending on the event that happened to survive.
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment:
@@ -99,8 +97,16 @@ jobs:
             warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
           end
           RUBY
-      - name: React with eyes
+      - uses: max-sixty/tend/review/preflight@X.Y.Z
+        name: Check whether review work remains
+        id: review_gate
         if: steps.tend_enabled.outputs.enabled == 'true'
+        continue-on-error: true
+        with:
+          github_token: ${{ secrets.TEND_BOT_TOKEN }}
+          pr_number: ${{ github.event.pull_request.number }}
+      - name: React with eyes
+        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
         run: |
           gh api "repos/$REPO/$TARGET/reactions" -f content=eyes --silent \
             || echo "::warning::could not add the eyes reaction"
@@ -116,7 +122,7 @@ jobs:
       # tree.
       - name: Resolve PR checkout ref
         id: pr_ref
-        if: steps.tend_enabled.outputs.enabled == 'true'
+        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
         env:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
@@ -128,7 +134,7 @@ jobs:
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
       - uses: actions/checkout@v7
-        if: steps.tend_enabled.outputs.enabled == 'true'
+        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
         with:
           ref: ${{ steps.pr_ref.outputs.ref }}
           allow-unsafe-pr-checkout: true
@@ -137,7 +143,7 @@ jobs:
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
       - uses: max-sixty/tend/claude@X.Y.Z
-        if: steps.tend_enabled.outputs.enabled == 'true'
+        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -150,7 +156,7 @@ jobs:
       - name: Remove the eyes reaction
         if: |
           always()
-          && (steps.tend_enabled.outputs.enabled == 'true')
+          && (steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false'))
         run: |
           REACTION_ID=$(gh api --paginate \
             "repos/$REPO/$TARGET/reactions?content=eyes&per_page=100" \

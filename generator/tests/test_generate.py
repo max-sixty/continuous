@@ -292,9 +292,11 @@ def test_local_setup_action_restored_for_post_cleanup(
     assert condition.startswith("always()"), (
         f"{name}: the restore has to run even when the session fails"
     )
-    assert condition.strip() == (
-        "always()\n&& (steps.tend_enabled.outputs.enabled == 'true')"
-    ), f"{name}: restore has an unexpected gate"
+    enabled = "steps.tend_enabled.outputs.enabled == 'true'"
+    assert enabled in condition, f"{name}: restore has an unexpected gate"
+    if name == "review":
+        assert "steps.review_gate.outcome == 'failure'" in condition
+        assert "steps.review_gate.outputs.should_run != 'false'" in condition
     switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
     assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
 
@@ -1062,10 +1064,8 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
     assert "clean" not in checkouts[0]["with"]
 
 
-def test_review_preserves_pending_events_without_an_examined_status(
-    tmp_path: Path,
-) -> None:
-    """Every event waits for the current session, including ready-for-review."""
+def test_review_reconciles_live_state_before_starting_an_agent(tmp_path: Path) -> None:
+    """Only an explicit successful skip suppresses consequential work."""
     extra = "setup:\n  - run: npm ci\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
@@ -1073,12 +1073,39 @@ def test_review_preserves_pending_events_without_an_examined_status(
     data = yaml.safe_load(content)
     job = data["jobs"]["review"]
 
-    assert job["concurrency"]["cancel-in-progress"] is False
-    assert job["concurrency"]["queue"] == "max"
-    assert "must set\n      # `queue: null`" in content
-    assert all(step.get("id") != "gate" for step in job["steps"])
-    assert "steps.gate" not in content
-    assert "tend-review/" not in content
+    assert job["concurrency"] == {
+        "group": "${{ github.workflow }}-${{ github.event.pull_request.number }}",
+        "cancel-in-progress": False,
+    }
+
+    steps = job["steps"]
+    enabled_idx = next(
+        i for i, step in enumerate(steps) if step.get("id") == "tend_enabled"
+    )
+    gate_idx = next(
+        i for i, step in enumerate(steps) if step.get("id") == "review_gate"
+    )
+    gate = steps[gate_idx]
+    assert gate_idx == enabled_idx + 1
+    assert gate == {
+        "uses": f"max-sixty/tend/review/preflight@{ACTION_VERSION}",
+        "name": "Check whether review work remains",
+        "id": "review_gate",
+        "if": "steps.tend_enabled.outputs.enabled == 'true'",
+        "continue-on-error": True,
+        "with": {
+            "github_token": f"${{{{ secrets.{BOT_TOKEN_SECRET} }}}}",
+            "pr_number": "${{ github.event.pull_request.number }}",
+        },
+    }
+
+    run_condition = (
+        "steps.tend_enabled.outputs.enabled == 'true' && "
+        "(steps.review_gate.outcome == 'failure' || "
+        "steps.review_gate.outputs.should_run != 'false')"
+    )
+    for step in steps[gate_idx + 1 :]:
+        assert run_condition in step["if"], step
 
 
 def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
@@ -1102,8 +1129,9 @@ def test_issue_and_pr_acknowledged_with_eyes(tmp_path: Path) -> None:
     review = yaml.safe_load(workflows["tend-review.yaml"].content)
     react = _eyes_steps(review["jobs"]["review"]["steps"])[0]
     assert react["env"]["TARGET"] == "issues/${{ github.event.pull_request.number }}"
-    # Every enabled review run boots a session, so each one gets a reaction.
-    assert react["if"] == "steps.tend_enabled.outputs.enabled == 'true'"
+    # A preflight skip never claims that an agent is working on the PR.
+    assert "steps.review_gate.outcome == 'failure'" in react["if"]
+    assert "steps.review_gate.outputs.should_run != 'false'" in react["if"]
 
 
 @pytest.mark.parametrize(
@@ -1122,10 +1150,9 @@ def test_eyes_come_off_when_the_session_ends(
     none of its steps execute — `always()` governs execution within a job that
     started. React in one job and unreact in another and every route where the
     second job never starts leaves the eyes on with no session behind them.
-    For jobs with the default one-pending-run queue, `cancel-in-progress: false`
-    doesn't close that: it holds a *running* job while GitHub can still evict a
-    *pending* one. Review's `queue: max` prevents ordinary eviction, but keeping
-    both halves in one job preserves the same lifecycle invariant.
+    With the default one-pending-run queue, GitHub may evict a pending job, but
+    that job never ran its reaction step. Keeping both halves in one job
+    preserves the lifecycle invariant.
 
     Both halves also have to name the same reaction target; one that drifted
     would leave the eyes on every comment the bot ever answered."""

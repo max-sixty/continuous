@@ -32,6 +32,10 @@ RUNNING_IN_CI_SKILL = (
 BOT = "tend-bot"
 HEAD = "head000"
 DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
+READY_REVIEW_MARKER = "<!-- tend:ready-review:101 -->"
+INCOMPLETE_REVIEW_MARKER = (
+    "<!-- tend:review-incomplete:12345678123442348234123456789abc -->"
+)
 LEGACY_DRAFT_REVIEW_LINE = (
     "Reviewing as a draft — flagging anything that looks worth a quick fix. "
     "Mark ready for a full review."
@@ -140,6 +144,17 @@ def _rewrite_at(env: dict[str, str], *times: str) -> None:
     )
 
 
+def _ready_at(env: dict[str, str], *events: tuple[int, str]) -> None:
+    _write(
+        env,
+        "TIMELINE_JSON",
+        [
+            {"event": "ready_for_review", "id": event_id, "created_at": at}
+            for event_id, at in events
+        ],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Substantive vs. synthetic reply containers
 # ---------------------------------------------------------------------------
@@ -152,11 +167,14 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["bot_login"] == BOT
     assert state["last_substantive"] is None
     assert state["at_head"] is None
-    assert state["orphan_id"] is None
     assert state["fresh_approval_sha"] == ""
     assert state["stale_approval_id"] == ""
     assert state["standing_approval_id"] == ""
     assert state["force_pushed_since"] is False
+    assert state["latest_ready_for_review"] is None
+    assert state["acknowledged_ready_ids"] == []
+    assert state["outstanding_ready_for_review"] is None
+    assert state["incomplete_reviews"] == []
 
 
 def test_prepare_approval_pins_only_an_unapproved_head(env: dict[str, str]) -> None:
@@ -279,7 +297,108 @@ def test_feedback_combines_conversation_reviews_and_inline_comments(
                 "body": "inline",
             }
         ],
+        "incomplete_inline_comments": [],
     }
+
+
+def test_feedback_excludes_comments_from_incomplete_reviews(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                "2026-01-01T00:00:00Z",
+                body=INCOMPLETE_REVIEW_MARKER,
+            )
+        ],
+    )
+    _write(env, "PR_HEAD_JSON", {"comments": [], "reviews": []})
+    _write(
+        env,
+        "GRAPHQL_JSON",
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "author": {"login": BOT},
+                                                "path": "incomplete.py",
+                                                "line": 3,
+                                                "createdAt": "2026-01-01T01:00:00Z",
+                                                "body": "partial finding",
+                                                "pullRequestReview": {
+                                                    "author": {"login": BOT},
+                                                    "body": INCOMPLETE_REVIEW_MARKER,
+                                                    "state": "COMMENTED",
+                                                    "fullDatabaseId": 7,
+                                                },
+                                            },
+                                            {
+                                                "author": {"login": BOT},
+                                                "path": "published.py",
+                                                "line": 4,
+                                                "createdAt": "2026-01-02T01:00:00Z",
+                                                "body": "published finding",
+                                                "pullRequestReview": {
+                                                    "author": {"login": BOT},
+                                                    "body": "Final review.",
+                                                    "state": "COMMENTED",
+                                                    "fullDatabaseId": 8,
+                                                },
+                                            },
+                                            {
+                                                "author": {"login": BOT},
+                                                "path": "human-review.py",
+                                                "line": 5,
+                                                "createdAt": "2026-01-03T01:00:00Z",
+                                                "body": "bot reply",
+                                                "pullRequestReview": {
+                                                    "author": {"login": "human"},
+                                                    "body": INCOMPLETE_REVIEW_MARKER,
+                                                    "state": "COMMENTED",
+                                                    "fullDatabaseId": 9,
+                                                },
+                                            },
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    result = _run_cli(env, "feedback", "7")
+
+    assert result.returncode == 0, result.stderr
+    feedback = json.loads(result.stdout)
+    assert [item["body"] for item in feedback["inline_comments"]] == [
+        "published finding",
+        "bot reply",
+    ]
+    assert feedback["incomplete_inline_comments"] == [
+        {
+            "review_id": 7,
+            "path": "incomplete.py",
+            "line": 3,
+            "created_at": "2026-01-01T01:00:00Z",
+            "body": "partial finding",
+        }
+    ]
+    assert (
+        "pullRequestReview { author { login } body state fullDatabaseId }"
+        in Path(env["GH_CALLS"]).read_text()
+    )
 
 
 def test_threads_filters_to_unresolved_threads_started_by_the_bot(
@@ -350,7 +469,6 @@ def test_an_unsubmitted_review_anchors_nothing(env: dict[str, str]) -> None:
 
     assert state["last_substantive"] is None
     assert state["at_head"] is None
-    assert state["orphan_id"] is None
 
 
 def test_a_reply_container_does_not_read_as_a_review(env: dict[str, str]) -> None:
@@ -403,7 +521,10 @@ def test_at_head_identifies_a_tend_draft_review(env: dict[str, str], body: str) 
         ],
     )
 
-    assert _state(env)["at_head"]["draft_mode"] is True
+    state = _state(env)
+
+    assert state["at_head"]["draft_mode"] is True
+    assert state["last_substantive"]["draft_mode"] is True
 
 
 def test_at_head_does_not_call_an_ordinary_comment_draft_mode(
@@ -416,6 +537,295 @@ def test_at_head_does_not_call_an_ordinary_comment_draft_mode(
     )
 
     assert _state(env)["at_head"]["draft_mode"] is False
+
+
+# ---------------------------------------------------------------------------
+# Ready-for-review generations and private review metadata
+# ---------------------------------------------------------------------------
+
+
+def test_only_the_latest_exact_ready_generation_can_be_outstanding(
+    env: dict[str, str],
+) -> None:
+    """Events are state generations, not queued work: an acknowledgment of
+    the newest one semantically supersedes every older generation."""
+    _ready_at(
+        env,
+        (99, "2026-01-02T00:00:00Z"),
+        (101, "2026-01-03T00:00:00Z"),
+        (100, "2026-01-03T00:00:00Z"),
+    )
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-04T00:00:00Z",
+                body="Full pass.\n\n<!-- tend:ready-review:99 -->",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["latest_ready_for_review"] == {
+        "id": 101,
+        "at": "2026-01-03T00:00:00Z",
+    }
+    assert state["acknowledged_ready_ids"] == [99]
+    assert state["outstanding_ready_for_review"] == state["latest_ready_for_review"]
+
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                2,
+                "2026-01-05T00:00:00Z",
+                state="APPROVED",
+                body=READY_REVIEW_MARKER,
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+
+
+def test_submission_time_does_not_acknowledge_a_ready_generation(
+    env: dict[str, str],
+) -> None:
+    """A session can start before ready and post afterward without doing the
+    requested full pass; only the exact event marker proves observation."""
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-03T00:00:00Z", state="APPROVED")],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 1
+    assert state["outstanding_ready_for_review"]["id"] == 101
+
+
+def test_a_draft_review_cannot_acknowledge_readiness(env: dict[str, str]) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-03T00:00:00Z",
+                body=f"{DRAFT_REVIEW_MARKER}\n{READY_REVIEW_MARKER}",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"]["draft_mode"] is True
+    assert state["acknowledged_ready_ids"] == []
+    assert state["outstanding_ready_for_review"]["id"] == 101
+
+
+def test_only_a_finalized_substantive_bot_review_acknowledges_readiness(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-03T00:00:00Z",
+                author="human",
+                state="APPROVED",
+                body=READY_REVIEW_MARKER,
+            ),
+            _review(2, None, state="PENDING", body=READY_REVIEW_MARKER),
+            _review(3, "2026-01-03T00:00:00Z", body=READY_REVIEW_MARKER),
+            _review(
+                4,
+                "2026-01-03T00:00:00Z",
+                body=f"{INCOMPLETE_REVIEW_MARKER}\n{READY_REVIEW_MARKER}",
+            ),
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == []
+    assert state["at_head"] is None
+    assert state["outstanding_ready_for_review"]["id"] == 101
+
+
+def test_a_finalized_inline_review_acknowledges_readiness(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(5, "2026-01-03T00:00:00Z", body=READY_REVIEW_MARKER)],
+    )
+    _write(env, "INLINE_JSON", [{"pull_request_review_id": 5}])
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 5
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+
+
+def test_incomplete_inline_review_is_recoverable_but_never_coverage(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                "2026-01-03T00:00:00Z",
+                body=f"{INCOMPLETE_REVIEW_MARKER}\n{READY_REVIEW_MARKER}",
+            )
+        ],
+    )
+    _write(env, "INLINE_JSON", [{"pull_request_review_id": 7}])
+
+    state = _state(env)
+
+    assert state["incomplete_reviews"] == [
+        {
+            "id": 7,
+            "sha": HEAD,
+            "at": "2026-01-03T00:00:00Z",
+            "operation_id": "12345678123442348234123456789abc",
+            "draft_mode": False,
+            "ready_review_ids": [101],
+        }
+    ]
+    assert state["last_substantive"] is None
+    assert state["at_head"] is None
+    assert state["acknowledged_ready_ids"] == []
+
+
+def test_incomplete_review_before_a_force_push_is_not_recoverable(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(7, "2026-01-01T00:00:00Z", body=INCOMPLETE_REVIEW_MARKER)],
+    )
+    _rewrite_at(env, "2026-01-02T00:00:00Z")
+
+    assert _state(env)["incomplete_reviews"] == []
+
+
+def test_only_submitted_bot_comments_are_incomplete_reviews(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-01T00:00:00Z",
+                author="human",
+                body=INCOMPLETE_REVIEW_MARKER,
+            ),
+            _review(2, None, state="PENDING", body=INCOMPLETE_REVIEW_MARKER),
+            _review(
+                3,
+                "2026-01-01T00:00:00Z",
+                state="APPROVED",
+                body=INCOMPLETE_REVIEW_MARKER,
+            ),
+        ],
+    )
+
+    assert _state(env)["incomplete_reviews"] == []
+
+
+def test_review_metadata_is_not_public_feedback(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "PR_HEAD_JSON",
+        {
+            "comments": [],
+            "reviews": [
+                {
+                    "author": {"login": BOT},
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-01-01T00:00:00Z",
+                    "body": INCOMPLETE_REVIEW_MARKER,
+                },
+                {
+                    "author": {"login": BOT},
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-01-02T00:00:00Z",
+                    "body": (
+                        f"Finding.\n\n{READY_REVIEW_MARKER}\n{DRAFT_REVIEW_MARKER}"
+                    ),
+                },
+            ],
+        },
+    )
+    _write(
+        env,
+        "GRAPHQL_JSON",
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}},
+    )
+
+    result = _run_cli(env, "feedback", "7")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["previous_reviews"] == [
+        {
+            "state": "COMMENTED",
+            "submitted_at": "2026-01-02T00:00:00Z",
+            "body": f"Finding.\n\n\n{DRAFT_REVIEW_MARKER}",
+        }
+    ]
+
+
+def test_malformed_reserved_markers_cannot_become_public_metadata(
+    env: dict[str, str],
+) -> None:
+    """The parser accepts only canonical IDs, while public-body sanitization
+    reserves the whole namespace rather than leaking malformed lookalikes."""
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                "2026-01-03T00:00:00Z",
+                body=(
+                    "Finding.\n\n<!-- tend:ready-review:not-an-id -->\n"
+                    "<!-- tend:review-incomplete:NOT-A-UUID -->"
+                ),
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 7
+    assert state["acknowledged_ready_ids"] == []
+    assert state["incomplete_reviews"] == []
 
 
 def test_a_review_owning_a_fresh_inline_comment_anchors(env: dict[str, str]) -> None:
@@ -676,56 +1086,6 @@ def test_an_approval_whose_commit_was_deleted_has_no_fresh_sha(
 
 
 # ---------------------------------------------------------------------------
-# Orphan bodies from a partially-failed review POST
-# ---------------------------------------------------------------------------
-
-
-def test_a_body_bearing_review_on_the_head_is_the_orphan_to_edit(
-    env: dict[str, str],
-) -> None:
-    """A review POST whose inline comments are rejected still persists the
-    body. Retrying blind duplicates it."""
-    _write(env, "REVIEWS_JSON", [_review(5, "2026-01-01T00:00:00Z", body="findings")])
-
-    assert _state(env)["orphan_id"] == 5
-
-
-def test_a_reply_container_is_never_mistaken_for_an_orphan(
-    env: dict[str, str],
-) -> None:
-    """The body-length test is what separates them, and getting it wrong means
-    the recovery PUT overwrites an unrelated reply."""
-    _write(env, "REVIEWS_JSON", [_review(5, "2026-01-01T00:00:00Z")])
-
-    assert _state(env)["orphan_id"] is None
-
-
-def test_a_pre_rewrite_body_is_never_mistaken_for_an_orphan(
-    env: dict[str, str],
-) -> None:
-    """It reports commit_id == head and passes the body test, so without the
-    rewrite filter the PUT destroys a published review — overwriting its text
-    with this run's findings, over inline comments on code that is gone."""
-    _write(env, "REVIEWS_JSON", [_review(5, "2026-01-01T00:00:00Z", body="published")])
-    _rewrite_at(env, "2026-01-02T00:00:00Z")
-
-    assert _state(env)["orphan_id"] is None
-
-
-def test_the_newest_orphan_wins(env: dict[str, str]) -> None:
-    _write(
-        env,
-        "REVIEWS_JSON",
-        [
-            _review(5, "2026-01-01T00:00:00Z", body="first"),
-            _review(6, "2026-01-02T00:00:00Z", body="second"),
-        ],
-    )
-
-    assert _state(env)["orphan_id"] == 6
-
-
-# ---------------------------------------------------------------------------
 # Shape of the call
 # ---------------------------------------------------------------------------
 
@@ -734,8 +1094,8 @@ def test_the_head_comes_from_head_ref_oid(env: dict[str, str]) -> None:
     """`--json commits` caps at 100 and returns oldest-first, so on a long PR
     `.commits[-1]` is commit #100. Every head-keyed field then matches nothing
     and goes quiet: the pre-post guard stops firing and a re-run posts a second
-    review, the 422 recovery duplicates instead of editing the orphan, and
-    `weekly`'s redundant-approval guard lets approvals pile up on one commit."""
+    review, incomplete recovery cannot match its review, and `weekly`'s
+    redundant-approval guard lets approvals pile up on one commit."""
     assert _state(env)["head_sha"] == HEAD
 
     calls = Path(env["GH_CALLS"]).read_text()

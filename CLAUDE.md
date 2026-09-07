@@ -51,8 +51,9 @@ Four pieces:
    skills). Both ship from the same marketplace.
 2. **Composite actions** — the stable interface, pinned to an immutable
    release tag (`max-sixty/tend/<action-path>@X.Y.Z`, the generator's own version
-   — no floating `v1`). Every action lives under a harness-named path; there
-   is no bare-root default. The two harness runners are:
+   — no floating `v1`). Harness runners live under harness-named paths; support
+   actions use capability paths. There is no bare-root default. The two harness
+   runners are:
    - `max-sixty/tend/claude@X.Y.Z` (Claude) — runs the official `claude`
      binary headless (`claude -p`) as a non-sudo sandbox user behind the
      credential-injecting proxy; completion is the process exit code.
@@ -72,6 +73,10 @@ Four pieces:
    publish the full and access-only bundles. It holds no bot token and does not
    inspect adopter code. Inputs in `codex/refresh/action.yaml`.
 
+   `max-sixty/tend/review/preflight@X.Y.Z` is the harness-neutral review
+   admission action. After a queued job acquires its per-PR lock, it reconciles
+   live review state and skips work already covered by an earlier run.
+
    Removed: `claude-interactive`, a PTY-supervised variant of the same binary
    that existed only to dodge the 2026-06-15 Agent SDK metering (which covered
    `claude -p` but not interactive sessions). Anthropic paused that change and
@@ -81,9 +86,7 @@ Four pieces:
    the adopter's `.github/workflows/` from `.config/tend.yaml`. Picks the
    right action ref and secret names per `harness`. Generation is
    idempotent — running `init` again overwrites all files from the
-   current config. When the review workflow is generated, it also merges the
-   `concurrency.queue` ignore into the adopter-owned
-   `.github/actionlint.yaml` (see "Concurrency and filtering").
+   current config.
 4. **Config** (`.config/tend.yaml`) — inputs to the generator. Overrides
    from defaults only. `harness: claude | codex` selects the harness
    (default `claude`). A per-workflow `harness:` override (and matching
@@ -119,6 +122,8 @@ tend/
 │   │   └── action.yaml   # Serialized Plus/Pro credential refresh action
 │   ├── runner.py         # Codex harness commands (plugin, prompt, execution)
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
+├── review/
+│   └── preflight/action.yaml  # Harness-neutral review admission
 ├── shared/
 │   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
 │   └── system-prompt.md  # Harness-neutral system prompt base
@@ -273,7 +278,8 @@ Events pass through three layers before the bot does work:
    A false condition skips the job entirely (never enters the concurrency
    group, never queues).
 2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
-   whether the agent boots: mention's verify job checks engagement, and
+   whether the agent boots: review reconciles live head coverage after taking
+   its per-PR lock, mention's verify job checks engagement, and
    notifications' check repairs repository watching, captures a paginated
    cutoff snapshot, and finds configured-bot PR conflicts whose current heads
    have not already been deferred for manual resolution.
@@ -283,7 +289,7 @@ Concurrency groups:
 
 | Workflow | Group key | Cancel-in-progress |
 |---|---|---|
-| review | `workflow-PR#` | **no** — killing a session discards a review it can still deliver; `queue: max` holds pending PR events within GitHub's queue limit while it folds the push in and posts |
+| review | `workflow-PR#` | **no** — killing a session discards a review it can still deliver; the newest pending event survives, then reconciles live state after it acquires the lock |
 | mention/relay | none | stateless — secretless job that re-posts review events as a `repository_dispatch` |
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
@@ -312,13 +318,11 @@ commit retried. The watched workflow is in the key too, so a red
 job-level, not workflow-level: most `workflow_run` events are green runs the
 job's `if` skips, and a skipped job never enters the group.
 
-**GHA queue depth.** Review sets `queue: max`, so pending PR events within
-GitHub's queue limit wait and a later push cannot replace `ready_for_review`.
-GitHub accepts the key; actionlint's schema does not, so `init` merges the
-matching ignore into `.github/actionlint.yaml`, which the binary reads for
-every invocation.
-Mention/handle and notifications keep the default one-pending-run queue; when a
-third job arrives while one runs and one queues, the pending job is replaced. For mention,
+**GHA queue depth.** Review, mention/handle, and notifications use the default
+one-pending-run queue: when a third job arrives while one runs and one queues,
+the pending job is replaced. Review reconstructs readiness demand from the PR's
+timeline and checks the bot's review coverage after acquiring the concurrency
+lock, so correctness does not depend on which event survives. For mention,
 mitigation lives in the skill prompts: dedup if the bot already responded to
 the triggering comment; self-heal earlier comments without a bot reply (oldest
 first). The workflow injects the queue-to-run time delta (seconds between event

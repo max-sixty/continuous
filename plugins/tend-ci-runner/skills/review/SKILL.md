@@ -32,6 +32,12 @@ Before reading the diff, run the initial snapshot. It pins the open head, resolv
 On `skip`, finish. The JSON fields replace the shell variables named below;
 `incremental_path` is either null or a file containing the commits and per-file
 line counts authored since the last review, excluding base-branch churn.
+`recovery_review_id` is the one current-head incomplete COMMENT compatible with
+this review mode, or null.
+
+When `recovery_review_id` is non-null, bypass the already-reviewed and
+trivial-increment silent exits below. The incomplete review has outward comments
+to reconcile but does not count as a finalized verdict.
 
 When `force_full_review` is true, bypass both the already-reviewed and trivial-
 increment shortcuts: becoming ready asks for a full non-draft review.
@@ -58,6 +64,20 @@ uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
   feedback <number>
 ```
 
+`incomplete_inline_comments` are already visible on the PR but belong to a
+review whose final body was never published. Verify them against the current
+diff, but do not repeat them in a new inline comment and do not let them trigger
+the ordinary “prior feedback already covers it” silent exit.
+
+If `recovery_review_id` is non-null, finish or supersede that incomplete review
+in step 6. When its existing inline comments cover the review, compose the
+public body (use “See the existing inline findings.” if no other prose is
+needed) and finalize that exact ID with the recovery edit command. If the new
+pass needs additional inline comments, submit one new COMMENT containing only
+the new comments; its finalized coverage makes the older incomplete record
+inert. In either case, do not finish silently. Incomplete comments from other
+review modes remain visible context but cannot satisfy this run's verdict.
+
 **Apply the sibling-workflow dedup rule from `running-in-ci`** to both the review body and inline comments. If a prior bot comment in the conversation already covers a point — a previous review on this or an earlier commit, a `tend-mention` reply, a `tend-triage` post, anything from a tend workflow — omit it from this review and stick to diff-grounded findings. If that leaves no new diff-grounded finding on the incremental changes and the only outstanding concern is a still-unresolved thread from an earlier bot review, do not post a new review: that thread already blocks the PR, and restating "the prior thread still applies" on every push is noise. Resolve any bot threads the new commits addressed (step 8), then finish without posting. A fresh review is warranted only when the incremental diff introduces a new finding, or resolves the last open one (then approve with an empty body — the author-readiness gate under step 6 applies here too, since these are the bot's own findings closing out rather than the author's). When concurrent runs race (a new push while the first run is still responding), both see the same unanswered question — check whether a bot reply exists after the question's timestamp before answering. Address remaining unanswered questions in the review body (not via `gh pr comment`).
 
 #### Draft mode
@@ -68,7 +88,7 @@ If `is_draft` is true, run a lighter review:
 - Skip the duplication scan in step 4 — the author is still shaping the design.
 - Submit as **COMMENT only**, never APPROVE. GitHub blocks approving drafts, and the author hasn't asked for a verdict yet.
 - Make the review's context clear: this is feedback on work in progress, not a merge verdict, and the author can mark it ready to request the full review.
-- Include the exact hidden marker `<!-- tend:draft-review -->` anywhere in the review body. Posting mechanics uses it to replace this COMMENT with a full verdict when the PR becomes ready; it is not part of the reader-facing prose. Carry it through any body you recompose — re-targeting after a mid-review push and the 422 body-only retry both rewrite the body, and dropping the marker there forfeits the replacement silently.
+- Include the exact hidden marker `<!-- tend:draft-review -->` anywhere in the review body. Posting mechanics uses it to replace this COMMENT with a full verdict when the PR becomes ready; it is not part of the reader-facing prose. The submit command preserves it across a re-target or recovery edit.
 - Skip step 7 (CI monitoring) — drafts churn; CI failures are the author's to chase.
 - Skip step 9 (push fixes) — never push to a WIP branch.
 
@@ -148,17 +168,14 @@ What counts as core is repo-specific; let the project's own guidance (CLAUDE.md,
 **Unless the author withheld merge readiness.** When the PR body — or a later comment from the author or a maintainer — says the change should not merge yet — "should not merge until…", "not ready", design questions the author calls unresolved — the verdict is withheld the same way the draft flag withholds it, and plenty of contributors state it in prose rather than toggling draft. Submit COMMENT instead, naming the stated blocker that holds the verdict; name it once, and on a later pass that finds nothing new stay silent rather than restating it — the surrounding dedup rules are keyed on threads, so they don't reach a body-only COMMENT. Your own findings being closed out does not clear it: "everything the reviewer raised is fixed" and "the author says this must not merge" are independent conditions, and only whoever stated the blocker retracts it. The asymmetry is why this is worth a condition: withholding a warranted approval costs a re-review on the next push, while an APPROVE standing on a PR its author gated is a wrong outward signal that persists until someone notices.
 
 ```bash
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-# Read the sha first and bail if it isn't there: inlined as `$(cat ...)` a
-# missing file substitutes the empty string and the POST still runs, which is
-# the unpinned review this pins against.
-REVIEWED=$(cat /tmp/reviewed-head) || exit 0
-/usr/bin/python3 -E -s "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" post <number> -- \
-  gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
-    -f event=APPROVE -f commit_id="$REVIEWED" -f body=""
+/usr/bin/python3 -E -s \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" \
+  submit <number> --event APPROVE
 ```
 
-`/tmp/reviewed-head` holds the commit this session reviewed — written in step 1, rewritten by **Posting mechanics** if HEAD moved. Every path that posts a review reads it back; see **Pin every review to the commit you read**.
+The submit command reads `/tmp/reviewed-head`, performs the final live-state
+check, and pins the review to that commit. When an approval needs prose, write
+it to `/tmp/review-body.md` and add `--body-file /tmp/review-body.md`.
 
 If there are actionable findings, submit them as a review with inline suggestions for concrete fixes. The review is a decision surface for the author, not a record of the reviewer's work: publish only distinct points that require a change or decision, with enough mechanism and evidence to make each credible and actionable. Correct paths, unaffected behavior, verification inventory, and search history stay in the session. Follow **Reader-facing prose** in `running-in-ci` for any supporting detail.
 
@@ -221,12 +238,11 @@ Before composing the final payload, run the preflight without a command. It chec
 On `skip`, post nothing and finish. A re-targeted result also prints `delta: <path>` and updates `/tmp/reviewed-head`. Read that entire file in chunks, update the review without dropping the draft marker when one is present, then run the preflight again. Do not post from the re-targeting pass.
 
 A non-zero exit from this commandless check means nothing was decided. Fix the
-error and re-run it. In command mode below, `post:` means the outward command
-was attempted; handle that command's failure directly. For a review POST that
-returns 422, use the orphan-aware recovery procedure below instead of blindly
-rerunning the preflight.
-
-Every review POST below passes its `gh api` command to the preflight after `--`. In that mode the preflight does not re-target: it runs the command only when two live snapshots and `bot_review_state.py` agree that the pinned head is open and unreviewed. This keeps the final check beside the outward action.
+error and re-run it. Publish only through `review_preflight.py submit`: it
+performs the same canonical-state check immediately before the API write and
+never re-targets onto a head the session did not inspect. On `skip`, post
+nothing. For an inline review failure, use the exact recovery ID the command
+prints instead of blindly submitting again.
 
 **A push mid-review re-targets the review.** Everything read so far still holds for the code it was read against, and the delta is the only new information — however many pushes it spans. Read it, then post against the new head:
 
@@ -240,7 +256,13 @@ Every review POST below passes its `gh api` command to the preflight after `--`.
 - **Also read `git show --cc <merge sha>` on a base merge**, for what the merge itself changed. Where it conflicted, the author's resolution is committed *inside* the merge, and both logs miss it: the scoped log excludes merge commits, and the merges line says a merge happened, not what it changed. A finding the resolution already fixed must drop out. `--cc` prints only hunks differing from every parent, so a resolution that took the base side prints nothing at all — it tells you what a merge changed, never that a merge changed nothing, which is why re-verification above is unconditional.
 - Re-compose every `suggestion` block after re-targeting, reading the new content with `git show "$(cat /tmp/reviewed-head)":<path>` — the workspace still holds the tree you reviewed, so disk gives you the old lines. A suggestion carried over unchanged can revert the author's newest edit or base-merged content.
 
-**Pin every review to the commit you read** — `commit_id` in every posting recipe, read back from `/tmp/reviewed-head`. Two things depend on the pin. GitHub otherwise anchors the review at whatever is live when the POST lands, so the review claims code this session never saw. And the anchor is what step 1 reports as `last_review_sha`: pinned to the head you re-targeted onto, the queued run finds that head already reviewed and finishes without posting a second review of the same code.
+**Pin every review to the commit you read** — the submit command reads
+`/tmp/reviewed-head` and overwrites any caller-supplied `commit_id`. Two things
+depend on the pin. GitHub otherwise anchors the review at whatever is live when
+the POST lands, so the review claims code this session never saw. And the anchor
+is what step 1 reports as `last_review_sha`: pinned to the head you re-targeted
+onto, the queued run finds that head already reviewed and finishes without
+posting a second review of the same code.
 
 **Before APPROVE specifically**, run the snapshot below and require its `head_sha` to equal `/tmp/reviewed-head`. The rollup is pinned to `/tmp/reviewed-head`; a head mismatch means it does not cover the live head, so post findings if you have them, otherwise finish and leave the approval to the queued run. Then inspect that rollup: if any check has reached terminal `FAILURE`, do not emit an empty-body APPROVE — the close-out reads as the bot rubber-stamping over the visibly red signal. Re-check the author-readiness gate on the same pass — a comment withholding merge readiness can land after the review began, and the conversation you read in step 1 is by now stale.
 
@@ -291,7 +313,6 @@ Post inline suggestions via the review API. First compose `/tmp/review-body.md` 
 `````bash
 cat > /tmp/review-payload.json << 'ENDJSON'
 {
-  "event": "COMMENT",
   "comments": [
     {
       "path": "example/file.txt",
@@ -303,15 +324,12 @@ cat > /tmp/review-payload.json << 'ENDJSON'
 ENDJSON
 
 BODY=$(cat /tmp/review-body.md) || exit 0
-REVIEWED=$(cat /tmp/reviewed-head) || exit 0
-REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-jq --arg body "$BODY" --arg sha "$REVIEWED" \
-  '.body = $body | .commit_id = $sha' /tmp/review-payload.json > /tmp/review-final.json
+jq --arg body "$BODY" '.body = $body' \
+  /tmp/review-payload.json > /tmp/review-final.json
 
-/usr/bin/python3 -E -s "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" post <number> -- \
-  gh api "repos/$REPO/pulls/<number>/reviews" \
-    --method POST \
-    --input /tmp/review-final.json
+/usr/bin/python3 -E -s \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" \
+  submit <number> --event COMMENT --payload-file /tmp/review-final.json
 `````
 
 **Do not** use `-f 'comments[0][path]=...'` flag syntax — `gh api` converts array indices to object keys, which GitHub rejects.
@@ -326,50 +344,43 @@ jq --arg body "$BODY" --arg sha "$REVIEWED" \
   3. **Cap the range at ~10 lines.** Larger suggestions are error-prone and hard to review. For changes spanning more than 10 lines, split into multiple suggestions or push a fix commit instead.
   4. **Never span markdown fences.** If the range includes a `` ``` `` line, GitHub's suggestion parser may consume it as a delimiter, corrupting the result. Either shrink the range to avoid the fence or push a commit.
 
-#### Recovering from inline comment 422 errors
+#### Recovering from inline comment errors
 
-GitHub returns `422 Unprocessable Entity` with "Line could not be resolved" when inline comment line numbers don't map to valid positions in the diff. Two failure modes produce the same error message but differ in whether a review record is persisted:
+GitHub can persist a review body before rejecting one of its inline comments.
+The submit command makes that partial state explicit: its initial review body is
+an operation-specific hidden marker, and it replaces that marker with the
+public body only after GitHub accepts the inline comments. Partial records never
+count as coverage or readiness acknowledgment.
 
-- **(a) Large / complex diff**: the body is persisted first, then the inline comments are rejected — leaving an **orphan body-only review** on the PR. A blind retry creates a duplicate.
-- **(b) Line outside the diff entirely**: the entire POST is rejected up front — **no review is persisted**. Retrying without inline comments is correct; editing a non-existent review will fail.
+When inline submission fails, look for this exact status line:
 
-**Check which case you are in before deciding how to recover** — query for an orphan review on the current HEAD first, then branch on the result.
-
-```bash
-# `orphan_id` is the body-bearing bot review anchored here, and only that: a
-# synthetic reply container on the same HEAD has no body, so the PUT below
-# can't overwrite an unrelated reply, and a body-bearing review from before a
-# rewrite is excluded too — it reports `.commit_id == head_sha`, so without
-# that filter the PUT destroys a published review, leaving this run's findings
-# over the old review's inline comments on code that no longer exists.
-ORPHAN_ID=$(uv run --script \
-  "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" state <number> \
-  | jq -r '.orphan_id // empty')
+```text
+recover: incomplete review <id>
 ```
 
-Use the printed ID as the literal `<orphan-id>` below; shell variables do not
-survive between agent tool calls. Then, in either case, **move the failed inline
-comments into the review body** as fenced code blocks with file paths,
-preserving the hidden marker when this is a draft review, and:
+If it appears, use its literal ID below; shell variables do not
+survive between agent tool calls. Move the failed inline comments into the
+review body as fenced code blocks with file paths. The command verifies that
+this ID is a marked incomplete review on the still-current head before editing
+it:
 
-- **If `ORPHAN_ID` is non-empty (case a)**: edit the existing review instead of creating a duplicate.
-  ```bash
-  REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-  /usr/bin/python3 -E -s "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" post <number> \
-    --edit-review <orphan-id> -- \
-    gh api "repos/$REPO/pulls/<number>/reviews/<orphan-id>" \
-      -X PUT -F body=@/tmp/updated-review-body.md
-  ```
-  If the edit itself fails, **do not post another review** — the body-only review is sufficient.
+```bash
+/usr/bin/python3 -E -s \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" \
+  submit <number> --edit-review <id> \
+  --body-file /tmp/updated-review-body.md
+```
 
-- **If `ORPHAN_ID` is empty (case b)**: retry the `POST` with `comments` omitted (body-only), since no duplicate is possible.
-  ```bash
-  jq 'del(.comments)' /tmp/review-final.json > /tmp/review-body-only.json
-  REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-  /usr/bin/python3 -E -s "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" post <number> -- \
-    gh api "repos/$REPO/pulls/<number>/reviews" \
-      --method POST --input /tmp/review-body-only.json
-  ```
+If the command instead prints `uncertain: review submission outcome unknown`,
+do not submit again: GitHub may have accepted the review even though the
+follow-up lookup could not observe it. Stop this run. The next PR event or the
+daily `review-runs` live-work reconciliation re-enters the normal review path,
+which reconstructs whether an incomplete review exists and either finalizes,
+supersedes, or publishes the still-uncovered review.
+
+If finalizing an incomplete review fails, do not create another review. Retry
+the exact edit after fixing the transient error; the hidden marker keeps the
+partial record from acting as public coverage in the meantime.
 
 Prevention: before writing any inline comment, verify the target line falls inside one of the PR's diff hunks. For fixes outside the diff, use the "push a fix commit" path instead of an inline suggestion (see above).
 

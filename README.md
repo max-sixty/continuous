@@ -106,13 +106,11 @@ conditions, concurrency, and permissions — then calls the composite action
 for the configured harness, pinned to the released generator version
 (`max-sixty/tend/claude@X.Y.Z` for Claude, `max-sixty/tend/codex@X.Y.Z` for Codex).
 The nightly regen restamps a newer tag when a new tend version ships.
+Review jobs call the pinned `max-sixty/tend/review/preflight@X.Y.Z` support
+action before checkout or setup, so a queued event whose live head is already
+covered stops before the agent starts.
 
-When the review workflow is generated, `init` also merges one ignore into
-`.github/actionlint.yaml`: the workflow's `concurrency.queue` is valid GitHub
-syntax that actionlint's schema rejects. The ignore applies only to generated
-workflows and preserves the rest of the adopter-owned config.
-
-Both actions run the same security and rate-limit preflight checks and
+Both harness actions run the same security and rate-limit preflight checks and
 resolve bot identity. They differ in how the agent runs:
 
 - **Claude harness** — runs the official `claude` binary headless

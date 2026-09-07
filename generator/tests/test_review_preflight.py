@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -36,9 +37,28 @@ case "$*" in
                               emit "$(cat "$FINAL_PR_JSON")" ;;
   "pr view "*"--json headRefOid"*)
                               emit "$(cat "$BOT_HEAD_JSON")" ;;
+  *"/reviews --method POST --input -"*)
+                              cat > "$POST_INPUT"
+                              if [ "${POST_EXIT:-0}" -ne 0 ]; then
+                                printf '%s\n' "${POST_ERROR:-review failed}" >&2
+                                exit "$POST_EXIT"
+                              fi
+                              emit "${POST_RESPONSE:-{\"id\":42}}" ;;
+  *"/reviews/"*" --method PUT --input -"*)
+                              cat > "$PUT_INPUT"
+                              if [ "${PUT_EXIT:-0}" -ne 0 ]; then
+                                printf '%s\n' "${PUT_ERROR:-edit failed}" >&2
+                                exit "$PUT_EXIT"
+                              fi
+                              emit "${PUT_RESPONSE:-{\"id\":42}}" ;;
   *"/pulls/"*"/comments"*)  emit "$(cat "$INLINE_JSON")" ;;
   *"/issues/"*"/timeline"*) emit "$(cat "$TIMELINE_JSON")" ;;
-  *"/pulls/"*"/reviews"*)   emit "$(cat "$REVIEWS_JSON")" ;;
+  *"/pulls/"*"/reviews"*)
+                              if [ "${REVIEWS_AFTER_POST_INVALID:-0}" -eq 1 ] && [ -e "$POST_INPUT" ]; then
+                                emit ""
+                              else
+                                emit "$(cat "$REVIEWS_JSON")"
+                              fi ;;
   *) exit 1 ;;
 esac
 """
@@ -79,6 +99,7 @@ class Fixture:
         self.origin = tmp_path / "origin"
         self.work = tmp_path / "work"
         self.pin = tmp_path / "reviewed-head"
+        self.context = tmp_path / "review-context.json"
 
         git = shutil.which("git")
         assert git, "git is required for these tests"
@@ -124,23 +145,32 @@ class Fixture:
         self.publish(head)
         return head
 
-    def set_head(self, sha: str, state: str = "OPEN") -> None:
+    def set_head(
+        self, sha: str, state: str = "OPEN", *, is_draft: bool = False
+    ) -> None:
         self.head = sha
         view = {
             "headRefOid": sha,
             "state": state,
             "baseRefOid": self.base,
             "author": {"login": "author"},
-            "isDraft": False,
+            "isDraft": is_draft,
         }
         self.write("PR_JSON", view)
         self.write("FINAL_PR_JSON", view)
         self.write("BOT_HEAD_JSON", {"headRefOid": sha})
 
-    def set_final(self, sha: str | None = None, state: str = "OPEN") -> None:
+    def set_final(
+        self, sha: str | None = None, state: str = "OPEN", is_draft: bool = False
+    ) -> None:
         self.write(
             "FINAL_PR_JSON",
-            {"headRefOid": sha or self.head, "state": state, "baseRefOid": self.base},
+            {
+                "headRefOid": sha or self.head,
+                "state": state,
+                "baseRefOid": self.base,
+                "isDraft": is_draft,
+            },
         )
 
     def set_resolver_head(self, sha: str) -> None:
@@ -161,12 +191,15 @@ class Fixture:
             "GITHUB_REPOSITORY": "owner/repo",
             "BOT_LOGIN": BOT,
             "REVIEWED_HEAD_FILE": str(self.pin),
+            "REVIEW_CONTEXT_FILE": str(self.context),
             "PR_JSON": str(self.tmp_path / "pr_json.json"),
             "FINAL_PR_JSON": str(self.tmp_path / "final_pr_json.json"),
             "BOT_HEAD_JSON": str(self.tmp_path / "bot_head_json.json"),
             "INLINE_JSON": str(self.tmp_path / "inline_json.json"),
             "TIMELINE_JSON": str(self.tmp_path / "timeline_json.json"),
             "REVIEWS_JSON": str(self.tmp_path / "reviews_json.json"),
+            "POST_INPUT": str(self.tmp_path / "post-input.json"),
+            "PUT_INPUT": str(self.tmp_path / "put-input.json"),
             **GIT_ENV,
             **extra,
         }
@@ -195,6 +228,32 @@ class Fixture:
             text=True,
             check=False,
         )
+
+    def gate(self, **extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-E", "-s", str(PREFLIGHT), "gate", PR],
+            cwd=self.work,
+            env=self.env(**extra),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def submit(self, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-E", "-s", str(PREFLIGHT), "submit", PR, *args],
+            cwd=self.work,
+            env=self.env(**extra),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def submitted(self) -> dict:
+        return json.loads((self.tmp_path / "post-input.json").read_text())
+
+    def edited(self) -> dict:
+        return json.loads((self.tmp_path / "put-input.json").read_text())
 
     def pinned(self) -> str:
         return self.pin.read_text().strip()
@@ -257,10 +316,164 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
         "last_review_sha": pr.reviewed,
         "force_pushed_since": False,
         "incremental_path": context["incremental_path"],
+        "ready_review_event_id": None,
+        "recovery_review_id": None,
+        "operation_id": context["operation_id"],
+    }
+    assert re.fullmatch(r"[0-9a-f]{32}", context["operation_id"])
+    assert json.loads(pr.context.read_text()) == {
+        "operation_id": context["operation_id"],
+        "head_sha": moved,
+        "full_non_draft": False,
+        "ready_review_event_id": None,
+        "recovery_review_id": None,
     }
     assert "pr-2" in Path(context["incremental_path"]).read_text()
     assert "base-2" not in Path(context["incremental_path"]).read_text()
     assert pr.pinned() == moved
+
+
+def test_gate_admits_only_uncovered_or_outstanding_work(pr: Fixture) -> None:
+    result = pr.gate()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "should_run=true\nreason=uncovered\n"
+
+    pr.reviews(_review(pr.reviewed, "Full pass."))
+    result = pr.gate()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "should_run=false\nreason=covered\n"
+
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "id": 31,
+                "event": "ready_for_review",
+                "created_at": "2026-01-02T00:00:00Z",
+            }
+        ],
+    )
+    result = pr.gate()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "should_run=true\nreason=readiness\n"
+
+    pr.reviews(
+        _review(
+            pr.reviewed,
+            "Full pass.\n\n<!-- tend:ready-review:31 -->",
+            state="APPROVED",
+        )
+    )
+    result = pr.gate()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "should_run=false\nreason=covered\n"
+
+
+def test_gate_keeps_readiness_dormant_while_the_pr_is_draft(pr: Fixture) -> None:
+    pr.set_head(pr.reviewed, is_draft=True)
+    pr.reviews(_review(pr.reviewed, DRAFT_REVIEW_MARKER))
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "id": 31,
+                "event": "ready_for_review",
+                "created_at": "2026-01-02T00:00:00Z",
+            }
+        ],
+    )
+
+    result = pr.gate()
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "should_run=false\nreason=covered\n"
+
+
+def test_gate_fails_open_when_its_snapshot_is_inconsistent(pr: Fixture) -> None:
+    pr.set_resolver_head("a" * 40)
+
+    result = pr.gate()
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "changed during the gate snapshot" in result.stderr
+
+
+def test_start_captures_the_exact_outstanding_readiness_generation(
+    pr: Fixture,
+) -> None:
+    pr.reviews(_review(pr.reviewed, "Earlier pass."))
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "id": 31,
+                "event": "ready_for_review",
+                "created_at": "2026-01-02T00:00:00Z",
+            }
+        ],
+    )
+
+    result = pr.start()
+
+    assert result.returncode == 0, result.stderr
+    context = json.loads(result.stdout)
+    assert context["force_full_review"] is True
+    assert context["ready_review_event_id"] == 31
+    assert context["incremental_path"] is None
+    assert json.loads(pr.context.read_text())["ready_review_event_id"] == 31
+
+
+def test_start_does_not_capture_readiness_while_the_pr_is_draft(
+    pr: Fixture,
+) -> None:
+    pr.set_head(pr.reviewed, is_draft=True)
+    pr.reviews(_review(pr.reviewed, DRAFT_REVIEW_MARKER))
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "id": 31,
+                "event": "ready_for_review",
+                "created_at": "2026-01-02T00:00:00Z",
+            }
+        ],
+    )
+
+    result = pr.start()
+
+    assert result.returncode == 0, result.stderr
+    context = json.loads(result.stdout)
+    assert context["force_full_review"] is False
+    assert context["ready_review_event_id"] is None
+
+
+def test_start_selects_only_a_mode_compatible_incomplete_review(
+    pr: Fixture,
+) -> None:
+    pr.reviews(
+        {
+            **_review(
+                pr.reviewed,
+                "<!-- tend:review-incomplete:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->",
+            ),
+            "id": 77,
+        },
+        {
+            **_review(
+                pr.reviewed,
+                "<!-- tend:review-incomplete:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n"
+                "<!-- tend:ready-review:31 -->",
+            ),
+            "id": 88,
+        },
+    )
+
+    result = pr.start()
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["recovery_review_id"] == 77
+    assert json.loads(pr.context.read_text())["recovery_review_id"] == 77
 
 
 @pytest.mark.parametrize("state", ["CLOSED", "MERGED"])
@@ -310,110 +523,285 @@ def test_a_head_change_during_final_read_skips(pr: Fixture) -> None:
     assert pr.pinned() == pr.reviewed
 
 
-def test_a_wrapped_outward_action_runs_only_on_a_stable_head(
+def test_submit_approves_only_the_stable_pinned_head(
     pr: Fixture, tmp_path: Path
 ) -> None:
-    marker = tmp_path / "posted"
+    assert pr.start().returncode == 0
 
-    result = pr.run("--", BASH, "-c", 'echo posted > "$1"', "_", str(marker))
+    result = pr.submit("--event", "APPROVE")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"post: {pr.reviewed} is still the head you reviewed\n"
-    assert marker.read_text() == "posted\n"
+    assert result.stdout == "posted: review 42\n"
+    assert pr.submitted() == {
+        "event": "APPROVE",
+        "commit_id": pr.reviewed,
+        "body": "",
+    }
 
-
-def test_a_wrapped_outward_action_does_not_retarget(
-    pr: Fixture, tmp_path: Path
-) -> None:
-    marker = tmp_path / "posted"
     moved = pr.push_over_base_merge()
-
-    result = pr.run("--", BASH, "-c", 'echo posted > "$1"', "_", str(marker))
+    result = pr.submit("--event", "APPROVE")
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"skip: HEAD moved to {moved} before the outward action\n"
-    assert not marker.exists()
-    assert pr.pinned() == pr.reviewed
 
 
-def test_a_wrapped_outward_action_propagates_failure(pr: Fixture) -> None:
-    result = pr.run("--", BASH, "-c", "exit 23")
-
-    assert result.returncode == 23
-
-
-def test_edit_review_allows_only_the_existing_orphan(
+def test_submit_injects_only_the_captured_readiness_marker(
     pr: Fixture, tmp_path: Path
 ) -> None:
-    marker = tmp_path / "edited"
-    pr.reviews(_review(pr.reviewed, "body persisted before inline comments failed"))
-
-    assert pr.output().startswith("skip:")
-    result = pr.run(
-        "--edit-review",
-        "1",
-        "--",
-        BASH,
-        "-c",
-        'echo edited > "$1"',
-        "_",
-        str(marker),
+    event_path = _event(tmp_path / "event.json", "ready_for_review")
+    pr.write(
+        "TIMELINE_JSON",
+        [{"id": 31, "event": "ready_for_review", "created_at": "2026-01-02T00:00:00Z"}],
     )
+    start = pr.start(GITHUB_EVENT_PATH=event_path)
+    assert start.returncode == 0, start.stderr
+    body = tmp_path / "body.md"
+    body.write_text(
+        "Looks good.\n<!-- tend:ready-review:999 -->\n"
+        "<!-- tend:review-incomplete:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->\n"
+    )
+
+    result = pr.submit("--event", "APPROVE", "--body-file", str(body))
 
     assert result.returncode == 0, result.stderr
-    assert marker.read_text() == "edited\n"
+    assert pr.submitted()["body"] == ("Looks good.\n\n<!-- tend:ready-review:31 -->")
 
 
-@pytest.mark.parametrize("existing_review", [False, True])
-def test_edit_review_rejects_missing_or_different_orphan(
-    pr: Fixture, tmp_path: Path, existing_review: bool
-) -> None:
-    marker = tmp_path / "edited"
-    if existing_review:
-        pr.reviews(_review(pr.reviewed, "different orphan"))
+def test_submit_preserves_draft_review_identity(pr: Fixture, tmp_path: Path) -> None:
+    pr.set_head(pr.reviewed, is_draft=True)
+    assert pr.start().returncode == 0
+    body = tmp_path / "body.md"
+    body.write_text("One early concern.")
 
-    result = pr.run(
-        "--edit-review",
-        "999",
-        "--",
-        BASH,
-        "-c",
-        'echo edited > "$1"',
-        "_",
-        str(marker),
-    )
+    result = pr.submit("--event", "COMMENT", "--body-file", str(body))
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == (
-        f"skip: {pr.reviewed} cannot edit requested orphan review 999\n"
+    assert pr.submitted()["body"] == (
+        "One early concern.\n\n<!-- tend:draft-review -->"
     )
-    assert not marker.exists()
 
 
-def test_ready_for_review_does_not_override_edit_review_identity(
+def test_inline_submit_finalizes_only_after_the_comments_post(
     pr: Fixture, tmp_path: Path
 ) -> None:
-    marker = tmp_path / "edited"
-    event = _event(tmp_path / "event.json", "ready_for_review")
-    pr.reviews(_review(pr.reviewed, LEGACY_DRAFT_REVIEW_LINE))
-
-    result = pr.run(
-        "--edit-review",
-        "999",
-        "--",
-        BASH,
-        "-c",
-        'echo edited > "$1"',
-        "_",
-        str(marker),
-        GITHUB_EVENT_PATH=event,
+    start = pr.start()
+    assert start.returncode == 0, start.stderr
+    context = json.loads(pr.context.read_text())
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "body": "One issue.",
+                "comments": [{"path": "feature.txt", "line": 1, "body": "Fix it"}],
+                "commit_id": "agent-supplied",
+                "event": "APPROVE",
+            }
+        )
     )
+
+    result = pr.submit("--event", "COMMENT", "--payload-file", str(payload))
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == (
-        f"skip: {pr.reviewed} cannot edit requested orphan review 999\n"
+    assert pr.submitted() == {
+        "event": "COMMENT",
+        "commit_id": pr.reviewed,
+        "body": (f"<!-- tend:review-incomplete:{context['operation_id']} -->"),
+        "comments": [{"path": "feature.txt", "line": 1, "body": "Fix it"}],
+    }
+    assert pr.edited() == {"body": "One issue."}
+
+
+def test_incomplete_inline_record_carries_its_readiness_generation(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "id": 31,
+                "event": "ready_for_review",
+                "created_at": "2026-01-02T00:00:00Z",
+            }
+        ],
     )
-    assert not marker.exists()
+    assert pr.start().returncode == 0
+    operation_id = json.loads(pr.context.read_text())["operation_id"]
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "body": "One issue.",
+                "comments": [{"path": "feature.txt", "line": 1, "body": "Fix it"}],
+            }
+        )
+    )
+
+    result = pr.submit(
+        "--event",
+        "COMMENT",
+        "--payload-file",
+        str(payload),
+        PUT_EXIT="22",
+    )
+
+    assert result.returncode == 22
+    assert pr.submitted()["body"] == (
+        f"<!-- tend:review-incomplete:{operation_id} -->\n\n"
+        "<!-- tend:ready-review:31 -->"
+    )
+
+
+def test_partial_inline_failure_reports_its_operation_specific_review(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    start = pr.start()
+    assert start.returncode == 0, start.stderr
+    operation_id = json.loads(pr.context.read_text())["operation_id"]
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "body": "One issue.",
+                "comments": [{"path": "feature.txt", "line": 1, "body": "Fix it"}],
+            }
+        )
+    )
+    pr.reviews(
+        {
+            **_review(
+                pr.reviewed,
+                f"<!-- tend:review-incomplete:{operation_id} -->",
+            ),
+            "id": 77,
+        }
+    )
+
+    result = pr.submit(
+        "--event",
+        "COMMENT",
+        "--payload-file",
+        str(payload),
+        POST_EXIT="22",
+        POST_ERROR="line could not be resolved",
+    )
+
+    assert result.returncode == 22
+    assert result.stdout == "recover: incomplete review 77\n"
+    assert "line could not be resolved" in result.stderr
+
+
+@pytest.mark.parametrize("reviews_json", [[], None])
+def test_ambiguous_inline_failure_never_invites_a_second_post(
+    pr: Fixture, tmp_path: Path, reviews_json: list[dict] | None
+) -> None:
+    assert pr.start().returncode == 0
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "body": "One issue.",
+                "comments": [{"path": "feature.txt", "line": 1, "body": "Fix it"}],
+            }
+        )
+    )
+    if reviews_json is not None:
+        pr.reviews(*reviews_json)
+
+    result = pr.submit(
+        "--event",
+        "COMMENT",
+        "--payload-file",
+        str(payload),
+        POST_EXIT="22",
+        POST_ERROR="line could not be resolved",
+        REVIEWS_AFTER_POST_INVALID="1" if reviews_json is None else "0",
+    )
+
+    assert result.returncode == 22
+    assert result.stdout == "uncertain: review submission outcome unknown\n"
+    assert "line could not be resolved" in result.stderr
+
+
+def test_inline_finalize_failure_leaves_an_explicit_recovery_target(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    assert pr.start().returncode == 0
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "body": "One issue.",
+                "comments": [{"path": "feature.txt", "line": 1, "body": "Fix it"}],
+            }
+        )
+    )
+
+    result = pr.submit(
+        "--event",
+        "COMMENT",
+        "--payload-file",
+        str(payload),
+        PUT_EXIT="22",
+        PUT_ERROR="temporary edit failure",
+    )
+
+    assert result.returncode == 22
+    assert result.stdout == "recover: incomplete review 42\n"
+    assert "temporary edit failure" in result.stderr
+
+
+def test_submit_edits_only_an_incomplete_review_on_the_current_head(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    start = pr.start()
+    assert start.returncode == 0, start.stderr
+    operation_id = json.loads(pr.context.read_text())["operation_id"]
+    body = tmp_path / "body.md"
+    body.write_text("Recovered finding.")
+    pr.reviews(
+        {
+            **_review(
+                pr.reviewed,
+                f"<!-- tend:review-incomplete:{operation_id} -->",
+            ),
+            "id": 77,
+        }
+    )
+
+    result = pr.submit("--edit-review", "77", "--body-file", str(body))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "posted: review 42\n"
+    assert pr.edited() == {"body": "Recovered finding."}
+
+    result = pr.submit("--edit-review", "999", "--body-file", str(body))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (f"skip: {pr.reviewed} cannot edit incomplete review 999\n")
+
+
+def test_finalized_coverage_makes_an_older_incomplete_review_inert(
+    pr: Fixture, tmp_path: Path
+) -> None:
+    assert pr.start().returncode == 0
+    operation_id = json.loads(pr.context.read_text())["operation_id"]
+    body = tmp_path / "body.md"
+    body.write_text("Recovered finding.")
+    pr.reviews(
+        {
+            **_review(
+                pr.reviewed,
+                f"<!-- tend:review-incomplete:{operation_id} -->",
+            ),
+            "id": 77,
+        },
+        {**_review(pr.reviewed, "A later complete review."), "id": 88},
+    )
+
+    result = pr.submit("--edit-review", "77", "--body-file", str(body))
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (f"skip: {pr.reviewed} cannot edit incomplete review 77\n")
+    assert not (tmp_path / "put-input.json").exists()
 
 
 def test_a_large_delta_is_preserved_for_chunked_reads(pr: Fixture) -> None:
@@ -502,11 +890,11 @@ def test_dedup_uses_the_retargeted_head(pr: Fixture) -> None:
     [
         ("ready_for_review", DRAFT_REVIEW_MARKER, "post:"),
         ("ready_for_review", LEGACY_DRAFT_REVIEW_LINE, "post:"),
-        ("ready_for_review", "A landing concern.", "skip:"),
+        ("ready_for_review", "A landing concern.", "post:"),
         ("synchronize", DRAFT_REVIEW_MARKER, "skip:"),
     ],
 )
-def test_only_ready_for_review_replaces_a_draft_review(
+def test_only_ready_for_review_replaces_a_same_head_review(
     pr: Fixture, tmp_path: Path, action: str, body: str, expected: str
 ) -> None:
     pr.reviews(_review(pr.reviewed, body))

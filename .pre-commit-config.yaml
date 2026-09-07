@@ -27,9 +27,9 @@ repos:
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
-      # The concurrency.queue false positive is suppressed in
-      # .github/actionlint.yaml, which `tend init` writes and every actionlint
-      # caller reads — hook args would cover this one invocation only.
+      # The currently released dogfood workflow still contains
+      # concurrency.queue. Its repo-local suppression can disappear after the
+      # next release regenerates that workflow from the new template.
       - id: actionlint
       # Snapshot tests keep these full rendered workflows current. Linting the
       # artifacts exercises actionlint's own ShellCheck preprocessing and

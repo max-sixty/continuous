@@ -1,7 +1,6 @@
-# `concurrency.queue` is valid GitHub Actions syntax that
-# actionlint's schema rejects. tend writes this ignore so the
-# generated workflows lint clean; the glob keeps a real schema
-# error in your own workflows failing.
+# The currently released dogfood workflow still contains `concurrency.queue`,
+# which actionlint's schema rejects. Remove this repo-local suppression after
+# the next release regenerates that workflow from the new template.
 paths:
   '**/.github/workflows/tend-*.yaml':
     ignore:

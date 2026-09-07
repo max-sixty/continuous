@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from itertools import takewhile
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
@@ -19,7 +18,6 @@ import pytest
 from click.testing import CliRunner
 from tend.checks import CheckResult
 from tend.cli import main
-from tend.workflows import ACTIONLINT_QUEUE_IGNORE, ACTIONLINT_TEND_GLOB
 
 from tests import ACTION_VERSION, BASH, UV, tool_path
 from tests import _yaml as yaml
@@ -203,201 +201,28 @@ def test_init_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 # ---------------------------------------------------------------------------
-# actionlint config
+# Adopter-owned files
 # ---------------------------------------------------------------------------
 
 
-def _actionlint_path(tmp_path: Path) -> Path:
-    return tmp_path / ".github" / "actionlint.yaml"
-
-
-def test_init_writes_actionlint_queue_ignore(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "existing", [None, "self-hosted-runner:\n  labels: [my-runner]\n"]
+)
+def test_init_does_not_write_actionlint_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: str | None
 ) -> None:
-    """`concurrency.queue` is valid GitHub syntax actionlint's schema rejects,
-    so init ships the ignore that keeps an adopter's lint green — scoped to the
-    generated files so a real schema error elsewhere still fails."""
+    """The review workflow no longer needs a schema ignore, so init does not
+    create or edit the adopter's actionlint configuration."""
     _write_config(tmp_path, "bot_name: test-bot")
+    actionlint = tmp_path / ".github" / "actionlint.yaml"
+    if existing is not None:
+        actionlint.parent.mkdir(parents=True, exist_ok=True)
+        actionlint.write_text(existing)
     monkeypatch.chdir(tmp_path)
 
     assert _run_init().exit_code == 0
-
-    data = yaml.safe_load(_actionlint_path(tmp_path).read_text())
-    assert data["paths"]["**/.github/workflows/tend-*.yaml"]["ignore"] == [
-        ACTIONLINT_QUEUE_IGNORE
-    ]
-
-
-def test_init_skips_actionlint_config_without_review(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _write_config(
-        tmp_path,
-        dedent("""\
-            bot_name: test-bot
-            workflows:
-              review:
-                enabled: false
-            """),
-    )
-    existing = _actionlint_path(tmp_path)
-    existing.parent.mkdir(parents=True, exist_ok=True)
-    original = "self-hosted-runner:\n  labels: [my-runner]\n"
-    existing.write_text(original)
-    monkeypatch.chdir(tmp_path)
-
-    assert _run_init().exit_code == 0
-
-    assert existing.read_text() == original
-    assert (_workflow_dir(tmp_path) / "tend-mention.yaml").exists()
-
-
-def test_init_merges_actionlint_ignore_into_existing_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An adopter's own actionlint config survives — the ignore is merged in,
-    not written over the top of it."""
-    _write_config(tmp_path, "bot_name: test-bot")
-    existing = _actionlint_path(tmp_path)
-    existing.parent.mkdir(parents=True, exist_ok=True)
-    existing.write_text(
-        dedent("""\
-            self-hosted-runner:
-              labels:
-                - my-runner
-            paths:
-              .github/workflows/release.yaml:
-                ignore:
-                  - 'some adopter pattern'
-            """)
-    )
-    monkeypatch.chdir(tmp_path)
-
-    assert _run_init().exit_code == 0
-
-    data = yaml.safe_load(existing.read_text())
-    assert data["self-hosted-runner"]["labels"] == ["my-runner"]
-    assert data["paths"][".github/workflows/release.yaml"]["ignore"] == [
-        "some adopter pattern"
-    ]
-    assert data["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
-
-
-def test_init_preserves_comments_only_actionlint_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _write_config(tmp_path, "bot_name: test-bot")
-    existing = _actionlint_path(tmp_path)
-    existing.parent.mkdir(parents=True, exist_ok=True)
-    existing.write_text("# adopter note\n")
-    monkeypatch.chdir(tmp_path)
-
-    assert _run_init().exit_code == 0
-
-    updated = existing.read_text()
-    assert updated.startswith("# adopter note\n")
-    assert yaml.safe_load(updated)["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [
-        ACTIONLINT_QUEUE_IGNORE
-    ]
-
-
-def test_init_leaves_actionlint_config_alone_once_ignored(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The nightly regen must not churn a file it already updated."""
-    _write_config(tmp_path, "bot_name: test-bot")
-    monkeypatch.chdir(tmp_path)
-
-    _run_init()
-    first = _actionlint_path(tmp_path).read_text()
-    _run_init()
-
-    assert _actionlint_path(tmp_path).read_text() == first
-
-
-def test_init_updates_existing_actionlint_yml_in_place(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """actionlint reads `.yaml` in preference to `.yml`, so writing a new
-    `.yaml` beside an adopter's `.yml` would silently disable their config.
-    Update the file they have."""
-    _write_config(tmp_path, "bot_name: test-bot")
-    yml = tmp_path / ".github" / "actionlint.yml"
-    yml.parent.mkdir(parents=True, exist_ok=True)
-    yml.write_text("self-hosted-runner:\n  labels:\n    - my-runner\n")
-    monkeypatch.chdir(tmp_path)
-
-    assert _run_init().exit_code == 0
-
-    assert not _actionlint_path(tmp_path).exists()
-    data = yaml.safe_load(yml.read_text())
-    assert data["self-hosted-runner"]["labels"] == ["my-runner"]
-    assert data["paths"][ACTIONLINT_TEND_GLOB]["ignore"] == [ACTIONLINT_QUEUE_IGNORE]
-
-
-def test_init_dry_run_writes_no_actionlint_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """--dry-run writes nothing."""
-    _write_config(tmp_path, "bot_name: test-bot")
-    monkeypatch.chdir(tmp_path)
-
-    result = _run_init(["--dry-run"])
-
-    assert result.exit_code == 0
-    assert not _actionlint_path(tmp_path).exists()
-
-
-def test_init_leaves_unmergeable_actionlint_config_untouched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A config shape the generator can't merge into is the adopter's to fix:
-    warn and leave it byte-for-byte, rather than rewrite their linter config
-    into something they didn't ask for."""
-    _write_config(tmp_path, "bot_name: test-bot")
-    existing = _actionlint_path(tmp_path)
-    existing.parent.mkdir(parents=True, exist_ok=True)
-    original = "paths:\n  - .github/workflows/release.yaml\n"
-    existing.write_text(original)
-    monkeypatch.chdir(tmp_path)
-
-    result = _run_init()
-
-    assert result.exit_code == 0
-    assert existing.read_text() == original
-    assert "leaving it unchanged" in result.output
-    assert ACTIONLINT_QUEUE_IGNORE in result.output  # the by-hand snippet
-
-    # The snippet is meant to be pasted, so it has to parse: the glob opens
-    # with `**`, which YAML reads as an alias unless the key is quoted.
-    lines = result.output[result.output.index("  paths:") :].splitlines()
-    snippet = "\n".join(takewhile(lambda ln: ln.startswith("  "), lines))
-    assert yaml.safe_load(dedent(snippet))["paths"][ACTIONLINT_TEND_GLOB] == {
-        "ignore": [ACTIONLINT_QUEUE_IGNORE]
-    }
-
-
-def test_init_leaves_unparsable_actionlint_config_untouched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A file that doesn't parse — conflict markers mid-rebase, a tab indent —
-    is the likeliest form of "a config the generator doesn't understand", so it
-    warns like the shape mismatches rather than raising a traceback out of
-    `init` with the workflow files already half-written."""
-    _write_config(tmp_path, "bot_name: test-bot")
-    existing = _actionlint_path(tmp_path)
-    existing.parent.mkdir(parents=True, exist_ok=True)
-    original = "paths:\n  - a\n  b: c\n"
-    existing.write_text(original)
-    monkeypatch.chdir(tmp_path)
-
-    result = _run_init()
-
-    assert result.exit_code == 0
-    assert existing.read_text() == original
-    assert "leaving it unchanged" in result.output
-    # The whole run finishes: the workflow files land and the summary prints.
-    assert (_workflow_dir(tmp_path) / "tend-review.yaml").exists()
+    actual = actionlint.read_text() if actionlint.exists() else None
+    assert actual == existing
 
 
 # ---------------------------------------------------------------------------

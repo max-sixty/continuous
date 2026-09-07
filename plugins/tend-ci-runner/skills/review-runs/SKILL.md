@@ -87,7 +87,7 @@ The failed-run census and the `tend-outage` issue diagnose availability. Do not 
 As a daily backstop for delayed notifications, retention, edited activity, and repaired subscriptions, inspect the live repository for:
 
 - an open issue with no bot response to the latest human activity;
-- an open PR whose live head has no bot review, or whose latest comment, review, or inline review comment directed at the bot has no response; this includes replies to the bot's review on a fork PR;
+- an open PR whose live head has no finalized bot review, or whose latest comment, review, or inline review comment directed at the bot has no response; a `tend:review-incomplete` record is not finalized, and this includes replies to the bot's review on a fork PR;
 - failing default-branch CI with no bot fix in progress. A live-state check like the two above it: scoped neither to `ci-fix`'s watched workflows — Dependabot security updates, cron releases and doc builds fail there with no PR attached, and nothing else looks for them — nor to this run's window.
 
   ```bash

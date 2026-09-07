@@ -102,7 +102,7 @@ def test_review_runs_pins_current_state_recovery() -> None:
     assert "complete **Reconcile live work** below, then exit" in skill
     assert "Do not replay historical workflow runs" in skill
     assert "an open issue with no bot response to the latest human activity" in skill
-    assert "whose live head has no bot review" in skill
+    assert "whose live head has no finalized bot review" in skill
     assert "failing default-branch CI with no bot fix in progress" in skill
 
 
@@ -143,9 +143,8 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     review pins the commit it read: unpinned, GitHub anchors it at whatever is
     live when the POST lands, so the review claims code the session never saw.
 
-    The sha reaches the POST through a file because it cannot reach it any
-    other way — the agent composes the body between reading the head and
-    posting, and shell state does not survive a tool call.
+    The sha reaches the POST through a private context file because the agent
+    composes the body between reading the head and posting.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
     preflight = _read("plugins", "tend-ci-runner", "scripts", "review_preflight.py")
@@ -158,24 +157,24 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
         'Path(os.environ.get("REVIEWED_HEAD_FILE", "/tmp/reviewed-head"))' in preflight
     )
     assert '"REVIEWED_HEAD_FILE", "/tmp/reviewed-head"' in preflight
-    # Read back by both posting recipes, and read *before* the POST: inlined as
-    # `$(cat ...)` a missing file substitutes the empty string and the request
-    # still goes out, which is the unpinned review the pin exists to prevent.
-    assert skill.count("REVIEWED=$(cat /tmp/reviewed-head) || exit 0") == 2
-    assert '-f commit_id="$REVIEWED"' in skill
-    assert '--arg sha "$REVIEWED"' in skill
-    assert skill.count('review_preflight.py" post <number> --') == 3
+    # The script, rather than prose recipes, owns the final state check, pin,
+    # metadata, and API request. Arbitrary commands cannot bypass that contract.
+    assert '"commit_id": reviewed' in preflight
+    assert "review_preflight.py submit" in skill
+    assert skill.count("submit <number>") == 3
+    assert "post <number> --" not in skill
     direct_launches = re.findall(
         r"/usr/bin/python3 -E -s\s+(?:\\\n\s*)?"
         r'"\$\{CLAUDE_PLUGIN_ROOT\}/scripts/review_preflight\.py"',
         skill,
     )
-    assert len(direct_launches) == 6
+    assert len(direct_launches) == 5
     assert (
         'uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py"'
         not in skill
     )
-    assert "--edit-review <orphan-id> --" in skill
+    assert "--edit-review <id>" in skill
+    assert "recover: incomplete review <id>" in skill
     assert "shell variables do not\nsurvive between agent tool calls" in skill
 
     # Both logs reach the session in one stream, so the skill names both halves.
@@ -263,6 +262,21 @@ def test_review_second_pass_is_a_submit_precondition() -> None:
     assert "Run step 5 again over the updated merged tree" in skill
 
 
+def test_incomplete_reviews_have_a_survivor_and_a_daily_backstop() -> None:
+    review = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+    review_runs = _read(
+        "plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md"
+    )
+
+    assert "`recovery_review_id`" in review
+    assert "`incomplete_inline_comments`" in review
+    assert "bypass the already-reviewed and\ntrivial-increment silent exits" in review
+    assert "do not finish silently" in review
+    assert "daily `review-runs` live-work reconciliation" in review
+    assert "no finalized bot review" in review_runs
+    assert "`tend:review-incomplete` record is not finalized" in review_runs
+
+
 def test_review_reviewers_matrix_covers_consumers() -> None:
     workflow = yaml.safe_load(_read(".github", "workflows", "review-reviewers.yaml"))
     matrix = workflow["jobs"]["review-reviewers"]["strategy"]["matrix"]["repo"]
@@ -334,11 +348,8 @@ def test_nightly_regen_stages_every_path_init_writes(
 ) -> None:
     """Step 7's `git add -A` pathspecs must cover everything `tend init` writes.
 
-    The recipe names a fixed pathspec while the generator's output set grows —
-    `.github/actionlint.yaml` arrived after the recipe was written, and while
-    the pathspec read `.github/workflows .config` the regeneration PR shipped
-    without it, leaving adopters who lint workflows red and re-creating the
-    file untracked every night.
+    The recipe names a fixed pathspec while the generator's output set can
+    grow, so every generated path must remain covered.
     """
     script = _read("plugins", "tend-ci-runner", "scripts", "nightly_workflow_update.py")
     normalized = re.sub(r"\s+", " ", script)
@@ -367,8 +378,6 @@ def test_nightly_regen_stages_every_path_init_writes(
     written = {
         p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()
     }
-    assert ".github/actionlint.yaml" in written, "review no longer writes the ignore"
-
     uncovered = sorted(
         path
         for path in written
