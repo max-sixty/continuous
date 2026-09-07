@@ -38,9 +38,12 @@ inputs:
   model:
     default: gpt-5.5
     description: >-
-      Codex model to use. Current visible models per Codex's model cache:
-      gpt-5.5 (default, top tier), gpt-5.4, gpt-5.4-mini, gpt-5.3-codex,
-      gpt-5.2.
+      Codex model to use. The set of models a run can select is server-side
+      and per-account, so it is not enumerated here — read the account CI
+      runs as, whose visible models are the `"visibility": "list"` entries
+      in its `~/.codex/models_cache.json`. The action always passes
+      `--model`, so whatever Codex bundles as its no-model default never
+      applies; this value is what runs.
   effort:
     default: ""
     description: >-
@@ -61,7 +64,7 @@ inputs:
       Codex sandbox mode. Restricted modes require a compatible Linux runner;
       GitHub-hosted Ubuntu 24.04 currently requires danger-full-access.
   codex_version:
-    default: "0.151.0"
+    default: "0.153.4"
     description: >-
       `@openai/codex` npm version to install. Must ship
       the `codex plugin add` subcommand (PR #21396, first released in

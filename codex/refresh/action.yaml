@@ -15,7 +15,7 @@ inputs:
     default: ""
     description: GitHub PAT allowed to update secrets in the tend environment
   codex_version:
-    default: "0.151.0"
+    default: "0.153.4"
     description: Pinned @openai/codex npm version that performs the refresh
 
 runs:
