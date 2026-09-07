@@ -59,7 +59,10 @@ case "$*" in
   *"/annotations"*) emit "$(cat "$ANNOTATIONS_JSON")" ;;
   "run view"*--log-failed*)
     if [ -n "${LOG_FAILS:-}" ]; then exit 1; fi
-    cat "$LOG_TXT"
+    case "$*" in
+      *--attempt*) cat "$LOG_TXT" ;;
+      *) cat "${LATEST_LOG_TXT:-$LOG_TXT}" ;;
+    esac
     ;;
   "issue comment"*)
     prev=""
@@ -223,6 +226,58 @@ def test_a_rerun_that_went_green_is_enriched_from_the_failed_attempt(
     assert "filter=all" in Path(env["GH_CALLS"]).read_text()
     assert "#### review (attempt 1)\n\n```\nassertion failed\n```" in body
     assert "No failure details could be extracted." not in body
+
+
+def test_a_rerun_that_went_green_reads_the_failed_attempt_log(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    # A transient failure annotates only `Process completed with exit code N`,
+    # so its diagnosis lives solely in the log — and `--log-failed` reads the
+    # rerun's green attempt unless it is told which attempt failed.
+    Path(env["JOBS_JSON"]).write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {
+                        "id": int(JOB_ID),
+                        "name": "review",
+                        "conclusion": "failure",
+                        "run_attempt": 1,
+                    },
+                    {
+                        "id": 102,
+                        "name": "review",
+                        "conclusion": "success",
+                        "run_attempt": 2,
+                    },
+                ]
+            }
+        )
+    )
+    Path(env["ANNOTATIONS_JSON"]).write_text(json.dumps(EXIT_ONLY))
+    Path(env["LOG_TXT"]).write_text(BOM_TAIL)
+    latest = tmp_path / "latest-log.txt"
+    latest.write_text("")
+    env["LATEST_LOG_TXT"] = str(latest)
+
+    body = _run(env)
+
+    assert "--attempt 1" in Path(env["GH_CALLS"]).read_text()
+    assert "curl: (35) Recv failure" in body
+    assert "No failure details could be extracted." not in body
+
+
+def test_a_run_with_no_readable_jobs_still_reads_the_latest_log(
+    env: dict[str, str],
+) -> None:
+    # With the jobs read unavailable there is no attempt to name, so the log
+    # source stays on the latest attempt rather than losing its one fallback.
+    Path(env["JOBS_JSON"]).write_text("not json")
+
+    body = _run(env)
+
+    assert "--attempt" not in Path(env["GH_CALLS"]).read_text()
+    assert "1 failed, 2021 passed" in body
 
 
 def test_a_single_attempt_job_heading_carries_no_attempt(env: dict[str, str]) -> None:

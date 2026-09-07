@@ -77,8 +77,8 @@ def job_heading(job: dict[str, Any], label_attempt: bool) -> str:
     return f"{job['name']} (attempt {job.get('run_attempt') or 1})"
 
 
-def annotation_details(repo: str, run_id: str) -> list[str]:
-    """Render bounded failure annotations for one run.
+def run_jobs(repo: str, run_id: str) -> list[dict[str, Any]]:
+    """Read the run's jobs across every attempt.
 
     ``filter=all`` reads every attempt, not just the latest. A row is recorded
     when the run fails, and a rerun that then goes green leaves the default
@@ -91,8 +91,23 @@ def annotation_details(repo: str, run_id: str) -> list[str]:
         )
     except (subprocess.CalledProcessError, ValueError):
         return []
+    return response.get("jobs", [])
 
-    jobs = response.get("jobs", [])
+
+def failed_attempt(jobs: list[dict[str, Any]]) -> int | None:
+    """The latest attempt that failed — the one whose log holds the error."""
+    return max(
+        (
+            job.get("run_attempt") or 1
+            for job in jobs
+            if job.get("conclusion") == "failure"
+        ),
+        default=None,
+    )
+
+
+def annotation_details(repo: str, jobs: list[dict[str, Any]]) -> list[str]:
+    """Render bounded failure annotations for one run."""
     label_attempt = len({job.get("run_attempt") or 1 for job in jobs}) > 1
     details: list[str] = []
     rendered_bytes = 0
@@ -133,12 +148,19 @@ def clean_log_line(line: str) -> str:
     return truncate_line(LITERAL_ANSI_ESCAPE.sub("", line))
 
 
-def log_details(repo: str, run_id: str) -> list[str]:
-    """Render the tail ending at the run's last error, when available."""
+def log_details(repo: str, run_id: str, attempt: int | None) -> list[str]:
+    """Render the tail ending at the failing attempt's last error, when available.
+
+    ``--log-failed`` reads the latest attempt unless told otherwise, so a rerun
+    that went green yields no failed log at all — the same blanking ``filter=all``
+    fixes for annotations, and the source that carries a transient failure whose
+    only annotation is a bare ``Process completed with exit code N``.
+    """
+    args = ["run", "view", run_id, "--repo", repo, "--log-failed"]
+    if attempt is not None:
+        args += ["--attempt", str(attempt)]
     try:
-        output = github_cli.run(
-            "run", "view", run_id, "--repo", repo, "--log-failed", quiet=True
-        )
+        output = github_cli.run(*args, quiet=True)
     except subprocess.CalledProcessError:
         return []
 
@@ -153,8 +175,11 @@ def log_details(repo: str, run_id: str) -> list[str]:
 
 
 def failure_details(repo: str, run_id: str) -> list[str]:
-    """Prefer precise annotations, falling back to the failed-log tail."""
-    return annotation_details(repo, run_id) or log_details(repo, run_id)
+    """Prefer precise annotations, falling back to the failing attempt's log tail."""
+    jobs = run_jobs(repo, run_id)
+    return annotation_details(repo, jobs) or log_details(
+        repo, run_id, failed_attempt(jobs)
+    )
 
 
 def render_run(repo: str, run_id: str, details: list[str]) -> str:
