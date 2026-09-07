@@ -59,11 +59,24 @@ bot_name: my-project-bot
 # `workflows.<name>` entry. That workflow then overrides the top-level value;
 # `args: []` clears inherited arguments.
 
+# ## Merge mode
+#
+# `maintainer` is the default: the bot can push branches and open PRs, but only an
+# admin can update the default branch. `yolo` lets the bot merge PRs into the
+# default branch while still blocking direct pushes. In yolo mode, `tend init`
+# owns a final CODEOWNERS block for `.github/**`, `.config/tend.yaml`, and the
+# CODEOWNERS files themselves. GitHub requires a fresh approval from the
+# configured maintainer user (never the bot or a team) before those control-plane
+# changes can merge.
+#
+# merge: yolo
+# control_plane_owner: "@octocat"
+
 # ## Protected branches
 #
 # The default branch is always protected. Additional long-lived branches
-# (e.g. release or staging branches) can be listed here. The bot cannot
-# merge to any of them without human approval.
+# (e.g. release or staging branches) can be listed here. They remain
+# admin-only under either merge mode.
 #
 # protected_branches: ["release", "staging"]
 
@@ -128,10 +141,11 @@ bot_name: my-project-bot
 #     continue-on-error, timeout-minutes
 #
 # For multi-step setup, add multiple entries to the `setup:` list — they
-# render in declared order. For anything more elaborate (conditional shells,
-# shared env across many steps, anchored caches), move the YAML into a local
-# composite action (`.github/actions/tend-setup/action.yaml`) and reference
-# it from one entry with `uses`.
+# render in declared order. Local actions (`uses: ./...`) are refused because
+# their POST steps can re-enter agent-controlled workspace state after the
+# sandbox exits. In `yolo`, all `setup:` entries are refused because even a
+# trusted remote action can execute bot-editable repository configuration; use
+# `sandbox_setup:` for commands.
 #
 # Setup runs against reviewed code — the default branch, or in `tend-review`
 # the PR's base branch, checked out before the PR's own tree lands. Project
@@ -197,7 +211,8 @@ bot_name: my-project-bot
 
 # ## Sandbox setup (both harnesses)
 #
-# `setup:` above runs as the RUNNER user, around the composite action. The
+# `setup:` above is available only in maintainer mode and runs as the RUNNER
+# user, around the composite action. The
 # harness runs the agent as a separate, non-sudo sandbox user with a
 # fixed env allowlist. Shared system/hosted-toolcache paths and independently
 # seeded paths already present under the sandbox home carry over. Changes that
@@ -361,8 +376,8 @@ bot_name: my-project-bot
 
 # ### weekly
 #
-# Weekly (default Sunday 09:17 UTC). Reviews dependency PRs, approves safe
-# patch and minor updates (a maintainer merges — the bot never merges).
+# Weekly (default Sunday 09:17 UTC). Reviews dependency PRs and approves safe
+# patch and minor updates; merging follows the configured mode.
 #
 # workflows:
 #   weekly:
@@ -392,7 +407,8 @@ bot_name: my-project-bot
 # Overrides use RFC 7396 (JSON Merge Patch): mappings deep-merge, scalars and
 # lists replace, and `null` deletes the key. Unknown job names print a warning
 # but don't fail. Step-level overrides aren't supported — use the `setup:`
-# mechanism above to inject steps.
+# mechanism above to inject steps. Yolo refuses both override forms so
+# credential-bearing generated jobs retain their audited shape.
 #
 # ### Example: skip review on labeled PRs
 #

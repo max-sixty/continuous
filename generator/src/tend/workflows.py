@@ -6,7 +6,6 @@ import copy
 import dataclasses
 import importlib.resources
 import io
-import shlex
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -93,14 +92,22 @@ def _inline_script(name: str) -> str:
 
 
 # The GitHub Environment holding the operational secrets (bot token, harness
-# token). Its deployment branch policy admits only admin-gated refs, so a job
-# that names it runs solely from those refs — a workflow pushed to a feature
-# branch is refused before its first step, which is what stops a hijacked
-# session reading the secrets out of a run it wrote. Every job carrying a
-# secret names it; jobs that carry none must not, or they lose the refs the
-# policy excludes for nothing. Not configurable: the name is an implementation
-# detail of that guarantee, and `tend check` creates and verifies it.
+# token). Its deployment branch policy admits only refs Tend verified for its
+# hardened runtime — the default branch and configured protected branches — so
+# a workflow pushed to a feature branch is refused before its first step. In
+# yolo, control-plane review protects the generated workflow on the default
+# branch. Every job carrying a secret names the environment; jobs that carry
+# none must not, or they lose excluded refs for nothing. The fixed name is an
+# implementation detail of that guarantee, and `tend check` creates it.
 TEND_ENVIRONMENT = "tend"
+CODEOWNERS_BEGIN = "# BEGIN tend control plane"
+CODEOWNERS_END = "# END tend control plane"
+CONTROL_PLANE_PATHS = (
+    "/.github/**",
+    "/.config/tend.yaml",
+    "/CODEOWNERS",
+    "/docs/CODEOWNERS",
+)
 
 
 # Available to every template without being passed to render().
@@ -212,46 +219,6 @@ def _setup_yaml(cfg: Config, condition: str = "") -> str:
     return "\n" + textwrap.indent(buf.getvalue().rstrip(), "    ") + "\n"
 
 
-def _restore_local_actions_run(cfg: Config) -> str:
-    """Shell that puts the local composites named by `setup:` back on disk.
-
-    A `uses: ./path` resolves against the workspace, and the runner re-reads
-    the action file from that same path to dispatch the POST steps of the
-    actions nested inside the composite — matching it against the step list it
-    cached when the composite ran. Review and mention land the PR's tree over
-    that workspace between the two reads, so a PR that resizes or deletes the
-    file breaks cleanup (actions/runner#2816); the paths need restoring before
-    the POST chain walks.
-
-    A restore covers the named directory recursively, so a composite that nests
-    another action *inside its own tree* is covered too; one that reaches for a
-    sibling `uses: ./elsewhere` is not, since only `setup:` is visible here.
-
-    Returned unindented and without a trailing newline, for the macro to place.
-    Empty when no step names a local action, which renders the step away.
-    """
-    paths: list[str] = []
-    for step in cfg.setup:
-        uses = step.fields.get("uses")
-        if not isinstance(uses, str) or not uses.startswith("./"):
-            continue
-        path = uses.removeprefix("./").rstrip("/")
-        if path and path not in paths:
-            paths.append(path)
-    # The path goes through a shell variable rather than straight into both
-    # lines: `shlex.quote` makes it a safe operand for `git`, but the warning
-    # interpolates it into a double-quoted string, where a `$` would expand and
-    # a `"` would end the string early — failing the one step whose job is to
-    # never turn a working run red.
-    return "\n".join(
-        f"dir={shlex.quote(path)}\n"
-        f'git checkout "$GITHUB_SHA" -- "$dir" ||\n'
-        f'  echo "::warning::could not restore $dir from $GITHUB_SHA;'
-        f' POST cleanup of the local action may fail"'
-        for path in paths
-    )
-
-
 @dataclass
 class GeneratedWorkflow:
     filename: str
@@ -304,7 +271,6 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     content = _REVIEW_TMPL.render(
         cfg=eff,
         setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
-        local_actions=_restore_local_actions_run(eff),
         prompt=prompt,
     )
     return GeneratedWorkflow(filename="tend-review.yaml", content=content)
@@ -326,7 +292,6 @@ def generate_mention(cfg: Config) -> GeneratedWorkflow:
     content = _MENTION_TMPL.render(
         cfg=eff,
         setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
-        local_actions=_restore_local_actions_run(eff),
         heredoc="<<",
         uv_version=UV_VERSION,
         check_script=check_script,
@@ -623,8 +588,48 @@ def generate_codex_auth_refresh(cfg: Config) -> GeneratedWorkflow:
 
 
 # ---------------------------------------------------------------------------
-# actionlint config
+# Adopter-owned config merged by `tend init`
 # ---------------------------------------------------------------------------
+
+
+def codeowners_config(existing: str | None, owner: str | None) -> str | None:
+    """Put Tend's managed block last, or remove it when ``owner`` is None.
+
+    CODEOWNERS uses the last matching pattern, so the managed block must be the
+    final one. The surrounding file remains adopter-owned and byte-stable.
+    """
+    original = existing or ""
+    lines = original.rstrip().splitlines()
+    begins = [i for i, line in enumerate(lines) if line == CODEOWNERS_BEGIN]
+    ends = [i for i, line in enumerate(lines) if line == CODEOWNERS_END]
+    if len(begins) != len(ends) or len(begins) > 1 or (begins and begins[0] >= ends[0]):
+        raise click.ClickException(
+            "CODEOWNERS has a malformed tend control-plane block; keep exactly "
+            f"one {CODEOWNERS_BEGIN!r} / {CODEOWNERS_END!r} pair"
+        )
+    if begins:
+        del lines[begins[0] : ends[0] + 1]
+        while lines and not lines[-1].strip():
+            lines.pop()
+
+    if owner is None:
+        if not begins:
+            return None
+        prefix = "\n".join(lines).rstrip()
+        updated = f"{prefix}\n" if prefix else ""
+        return None if updated == original else updated
+
+    block = "\n".join(
+        [
+            CODEOWNERS_BEGIN,
+            *(f"{path} {owner}" for path in CONTROL_PLANE_PATHS),
+            CODEOWNERS_END,
+        ]
+    )
+    prefix = "\n".join(lines).rstrip()
+    updated = f"{prefix}\n\n{block}\n" if prefix else f"{block}\n"
+    return None if updated == original else updated
+
 
 # `concurrency.queue` is valid GitHub Actions syntax that actionlint's schema
 # does not accept, so tend-review.yaml fails every actionlint run an adopter

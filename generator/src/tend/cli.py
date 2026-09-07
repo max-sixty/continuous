@@ -10,7 +10,6 @@ import click
 
 from tend.checks import (
     CheckResult,
-    admitted_refs,
     detect_canonical_owner,
     detect_default_branch,
     detect_repo,
@@ -18,11 +17,12 @@ from tend.checks import (
     fix_environment,
     fix_immutable_releases,
     fix_tag_protection,
+    operational_refs,
     run_all_checks,
 )
 from tend.config import Config
 from tend.migrate import migrate_toml_to_yaml, render_toml_as_yaml
-from tend.workflows import actionlint_config, generate_all
+from tend.workflows import actionlint_config, codeowners_config, generate_all
 
 
 def _detect_default_branch_local() -> str:
@@ -83,6 +83,28 @@ def _update_actionlint_config(dry_run: bool) -> None:
     click.echo(f"  wrote {path}")
 
 
+def _update_codeowners(owner: str | None, dry_run: bool) -> None:
+    """Put Tend's ownership rules in the effective CODEOWNERS file."""
+    candidates = (
+        Path(".github/CODEOWNERS"),
+        Path("CODEOWNERS"),
+        Path("docs/CODEOWNERS"),
+    )
+    path = next(
+        (candidate for candidate in candidates if candidate.exists()), candidates[0]
+    )
+    existing = path.read_text(encoding="utf-8") if path.exists() else None
+    updated = codeowners_config(existing, owner)
+    if updated is None:
+        return
+    if dry_run:
+        click.echo(f"  would update {path} (tend control-plane ownership)")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+    click.echo(f"  wrote {path}")
+
+
 def _print_check_results(results: list[CheckResult]) -> None:
     """Print check results with pass/fail/skip indicators."""
     for r in results:
@@ -93,6 +115,23 @@ def _print_check_results(results: list[CheckResult]) -> None:
         else:
             icon = click.style("SKIP", fg="yellow")
         click.echo(f"  {icon}  {r.name} — {r.message}")
+
+
+def _yolo_activation_blockers(results: list[CheckResult]) -> list[CheckResult]:
+    """Non-fixable checks that must hold before granting merge access."""
+    fixable = {
+        "control-plane-ruleset",
+        "environment",
+        "immutable-releases",
+        "tag-protection",
+    }
+    return [
+        result
+        for result in results
+        if result.passed is not True
+        and result.name not in fixable
+        and not result.name.startswith("branch-protection:")
+    ]
 
 
 @click.group()
@@ -187,6 +226,12 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 
     if any(wf.filename == "tend-review.yaml" for wf in workflows):
         _update_actionlint_config(dry_run)
+    _update_codeowners(
+        cfg.control_plane_owner
+        if cfg.merge_policy.requires_control_plane_review
+        else None,
+        dry_run,
+    )
 
     # Remove stale tend-*.yaml files the generator didn't produce this run.
     # Catches: install-test cleanup on regen, disabled workflows leaving
@@ -235,6 +280,9 @@ def init(config_path: Path | None, dry_run: bool, with_install_test: bool) -> No
 def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
     """Verify release integrity, branch protection, bot access, and credentials."""
     cfg = Config.load(config_path)
+    cfg.config_path = _runtime_config_path(
+        config_path if config_path is not None else Path(".config/tend.yaml")
+    )
     if not cfg.enabled:
         click.echo("Tend is disabled in config; new operational jobs will skip.")
 
@@ -243,7 +291,10 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
     _print_check_results(results)
 
     failures = [r for r in results if r.passed is False]
-    if not failures:
+    activation_blockers = (
+        _yolo_activation_blockers(results) if cfg.merge == "yolo" else []
+    )
+    if not failures and not (fix and activation_blockers):
         return
 
     if not fix:
@@ -258,28 +309,38 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
 
     # Every fix is written in terms of the default branch, and guessing it
     # wrong writes a ref the bot can create: a `main` guessed for a `master`
-    # repo is outside the merge restriction, so the environment would admit a
-    # branch the bot can push. The checks just resolved it, so a failure here
-    # is a transient one to surface, not to paper over.
+    # repo is outside the configured merge policy, so the environment would
+    # admit a branch the bot can push. The checks just resolved it, so a
+    # failure here is a transient one to surface, not to paper over.
     default_branch = detect_default_branch(repo)
     if default_branch is None:
         click.echo(f"Could not detect the default branch for {repo} — not fixing.")
         raise SystemExit(1)
 
     fixed_any = False
-    bp_fixable = [
-        r
-        for r in failures
-        if r.name.startswith("branch-protection:")
-        and "bot can still merge" in r.message
-    ]
-    if bp_fixable:
-        branches_desc = ", ".join(r.name.split(":", 1)[1] for r in bp_fixable)
+    rules_fixable = any(
+        result.name.startswith("branch-protection:")
+        or result.name == "control-plane-ruleset"
+        for result in failures
+    )
+    if rules_fixable or activation_blockers:
+        merge_to_apply = "maintainer" if activation_blockers else cfg.merge
         click.echo()
-        click.echo(
-            f"Creating 'Merge access' ruleset — only admins can merge ({branches_desc})..."
+        if merge_to_apply != cfg.merge:
+            click.echo(
+                "Yolo prerequisites are not all verified; configuring maintainer "
+                "merge mode until these pass: "
+                + ", ".join(result.name for result in activation_blockers)
+            )
+        else:
+            click.echo(f"Configuring {cfg.merge} merge rulesets...")
+        fix_result = fix_branch_protection(
+            repo,
+            default_branch,
+            cfg.bot_name,
+            merge_to_apply,
+            cfg.protected_branches,
         )
-        fix_result = fix_branch_protection(repo, default_branch, cfg.protected_branches)
         _print_check_results([fix_result])
         if fix_result.passed:
             fixed_any = True
@@ -306,14 +367,14 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         if fix_result.passed:
             fixed_any = True
 
-    if any(r.name == "environment" for r in failures):
+    if any(r.name == "environment" for r in failures) and not activation_blockers:
         click.echo()
         click.echo("Configuring the 'tend' environment...")
         # Read off the same run's branch-protection results, so the policy the
         # fix writes is the set the check just demanded — never a ref whose
         # protection this run could not verify. An empty set can't reach here:
         # the check reports unknown rather than failure when nothing verified.
-        fix_result = fix_environment(repo, admitted_refs(results))
+        fix_result = fix_environment(repo, operational_refs(results))
         _print_check_results([fix_result])
         if fix_result.passed:
             fixed_any = True

@@ -77,7 +77,7 @@ minutes of the user's hands-on time (browser logins, OAuth approvals,
 occasional copy-paste) — the agent drives the rest, ending at a local
 commit (pushing waits for their go-ahead, step 11).
 
-Then one `AskUserQuestion` call with three questions. Answering it is the
+Then one `AskUserQuestion` call with four questions. Answering it is the
 go-ahead — no separate "ready to start?" confirmation. Drop any question the
 user's request or an existing config already answers (a supplied bot name, a
 chosen harness; the auth mode a config-settled harness leaves open is asked
@@ -96,11 +96,18 @@ itself the go-ahead.
      depends on Codex's internal auth mode; detail in
      ${CLAUDE_SKILL_DIR}/references/security-model.md.
    - **Codex — OpenAI API key** — standard pay-per-token path.
-2. **Bot name** — the available candidates, recommended first. "Other"
+2. **Merge mode** — who may merge into the default branch:
+   - **Maintainer** (recommended) — the bot opens and updates PRs; only admins can
+     update the default branch.
+   - **Yolo** — the bot may merge ordinary PRs, but cannot push directly.
+     Workflow and Tend-config changes require a fresh CODEOWNER approval;
+     ask for the one maintainer GitHub user to own them. Teams are not accepted
+     because Tend cannot prove the bot is not a member.
+3. **Bot name** — the available candidates, recommended first. "Other"
    takes a custom name; check its availability before using it. The tool
    needs 2–4 options, so generate more candidates whenever fewer than two
    come back available.
-3. **Defaults** — accept the default setup, or pick areas to change:
+4. **Defaults** — accept the default setup, or pick areas to change:
    - **Accept all defaults** (recommended) — no workflow overrides, a
      placeholder guidance overlay, the badge added, and the bot bio
      "tend agent for `<owner>/<repo>`. I triage issues and help maintain
@@ -162,6 +169,9 @@ README.md "Harnesses" for the comparison.
 
 ```yaml
 bot_name: <bot-name>
+# For autonomous merging (also set the owner selected at kickoff):
+# merge: yolo
+# control_plane_owner: "@maintainer"
 # For Codex:
 # harness: codex
 # Both harnesses optionally accept:
@@ -193,9 +203,10 @@ place. Classify each remaining secret and act now — don't defer:
   keys, deploy credentials) at the repo level are reachable from any
   workflow run, including ones a write-access bot can trigger with no
   merge. Don't allowlist them. Migrate each to a GitHub Environment whose
-  deployment policy pins to the admin-gated refs from §3 (the default
-  branch and/or all tags). The bot can reach neither ref class, so it
-  cannot reach the secret. `tend check` sweeps every credential-holding
+  deployment policy pins to the bot-inaccessible refs from §3 (all tags
+  and, under maintainer mode, the default branch). Under yolo, a generic
+  credential environment that admits the default branch needs a non-bot
+  required reviewer. `tend check` sweeps every credential-holding
   environment — one that stores a secret, or that an `id-token: write` job
   deploys to, since trusted publishing stores nothing — and fails on any it
   cannot confirm gated: no reviewer and no policy, an unverified branch
@@ -366,11 +377,29 @@ user that team members should @-mention the bot account instead of `@claude`.
 
 ## 3. Ref protection
 
-Two ref classes can land code that reaches a deploy or publish workflow:
-the default branch (via merge) and tags (via tag push). Restrict both to
-admin-only operations so every privileged code path chains back to an
-admin action. The bot has write, which is below every role that can
-bypass, so it satisfies neither.
+Reconcile Tend's canonical rulesets and environment policy:
+
+```bash
+uvx tend@latest check --fix --repo "$REPO"
+```
+
+The command is expected to remain non-zero until later steps install the
+secrets. Fix every ref-protection finding now. Under `maintainer`, `Merge access`
+keeps the default branch admin-only. Under `yolo`, it grants the bot user a
+pull-request-only bypass, while `Control-plane review` requires a fresh,
+non-bypassable CODEOWNER approval for `.github/**` and
+`.config/tend.yaml`, including the CODEOWNERS files themselves. `Protected
+branch access` keeps creation, updates, and deletion of every configured extra
+branch admin-only in both modes. `Tag operations` keeps all tags admin-only.
+
+Yolo bootstraps in two safe phases. Before the generated CODEOWNERS block and
+exact generated workflows are on the default branch, or while any credential
+check is unresolved, `--fix` installs maintainer mode and refuses to grant the
+bot a bypass. Merge the install PR manually and fix any credential gates, then
+rerun this section; only then does it enable the pull-request-only bypass.
+The workflow check also rejects non-generated jobs with dynamic environment
+names or external or ref-qualified reusable workflows, because their use of
+the `tend` environment cannot be verified from the default-branch tree.
 
 Survey existing rulesets; skip any slot already covered:
 
@@ -378,31 +407,9 @@ Survey existing rulesets; skip any slot already covered:
 gh api "repos/$REPO/rulesets" --jq '.[] | {name, target, enforcement}'
 ```
 
-**Merge restriction on the default branch.** Create if missing:
-
-```bash
-gh api "repos/$REPO/rulesets" --method POST --input - << 'EOF'
-{
-  "name": "Merge access",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": {
-    "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] }
-  },
-  "rules": [{ "type": "update" }],
-  "bypass_actors": [{
-    "actor_id": 5,
-    "actor_type": "RepositoryRole",
-    "bypass_mode": "exempt"
-  }]
-}
-EOF
-```
-
-`actor_id: 5` is the admin role. The base role IDs run maintain 2, write 4,
-admin 5 — not ordered by privilege, so the plausible guess for maintain is in
-fact write, the bot's own role, and granting it hands the bot the merge. Before
-adding any bypass actor, read back what the ruleset actually granted:
+Read back what GitHub actually granted; repository role IDs are not ordered by
+privilege, and hand-editing one can silently give the write-role bot an
+always-bypass:
 
 ```bash
 gh api graphql -f query='{repository(owner:"<owner>", name:"<repo>")
@@ -467,14 +474,16 @@ gh api "repos/$REPO/environments" \
 ```
 
 Each environment that holds a secret, or that a job with `id-token: write`
-names, needs a gate: a deployment policy pinned to admin-gated refs, or
-required reviewers who exclude the bot. Either clears
+names, needs a gate: a deployment policy pinned to bot-inaccessible refs, or
+required reviewers who exclude the bot. Under yolo, the default branch is not
+a bot-inaccessible ref, so a generic credential environment admitting it must
+use the reviewer gate. Either clears
 `credential-environments`, so an environment already behind reviewers
 stays as it is.
 
-Pin the policy to the admin-gated refs its workflows actually use — all
-tags for a release, the default branch for a continuous deploy. The
-rulesets above are what hold those refs out of the bot's reach:
+Pin the policy to bot-inaccessible refs its workflows actually use — all tags
+for a release, and under maintainer mode the default branch for a continuous
+deploy. Under yolo, use required reviewers for continuous deploys:
 
 ```bash
 gh api "repos/$REPO/environments/$ENV" --method PUT --input - << 'EOF'
@@ -1055,9 +1064,9 @@ line picks the row that matches the chosen harness):
 
 - [ ] Config: `.config/tend.yaml` created (with `harness` set if Codex)
 - [ ] Workflows: generated in `.github/workflows/`
-- [ ] Rulesets: merge restriction on default branch (admin bypass), tag operations on all tags (admin bypass)
+- [ ] Rulesets: merge mode on the default branch, extra protected branches admin-only, tag operations admin-only; yolo also has control-plane CODEOWNERS review
 - [ ] Immutable releases: enabled before the next release
-- [ ] Release/deploy secrets: environment-protected; the environment's deployment-branch-policies list only the admin-gated refs from §3 (default branch and/or all tags)
+- [ ] Release/deploy credentials: environment-protected; policies list only bot-inaccessible refs, and yolo default-branch deploys require a non-bot reviewer
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
 - [ ] Badge: added to README (unless skipped, or no README)
 - [ ] Bot account: `<bot-name>` exists on GitHub

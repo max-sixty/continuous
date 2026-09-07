@@ -114,12 +114,30 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
     runner = (REPO_ROOT / "codex" / "runner.py").read_text()
     assert "_sandbox.launch_env" in runner
     assert 'model_provider="tend-openai"' in runner
-    reap = steps["Reap sandbox and restore workspace ownership"]
+    reap = steps["Reap sandbox and quarantine workspace"]
     assert reap["id"] == "sandbox_reap"
     assert 'echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"' in reap["run"]
     assert steps["Token usage"]["env"]["SANDBOX_REAPED"] == (
         "${{ steps.sandbox_reap.outputs.sandbox_reaped }}"
     )
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_agent_workspace_is_quarantined_before_checkout_post(harness: str) -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / harness / "action.yaml").read_text()
+    )
+    step = next(
+        step
+        for step in action["runs"]["steps"]
+        if step["name"] == "Reap sandbox and quarantine workspace"
+    )
+    run = step["run"]
+
+    assert '/usr/bin/mv -- "$GITHUB_WORKSPACE" "$quarantine/workspace"' in run
+    assert '"$GITHUB_WORKSPACE"' in run
+    assert "chown -R" not in run
+    assert step["if"] == "always()"
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])

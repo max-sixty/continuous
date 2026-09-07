@@ -12,6 +12,12 @@ inputs:
   github_token:
     required: true
     description: GitHub token for API access and pushing commits
+  merge:
+    default: maintainer
+    description: Merge mode generated from .config/tend.yaml (maintainer or yolo)
+  control_plane_owner:
+    default: ""
+    description: CODEOWNER for yolo-protected workflow and Tend config changes
   claude_code_oauth_token:
     required: false
     default: ""
@@ -165,6 +171,8 @@ runs:
         # shell runs before the pinned interpreter does.
         BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        TEND_MERGE: ${{ inputs.merge }}
+        TEND_CONTROL_PLANE_OWNER: ${{ inputs.control_plane_owner }}
 
     # Also publishes `login`/`id` for the bot: it reads them off the token it
     # already holds, so nothing downstream has to resolve them again from the
@@ -216,6 +224,7 @@ runs:
       env:
         SYSTEM_PROMPT_FILE: ${{ github.action_path }}/../shared/system-prompt.md
         BOT_NAME: ${{ steps.bot.outputs.login }}
+        TEND_MERGE: ${{ inputs.merge }}
         EXTRA: ${{ inputs.system_prompt_append }}
 
     # Credential isolation: run the agent as a separate, non-sudo
@@ -468,20 +477,30 @@ runs:
       env:
         BASH_ENV: ""
 
-    # The sandbox owned the workspace during the run. Hand it back to the runner
-    # so actions/checkout's post-job credential cleanup — which runs as the
-    # runner and writes .git/config — doesn't warn on dubious ownership /
-    # permission. Always, so a failed run cleans up too: setup_sandbox.py
-    # exports SANDBOX before its first fallible step, so the guard holds even
-    # when setup died mid-way (chown to self is an idempotent no-op if the
-    # handoff never happened).
-    - name: Restore workspace ownership for checkout cleanup
+    # actions/checkout runs Git again from its POST step. The agent controls
+    # .git by now, so handing the tree back to runner would execute planted Git
+    # helpers (for example core.fsmonitor) with the checkout action's secrets.
+    # Atomically move the whole tree out of checkout's fixed path and recreate
+    # an empty directory there; checkout sees no .git/config and returns before
+    # invoking Git. Keep the quarantined tree in RUNNER_TEMP for job cleanup.
+    - name: Reap sandbox and quarantine workspace
       if: always()
-      shell: bash
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       run: |
+        set +x
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
         if [ -n "${SANDBOX:-}" ]; then
-          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          /usr/bin/sudo /usr/bin/pkill -KILL -u "$SANDBOX" 2>/dev/null || true
+          quarantine=$(/usr/bin/mktemp -d "$RUNNER_TEMP/tend-workspace.XXXXXX")
+          /usr/bin/sudo /usr/bin/mv -- "$GITHUB_WORKSPACE" "$quarantine/workspace"
+          /usr/bin/sudo /usr/bin/install -d \
+            -o "$(/usr/bin/id -u)" -g "$(/usr/bin/id -g)" -- "$GITHUB_WORKSPACE"
         fi
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
 
     - name: Mark event notification read
       if: success()

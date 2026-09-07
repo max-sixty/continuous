@@ -71,8 +71,8 @@ jobs:
     # mention unanswered rather than merely unprivileged. It grants nobody a
     # new capability: only someone who can already push a branch can open the
     # same-repo PR whose workflow file this is, and they could declare any
-    # permissions they liked in it. The merge restriction is what bounds that,
-    # here as everywhere.
+    # permissions they liked in it. The merge policy and control-plane rule
+    # are what bound that, here as everywhere.
     permissions:
       contents: write
     steps:
@@ -608,6 +608,8 @@ jobs:
         if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
+          merge: maintainer
+          control_plane_owner: ""
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot

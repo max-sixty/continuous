@@ -8,6 +8,12 @@ inputs:
   github_token:
     required: true
     description: GitHub token for API access and pushing commits
+  merge:
+    default: maintainer
+    description: Merge mode generated from .config/tend.yaml (maintainer or yolo)
+  control_plane_owner:
+    default: ""
+    description: CODEOWNER for yolo-protected workflow and Tend config changes
   openai_api_key:
     required: false
     default: ""
@@ -129,6 +135,8 @@ runs:
       env:
         BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        TEND_MERGE: ${{ inputs.merge }}
+        TEND_CONTROL_PLANE_OWNER: ${{ inputs.control_plane_owner }}
 
     # Also publishes `login`/`id` for the bot: it reads them off the token it
     # already holds, so nothing downstream has to resolve them again from the
@@ -366,6 +374,7 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         BOT_NAME: ${{ steps.bot.outputs.login }}
+        TEND_MERGE: ${{ inputs.merge }}
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" stage-agents
 
     - name: Run adopter sandbox setup
@@ -391,21 +400,33 @@ runs:
       # decode it with `base64 -d`.
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" run
 
-    # Stop every process owned by the sandbox before any runner-owned step
-    # reads agent-controlled paths, then restore checkout ownership.
-    - name: Reap sandbox and restore workspace ownership
+    # Stop every sandbox process, then move the agent-controlled tree out of
+    # actions/checkout's fixed path. Its POST cleanup otherwise runs Git as the
+    # runner against attacker-controlled .git config. The empty replacement has
+    # no .git/config, so checkout returns before invoking Git.
+    - name: Reap sandbox and quarantine workspace
       if: always()
       id: sandbox_reap
-      shell: bash
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       run: |
+        set +x
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
         if [ -n "${SANDBOX:-}" ]; then
-          sudo pkill -KILL -u "$SANDBOX" 2>/dev/null || true
-          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+          /usr/bin/sudo /usr/bin/pkill -KILL -u "$SANDBOX" 2>/dev/null || true
+          quarantine=$(/usr/bin/mktemp -d "$RUNNER_TEMP/tend-workspace.XXXXXX")
+          /usr/bin/sudo /usr/bin/mv -- "$GITHUB_WORKSPACE" "$quarantine/workspace"
+          /usr/bin/sudo /usr/bin/install -d \
+            -o "$(/usr/bin/id -u)" -g "$(/usr/bin/id -g)" -- "$GITHUB_WORKSPACE"
         fi
         if [ -n "${CODEX_PROXY_URL:-}" ]; then
-          curl --fail --silent --show-error "$CODEX_PROXY_URL/shutdown" || true
+          /usr/bin/curl --fail --silent --show-error "$CODEX_PROXY_URL/shutdown" || true
         fi
         echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
 
     - name: Append skill step summary
       if: always()

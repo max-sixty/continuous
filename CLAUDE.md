@@ -218,9 +218,10 @@ workflows:
 ```
 
 Workflow-level (`workflow_extra`) and job-level (`jobs.<name>`) overrides
-are supported; step-level is not — the `setup:` mechanism handles step
-injection. No allowlist of override keys; unknown job names produce a
-warning.
+are supported in maintainer merge mode; step-level is not — the `setup:`
+mechanism handles step injection. Yolo refuses both override forms and all
+runner-side `setup:` so credential-bearing jobs retain their audited shape.
+No allowlist of override keys; unknown job names produce a warning.
 
 When overrides are present, the generator renders the base template,
 parses it, merges the overrides, and re-serializes. Output YAML formatting
@@ -233,10 +234,12 @@ Each adopter creates a GitHub bot account and a classic PAT (`public_repo`
 for public repos, `repo` for private) plus `workflow`, `notifications`,
 `write:discussion`, `gist`, `user`. The PAT and a Claude OAuth token are
 stored as secrets in the repo's `tend` GitHub Environment, whose deployment
-branch policy admits only the branches `tend check` confirmed the bot
-cannot write — the default branch and any `protected_branches` that exist
-and are protected. A workflow the bot pushes to any other ref is refused
-them before its first step. Two things use the `gist` scope, both
+branch policy admits the default branch and any `protected_branches` that
+exist and are protected. A workflow the bot pushes to any other ref is
+refused them before its first step. In `maintainer` mode the bot cannot
+move any admitted branch. In `yolo`, it may merge pull requests to the
+default branch, while a CODEOWNERS-backed ruleset reserves Tend's workflows
+and config for a maintainer owner. Two things use the `gist` scope, both
 through bot-owned secret gists: `review-reviewers` keeps a per-month
 structured evidence store (avoids the 65 KB comment-body limit), and the
 experimental `memory_gist` setting persists Claude Code's auto memory
@@ -252,12 +255,18 @@ to every public repository the bot can access. Fine-grained PATs allow
 per-category scoping but don't support outside collaborators ([GitHub roadmap
 #601](https://github.com/github/roadmap/issues/601), not shipped).
 
-**Current privilege model: write + branch protection + environment gate.**
-The bot has write access; a merge restriction (ruleset or branch
-protection) is the primary security boundary — without it the bot can merge
-its own PRs — and the `tend` environment keeps the operational secrets out
-of any run the bot can cause on its own. `tend check` verifies both are
-configured correctly, and `--fix` creates either. See
+**Current privilege model: write + merge mode + environment gate.**
+The bot has write access. `merge: maintainer` keeps it out of the default branch;
+`merge: yolo` grants a pull-request-only bypass there, while a second
+ruleset requires fresh CODEOWNER approval for `.github/**`,
+`.config/tend.yaml`, and the CODEOWNERS files themselves. Extra protected
+branches and tags remain admin-only.
+The `tend` environment releases operational secrets only on those configured
+branches, and generic credential environments require refs the bot cannot
+move (or a non-bot reviewer). In yolo mode, Tend also requires exact generated
+workflows and rejects other workflows whose environment use is dynamic or
+hidden in an external or ref-qualified reusable workflow. `tend check` verifies the complete
+policy, and `--fix` reconciles it. See
 `docs/security-model.md` for the full threat model. Alternative models
 (GitHub App, triage+fork) are in `TODO.md`.
 

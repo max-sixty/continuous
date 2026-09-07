@@ -57,6 +57,8 @@ KNOWN_WORKFLOWS = {
 }
 KNOWN_TOP_LEVEL = {
     "bot_name",
+    "merge",
+    "control_plane_owner",
     "enabled",
     "memory_gist",
     "harness",
@@ -72,7 +74,9 @@ KNOWN_TOP_LEVEL = {
     "workflows",
 }
 KNOWN_HARNESSES = {"claude", "codex"}
+KNOWN_MERGE_POLICIES = {"maintainer", "yolo"}
 KNOWN_SECRETS_KEYS = {"allowed"}
+REMOVED_TOP_LEVEL_KEYS = {"landing": "merge"}
 
 # The operational secrets, by fixed name. Claude reads the OAuth token
 # (subscription) or the API key (console.anthropic.com) — adopters set one;
@@ -109,6 +113,7 @@ REMOVED_SECRETS_KEYS = {
     "openai_key": OPENAI_KEY_SECRET,
 }
 _GITHUB_USERNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
+_CODEOWNER_USER = re.compile(r"^@[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 # POSIX-ish env var name: letters, digits, underscore; not starting with a digit.
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -173,11 +178,35 @@ class SetupStep:
     `timeout-minutes`, `if`. In the workflows that pre-check whether the
     agent needs to boot, the renderer adds that check to every step's `if:`.
     A step's own condition narrows the check. For multi-step setup, add
-    multiple entries to the `setup:` list — or reference a local composite
-    action with `uses`.
+    multiple entries to the `setup:` list. Local actions are refused because
+    their POST steps re-read agent-controlled workspace state after the
+    sandbox exits.
     """
 
     fields: dict
+
+
+@dataclass(frozen=True)
+class MergePolicy:
+    """The small set of decisions that changes between merge modes."""
+
+    bot_can_merge: bool
+    expected_runtime_bypass: str
+    requires_control_plane_review: bool
+
+
+MERGE_POLICIES = {
+    "maintainer": MergePolicy(
+        bot_can_merge=False,
+        expected_runtime_bypass="never",
+        requires_control_plane_review=False,
+    ),
+    "yolo": MergePolicy(
+        bot_can_merge=True,
+        expected_runtime_bypass="pull_requests_only",
+        requires_control_plane_review=True,
+    ),
+}
 
 
 @dataclass
@@ -259,6 +288,12 @@ class Config:
     # in a bot-owned secret Gist. The Gist ID stays in a fixed environment
     # secret so a public repository does not publish the unlisted URL.
     memory_gist: bool = False
+    merge: str = "maintainer"
+    control_plane_owner: str = ""
+
+    @property
+    def merge_policy(self) -> MergePolicy:
+        return MERGE_POLICIES[self.merge]
 
     def enabled_harnesses(self) -> set[str]:
         """Harnesses used by the workflows a normal regeneration emits."""
@@ -301,6 +336,15 @@ class Config:
                 f"{path} must contain a YAML mapping at the top level"
             )
 
+        removed_top_level = sorted(set(raw) & set(REMOVED_TOP_LEVEL_KEYS))
+        if removed_top_level:
+            renames = ", ".join(
+                f"{key} → {REMOVED_TOP_LEVEL_KEYS[key]}" for key in removed_top_level
+            )
+            raise click.ClickException(
+                f"Removed config key(s): {renames}. Rename each key."
+            )
+
         if "bot_name" not in raw:
             raise click.ClickException("Missing required field: bot_name")
 
@@ -340,6 +384,31 @@ class Config:
         if not isinstance(enabled, bool):
             raise click.ClickException("enabled must be true or false")
 
+        merge = raw.get("merge", "maintainer")
+        if merge not in KNOWN_MERGE_POLICIES:
+            raise click.ClickException(
+                f"merge '{merge}' is not recognized "
+                f"(known: {', '.join(sorted(KNOWN_MERGE_POLICIES))})"
+            )
+        control_plane_owner = raw.get("control_plane_owner", "")
+        if not isinstance(control_plane_owner, str):
+            raise click.ClickException("control_plane_owner must be a string")
+        control_plane_owner = control_plane_owner.strip()
+        if control_plane_owner and not _CODEOWNER_USER.fullmatch(control_plane_owner):
+            raise click.ClickException(
+                "control_plane_owner must be one GitHub user, such as '@octocat'; "
+                "teams are not accepted because Tend cannot prove the bot is not "
+                "a member"
+            )
+        if merge == "yolo" and not control_plane_owner:
+            raise click.ClickException(
+                "control_plane_owner is required when merge is 'yolo'"
+            )
+        if control_plane_owner.casefold() == f"@{bot_name}".casefold():
+            raise click.ClickException(
+                "control_plane_owner must not be the Tend bot account"
+            )
+
         unknown = set(raw.keys()) - KNOWN_TOP_LEVEL
         for key in sorted(unknown):
             click.echo(f"Warning: unknown config key '{key}'", err=True)
@@ -367,8 +436,15 @@ class Config:
         for key in sorted(unknown_secrets):
             click.echo(f"Warning: unknown secrets key '{key}'", err=True)
 
+        setup_raw = raw.get("setup", []) or []
+        if merge == "yolo" and setup_raw:
+            raise click.ClickException(
+                "setup is not allowed when merge is 'yolo'; move repository "
+                "setup into sandbox_setup so ordinary code cannot execute on the "
+                "credential-bearing runner"
+            )
         setup: list[SetupStep] = []
-        for i, entry in enumerate(raw.get("setup", []) or []):
+        for i, entry in enumerate(setup_raw):
             if not isinstance(entry, dict):
                 raise click.ClickException(
                     f"setup[{i}] must be a mapping with `uses` or `run`"
@@ -376,8 +452,8 @@ class Config:
             if "raw" in entry:
                 raise click.ClickException(
                     f"setup[{i}]: `raw` was removed. Split into multiple "
-                    "setup entries, or move the YAML into a local "
-                    "composite action and reference it with `uses`."
+                    "setup entries, or move repository-controlled commands "
+                    "into sandbox_setup."
                 )
             unknown = set(entry.keys()) - ALLOWED_STEP_FIELDS
             if unknown:
@@ -389,6 +465,13 @@ class Config:
             if len(step_keys) != 1:
                 raise click.ClickException(
                     f"setup[{i}] must have exactly one of `uses` or `run`"
+                )
+            uses = entry.get("uses")
+            if isinstance(uses, str) and uses.startswith("./"):
+                raise click.ClickException(
+                    f"setup[{i}]: local actions are not supported. Use a pinned "
+                    "remote action, or move repository-controlled setup into "
+                    "sandbox_setup."
                 )
             for k in DICT_STEP_FIELDS:
                 if k in entry and not isinstance(entry[k], dict):
@@ -549,6 +632,14 @@ class Config:
                 ):
                     raise click.ClickException(
                         f"workflows.{name}.jobs must be a mapping of mappings"
+                    )
+                if merge == "yolo" and (
+                    workflow_extra is not None or jobs_raw is not None
+                ):
+                    raise click.ClickException(
+                        f"workflows.{name}: workflow_extra and jobs overrides are "
+                        "not allowed when merge is 'yolo'; generated runner jobs "
+                        "must retain their audited shape"
                     )
                 wf_harness = wf_raw.get("harness")
                 wf_model = wf_raw.get("model")
@@ -724,6 +815,8 @@ class Config:
             sandbox_env=sandbox_env,
             sandbox_setup=sandbox_setup,
             memory_gist=memory_gist,
+            merge=merge,
+            control_plane_owner=control_plane_owner,
             enabled=enabled,
             workflows=workflows,
             allowed_repo_secrets=allowed,

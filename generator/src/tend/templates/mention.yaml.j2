@@ -101,8 +101,8 @@ jobs:
     # mention unanswered rather than merely unprivileged. It grants nobody a
     # new capability: only someone who can already push a branch can open the
     # same-repo PR whose workflow file this is, and they could declare any
-    # permissions they liked in it. The merge restriction is what bounds that,
-    # here as everywhere.
+    # permissions they liked in it. The merge policy and control-plane rule
+    # are what bound that, here as everywhere.
     permissions:
       contents: write
     steps:
@@ -232,6 +232,6 @@ jobs:
           # the API record — the dispatch payload never carries one to spoof.
           EVENT_TS: ${{ github.event.comment.updated_at || needs.verify.outputs.ts || github.event.issue.updated_at }}
 
-<<agent_step(cfg, prompt_body, if_condition=tend_enabled_condition)>><<restore_local_actions(local_actions, if_condition=tend_enabled_condition)>>
+<<agent_step(cfg, prompt_body, if_condition=tend_enabled_condition)>>
 
 <<unreact_eyes(cfg, reaction_target, if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")\n&& (" ~ summoned(cfg.bot_name, 'needs.verify.outputs.reason') ~ ")")>>

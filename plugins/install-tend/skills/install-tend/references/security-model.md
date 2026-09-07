@@ -6,23 +6,27 @@ canonical, full threat model is maintained in the tend source repo at
 https://github.com/max-sixty/tend/blob/main/docs/security-model.md; this is
 the subset an installing agent needs.
 
-## The chain: every privileged path is admin-gated
+## The chain: merge authority is explicit
 
 Tend runs an agent with write access on attacker-controlled input. The
-boundary is structural: every code path into a privileged workflow chains
-back to an admin-controlled operation, and the bot has write, which is below
-every role that can bypass a ruleset. The merge half is re-proven on every
-run: preflight, holding the bot's own token, reads `current_user_can_bypass`
-on each ruleset covering the default branch — GitHub's evaluation of the
-bot's standing, teams and custom roles included — and aborts unless some
-restrict-updates ruleset answers `never` or the branch is otherwise
-protected.
+boundary is structural and policy-dependent. Under `maintainer`, the bot cannot
+update the default branch. Under `yolo`, it receives a pull-request-only
+bypass, but direct pushes remain blocked and `.github/**` plus
+`.config/tend.yaml` require a fresh CODEOWNER approval the bot cannot bypass.
+The ownership block also protects every possible CODEOWNERS file, and its
+owner must be a maintainer GitHub user distinct from the bot.
+Preflight reads GitHub's `current_user_can_bypass` answer with the bot's own
+token and requires the exact configured state: `never` or
+`pull_requests_only`.
 
 The two admin-gated operations are:
 
-- **Merging to the default branch.** A ruleset with the `update` rule on
-  the default branch, admin-only bypass. Blocks the bot from landing code
-  on the default branch.
+- **Updating the default branch.** `Merge access` protects creation, update,
+  and deletion, with an admin bypass in both
+  modes and, in yolo only, a bot-user `pull_request` bypass. `Control-plane
+  review` layers fresh CODEOWNER approval over workflow and Tend-config paths.
+- **Updating extra protected branches.** `Protected branch access` protects
+  creation, update, and deletion and remains admin-only under both modes.
 - **Operating on a tag.** A ruleset with the `creation` and `update`
   rules covering all tags (`~ALL` on a `tag`-target ruleset), admin-only
   bypass. Blocks the bot from pushing a new tag and from force-pushing
@@ -43,7 +47,7 @@ pattern choice and keeps the chain a single uniform rule. Adopters that
 need a narrower or layered configuration (per-pattern rulesets,
 no-bypass immutability on release tags for repos that publish actions
 consumed via tag pins, required-reviewer environment gates for per-deploy
-human approval) can layer additional rulesets and environment protection
+maintainer approval) can layer additional rulesets and environment protection
 rules on top; install-tend packages the simplest configuration that holds
 the chain.
 
@@ -53,10 +57,16 @@ names an environment runs only if the run's ref matches the environment's
 
 Tend's own operational secrets — the bot token and harness auth — live in
 the `tend` environment (step 7 creates it), whose policy names only the
-branches `tend check` confirmed the bot cannot write — the default branch
-and any `protected_branches` that exist and are protected. Every generated secret-bearing job
+branches `tend check` confirmed for Tend's hardened runtime — the default
+branch and any `protected_branches` that exist and are protected. Every generated secret-bearing job
 names it, so a workflow the bot pushes to a branch is refused the secrets
 before its first step: write access does not imply secret access.
+Under yolo, `tend check` additionally requires the exact current generated
+workflows on the default branch and refuses any other workflow that uses the
+`tend` environment, names an environment dynamically, or calls an external or
+ref-qualified reusable workflow whose environment use Tend cannot inspect. Yolo config
+rejects runner-side setup and workflow/job overrides, so those generated jobs
+retain the credential-isolating shape that justifies this exception.
 Environment secrets overlay repo-level ones, and a job naming a
 missing environment still runs, so an unfinished migration degrades to
 repo-level exposure rather than breakage; `tend check` fails until the
@@ -64,7 +74,8 @@ policy is set, the secrets are in the environment, and the repo-level
 copies are deleted.
 
 Deploy and publish workflows declare their own Environments whose
-policies list the admin-gated refs (the default branch and/or all tags),
+policies list bot-inaccessible refs (under maintainer, the default branch and/or
+all tags),
 and their release secrets live there rather than at repo level. A leaked
 bot token can push a non-default branch, but no ref it can push matches
 such a policy, so the deploy job is rejected before it reads the secret:
@@ -76,8 +87,9 @@ rather than assumed. A credential is a stored secret or the OIDC token a
 job requesting `id-token: write` mints in the environment's name, so a
 trusted-publishing repo that stores nothing is swept the same way.
 
-That holds only for a workflow whose sole path to invocation is updating
-an admin-gated ref (`push: tags:`, or `push:` on the default branch).
+That holds only for a workflow whose sole path to invocation is updating a
+bot-inaccessible ref (`push: tags:`, or under maintainer `push:` on the default
+branch). A yolo default-branch deploy needs a non-bot environment reviewer.
 Three triggers let a write-scoped bot supply the run's payload as well as
 fire it, at a ref the policy already admits: `release: published`
 (creating a release against an existing tag takes no tag operation),
@@ -90,7 +102,11 @@ triggers were probed rather than inferred, is the source repo's
 `docs/security-model.md` linked above; install does not configure release
 secrets.
 
-The composite action refuses to start if the default branch is unprotected.
+The composite action refuses to start if the default branch does not match the
+configured merge mode. After an agent run, it kills the sandbox and moves
+the agent-owned checkout away before `actions/checkout` POST cleanup; the POST
+step therefore sees no `.git/config` and cannot execute an agent-planted Git
+helper as the runner.
 
 Everything else (config pinning, rate limiting, fixed prompts) is defense
 in depth.
@@ -99,7 +115,7 @@ in depth.
 
 | Token | Lifetime | If leaked, attacker can... | ...but cannot |
 |-------|----------|----------------------------|---------------|
-| Bot token (PAT) | Long-lived | Push to unprotected branches, create PRs, impersonate the bot, indefinitely | Merge PRs (merge restriction), push to the default branch, read any environment-gated secret — operational or release — from a workflow it pushes |
+| Bot token (PAT) | Long-lived | Push to unprotected branches, create PRs, impersonate the bot; under yolo, merge ordinary PRs | Push directly to the default branch, alter yolo control-plane paths without CODEOWNER approval, operate on tags, or read environment secret values |
 | Bot token (App) | ~1 hour | Same as PAT, until the token expires | Same, plus auto-expiry |
 | Claude OAuth | Long-lived | Run Claude sessions billed to the account | Access GitHub |
 | `OPENAI_API_KEY` | Until revoked | Run Codex/OpenAI calls billed to the account | Access GitHub |
@@ -134,7 +150,7 @@ maintainer's local Codex login.
 ## Token assignment
 
 Use a single bot token across all workflows for consistent identity. The
-merge restriction caps blast radius regardless of which token is used.
+configured merge and control-plane rulesets cap its repository authority.
 
 Two tokens are needed: the bot's PAT (or GitHub App) credential, plus a
 harness-auth credential whose form depends on `harness` in
@@ -148,8 +164,8 @@ harness-auth credential whose form depends on `harness` in
 | ↳ Codex subscription trio | `harness: codex`: access-only consumer auth plus one weekly rotating writer (experimental; see above). |
 | ↳ `OPENAI_API_KEY` | `harness: codex`: standard OpenAI API key, per-token billing. |
 
-A single bot token is safe across workflows because the merge restriction
-caps the blast radius. One token also gives consistent bot identity for
+A single bot token is used across workflows because the same merge rules
+bound all of them. One token also gives consistent bot identity for
 reviews and comments and avoids the `github-actions[bot]` branding.
 
 ## Bot credential storage on the maintainer's machine
