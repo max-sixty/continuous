@@ -291,6 +291,7 @@ Concurrency groups:
 | notifications | `tend-notifications` | **no** — one poll drains notifications and repairs bot PRs at a time |
 | ci-fix | `workflow-<watched workflow>-<branch>` | **no** — a session mid-fix may already have pushed a branch or opened a PR |
 | nightly / weekly | none | cron-serialized |
+| codex-auth-refresh (codex only) | `tend-codex-auth-refresh` | **no** — only this workflow may rotate the refresh-token chain, so a second refresher must never race it |
 
 **Fork guard.** Workflows whose triggers can fire from a fork's own
 Actions (`schedule`, `workflow_dispatch`, `workflow_run`, `issues`) carry
