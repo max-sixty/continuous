@@ -220,9 +220,9 @@ Always use `git push` without specifying a remote — `gh pr checkout` configure
 
 If pushing fails (fork PR with edits disabled), fall back to posting code snippets in a comment. Don't reference commit SHAs from temporary branches — post code inline.
 
-### Batch related pushes
+### Batch related pushes — every push costs a session
 
-`tend-review` triggers on `synchronize` under a non-canceling per-PR concurrency group. GitHub keeps the newest pending event while a review runs. After it acquires the lock, a preflight checks live review state and stops before the agent when the current head is already covered. A push that lands after the earlier review posts still needs a full review.
+`tend-review` triggers on `synchronize` under a non-canceling per-PR concurrency group. GitHub keeps the newest pending event while a review runs. The surviving run reconstructs live review state at session start, so a replaced pending event loses nothing — and it finishes without posting when the current head is already covered. A push that lands after the earlier review posts creates an uncovered head for the next session to evaluate.
 
 - **Commit everything before `gh pr create`.** Changelog entries, test pins, and formatting fixups belong in the initial push, not a follow-up thirty seconds later.
 - **Make the commits, then push once** — not a push after each commit. Amends and rebases count: a force-push fires `synchronize` too.
