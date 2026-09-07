@@ -51,9 +51,8 @@ Four pieces:
    skills). Both ship from the same marketplace.
 2. **Composite actions** — the stable interface, pinned to an immutable
    release tag (`max-sixty/tend/<action-path>@X.Y.Z`, the generator's own version
-   — no floating `v1`). Harness runners live under harness-named paths; support
-   actions use capability paths. There is no bare-root default. The two harness
-   runners are:
+   — no floating `v1`). Every action lives under a harness-named path; there
+   is no bare-root default. The two harness runners are:
    - `max-sixty/tend/claude@X.Y.Z` (Claude) — runs the official `claude`
      binary headless (`claude -p`) as a non-sudo sandbox user behind the
      credential-injecting proxy; completion is the process exit code.
@@ -72,10 +71,6 @@ Four pieces:
    serialized workflow runs it weekly to rotate Plus/Pro credentials and
    publish the full and access-only bundles. It holds no bot token and does not
    inspect adopter code. Inputs in `codex/refresh/action.yaml`.
-
-   `max-sixty/tend/review/preflight@X.Y.Z` is the harness-neutral review
-   admission action. After a queued job acquires its per-PR lock, it reconciles
-   live review state and skips work already covered by an earlier run.
 
    Removed: `claude-interactive`, a PTY-supervised variant of the same binary
    that existed only to dodge the 2026-06-15 Agent SDK metering (which covered
@@ -122,8 +117,6 @@ tend/
 │   │   └── action.yaml   # Serialized Plus/Pro credential refresh action
 │   ├── runner.py         # Codex harness commands (plugin, prompt, execution)
 │   └── agents-tail.md    # AGENTS.md appendix for Codex
-├── review/
-│   └── preflight/action.yaml  # Harness-neutral review admission
 ├── shared/
 │   ├── steps/            # Shared composite-action step bodies (Python; bash for the install/plumbing ones)
 │   └── system-prompt.md  # Harness-neutral system prompt base
@@ -278,8 +271,7 @@ Events pass through three layers before the bot does work:
    A false condition skips the job entirely (never enters the concurrency
    group, never queues).
 2. **Custom `should_run` pre-checks** — cheap deterministic steps that decide
-   whether the agent boots: review reconciles live head coverage after taking
-   its per-PR lock, mention's verify job checks engagement, and
+   whether the agent boots: mention's verify job checks engagement, and
    notifications' check repairs repository watching, captures a paginated
    cutoff snapshot, and finds configured-bot PR conflicts whose current heads
    have not already been deferred for manual resolution.

@@ -634,7 +634,7 @@ def test_a_draft_review_cannot_acknowledge_readiness(env: dict[str, str]) -> Non
     assert state["outstanding_ready_for_review"]["id"] == 101
 
 
-def test_only_a_finalized_substantive_bot_review_acknowledges_readiness(
+def test_only_a_finalized_bot_review_acknowledges_readiness(
     env: dict[str, str],
 ) -> None:
     _ready_at(env, (101, "2026-01-02T00:00:00Z"))
@@ -650,7 +650,6 @@ def test_only_a_finalized_substantive_bot_review_acknowledges_readiness(
                 body=READY_REVIEW_MARKER,
             ),
             _review(2, None, state="PENDING", body=READY_REVIEW_MARKER),
-            _review(3, "2026-01-03T00:00:00Z", body=READY_REVIEW_MARKER),
             _review(
                 4,
                 "2026-01-03T00:00:00Z",
@@ -664,6 +663,24 @@ def test_only_a_finalized_substantive_bot_review_acknowledges_readiness(
     assert state["acknowledged_ready_ids"] == []
     assert state["at_head"] is None
     assert state["outstanding_ready_for_review"]["id"] == 101
+
+
+def test_a_marker_only_review_acknowledges_without_becoming_coverage(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(3, "2026-01-03T00:00:00Z", body=READY_REVIEW_MARKER)],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+    assert state["last_substantive"] is None
+    assert state["at_head"] is None
 
 
 def test_a_finalized_inline_review_acknowledges_readiness(

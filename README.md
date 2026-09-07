@@ -106,9 +106,6 @@ conditions, concurrency, and permissions — then calls the composite action
 for the configured harness, pinned to the released generator version
 (`max-sixty/tend/claude@X.Y.Z` for Claude, `max-sixty/tend/codex@X.Y.Z` for Codex).
 The nightly regen restamps a newer tag when a new tend version ships.
-Review jobs call the pinned `max-sixty/tend/review/preflight@X.Y.Z` support
-action before checkout or setup, so a queued event whose live head is already
-covered stops before the agent starts.
 
 Both harness actions run the same security and rate-limit preflight checks and
 resolve bot identity. They differ in how the agent runs:

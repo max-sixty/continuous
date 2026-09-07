@@ -276,7 +276,6 @@ COMPOSITE_ACTIONS = (
     "claude/action.yaml",
     "codex/action.yaml",
     "codex/refresh/action.yaml",
-    "review/preflight/action.yaml",
 )
 
 
@@ -373,22 +372,6 @@ def test_inputs_reach_run_bodies_through_env(action: str) -> None:
         f"{action}: pass these through the step's `env:` instead of `${{{{ }}}}` "
         f"in the body: {inlined}"
     )
-
-
-def test_review_preflight_action_exposes_only_validated_results() -> None:
-    action = YAML(typ="safe", pure=True).load(
-        (REPO_ROOT / "review" / "preflight" / "action.yaml").read_text()
-    )
-    step = action["runs"]["steps"][0]
-    run = step["run"]
-
-    assert set(action["outputs"]) == {"should_run", "reason"}
-    assert "/usr/bin/python3 -E -s" in run
-    assert "review_preflight.py" in run
-    assert 'gate "$PR_NUMBER"' in run
-    assert "should_run=false\\nreason=covered" in run
-    assert "should_run=true\\nreason=readiness" in run
-    assert 'printf \'%s\\n\' "$output" >> "$GITHUB_OUTPUT"' in run
 
 
 def test_codex_action_passes_selected_auth_mode_to_runner() -> None:

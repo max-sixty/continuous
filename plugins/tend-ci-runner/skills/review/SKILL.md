@@ -35,6 +35,20 @@ line counts authored since the last review, excluding base-branch churn.
 `recovery_review_id` is the one current-head incomplete COMMENT compatible with
 this review mode, or null.
 
+After a successful `start`, every instruction below to finish without posting
+or stay silent first runs:
+
+```bash
+/usr/bin/python3 -E -s \
+  "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py" \
+  complete <number>
+```
+
+Normally this is a no-op. When `start` captured a ready-for-review generation,
+it submits a marker-only COMMENT review: no reader-facing prose, but durable
+state proves that the requested full pass deliberately completed without a
+verdict. Never substitute a visible “looks fine” comment.
+
 When `recovery_review_id` is non-null, bypass the already-reviewed and
 trivial-increment silent exits below. The incomplete review has outward comments
 to reconcile but does not count as a finalized verdict.

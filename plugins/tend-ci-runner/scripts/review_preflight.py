@@ -2,22 +2,23 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""Admit useful review runs and bind review publication to the reviewed PR head.
+"""Bind review sessions and publication to canonical state for the reviewed PR.
 
-``gate`` skips a run only when canonical review state proves it redundant.
 ``start`` records the consistent snapshot a session reviews. ``post`` reports
 whether a narrative review may proceed, including a compatible queued delta;
 ``submit`` is the final boundary for GitHub review API writes and never
-retargets onto a head the session did not inspect.
+retargets onto a head the session did not inspect. ``complete`` durably
+acknowledges a ready-for-review generation when a pass deliberately publishes
+no reader-facing review.
 
-Keeping admission, snapshotting, re-targeting, and submission in one
-review-domain command makes their shared state explicit without turning
-unrelated runner helpers into a single application.
+Keeping snapshotting, re-targeting, completion, and submission in one review-
+domain command makes their shared state explicit without turning unrelated
+runner helpers into a single application.
 
 Run this script directly with ``/usr/bin/python3 -E -s``, not through ``uv``.
 The reviewed-head pin advances only after the status reaches stdout; ``uv run``
 reopens a closed stdout for its child and would hide a failed delivery. The
-action's system interpreter is the same isolated standard-library runtime used
+workflow's system interpreter is the same isolated standard-library runtime used
 by its shared step bodies, so this module and its imports stay Python 3.10+
 compatible for supported runner overrides.
 """
@@ -38,7 +39,6 @@ import bot_review_state
 import github_cli
 
 SHA_RE = re.compile(r"[0-9a-f]{40}")
-RESULT_REASONS = {"closed", "covered", "readiness", "uncovered"}
 
 
 def _error(message: str) -> int:
@@ -102,50 +102,6 @@ def _read_context() -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
-
-
-def _emit_gate(should_run: bool, reason: str) -> int:
-    if reason not in RESULT_REASONS:
-        return _error(f"unknown gate reason {reason}")
-    print(f"should_run={'true' if should_run else 'false'}")
-    print(f"reason={reason}")
-    return 0
-
-
-def _gate(pr: str) -> int:
-    repo = github_cli.repository()
-    initial = _pr_view(pr, repo, "headRefOid,state,isDraft")
-    if not initial or not all(
-        initial.get(key) is not None for key in ("headRefOid", "state", "isDraft")
-    ):
-        return _error(f"could not read PR #{pr}")
-    if initial["state"] != "OPEN":
-        return _emit_gate(False, "closed")
-
-    state = bot_review_state.fetch_review_state(pr, repo=repo)
-    final = _pr_view(pr, repo, "headRefOid,state,isDraft")
-    if not final or not all(
-        final.get(key) is not None for key in ("headRefOid", "state", "isDraft")
-    ):
-        return _error(f"could not re-read PR #{pr}")
-    if final["state"] != "OPEN":
-        return _emit_gate(False, "closed")
-
-    head_sha = str(initial["headRefOid"])
-    if (
-        state.get("head_sha") != head_sha
-        or final["headRefOid"] != head_sha
-        or final["isDraft"] != initial["isDraft"]
-    ):
-        return _error(f"PR #{pr} changed during the gate snapshot")
-
-    if not bool(final["isDraft"]) and (
-        _event_forces_review() or state.get("outstanding_ready_for_review") is not None
-    ):
-        return _emit_gate(True, "readiness")
-    if state.get("at_head") is None:
-        return _emit_gate(True, "uncovered")
-    return _emit_gate(False, "covered")
 
 
 def _write_delta(reviewed: str, current_head: str, base_sha: str) -> tuple[int, str]:
@@ -320,7 +276,6 @@ def _start(pr: str) -> int:
         context_path,
         {
             "operation_id": context["operation_id"],
-            "head_sha": head_sha,
             "full_non_draft": force_full_review,
             "ready_review_event_id": ready_review_event_id,
             "recovery_review_id": recovery_review_id,
@@ -367,7 +322,7 @@ def _publication_snapshot(
     except OSError:
         reviewed = ""
     if not SHA_RE.fullmatch(reviewed):
-        return _error(f"{pin_file} does not hold a commit sha")
+        return _error(f"{pin_file} does not hold a commit sha"), None
 
     initial = _pr_view(pr, repo, "headRefOid,state,baseRefOid,isDraft")
     if not initial or not all(
@@ -606,6 +561,37 @@ def _matching_incomplete(pr: str, repo: str, *, operation_id: str) -> int | None
     return matches[-1] if matches else None
 
 
+def _complete(args: list[str]) -> int:
+    if len(args) != 1 or not args[0].isdigit():
+        print(f"usage: {sys.argv[0]} complete <pr-number>", file=sys.stderr)
+        return 1
+    pr = args[0]
+    status, snapshot = _publication_snapshot(pr, edit_review=None, allow_retarget=False)
+    if snapshot is None:
+        return status
+    marker = _readiness_marker(snapshot)
+    if marker is None:
+        return _skip("no captured ready-for-review generation needs acknowledgment")
+    try:
+        posted = _review_id(
+            _review_api(
+                str(snapshot["repo"]),
+                pr,
+                payload={
+                    "event": "COMMENT",
+                    "commit_id": str(snapshot["reviewed"]),
+                    "body": marker,
+                },
+            )
+        )
+    except subprocess.CalledProcessError as error:
+        return _report_api_error(error)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        return _error(str(error))
+    print(f"acknowledged: review {posted}")
+    return 0
+
+
 def _submit(args: list[str]) -> int:
     parsed = _parse_submit(args)
     if parsed is None:
@@ -772,16 +758,16 @@ def _submit(args: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if len(args) == 2 and args[0] == "gate" and args[1].isdigit():
-        return _gate(args[1])
     if len(args) == 2 and args[0] == "start" and args[1].isdigit():
         return _start(args[1])
+    if args[:1] == ["complete"]:
+        return _complete(args[1:])
     if args[:1] == ["post"]:
         return _post(args[1:])
     if args[:1] == ["submit"]:
         return _submit(args[1:])
     print(
-        f"usage: {sys.argv[0]} gate|start|post|submit <pr-number> ...",
+        f"usage: {sys.argv[0]} start|post|submit|complete <pr-number> ...",
         file=sys.stderr,
     )
     return 1

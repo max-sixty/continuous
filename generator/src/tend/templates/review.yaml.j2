@@ -14,8 +14,8 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
       # Runs stay serial so outward actions cannot race. GitHub keeps the newest
-      # pending run; after it acquires the lock, the preflight reconciles live
-      # state instead of depending on the event that happened to survive.
+      # pending run; after it acquires the lock, the review session reconstructs
+      # live state instead of depending on the event that happened to survive.
       cancel-in-progress: false
     runs-on: ubuntu-24.04
 <<environment()>>
@@ -23,21 +23,13 @@ jobs:
 <<permissions()>>
     steps:
 <<check_tend_enabled(cfg)>>
-      - uses: max-sixty/tend/review/preflight@<<tend_version>>
-        name: Check whether review work remains
-        id: review_gate
-        if: <<tend_enabled_condition>>
-        continue-on-error: true
-        with:
-          github_token: ${{ secrets.<<bot_token_secret>> }}
-          pr_number: ${{ github.event.pull_request.number }}
-<<react_eyes('issues/${{ github.event.pull_request.number }}', if_condition=review_run_condition)>>
+<<react_eyes('issues/${{ github.event.pull_request.number }}', if_condition=tend_enabled_condition)>>
 
 {% if has_setup %}
       # Two checkouts: `setup:` runs against the base tree, and the PR's own
       # tree lands after it. Setup executes as the runner user, outside the
       # containment the harness builds for the contributor's code.
-<<checkout(cfg, if_condition=review_run_condition)>>
+<<checkout(cfg, if_condition=tend_enabled_condition)>>
 <<setup>>
 {% endif %}
       # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
@@ -47,7 +39,7 @@ jobs:
       # tree.
       - name: Resolve PR checkout ref
         id: pr_ref
-        if: <<review_run_condition>>
+        if: <<tend_enabled_condition>>
         env:
           GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
           PR: ${{ github.event.pull_request.number }}
@@ -58,8 +50,8 @@ jobs:
             echo "ref=refs/pull/$PR/head" >> "$GITHUB_OUTPUT"
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
-<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', if_condition=review_run_condition, allow_unsafe_pr_checkout=True, clean=not has_setup)>>
+<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', if_condition=tend_enabled_condition, allow_unsafe_pr_checkout=True, clean=not has_setup)>>
 
-<<agent_step(cfg, block_input('prompt', prompt), if_condition=review_run_condition)>><<restore_local_actions(local_actions, if_condition=review_run_condition)>>
+<<agent_step(cfg, block_input('prompt', prompt), if_condition=tend_enabled_condition)>><<restore_local_actions(local_actions, if_condition=tend_enabled_condition)>>
 
-<<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition="always()\n&& (" ~ review_run_condition ~ ")")>>
+<<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")")>>

@@ -206,7 +206,8 @@ def review_state(
     acknowledged_ready_ids = sorted(
         {
             event_id
-            for review in substantive
+            for review in mine
+            if review.get("id") not in incomplete_ids
             if not is_draft_review(review)
             for event_id in _ready_review_ids(review.get("body") or "")
         }

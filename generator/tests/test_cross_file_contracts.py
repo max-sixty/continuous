@@ -143,8 +143,8 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     review pins the commit it read: unpinned, GitHub anchors it at whatever is
     live when the POST lands, so the review claims code the session never saw.
 
-    The sha reaches the POST through a private context file because the agent
-    composes the body between reading the head and posting.
+    The sha reaches the POST through a private pin because the agent composes
+    the body between reading the head and posting.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
     preflight = _read("plugins", "tend-ci-runner", "scripts", "review_preflight.py")
@@ -168,7 +168,7 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
         r'"\$\{CLAUDE_PLUGIN_ROOT\}/scripts/review_preflight\.py"',
         skill,
     )
-    assert len(direct_launches) == 5
+    assert len(direct_launches) == 6
     assert (
         'uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py"'
         not in skill

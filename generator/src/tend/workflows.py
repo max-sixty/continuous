@@ -151,12 +151,6 @@ _JINJA.globals["bookkeeping_labels"] = BOOKKEEPING_LABELS
 # Contents API defaults to that branch when `ref` is omitted.
 TEND_ENABLED_CONDITION = "steps.tend_enabled.outputs.enabled == 'true'"
 _JINJA.globals["tend_enabled_condition"] = TEND_ENABLED_CONDITION
-REVIEW_RUN_CONDITION = (
-    f"{TEND_ENABLED_CONDITION} && "
-    "(steps.review_gate.outcome == 'failure' || "
-    "steps.review_gate.outputs.should_run != 'false')"
-)
-_JINJA.globals["review_run_condition"] = REVIEW_RUN_CONDITION
 _JINJA.globals["check_enabled_script"] = (
     (importlib.resources.files("tend") / "templates" / "check-enabled.rb")
     .read_text(encoding="utf-8")
@@ -309,7 +303,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
 
     content = _REVIEW_TMPL.render(
         cfg=eff,
-        setup=_setup_yaml(eff, condition=REVIEW_RUN_CONDITION),
+        setup=_setup_yaml(eff, condition=TEND_ENABLED_CONDITION),
         local_actions=_restore_local_actions_run(eff),
         prompt=prompt,
     )

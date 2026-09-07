@@ -16,8 +16,8 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
       # Runs stay serial so outward actions cannot race. GitHub keeps the newest
-      # pending run; after it acquires the lock, the preflight reconciles live
-      # state instead of depending on the event that happened to survive.
+      # pending run; after it acquires the lock, the review session reconstructs
+      # live state instead of depending on the event that happened to survive.
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment:
@@ -96,16 +96,8 @@ jobs:
             warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
           end
           RUBY
-      - uses: max-sixty/tend/review/preflight@X.Y.Z
-        name: Check whether review work remains
-        id: review_gate
-        if: steps.tend_enabled.outputs.enabled == 'true'
-        continue-on-error: true
-        with:
-          github_token: ${{ secrets.TEND_BOT_TOKEN }}
-          pr_number: ${{ github.event.pull_request.number }}
       - name: React with eyes
-        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
+        if: steps.tend_enabled.outputs.enabled == 'true'
         run: |
           gh api "repos/$REPO/$TARGET/reactions" -f content=eyes --silent \
             || echo "::warning::could not add the eyes reaction"
@@ -118,14 +110,14 @@ jobs:
       # tree lands after it. Setup executes as the runner user, outside the
       # containment the harness builds for the contributor's code.
       - uses: actions/checkout@v7
-        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
       - uses: ./.github/actions/tend-setup
-        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
+        if: steps.tend_enabled.outputs.enabled == 'true'
 
       # GitHub only materializes refs/pull/N/merge for mergeable PRs ? on
       # conflicting PRs it 404s and every downstream step cascades as skipped.
@@ -134,7 +126,7 @@ jobs:
       # tree.
       - name: Resolve PR checkout ref
         id: pr_ref
-        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
+        if: steps.tend_enabled.outputs.enabled == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
@@ -146,7 +138,7 @@ jobs:
             echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
           fi
       - uses: actions/checkout@v7
-        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           ref: ${{ steps.pr_ref.outputs.ref }}
           allow-unsafe-pr-checkout: true
@@ -156,7 +148,7 @@ jobs:
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
       - uses: max-sixty/tend/claude@X.Y.Z
-        if: steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false')
+        if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -169,7 +161,7 @@ jobs:
       - name: Restore local setup actions for POST cleanup
         if: |
           always()
-          && (steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false'))
+          && (steps.tend_enabled.outputs.enabled == 'true')
         run: |
           dir=.github/actions/tend-setup
           git checkout "$GITHUB_SHA" -- "$dir" ||
@@ -178,7 +170,7 @@ jobs:
       - name: Remove the eyes reaction
         if: |
           always()
-          && (steps.tend_enabled.outputs.enabled == 'true' && (steps.review_gate.outcome == 'failure' || steps.review_gate.outputs.should_run != 'false'))
+          && (steps.tend_enabled.outputs.enabled == 'true')
         run: |
           REACTION_ID=$(gh api --paginate \
             "repos/$REPO/$TARGET/reactions?content=eyes&per_page=100" \

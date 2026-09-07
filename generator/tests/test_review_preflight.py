@@ -229,9 +229,9 @@ class Fixture:
             check=False,
         )
 
-    def gate(self, **extra: str) -> subprocess.CompletedProcess[str]:
+    def submit(self, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, "-E", "-s", str(PREFLIGHT), "gate", PR],
+            [sys.executable, "-E", "-s", str(PREFLIGHT), "submit", PR, *args],
             cwd=self.work,
             env=self.env(**extra),
             capture_output=True,
@@ -239,9 +239,9 @@ class Fixture:
             check=False,
         )
 
-    def submit(self, *args: str, **extra: str) -> subprocess.CompletedProcess[str]:
+    def complete(self, **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, "-E", "-s", str(PREFLIGHT), "submit", PR, *args],
+            [sys.executable, "-E", "-s", str(PREFLIGHT), "complete", PR],
             cwd=self.work,
             env=self.env(**extra),
             capture_output=True,
@@ -323,7 +323,6 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
     assert re.fullmatch(r"[0-9a-f]{32}", context["operation_id"])
     assert json.loads(pr.context.read_text()) == {
         "operation_id": context["operation_id"],
-        "head_sha": moved,
         "full_non_draft": False,
         "ready_review_event_id": None,
         "recovery_review_id": None,
@@ -331,72 +330,6 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
     assert "pr-2" in Path(context["incremental_path"]).read_text()
     assert "base-2" not in Path(context["incremental_path"]).read_text()
     assert pr.pinned() == moved
-
-
-def test_gate_admits_only_uncovered_or_outstanding_work(pr: Fixture) -> None:
-    result = pr.gate()
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "should_run=true\nreason=uncovered\n"
-
-    pr.reviews(_review(pr.reviewed, "Full pass."))
-    result = pr.gate()
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "should_run=false\nreason=covered\n"
-
-    pr.write(
-        "TIMELINE_JSON",
-        [
-            {
-                "id": 31,
-                "event": "ready_for_review",
-                "created_at": "2026-01-02T00:00:00Z",
-            }
-        ],
-    )
-    result = pr.gate()
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "should_run=true\nreason=readiness\n"
-
-    pr.reviews(
-        _review(
-            pr.reviewed,
-            "Full pass.\n\n<!-- tend:ready-review:31 -->",
-            state="APPROVED",
-        )
-    )
-    result = pr.gate()
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "should_run=false\nreason=covered\n"
-
-
-def test_gate_keeps_readiness_dormant_while_the_pr_is_draft(pr: Fixture) -> None:
-    pr.set_head(pr.reviewed, is_draft=True)
-    pr.reviews(_review(pr.reviewed, DRAFT_REVIEW_MARKER))
-    pr.write(
-        "TIMELINE_JSON",
-        [
-            {
-                "id": 31,
-                "event": "ready_for_review",
-                "created_at": "2026-01-02T00:00:00Z",
-            }
-        ],
-    )
-
-    result = pr.gate()
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "should_run=false\nreason=covered\n"
-
-
-def test_gate_fails_open_when_its_snapshot_is_inconsistent(pr: Fixture) -> None:
-    pr.set_resolver_head("a" * 40)
-
-    result = pr.gate()
-
-    assert result.returncode != 0
-    assert result.stdout == ""
-    assert "changed during the gate snapshot" in result.stderr
 
 
 def test_start_captures_the_exact_outstanding_readiness_generation(
@@ -422,6 +355,49 @@ def test_start_captures_the_exact_outstanding_readiness_generation(
     assert context["ready_review_event_id"] == 31
     assert context["incremental_path"] is None
     assert json.loads(pr.context.read_text())["ready_review_event_id"] == 31
+
+
+def test_complete_durably_acknowledges_an_intentionally_silent_ready_pass(
+    pr: Fixture,
+) -> None:
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "id": 31,
+                "event": "ready_for_review",
+                "created_at": "2026-01-02T00:00:00Z",
+            }
+        ],
+    )
+    assert pr.start().returncode == 0
+
+    result = pr.complete()
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "acknowledged: review 42\n"
+    assert pr.submitted() == {
+        "event": "COMMENT",
+        "commit_id": pr.reviewed,
+        "body": "<!-- tend:ready-review:31 -->",
+    }
+
+    pr.reviews(_review(pr.reviewed, "<!-- tend:ready-review:31 -->"))
+    next_start = pr.start()
+    assert next_start.returncode == 0, next_start.stderr
+    assert json.loads(next_start.stdout)["force_full_review"] is False
+
+
+def test_complete_is_a_no_op_without_captured_readiness(pr: Fixture) -> None:
+    assert pr.start().returncode == 0
+
+    result = pr.complete()
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "skip: no captured ready-for-review generation needs acknowledgment\n"
+    )
+    assert not (pr.tmp_path / "post-input.json").exists()
 
 
 def test_start_does_not_capture_readiness_while_the_pr_is_draft(
@@ -974,8 +950,14 @@ def test_an_invalid_pin_file_fails(pr: Fixture, content: str | None) -> None:
     else:
         pr.pin.write_text(content)
 
-    result = pr.run()
+    results = [
+        pr.run(),
+        pr.submit("--event", "APPROVE"),
+        pr.complete(),
+    ]
 
-    assert result.returncode != 0
-    assert "does not hold a commit sha" in result.stderr
-    assert result.stdout == ""
+    for result in results:
+        assert result.returncode != 0
+        assert "does not hold a commit sha" in result.stderr
+        assert result.stdout == ""
+        assert "Traceback" not in result.stderr

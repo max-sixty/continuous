@@ -36,9 +36,6 @@ repos:
       # default severity before the generator is released.
       - id: actionlint
         name: Lint generated workflow snapshots
-        args:
-          - -ignore
-          - 'unexpected key "queue" for "concurrency" section'
         types: [file]
         files: ^generator/tests/_regtest_outputs/test_generate\..*\.out$
   # Step bodies in standalone scripts (shared/steps/, proxy/,
