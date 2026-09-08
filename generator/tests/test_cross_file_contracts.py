@@ -381,3 +381,32 @@ def test_nightly_regen_stages_every_path_init_writes(
         f"`tend init` writes paths the nightly regeneration never stages: {uncovered}. "
         "Widen Step 7's `git add -A` pathspecs so the regeneration PR carries them."
     )
+
+
+def test_bot_pat_scope_set_is_stated_identically_everywhere() -> None:
+    """One scope set, named by the installer, the audit, and the architecture doc.
+
+    The audit fails a token that lacks any required scope and the nightly files
+    a tracking issue for it, so a doc that offers a narrower alternative sends
+    an adopter down a path the audit reports as broken every night.
+    """
+    scopes = ["repo", "workflow", "notifications", "write:discussion", "gist", "user"]
+
+    rendered = ", ".join(f'"{scope}"' for scope in scopes)
+    audit = _read("plugins", "tend-ci-runner", "scripts", "pat_scope_audit.py")
+    assert f"REQUIRED = ({rendered})" in audit, "the audit's required set moved"
+
+    install = _read("plugins", "install-tend", "skills", "install-tend", "SKILL.md")
+    minted = f"--scopes {','.join(scopes)}"
+    assert minted in install, f"install-tend no longer mints `{minted}`"
+
+    # `repo` is the whole point: no path offers `public_repo` for a public
+    # repository, and a token carrying it instead is reported as missing.
+    architecture = _read("CLAUDE.md").splitlines()
+    offending = [line for line in architecture if "public_repo" in line]
+    assert not offending, (
+        f"CLAUDE.md offers a `public_repo` PAT the audit rejects: {offending}"
+    )
+    assert any("classic PAT with `repo`" in line for line in architecture), (
+        "CLAUDE.md no longer names the `repo` scope the installer mints"
+    )

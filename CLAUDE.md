@@ -233,9 +233,11 @@ functionally identical.
 
 ## Auth
 
-Each adopter creates a GitHub bot account and a classic PAT (`public_repo`
-for public repos, `repo` for private) plus `workflow`, `notifications`,
-`write:discussion`, `gist`, `user`. The PAT and a Claude OAuth token are
+Each adopter creates a GitHub bot account and a classic PAT with `repo`,
+`workflow`, `notifications`, `write:discussion`, `gist`, and `user`. `repo`
+is required on public and private repositories alike — `install-tend` mints
+exactly that set, and the nightly scope audit (`pat_scope_audit.py`) reports
+anything narrower as missing. The PAT and a Claude OAuth token are
 stored as secrets in the repo's `tend` GitHub Environment, whose deployment
 branch policy admits only the branches `tend check` confirmed the bot
 cannot write — the default branch and any `protected_branches` that exist
@@ -251,9 +253,10 @@ on the bot's user page.
 The agent may use PAT-backed GitHub API and git access for any repository the
 bot account can reach; this cross-repository access is intentional. Credential
 isolation keeps the PAT itself out of the agent process. If the PAT is stolen
-by compromising the runner or proxy, its `public_repo` scope grants full write
-to every public repository the bot can access. Fine-grained PATs allow
-per-category scoping but don't support outside collaborators ([GitHub roadmap
+by compromising the runner or proxy, its `repo` scope grants full write to
+every repository the bot account can reach, private ones included.
+Fine-grained PATs allow per-category scoping but don't support outside
+collaborators ([GitHub roadmap
 #601](https://github.com/github/roadmap/issues/601), not shipped).
 
 **Current privilege model: write + branch protection + environment gate.**
