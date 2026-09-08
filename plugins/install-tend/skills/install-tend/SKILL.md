@@ -91,9 +91,10 @@ itself the go-ahead.
    - **Claude — API key** — a console.anthropic.com key, billed per token.
      Fits when there's no subscription to draw on, or the user wants a
      dedicated billing surface and per-key revocation.
-   - **Codex — Plus/Pro subscription** — experimental. Concurrent jobs receive
-     an access-only token; one serialized weekly workflow owns renewal. It
-     depends on Codex's internal auth mode; detail in
+   - **Codex — Plus/Pro subscription** — experimental. It needs two browser
+     handoffs: a Codex device approval and a repo-scoped GitHub token form.
+     Concurrent jobs receive an access-only token; one serialized weekly
+     workflow owns renewal. It depends on Codex's internal auth mode; detail in
      ${CLAUDE_SKILL_DIR}/references/security-model.md.
    - **Codex — OpenAI API key** — standard pay-per-token path.
 2. **Bot name** — the available candidates, recommended first. "Other"
@@ -146,8 +147,10 @@ first browser step, or any question that would offer one as an option.
 When it is, drive the browser steps yourself rather than offering a
 hand-off choice: hand the user only the prompts automation can't cross
 (a signup CAPTCHA, a 2FA or password reauth), and resume once they
-complete the prompt in the open tab. When it isn't, give the user URLs
-and wait for confirmation.
+complete the prompt in the open tab. When it isn't but the runtime can open
+a URL in the user's browser, open each URL as soon as it appears and hand over
+the exact prompt or code. Otherwise, give the user the URL and wait for
+confirmation.
 
 Driving uses the user's real Chrome profile, so logging in as the bot
 displaces their own github.com session until they sign back in — tell
