@@ -70,8 +70,9 @@ Codex has one path: consolidate the sandbox user's rollouts, then take the last
 cumulative token count from each ``sessions/**/rollout-*.jsonl``. That schema
 isn't versioned, so a missing field counts as zero — and no rollouts at all is
 the same computation over no events, which yields the all-zero record on its
-own. Cost stays 0: the Codex CLI doesn't surface API list prices and computing
-them here would mean maintaining a price table.
+own. Codex includes cached tokens in ``input_tokens``; ``cached_input_tokens``
+is the subset served from cache. Cost stays 0: the Codex CLI doesn't surface
+API list prices and computing them here would mean maintaining a price table.
 """
 
 from __future__ import annotations
@@ -105,9 +106,9 @@ CLAUDE_TABLE = (
 CODEX_TABLE = (
     "## Token Usage (Codex)",
     (
-        ("Input", "input_tokens"),
+        ("Total input", "input_tokens"),
         ("Output", "output_tokens"),
-        ("Cached input", "cached_input_tokens"),
+        ("Cached input (included in total)", "cached_input_tokens"),
         ("Turns", "turns"),
         ("Model", "model"),
     ),

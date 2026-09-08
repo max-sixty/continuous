@@ -392,6 +392,13 @@ def test_codex_counts_an_absent_token_count_as_zero() -> None:
             [
                 {"type": "response_item", "payload": {"type": "reasoning"}},
                 {"type": "event_msg", "payload": {"type": "token_count"}},
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {"total_token_usage": {"input_tokens": None}},
+                    },
+                },
                 {"type": "turn_context", "payload": {"model": "gpt-ignored"}},
             ]
         ],
@@ -525,9 +532,9 @@ def test_codex_main_publishes_the_record_three_ways(
         "## Token Usage (Codex)\n"
         "| Metric | Value |\n"
         "|--------|-------|\n"
-        "| Input | 100 |\n"
+        "| Total input | 100 |\n"
         "| Output | 30 |\n"
-        "| Cached input | 0 |\n"
+        "| Cached input (included in total) | 0 |\n"
         "| Turns | 1 |\n"
         "| Model | gpt-5-codex |\n"
         "\n"
