@@ -210,24 +210,29 @@ repos:
           - |
             import ast, sys
 
-            def literal_tuple(path):
+            def literal(path, name):
                 tree = ast.parse(open(path).read())
                 for node in tree.body:
                     if not isinstance(node, ast.Assign):
                         continue
                     if any(
                         isinstance(target, ast.Name)
-                        and target.id == "CONTROL_PLANE_PATHS"
+                        and target.id == name
                         for target in node.targets
                     ):
-                        return tuple(ast.literal_eval(node.value))
-                raise RuntimeError(f"CONTROL_PLANE_PATHS not found in {path}")
+                        return ast.literal_eval(node.value)
+                raise RuntimeError(f"{name} not found in {path}")
 
-            generator = literal_tuple("generator/src/tend/workflows.py")
-            runtime = literal_tuple("shared/steps/security_preflight.py")
-            if generator != runtime:
-                print("CONTROL_PLANE_PATHS differs between generator and runtime")
-                print(f"generator: {generator}")
-                print(f"runtime:   {runtime}")
-                sys.exit(1)
+            for name in (
+                "CODEOWNERS_BEGIN",
+                "CODEOWNERS_END",
+                "CONTROL_PLANE_PATHS",
+            ):
+                generator = literal("generator/src/tend/workflows.py", name)
+                runtime = literal("shared/steps/security_preflight.py", name)
+                if generator != runtime:
+                    print(f"{name} differs between generator and runtime")
+                    print(f"generator: {generator}")
+                    print(f"runtime:   {runtime}")
+                    sys.exit(1)
         pass_filenames: false
