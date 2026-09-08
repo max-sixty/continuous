@@ -92,6 +92,7 @@ jobs:
         env:
           BASH_ENV: ""
           SRT_VERSION: "0.0.75"
+          TEND_RUNNER_ENVIRONMENT: ${{ runner.environment }}
       - name: Plant PATH-boundary fixtures
         run: bash proxy/test-setup-sandbox.sh plant
       - name: Set up the sandbox
@@ -107,6 +108,9 @@ jobs:
       - name: Clean up sandbox fixtures
         if: always()
         run: bash proxy/test-setup-sandbox.sh cleanup
+      - name: Restore Sandbox Runtime host policy
+        if: always()
+        run: bash shared/steps/restore-sandbox-runtime-host.sh
 
   # Gate Codex version bumps on the credential-free parts of the action's CLI
   # and Responses-proxy contracts. Live model behavior needs an authenticated

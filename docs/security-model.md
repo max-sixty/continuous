@@ -305,7 +305,13 @@ Each transition is a bottleneck with one job:
   Claude or Codex turn as one command under the pinned Anthropic Sandbox
   Runtime. Tend supplies absolute `node`, `bwrap`, `socat`, `rg`, and seccomp
   paths, treats dependency warnings as fatal, and probes both AF_UNIX denial
-  and runner-checkout unreadability before setup executes.
+  and runner-checkout unreadability before setup executes. Ubuntu 24.04's
+  AppArmor policy strips the user-namespace capabilities SRT needs. Tend
+  temporarily applies SRT's documented sysctl prerequisite on disposable
+  GitHub-hosted VMs and restores it immediately after the sandbox is reaped;
+  Tend never changes self-hosted policy, where a scoped AppArmor profile may
+  satisfy the same prerequisite and SRT's capability probe fails closed if it
+  does not.
 - **Authority brokerage** leaves long-lived credentials in runner-owned
   proxies. SRT supplies the isolated network namespace and routes HTTP through
   Tend's credential proxy; the agent gets dummy credentials. Codex and Claude

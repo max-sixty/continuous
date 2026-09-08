@@ -6,6 +6,18 @@ set -euo pipefail
 : "${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE is required}"
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
 
+apparmor_userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -r "$apparmor_userns" ] && [ "$(/usr/bin/cat "$apparmor_userns")" = 1 ]; then
+  if [ "${TEND_RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
+    # Record rollback before changing host state so cancellation or a failed
+    # sysctl cannot leave an untracked policy change.
+    echo "TEND_RESTORE_APPARMOR_USERNS=true" >> "$GITHUB_ENV"
+    /usr/bin/sudo /usr/sbin/sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
+  else
+    echo "::notice::Leaving self-hosted AppArmor policy unchanged; SRT will verify that bwrap and apply-seccomp have capability-bearing user namespaces"
+  fi
+fi
+
 case "$(/usr/bin/uname -m)" in
   x86_64) srt_arch=x64 ;;
   aarch64) srt_arch=arm64 ;;

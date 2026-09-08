@@ -155,6 +155,34 @@ def test_disposable_workspace_is_removed_immediately_after_agent_reap(
     assert cleanup["name"] == "Dispose disposable agent workspace"
     assert cleanup["if"] == "always()"
     assert cleanup["run"].endswith('/dispose_agent_workspace.py"')
+    restore = steps[run_at + 2]
+    assert restore["name"] == "Restore Sandbox Runtime host policy"
+    assert restore["if"] == "always()"
+    assert restore["run"].endswith('/restore-sandbox-runtime-host.sh"')
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_srt_install_receives_trusted_runner_environment(harness: str) -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / harness / "action.yaml").read_text()
+    )
+    install = next(
+        step
+        for step in action["runs"]["steps"]
+        if step["name"] == "Install Anthropic Sandbox Runtime"
+    )
+
+    assert install["env"]["TEND_RUNNER_ENVIRONMENT"] == "${{ runner.environment }}"
+
+
+def test_srt_host_policy_records_rollback_before_the_host_change() -> None:
+    install = (REPO_ROOT / "shared/steps/install-sandbox-runtime.sh").read_text()
+    marker = install.index('echo "TEND_RESTORE_APPARMOR_USERNS=true"')
+    change = install.index("kernel.apparmor_restrict_unprivileged_userns=0")
+
+    assert marker < change
+    assert 'TEND_RUNNER_ENVIRONMENT:-}" = github-hosted' in install
+    assert "Leaving self-hosted AppArmor policy unchanged" in install
 
 
 def test_hosted_srt_probe_launches_only_from_the_action_copy() -> None:

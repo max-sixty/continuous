@@ -34,6 +34,22 @@ def probe_boundary() -> None:
 
     probe_url = os.environ.get("TEND_BOUNDARY_PROBE_URL")
     if probe_url:
+        direct = subprocess.run(
+            [
+                "/usr/bin/curl",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--noproxy",
+                "*",
+                probe_url,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if direct.returncode == 0:
+            raise RuntimeError("SRT capability probe reached host loopback directly")
         result = subprocess.run(
             [
                 "/usr/bin/curl",
