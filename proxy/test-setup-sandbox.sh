@@ -25,7 +25,8 @@ plant() {
   chmod 700 "$TEND_AGENT_WORKSPACE"
   chmod 711 "$TEND_AGENT_CONTAINER"
   mkdir -p "$TEND_TEST_ACTION_PATH"
-  cp -a "$GITHUB_WORKSPACE/proxy" "$GITHUB_WORKSPACE/shared" \
+  cp -a "$GITHUB_WORKSPACE/claude" "$GITHUB_WORKSPACE/proxy" \
+    "$GITHUB_WORKSPACE/shared" \
     "$TEND_TEST_ACTION_PATH/"
   workspace_explicit="$TEND_AGENT_WORKSPACE/.tend-explicit/bin"
   workspace_path="$TEND_AGENT_WORKSPACE/.tend-path/bin"
@@ -111,7 +112,7 @@ setup() {
   # Exercise the composite action's entrypoint rather than calling the setup
   # script directly. The boundary depends on the PATH the action passes in.
   action_run=$(yq -er '.runs.steps[] | select(.name == "Set up credential-isolation sandbox") | .run' claude/action.yaml)
-  action_run=${action_run//'${{ github.action_path }}'/"$GITHUB_WORKSPACE/claude"}
+  action_run=${action_run//'${{ github.action_path }}'/"$TEND_TEST_ACTION_PATH/claude"}
   /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run" \
     | tee "$RUNNER_TEMP/setup.log"
   test ! -e "$RUNNER_TEMP/uv-python-used"
@@ -151,7 +152,7 @@ install_agent_uv() {
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml)
   export UV_VERSION
   action_run=$(yq -er '.runs.steps[] | select(.name == "Install agent uv fallback (sandbox)") | .run' claude/action.yaml)
-  action_run=${action_run//'${{ github.action_path }}'/"$GITHUB_WORKSPACE/claude"}
+  action_run=${action_run//'${{ github.action_path }}'/"$TEND_TEST_ACTION_PATH/claude"}
   /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run"
 }
 
