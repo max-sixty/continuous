@@ -12,7 +12,8 @@ https://github.com/max-sixty/tend/compare for their history.
 
 - **Both harnesses run the event tree in a disposable sandbox workspace.** The reviewed runner checkout stays intact while `sandbox_setup:` and the full agent turn run together under one Sandbox Runtime process tree. Teardown reaps the sandbox user before exporting bounded outputs and deleting the per-run checkout and runtime. ([#1173](https://github.com/max-sixty/tend/pull/1173))
 - **Codex subscription authentication has an end-to-end install flow.** An isolated device login writes separate refreshable and access-only bundles to the gated environment without printing them, and a pre-scoped fine-grained PAT form supplies the weekly refresh workflow. Generated Codex installs pin `gpt-5.6-sol`; a per-workflow harness change now selects that harness's default model unless the workflow names one. ([#1179](https://github.com/max-sixty/tend/pull/1179))
-- **`tend check` verifies release integrity.** It requires an admin-gated all-tags ruleset and GitHub's immutable-release setting, and `tend check --fix` configures both. Codex agents now run as the sandbox user with the bot PAT outside their environment; API-key model requests use a narrow Responses API proxy, while subscription sessions receive only the expiring access token. ([#1160](https://github.com/max-sixty/tend/pull/1160))
+- **`tend check` verifies release integrity.** It requires an admin-gated all-tags ruleset and GitHub's immutable-release setting, and `tend check --fix` configures both. ([#1160](https://github.com/max-sixty/tend/pull/1160))
+- **Codex agents run as the sandbox user, with the bot PAT outside their environment.** API-key model requests use a narrow Responses API proxy, while subscription sessions receive only the expiring access token. ([#1160](https://github.com/max-sixty/tend/pull/1160))
 - **ci-fix handles cancelled watched workflows as well as failures**, using the same agent-driven diagnostic path for every unsuccessful run. ([#1160](https://github.com/max-sixty/tend/pull/1160))
 
 ### Fixed
@@ -20,6 +21,7 @@ https://github.com/max-sixty/tend/compare for their history.
 - **`review-runs` finds failed default-branch workflows outside ci-fix's configured watch list.** It searches the full red-run history rather than the current review window, and uses each affected workflow's latest successful run to close older failures. ([#1170](https://github.com/max-sixty/tend/pull/1170))
 - **Outage enrichment keeps the diagnosis when a failed run is rerun successfully.** It reads annotations across all attempts and requests the failing attempt's log instead of defaulting to the latest, green attempt. ([#1166](https://github.com/max-sixty/tend/pull/1166))
 - **Codex token summaries parse cumulative rollout events.** Independent rollout totals are summed without double-counting, turns come from assistant responses, and the model is recovered from turn context when the action did not supply one. ([#1180](https://github.com/max-sixty/tend/pull/1180))
+- **Bundled CI restrictions describe both harnesses' current credential and privilege boundaries.** They cover the shared non-sudo sandbox, runner-owned proxies, Codex's subscription access token, and the values still exposed by process command lines. ([#1181](https://github.com/max-sixty/tend/pull/1181))
 
 ### Internal
 
