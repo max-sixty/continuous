@@ -6,6 +6,12 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.2.2
+
+### Fixed
+
+- **Mentions on issue threads and closed PRs select the current default-branch workspace.** An issue-body edit no longer sends its issue number to the pull-request endpoint and aborts on a 404. A closed PR no longer pins the fallback checkout's instruction files to the PR's old base commit. ([#1175](https://github.com/max-sixty/tend/pull/1175))
+
 ## 0.2.1
 
 ### Improved
