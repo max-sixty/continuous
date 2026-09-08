@@ -130,9 +130,17 @@ def event_number(payload: dict[str, Any]) -> int:
     return raw
 
 
-def issue_comment_targets_pull_request(payload: dict[str, Any]) -> bool:
+def event_targets_pull_request(payload: dict[str, Any]) -> bool:
+    """True where a mention event names a pull request rather than an issue.
+
+    `issues` and `issue_comment` both carry an `issue`, which names a PR only
+    through its `pull_request` link; a relayed review names one outright in
+    `client_payload`.  Anything else has no PR head to fetch.
+    """
     issue = payload.get("issue")
-    return isinstance(issue, dict) and isinstance(issue.get("pull_request"), dict)
+    if isinstance(issue, dict):
+        return isinstance(issue.get("pull_request"), dict)
+    return isinstance(payload.get("client_payload"), dict)
 
 
 def git(
@@ -210,9 +218,11 @@ def checkout_mention(
 ) -> tuple[str, str]:
     pr = api_json(f"/repos/{repository}/pulls/{number}", token)
     if pr.get("state") != "open":
-        return checkout_base(workspace, base_branch, base_sha), pull_base_sha(
-            pr, number
-        )
+        # The fallback selects the default branch, which is reviewed code — so
+        # there is nothing to pin away, and pinning to the closed PR's base
+        # would revert this tree's instruction files to whatever they were
+        # when that PR opened.  Same answer as a mention on an issue thread.
+        return checkout_base(workspace, base_branch, base_sha), ""
     head = pr.get("head")
     if not isinstance(head, dict) or not isinstance(head.get("repo"), dict):
         raise TypeError(f"PR #{number} has no fetchable head repository")
@@ -352,12 +362,7 @@ def main() -> int:
             if mode == "review":
                 selected = checkout_review(destination, number, token)
                 config_base_sha = pull_base_sha(payload, number)
-            elif os.environ.get(
-                "GITHUB_EVENT_NAME"
-            ) == "issue_comment" and not issue_comment_targets_pull_request(payload):
-                selected = checkout_base(destination, base_branch, base_sha)
-                config_base_sha = ""
-            else:
+            elif event_targets_pull_request(payload):
                 selected, config_base_sha = checkout_mention(
                     destination,
                     repository=repository,
@@ -366,6 +371,12 @@ def main() -> int:
                     base_branch=base_branch,
                     base_sha=base_sha,
                 )
+            else:
+                # An issue thread: `number` is an issue number, which the PR
+                # endpoint 404s on.  The default branch is reviewed code, so
+                # it needs no pin either.
+                selected = checkout_base(destination, base_branch, base_sha)
+                config_base_sha = ""
             if config_base_sha:
                 ensure_commit(destination, config_base_sha, token)
 

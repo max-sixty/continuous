@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
+import urllib.error
 from pathlib import Path
 
 import prepare_agent_workspace as prepare
@@ -219,10 +221,104 @@ def test_event_number(payload: dict[str, object], number: int) -> None:
     [
         ({"issue": {"number": 1}}, False),
         ({"issue": {"number": 1, "pull_request": {"url": "example"}}}, True),
+        ({"client_payload": {"pr": "3"}}, True),
         ({}, False),
     ],
 )
-def test_issue_comment_targets_pull_request(
-    payload: dict[str, object], expected: bool
+def test_event_targets_pull_request(payload: dict[str, object], expected: bool) -> None:
+    assert prepare.event_targets_pull_request(payload) is expected
+
+
+def test_mention_on_a_closed_pr_keeps_the_default_branch_instructions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert prepare.issue_comment_targets_pull_request(payload) is expected
+    """A closed PR's base commit must not pin the default branch's own tree.
+
+    The fallback checks out the default branch, which is reviewed code. Pinning
+    it to the base the PR opened against reverts every `CLAUDE.md`, `AGENTS.md`
+    and `.claude/**` the branch has gained since — so the session runs on stale
+    repo guidance, and the revert is staged by any later `git add -A`.
+    """
+    origin, runner, base, _head = repository(tmp_path)
+    (runner / "CLAUDE.md").write_text("current guidance\n")
+    command("add", "CLAUDE.md", cwd=runner)
+    command("commit", "-m", "guidance", cwd=runner)
+    tip = command("rev-parse", "HEAD", cwd=runner)
+    command("push", "origin", "main", cwd=runner)
+
+    destination = tmp_path / "agent"
+    prepare.clone_workspace(
+        runner_workspace=runner,
+        destination=destination,
+        repository="owner/repo",
+        token="unused",
+        remote_url=str(origin),
+    )
+    monkeypatch.setattr(
+        prepare,
+        "api_json",
+        lambda _path, _token: {"state": "closed", "base": {"sha": base}},
+    )
+    selected, config_base = prepare.checkout_mention(
+        destination,
+        repository="owner/repo",
+        number=7,
+        token="unused",
+        base_branch="main",
+        base_sha=tip,
+    )
+
+    assert selected == f"base branch main at {tip}"
+    assert config_base == ""
+    prepare.restore_sensitive_config(destination, config_base)
+    assert (destination / "CLAUDE.md").read_text() == "current guidance\n"
+    assert command("status", "--porcelain", cwd=destination) == ""
+
+
+def test_a_mention_on_an_issue_never_asks_the_pull_request_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `issues` event names an issue, and `/pulls/{number}` 404s on one.
+
+    The handle job runs one mention checkout for every mention event it
+    admits, `issues: edited` among them, so an issue number reaching the PR
+    endpoint fails the step before the agent starts — losing every mention
+    added by editing an issue body, silently from the thread's side.
+    """
+    origin, runner, base, _head = repository(tmp_path)
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"action": "edited", "issue": {"number": 7}}))
+    github_env = tmp_path / "github.env"
+    github_env.write_text("")
+
+    def refuse(path: str, _token: str) -> dict[str, object]:
+        raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
+
+    clone_workspace = prepare.clone_workspace
+    monkeypatch.setattr(prepare, "api_json", refuse)
+    monkeypatch.setattr(
+        prepare,
+        "clone_workspace",
+        lambda **arguments: clone_workspace(**arguments, remote_url=str(origin)),
+    )
+    for name, value in {
+        "GITHUB_WORKSPACE": str(runner),
+        "GITHUB_REPOSITORY": "owner/repo",
+        "GITHUB_TOKEN": "unused",
+        "GITHUB_ENV": str(github_env),
+        "GITHUB_EVENT_PATH": str(event),
+        "GITHUB_EVENT_NAME": "issues",
+        "TEND_CHECKOUT_MODE": "mention",
+        "TEND_BASE_BRANCH": "main",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    assert prepare.main() == 0
+
+    exported = dict(line.split("=", 1) for line in github_env.read_text().splitlines())
+    workspace = Path(exported["TEND_AGENT_WORKSPACE"])
+    try:
+        assert command("rev-parse", "HEAD", cwd=workspace) == base
+        assert command("rev-parse", "--abbrev-ref", "HEAD", cwd=workspace) == "main"
+    finally:
+        shutil.rmtree(workspace.parent)
