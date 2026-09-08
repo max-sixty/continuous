@@ -129,7 +129,7 @@ uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/nightly_survey_files.py"
 ```
 
-The script drops any path an open PR already changes — a file with a pending PR is where a maintainer is already looking — printing `# skipped <path> (#N)` on stderr for each. Carry the skipped paths into the Step 9 summary.
+The script prints `# covered <path> (#N)` on stderr for each path an open PR already changes. Read that PR's diff before reading the file: drop the findings it already carries, and raise anything new as a comment on that PR rather than a second PR against the same file. Carry the covered paths into the Step 9 summary.
 
 Skip files that aren't meaningfully reviewable: lock files (`uv.lock`, `Cargo.lock`, `package-lock.json`), binary assets, vendored dependencies, and generated files (build output, compiled protobuf, auto-generated workflow YAML). When unsure, check the file — a quick glance is cheaper than missing something.
 
@@ -234,4 +234,4 @@ Keep the project's changelog up to date with recent changes. The `running-tend` 
 
 ## Step 9: Summary
 
-Report: commits reviewed, files surveyed, files skipped for an open PR (with that PR), findings, actions taken, assessment (clean / minor issues / needs attention).
+Report: commits reviewed, files surveyed, files an open PR already covers (with that PR), findings, actions taken, assessment (clean / minor issues / needs attention).

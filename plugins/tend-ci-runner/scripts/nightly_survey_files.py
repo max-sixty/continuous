@@ -6,9 +6,12 @@
 
 Both the day and the path pick a bucket by arithmetic, so bucket *N* returns to
 the same file set every cycle. On a repository whose pull requests sit unmerged
-longer than that, a path whose last pass left an open PR would be re-surveyed on
-the anniversary and re-derive that PR's findings, so paths an open pull request
-already changes are dropped before the survey reads anything.
+longer than that, a path whose last pass left an open PR comes round again and
+its findings get re-derived on the anniversary. So each path an open pull
+request already changes is reported with the pulls covering it, for the survey
+to read before it reads the file. The path stays in the list: on the repositories
+where this fires the backlog can cover most of the tree, and dropping those paths
+would leave them unsurveyed for as long as it stands.
 """
 
 from __future__ import annotations
@@ -63,18 +66,17 @@ def main(
             "pr", "list", "--state", "open", "--limit", "200", "--json", "number,files"
         )
     covering = covering_pulls(pull_requests)
-    skipped = [path for path in selected if path in covering]
-    selected = [path for path in selected if path not in covering]
+    covered = [path for path in selected if path in covering]
     if selected:
         print(*selected, sep="\n")
     print(
         f"# bucket={bucket}/{CYCLE_LENGTH} files={len(selected)}"
-        f" skipped={len(skipped)}",
+        f" covered={len(covered)}",
         file=sys.stderr,
     )
-    for path in skipped:
+    for path in covered:
         pulls = ", ".join(f"#{number}" for number in covering[path])
-        print(f"# skipped {path} ({pulls})", file=sys.stderr)
+        print(f"# covered {path} ({pulls})", file=sys.stderr)
     return 0
 
 

@@ -71,10 +71,10 @@ def test_main_lists_the_tracked_files_in_the_fixed_days_bucket(
     captured = capsys.readouterr()
     bucket, selected = survey.survey_files(sorted(files), unix_day=10_000)
     assert captured.out.splitlines() == selected
-    assert captured.err == f"# bucket={bucket}/28 files={len(selected)} skipped=0\n"
+    assert captured.err == f"# bucket={bucket}/28 files={len(selected)} covered=0\n"
 
 
-def test_paths_an_open_pr_already_changes_are_dropped_from_the_days_list(
+def test_paths_an_open_pr_already_changes_stay_listed_and_are_named(
     survey: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -87,7 +87,7 @@ def test_paths_an_open_pr_already_changes_are_dropped_from_the_days_list(
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     monkeypatch.chdir(tmp_path)
     _, selected = survey.survey_files(sorted(files), unix_day=10_000)
-    covered, kept = selected[0], selected[1:]
+    covered = selected[0]
 
     assert (
         survey.main(
@@ -102,13 +102,13 @@ def test_paths_an_open_pr_already_changes_are_dropped_from_the_days_list(
     )
 
     captured = capsys.readouterr()
-    assert captured.out.splitlines() == kept
+    assert captured.out.splitlines() == selected
     assert captured.err == (
-        f"# bucket=4/28 files={len(kept)} skipped=1\n# skipped {covered} (#7, #9)\n"
+        f"# bucket=4/28 files={len(selected)} covered=1\n# covered {covered} (#7, #9)\n"
     )
 
 
-def test_the_days_list_excludes_the_open_prs_gh_reports(
+def test_the_days_list_names_the_open_prs_gh_reports(
     survey: ModuleType, tmp_path: Path
 ) -> None:
     """The whole `gh` surface, on whichever bucket today's real clock picks."""
@@ -139,8 +139,8 @@ def test_the_days_list_excludes_the_open_prs_gh_reports(
         check=True,
     )
 
-    assert result.stdout.splitlines() == [kept]
-    assert f"# skipped {covered} (#12)" in result.stderr
+    assert sorted(result.stdout.splitlines()) == sorted([covered, kept])
+    assert f"# covered {covered} (#12)" in result.stderr
     assert calls.read_text().splitlines() == [
         "pr list --state open --limit 200 --json number,files"
     ]
