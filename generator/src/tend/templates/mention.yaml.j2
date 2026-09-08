@@ -201,22 +201,6 @@ jobs:
 
 <<checkout(cfg, if_condition=tend_enabled_condition)>>
 <<setup>>
-      - name: Check out PR branch
-        if: |
-          steps.tend_enabled.outputs.enabled == 'true' &&
-          ((github.event_name == 'issue_comment' && github.event.issue.pull_request.url != '') ||
-          github.event_name == 'repository_dispatch')
-        run: |
-          PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq '.state')
-          if [ "$PR_STATE" = "OPEN" ]; then
-            gh pr checkout "$PR_NUMBER"
-          else
-            echo "::warning::PR is $PR_STATE — staying on default branch"
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
-          PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || github.event.client_payload.pr }}
-
       - name: Compute queue delay
         id: delay
         if: <<tend_enabled_condition>>
@@ -232,6 +216,6 @@ jobs:
           # the API record — the dispatch payload never carries one to spoof.
           EVENT_TS: ${{ github.event.comment.updated_at || needs.verify.outputs.ts || github.event.issue.updated_at }}
 
-<<agent_step(cfg, prompt_body, if_condition=tend_enabled_condition)>><<restore_local_actions(local_actions, if_condition=tend_enabled_condition)>>
+<<agent_step(cfg, prompt_body, if_condition=tend_enabled_condition, checkout_mode='mention')>>
 
 <<unreact_eyes(cfg, reaction_target, if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")\n&& (" ~ summoned(cfg.bot_name, 'needs.verify.outputs.reason') ~ ")")>>

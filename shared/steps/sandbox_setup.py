@@ -128,7 +128,13 @@ def blocked_shims(path_value: str, blocked_path: str, *, as_user: str) -> set[st
     return set(_lines([*argv, path_value, blocked_path]))
 
 
-def setup_argv(commands: str, *, sandbox: str, agent_env_file: str) -> list[str]:
+def setup_argv(
+    commands: str,
+    *,
+    sandbox: str,
+    agent_env_file: str,
+    inside_sandbox: bool = False,
+) -> list[str]:
     """The command that runs the adopter's ``sandbox_setup:`` block in the sandbox.
 
     The commands go through ``bash -c``'s argument: no temp file (so no
@@ -143,12 +149,13 @@ def setup_argv(commands: str, *, sandbox: str, agent_env_file: str) -> list[str]
     ``sandbox_setup:`` block runs for every workflow and event, and a command
     scopes itself with ``$GITHUB_WORKFLOW`` or ``$GITHUB_EVENT_NAME``.
     """
+    prefix = (
+        ["/usr/bin/env", *_sandbox.launch_env(agent_env_file)]
+        if inside_sandbox
+        else ["sudo", "-u", sandbox, "env", *_sandbox.launch_env(agent_env_file)]
+    )
     return [
-        "sudo",
-        "-u",
-        sandbox,
-        "env",
-        *_sandbox.launch_env(agent_env_file),
+        *prefix,
         "bash",
         "-eo",
         "pipefail",
@@ -195,20 +202,28 @@ def main() -> int:
     sandbox = env["SANDBOX"]
 
     commands = os.environ.get("TEND_SANDBOX_SETUP", "")
+    inside_sandbox = os.environ.get("TEND_INSIDE_SANDBOX") == "1"
     if commands:
         argv = setup_argv(
-            commands, sandbox=sandbox, agent_env_file=env["AGENT_ENV_FILE"]
+            commands,
+            sandbox=sandbox,
+            agent_env_file=env["AGENT_ENV_FILE"],
+            inside_sandbox=inside_sandbox,
         )
         code = subprocess.run(argv, check=False).returncode
         if code != 0:
             return code
         _common.log(STEP, f"ran adopter sandbox_setup commands as {sandbox}")
 
-    report_reachability(
-        sandbox=sandbox,
-        agent_path=env["AGENT_PATH"],
-        blocked_path=os.environ.get("TEND_BLOCKED_PATH", ""),
-    )
+    # The reachability comparison crosses the UID boundary and therefore runs
+    # only in the trusted preflight form of this module. The lifecycle form is
+    # already inside SRT; crossing back out there would punch a second seam.
+    if not inside_sandbox:
+        report_reachability(
+            sandbox=sandbox,
+            agent_path=env["AGENT_PATH"],
+            blocked_path=os.environ.get("TEND_BLOCKED_PATH", ""),
+        )
     return 0
 
 

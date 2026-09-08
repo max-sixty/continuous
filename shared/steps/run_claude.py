@@ -13,8 +13,9 @@ Reads (env): ``SANDBOX`` and ``AGENT_ENV_FILE`` (exported by
 ``TEND_AUTO_MEMORY_SETTINGS``, ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB``, plus the
 ``GITHUB_*`` context from Actions. ``GITHUB_STEP_SUMMARY`` is read only when
 rendering the transcript.
-Publishes ``stream_json`` and, after supervision has stopped every sandbox
-process, ``sandbox_reaped``. Used by the Claude harness action.
+Publishes the inner ``stream_json`` path. The trusted outer supervisor reaps
+the sandbox UID, copies that fixed file through a no-follow bounded read, and
+publishes the runner-owned path plus ``sandbox_reaped``.
 
 Decisions this module owns:
 
@@ -107,6 +108,7 @@ def launch_argv(
     bot_id: str,
     ci: str,
     settings_file: str = "",
+    inside_sandbox: bool = False,
 ) -> list[str]:
     """The command that launches the agent as the non-sudo sandbox user.
 
@@ -130,10 +132,9 @@ def launch_argv(
             for entry in agent_env
             if not entry.startswith("CLAUDE_CODE_DISABLE_AUTO_MEMORY=")
         ]
+    prefix = [] if inside_sandbox else ["sudo", "-u", sandbox]
     argv = [
-        "sudo",
-        "-u",
-        sandbox,
+        *prefix,
         "env",
         *agent_env,
         f"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB={subprocess_env_scrub}",
@@ -232,6 +233,7 @@ def supervise(
     timeout_sec: int,
     stream_json: Path,
     stderr_log: Path,
+    inside_sandbox: bool = False,
 ) -> Supervised:
     """Run *argv* under the bound, capturing its streams to runner-owned files.
 
@@ -270,7 +272,11 @@ def supervise(
             stderr_log.open("wb") as err,
         ):
             agent = subprocess.Popen(
-                argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=err,
+                start_new_session=inside_sandbox,
             )
             try:
                 returncode = agent.wait(timeout_sec)
@@ -281,12 +287,20 @@ def supervise(
                 # takes the TERM and one that has to be killed are the same run
                 # to a maintainer, and the code it leaves says nothing.
                 code = None
-                signal_sandbox("TERM", sandbox)
+                if inside_sandbox:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(agent.pid, signal.SIGTERM)
+                else:
+                    signal_sandbox("TERM", sandbox)
                 # `sudo` exits once its child does, so this observes the agent.
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     agent.wait(TERM_GRACE_SEC)
     finally:
-        signal_sandbox("KILL", sandbox)
+        if inside_sandbox and agent is not None and agent.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(agent.pid, signal.SIGKILL)
+        elif not inside_sandbox:
+            signal_sandbox("KILL", sandbox)
         if agent is not None:
             agent.wait()
     return Supervised(code, round(time.monotonic() - start))
@@ -479,6 +493,7 @@ def main() -> int:
         "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
     )
     sandbox = env["SANDBOX"]
+    inside_sandbox = os.environ.get("TEND_INSIDE_SANDBOX") == "1"
     workspace = Path(env["GITHUB_WORKSPACE"])
     stream_json = Path(env["RUNNER_TEMP"]) / "tend-stream.json"
     stderr_log = Path(env["RUNNER_TEMP"]) / "tend-claude-stderr.log"
@@ -490,13 +505,14 @@ def main() -> int:
     # `stdin` is closed on every `sudo` here: without a tty a `sudo` that needs
     # a password fails instead of waiting for one on the step's stdin. The `tee`
     # gets the same guarantee from `input=`, which binds its stdin to a pipe.
+    user_prefix = [] if inside_sandbox else ["sudo", "-u", sandbox]
     subprocess.run(
-        ["sudo", "-u", sandbox, "mkdir", "-p", str(workspace / ".claude")],
+        [*user_prefix, "mkdir", "-p", str(workspace / ".claude")],
         stdin=subprocess.DEVNULL,
         check=True,
     )
     subprocess.run(
-        ["sudo", "-u", sandbox, "tee", str(workspace / ".claude/settings.local.json")],
+        [*user_prefix, "tee", str(workspace / ".claude/settings.local.json")],
         input=json.dumps(settings(env["TEND_ALLOWED_TOOLS"])),
         stdout=subprocess.DEVNULL,
         text=True,
@@ -523,6 +539,7 @@ def main() -> int:
         bot_id=env["BOT_ID"],
         ci=os.environ.get("CI") or "true",
         settings_file=os.environ.get("TEND_AUTO_MEMORY_SETTINGS", ""),
+        inside_sandbox=inside_sandbox,
     )
     # Published before the launch: the path does not depend on the run, and the
     # steps that read it — Token usage, the session-logs artifact — are
@@ -536,12 +553,14 @@ def main() -> int:
             timeout_sec=int(env["TEND_TIMEOUT_SEC"]),
             stream_json=stream_json,
             stderr_log=stderr_log,
+            inside_sandbox=inside_sandbox,
         )
     finally:
         # supervise() kills and reaps the sandbox uid on every exit, including
         # cancellation and launch failure. The memory save keys on this output
         # so it never reads agent-owned files while a sandbox process survives.
-        _common.set_output("sandbox_reaped", "true")
+        if not inside_sandbox:
+            _common.set_output("sandbox_reaped", "true")
     timed_out = run.exit_code is None
     print(
         f"Supervisor: status={'timeout' if timed_out else 'exited'} "

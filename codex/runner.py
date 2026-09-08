@@ -4,10 +4,11 @@
 # ///
 """Run the three stateful phases of Tend's Codex harness.
 
-The composite action remains the lifecycle and secret boundary. This module
-owns the Codex-specific mechanics that benefit from argv construction, output
-parsing, and file handling: installing the runner plugin, staging the global
-instructions, and preserving the final message around ``codex exec``.
+The shared SRT supervisor owns the execution lifetime; Tend's proxies own
+credentials. This module owns only Codex-specific mechanics that benefit from
+argv construction and file handling: installing the runner plugin, staging the
+global instructions, and writing the fixed final-message file around
+``codex exec``.
 """
 
 from __future__ import annotations
@@ -58,14 +59,12 @@ def _sandbox_command(*args: str, github_context: bool = False) -> list[str]:
         if github_context
         else _sandbox.agent_env(_required_path("AGENT_ENV_FILE"))
     )
-    return [
-        "/usr/bin/sudo",
-        "-u",
-        os.environ.get("SANDBOX", ""),
-        "/usr/bin/env",
-        *environment,
-        *args,
-    ]
+    prefix = (
+        []
+        if os.environ.get("TEND_INSIDE_SANDBOX") == "1"
+        else ["/usr/bin/sudo", "-u", os.environ.get("SANDBOX", "")]
+    )
+    return [*prefix, "/usr/bin/env", *environment, *args]
 
 
 def install_plugin() -> int:
@@ -197,15 +196,18 @@ def run_codex() -> int:
     else:
         raise ValueError(f"unknown AUTH_MODE: {auth_mode or '<unset>'}")
     output_file = _required_path("TEND_RUN_DIR") / "codex-final-message.md"
-    _run(["/usr/bin/sudo", "-u", sandbox, "/usr/bin/rm", "-f", "--", str(output_file)])
+    inside_sandbox = os.environ.get("TEND_INSIDE_SANDBOX") == "1"
+    user_prefix = [] if inside_sandbox else ["/usr/bin/sudo", "-u", sandbox]
+    _run([*user_prefix, "/usr/bin/rm", "-f", "--", str(output_file)])
     args = [
         codex,
         "exec",
         *(arg for arg in os.environ.get("EXTRA_ARGS", "").splitlines() if arg),
         "--model",
         os.environ.get("MODEL", ""),
-        "--sandbox",
-        os.environ.get("CODEX_SANDBOX_MODE", ""),
+        # SRT is the sole execution sandbox. A nested Codex sandbox creates a
+        # second, divergent policy surface and is deliberately not selected.
+        "--dangerously-bypass-approvals-and-sandbox",
         "--output-last-message",
         str(output_file),
         *auth_args,
@@ -229,27 +231,13 @@ def run_codex() -> int:
     result = _run(launch, check=False)
 
     exists = _run(
-        [
-            "/usr/bin/sudo",
-            "-u",
-            sandbox,
-            "/usr/bin/test",
-            "-f",
-            str(output_file),
-        ],
+        [*user_prefix, "/usr/bin/test", "-f", str(output_file)],
         check=False,
     )
     encoded = None
     if exists.returncode == 0:
         encoded = _run(
-            [
-                "/usr/bin/sudo",
-                "-u",
-                sandbox,
-                "/usr/bin/base64",
-                "-w0",
-                str(output_file),
-            ],
+            [*user_prefix, "/usr/bin/base64", "-w0", str(output_file)],
             capture=True,
             check=False,
         )

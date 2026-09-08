@@ -1,8 +1,3 @@
-{#- The base checkout exists to give `setup:` a reviewed tree, so it renders
-    only alongside it. With no setup nothing runs between the checkouts, and a
-    lone PR checkout into an empty workspace never reaches `clean` — the
-    action only consults it on the existing-repo path. #}
-{%- set has_setup = setup != '' -%}
 <<header>>
 name: tend-review
 on:
@@ -27,33 +22,11 @@ jobs:
 <<check_tend_enabled(cfg)>>
 <<react_eyes('issues/${{ github.event.pull_request.number }}', if_condition=tend_enabled_condition)>>
 
-{% if has_setup %}
-      # Two checkouts: `setup:` runs against the base tree, and the PR's own
-      # tree lands after it. Setup executes as the runner user, outside the
-      # containment the harness builds for the contributor's code.
+      # The runner checkout remains on the reviewed base tree for local setup
+      # actions and their POST chains. The harness creates and selects the PR
+      # topology in an independent disposable clone.
 <<checkout(cfg, if_condition=tend_enabled_condition)>>
 <<setup>>
-{% endif %}
-      # GitHub only materializes refs/pull/N/merge for mergeable PRs — on
-      # conflicting PRs it 404s and every downstream step cascades as skipped.
-      # Probe first and fall back to /head so review always runs; on fallback
-      # the review sees the PR branch in isolation rather than the post-merge
-      # tree.
-      - name: Resolve PR checkout ref
-        id: pr_ref
-        if: <<tend_enabled_condition>>
-        env:
-          GITHUB_TOKEN: ${{ secrets.<<bot_token_secret>> }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          if gh api "repos/${{ github.repository }}/git/ref/pull/$PR/merge" --silent 2>/dev/null; then
-            echo "ref=refs/pull/$PR/merge" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=refs/pull/$PR/head" >> "$GITHUB_OUTPUT"
-            echo "::notice::refs/pull/$PR/merge unavailable (likely merge conflict); falling back to /head"
-          fi
-<<checkout(cfg, ref='${{ steps.pr_ref.outputs.ref }}', if_condition=tend_enabled_condition, allow_unsafe_pr_checkout=True, clean=not has_setup)>>
-
-<<agent_step(cfg, block_input('prompt', prompt), if_condition=tend_enabled_condition)>><<restore_local_actions(local_actions, if_condition=tend_enabled_condition)>>
+<<agent_step(cfg, block_input('prompt', prompt), if_condition=tend_enabled_condition, checkout_mode='review', base_branch='${{ github.event.pull_request.base.ref }}')>>
 
 <<unreact_eyes(cfg, 'issues/${{ github.event.pull_request.number }}', if_condition="always()\n&& (" ~ tend_enabled_condition ~ ")")>>

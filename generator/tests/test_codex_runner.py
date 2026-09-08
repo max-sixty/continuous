@@ -186,7 +186,6 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     monkeypatch.setenv("TEND_RUN_DIR", str(run_dir))
     monkeypatch.setenv("CODEX_PROXY_URL", "http://127.0.0.1:1234")
     monkeypatch.setenv("MODEL", "gpt-test")
-    monkeypatch.setenv("CODEX_SANDBOX_MODE", "danger-full-access")
     monkeypatch.setenv("EFFORT", "high")
     monkeypatch.setenv(
         "EXTRA_ARGS", "--skip-git-repo-check\n--config\nproject_doc_max_bytes=8192"
@@ -231,8 +230,7 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
         "project_doc_max_bytes=8192",
         "--model",
         "gpt-test",
-        "--sandbox",
-        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--output-last-message",
         str(run_dir / "codex-final-message.md"),
         "--config",
@@ -267,7 +265,6 @@ def test_run_uses_staged_subscription_auth_without_responses_proxy(
     run_dir.mkdir()
     monkeypatch.setenv("TEND_RUN_DIR", str(run_dir))
     monkeypatch.setenv("MODEL", "gpt-test")
-    monkeypatch.setenv("CODEX_SANDBOX_MODE", "danger-full-access")
     monkeypatch.setenv("PROMPT", "Review this")
     monkeypatch.setenv("AUTH_MODE", "subscription")
     monkeypatch.setenv("OPENAI_API_KEY", "also-configured")
@@ -293,8 +290,7 @@ def test_run_uses_staged_subscription_auth_without_responses_proxy(
         "exec",
         "--model",
         "gpt-test",
-        "--sandbox",
-        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--output-last-message",
         str(run_dir / "codex-final-message.md"),
         "--config",

@@ -115,6 +115,16 @@ inputs:
       env-only tweaks don't persist — use sandbox_path/sandbox_env for those.
       It is also how a tool that setup installed under the runner's home reaches
       the agent: install it again here under the sandbox user's home.
+  checkout_mode:
+    default: "base"
+    description: >-
+      Internal generator contract selecting base, review, or mention topology.
+  base_branch:
+    default: "main"
+    description: Base branch used to seed the disposable agent clone.
+  sandbox_runtime_version:
+    default: "0.0.75"
+    description: Pinned Anthropic Sandbox Runtime version.
   memory_gist:
     default: "false"
     description: >-
@@ -194,16 +204,32 @@ runs:
         UV_VERSION: ${{ inputs.uv_version }}
         UV_INSTALL_DIR: ${{ runner.temp }}/tend-uv
 
-    # Restore PR-authored sensitive config (.claude, CLAUDE.md, …) from the
-    # reviewed base branch to close the startup-RCE surface. Runs before the
-    # credential handoff — it needs the git credential actions/checkout
-    # persisted, which setup_sandbox.py strips. Full rationale in the script.
-    - name: Restore sensitive config from base branch (PRs)
+    - name: Install Anthropic Sandbox Runtime
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sensitive-config.sh"
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/install-sandbox-runtime.sh"
+      env:
+        BASH_ENV: ""
+        SRT_VERSION: ${{ inputs.sandbox_runtime_version }}
+
+    - name: Prepare disposable agent workspace
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/prepare_agent_workspace.py"
       env:
         BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        TEND_CHECKOUT_MODE: ${{ inputs.checkout_mode }}
+        TEND_BASE_BRANCH: ${{ inputs.base_branch }}
+
+    # Restore PR-authored sensitive config (.claude, CLAUDE.md, …) from the
+    # exact reviewed base commit to close the startup-RCE surface. Content
+    # ingress already verified that commit, so this step neither re-derives
+    # topology nor receives a credential. Full rationale in the script.
+    - name: Restore sensitive config from base branch (PRs)
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      working-directory: ${{ env.TEND_AGENT_WORKSPACE }}
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sensitive-config.sh"
+      env:
+        BASH_ENV: ""
 
     # Compose the system prompt (shared/system-prompt.md + Claude directives +
     # the adopter's system_prompt_append). SYSTEM_PROMPT_FILE is passed in so
@@ -234,8 +260,7 @@ runs:
     # path resolves. See ../proxy/setup_sandbox.py and
     # ../proxy/inject_credentials.py.
     #
-    # Runs after "Restore sensitive config" (which needs the persisted git
-    # credential for its base fetch) and before the claude lifecycle — install,
+    # Runs after "Restore sensitive config" and before the Claude lifecycle — install,
     # plugins, and the run all execute as the sandbox user. Cache the proxy's
     # mitmproxy download (a sizeable dependency) in an isolated uv cache dir,
     # keyed on the pinned version. First run populates; every run after restores
@@ -282,6 +307,8 @@ runs:
           LANG=C.UTF-8 \
           GITHUB_ENV="$GITHUB_ENV" \
           GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+          TEND_AGENT_WORKSPACE="$TEND_AGENT_WORKSPACE" \
+          TEND_RUNNER_WORKSPACE="$TEND_RUNNER_WORKSPACE" \
           RUNNER_TEMP="$RUNNER_TEMP" \
           TEND_GH_TOKEN="$TEND_GH_TOKEN" \
           TEND_ANTHROPIC_OAUTH_TOKEN="$TEND_ANTHROPIC_OAUTH_TOKEN" \
@@ -328,17 +355,6 @@ runs:
       run: bash "${{ github.action_path }}/../shared/steps/install-tend-plugins.sh"
       env:
         MARKETPLACE_ROOT: ${{ github.action_path }}/..
-
-    # Run the adopter's `sandbox_setup:` commands inside the sandbox, as the
-    # sandbox user, after the toolchain + plugins are in place and before the
-    # agent launches, then log which commands the runner's PATH resolves and the
-    # agent's does not. The report runs whether or not the input is set — an
-    # empty `sandbox_setup:` is exactly the config a missing tool hides in.
-    - name: Run adopter sandbox setup
-      shell: bash
-      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/sandbox_setup.py"
-      env:
-        TEND_SANDBOX_SETUP: ${{ inputs.sandbox_setup }}
 
     # Auto memory is an explicit experiment. The Gist ID stays in the gated
     # environment secret rather than the committed workflow, preserving the
@@ -417,11 +433,8 @@ runs:
         # (proxy routing, CA trust, dummy GitHub + Anthropic credentials,
         # CLAUDE_CODE_REMOTE for remote/non-interactive context). The proxy
         # injects the real credentials per-host.
-        # The Linux bwrap wrapping path corrupts `!` to `\!` in Bash commands,
-        # so the subprocess sandbox stays off (`0`). Reproduced through claude
-        # 2.1.159; anthropics/claude-code#64301, write-up in #639. Off leaks
-        # nothing: the agent's env holds only dummy secrets, and the proxy
-        # injects the real ones per-host.
+        # Claude's nested subprocess sandbox stays off. The shared outer SRT
+        # boundary already covers Claude and every child for the whole lifecycle.
         CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0"
         BOT_NAME: ${{ steps.bot.outputs.login }}
         BOT_ID: ${{ steps.bot.outputs.id }}
@@ -433,10 +446,14 @@ runs:
         TEND_PROMPT: ${{ inputs.prompt }}
         TEND_TIMEOUT_SEC: ${{ inputs.timeout_seconds }}
         SHOW_FULL_OUTPUT: ${{ inputs.show_full_output }}
-      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/run_claude.py"
+        TEND_HARNESS: claude
+        TEND_LIFECYCLE: ${{ github.action_path }}/../shared/steps/agent_lifecycle.py
+        TEND_SANDBOX_SETUP: ${{ inputs.sandbox_setup }}
+        ACTION_PATH: ${{ github.action_path }}/..
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/launch_sandbox_runtime.py"
 
-    # run_claude.py reaps every sandbox process before returning, so this
-    # runner-owned save cannot race a surviving agent. Save is best-effort and
+    # The trusted outer supervisor reaps every sandbox process before returning,
+    # so this runner-owned save cannot race a surviving agent. Save is best-effort and
     # must not replace Claude's verdict when Gist sync itself fails.
     - name: Save experimental memory Gist
       if: always() && steps.auto_memory.outcome == 'success' && steps.claude.outputs.sandbox_reaped == 'true'
@@ -468,21 +485,6 @@ runs:
       env:
         BASH_ENV: ""
 
-    # The sandbox owned the workspace during the run. Hand it back to the runner
-    # so actions/checkout's post-job credential cleanup — which runs as the
-    # runner and writes .git/config — doesn't warn on dubious ownership /
-    # permission. Always, so a failed run cleans up too: setup_sandbox.py
-    # exports SANDBOX before its first fallible step, so the guard holds even
-    # when setup died mid-way (chown to self is an idempotent no-op if the
-    # handoff never happened).
-    - name: Restore workspace ownership for checkout cleanup
-      if: always()
-      shell: bash
-      run: |
-        if [ -n "${SANDBOX:-}" ]; then
-          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-        fi
-
     - name: Mark event notification read
       if: success()
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
@@ -490,16 +492,6 @@ runs:
       env:
         BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
-
-    - name: Append skill step summary
-      if: always()
-      shell: bash
-      run: |
-        if [ -f /tmp/claude/step-summary.md ]; then
-          sudo -u "$SANDBOX" cat /tmp/claude/step-summary.md \
-            | tee -a "$GITHUB_STEP_SUMMARY" >/dev/null
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-        fi
 
     # Account the run's token usage from the stream-json the headless run wrote
     # to stdout, falling back to the session JSONL when the run was cancelled
@@ -520,9 +512,9 @@ runs:
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/token_usage.py" --harness claude
 
     # Gate on the job being red, not on the agent step specifically. A dozen
-    # steps run before `claude` — the rate-limit preflight, auth validation,
-    # the proxy and sandbox build, the adopter's `sandbox_setup:` — and any of
-    # them failing strands the same work, so each needs to reach the outage
+    # steps run before the agent — the rate-limit preflight, auth validation,
+    # and proxy and sandbox build — while `sandbox_setup:` runs inside the same
+    # lifecycle step. Any of them failing strands the same work, so each needs to reach the outage
     # tracker. Keying on `steps.claude.outcome` meant a pre-agent failure went
     # out as a red run and nothing else; a rate-limit preflight abort held
     # every workflow on this repo for a full UTC day without filing a thing.

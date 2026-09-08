@@ -450,7 +450,7 @@ def launch(
         timed_out: bool = False,
         term_ends_it: bool = True,
         launch_error: Exception | None = None,
-        agent_env_text: str = "HOME=/sandbox\nGITHUB_TOKEN=dummy\nPATH=/usr/bin\n",
+        agent_env_text: str | None = None,
         **overrides: str,
     ) -> Launch:
         runner_temp = tmp_path / "runner-temp"
@@ -458,7 +458,15 @@ def launch(
         agent_env = tmp_path / "agent-env"
         runner_temp.mkdir(exist_ok=True)
         workspace.mkdir(exist_ok=True)
-        agent_env.write_text(agent_env_text)
+        agent_env.write_text(
+            agent_env_text
+            or (
+                "HOME=/sandbox\n"
+                "GITHUB_TOKEN=dummy\n"
+                f"GITHUB_WORKSPACE={workspace}\n"
+                "PATH=/usr/bin\n"
+            )
+        )
 
         # github_files owns the withheld names; clearing the rest makes the
         # composed argv the fixture's, not the developer's shell's.
@@ -607,9 +615,9 @@ def test_launch_composes_the_file_then_the_context_then_tends_own_names(
     assert crossing == [
         "HOME=/sandbox",
         "GITHUB_TOKEN=dummy",
+        f"GITHUB_WORKSPACE={result.stream_json.parent.parent / 'workspace'}",
         "PATH=/usr/bin",
         "GITHUB_WORKFLOW=tend-weekly",
-        f"GITHUB_WORKSPACE={result.stream_json.parent.parent / 'workspace'}",
         "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0",
         "BOT_NAME=tend-bot",
         "BOT_ID=42",

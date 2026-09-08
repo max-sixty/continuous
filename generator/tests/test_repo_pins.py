@@ -108,18 +108,32 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
         {"OPENAI_API_KEY", "CODEX_AUTH_JSON", "GH_TOKEN", "GITHUB_TOKEN"}
         & run_env.keys()
     )
-    assert steps["Run Codex"]["run"].endswith('runner.py" run')
-    assert run_env["CODEX_SANDBOX_MODE"] == "${{ inputs.sandbox }}"
+    assert steps["Run Codex"]["run"].endswith('launch_sandbox_runtime.py"')
+    assert "CODEX_SANDBOX_MODE" not in run_env
     assert run_env["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
     runner = (REPO_ROOT / "codex" / "runner.py").read_text()
     assert "_sandbox.launch_env" in runner
     assert 'model_provider="tend-openai"' in runner
-    reap = steps["Reap sandbox and restore workspace ownership"]
-    assert reap["id"] == "sandbox_reap"
-    assert 'echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"' in reap["run"]
     assert steps["Token usage"]["env"]["SANDBOX_REAPED"] == (
-        "${{ steps.sandbox_reap.outputs.sandbox_reaped }}"
+        "${{ steps.codex.outputs.sandbox_reaped }}"
     )
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_sensitive_config_restore_runs_only_in_the_disposable_checkout(
+    harness: str,
+) -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / harness / "action.yaml").read_text()
+    )
+    step = next(
+        item
+        for item in action["runs"]["steps"]
+        if item.get("name") == "Restore sensitive config from base branch (PRs)"
+    )
+
+    assert step["working-directory"] == "${{ env.TEND_AGENT_WORKSPACE }}"
+    assert "GITHUB_TOKEN" not in step.get("env", {})
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -381,7 +395,7 @@ def test_codex_action_passes_selected_auth_mode_to_runner() -> None:
     run = next(step for step in doc["runs"]["steps"] if step.get("name") == "Run Codex")
 
     assert run["env"]["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
-    assert run["run"].endswith('/runner.py" run')
+    assert run["run"].endswith('/launch_sandbox_runtime.py"')
 
 
 def test_codex_refresher_keeps_the_secret_writer_pat_out_of_the_model_step() -> None:

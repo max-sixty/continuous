@@ -279,6 +279,43 @@ same way. Configuration recipe:
 Everything else in this section is defense in depth: useful, but not
 load-bearing.
 
+### Agent execution boundary
+
+The harness has four states and only four transitions:
+
+| State | Runner checkout | Disposable checkout | Sandbox processes | Allowed next step |
+|---|---|---|---|---|
+| **trusted setup** | runner-owned, reviewed base | absent | none | clone |
+| **prepared** | unchanged | runner-owned, exact event topology, startup config pinned | none | launch |
+| **running** | unreadable and unwritable to the payload | sandbox-owned | one SRT process tree | reap |
+| **quiescent** | unchanged | no live writer | none | bounded export |
+
+Each transition is a bottleneck with one job:
+
+- **Content ingress** creates a full remote clone under `RUNNER_TEMP` with no
+  hardlinks or object-store alternates and with runner/system Git config and
+  attributes disabled. It selects the exact base, PR merge/head, or open-PR
+  head ref, pins startup configuration to the exact chosen base commit, removes
+  the temporary credential, then changes ownership of that clone only.
+- **Launch and lifetime** invokes the adopter's `sandbox_setup:` and the whole
+  Claude or Codex turn as one command under the pinned Anthropic Sandbox
+  Runtime. Tend supplies absolute `node`, `bwrap`, `socat`, `rg`, and seccomp
+  paths, treats dependency warnings as fatal, and probes both AF_UNIX denial
+  and runner-checkout unreadability before setup executes.
+- **Authority brokerage** leaves long-lived credentials in runner-owned
+  proxies. SRT supplies the isolated network namespace and routes HTTP through
+  Tend's credential proxy; the agent gets dummy credentials. Codex and Claude
+  do not add a second nested filesystem sandbox.
+- **Result export** begins only after SRT exits and the sandbox UID has no live
+  process. The supervisor reads fixed result and skill-summary files, and the
+  later token step copies bounded session data, all through no-follow reads;
+  the agent never receives GitHub's command-file paths.
+
+The Actions checkout is therefore orchestration state, not an agent
+workspace. Local `setup:` composites and all their POST chains continue to see
+the same reviewed tree, so Tend no longer checks out a PR over them and no
+longer needs a post-agent restore or recursive ownership repair.
+
 **Action distribution integrity.** Generated workflows pin the composite
 action to the generator's own release version
 (`max-sixty/tend/<harness>@X.Y.Z`), never a floating ref. Release-tag
@@ -301,7 +338,7 @@ skills from those directories. Both harnesses also restore RCE-relevant config
 at the root: `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`, and
 `.husky`. A malicious PR's `SessionStart` hook, MCP server, or injected skill
 is reverted before an agent reads it. The restoration is
-`git restore --source=<base>` in shell:
+`git restore --source=<exact base commit>` in shell:
 base-branch versions are written back, fork-added paths removed, and a
 fork-planted symlink replaced rather than written through. The root path list
 and ordering mirror claude-code-action's `restore-config.ts`. The PR's own
@@ -311,14 +348,12 @@ the runner user would follow a fork-planted symlink into files the agent must
 never see, such as the checkout credential in `.git/config`.
 
 **Setup runs on reviewed code.** Adopter `setup:` steps execute as the runner
-user, which holds sudo and, until the sandbox setup strips it, the checkout
-PAT in `.git/config`. So every generated workflow checks out reviewed code
-before running them — the default branch, or in `tend-review` the PR's base
-branch — and lands the PR's tree only afterwards. A contributor's build
-backend, added dependencies, and local `uses: ./` actions therefore execute
-under the agent, inside the sandbox, rather than ahead of it. `sandbox_setup:`
-is the lever for project setup that must see the PR's own manifests. Both
-harnesses run it as the non-sudo sandbox user.
+user against the stable Actions checkout: the default branch, or in
+`tend-review` the PR's reviewed base. That tree is never replaced or handed to
+the agent. A contributor's build backend and dependencies therefore execute
+only from the disposable event checkout, through `sandbox_setup:` or the agent
+itself, inside SRT. Both harnesses run `sandbox_setup:` as the non-sudo sandbox
+user in the same SRT process lifetime as the agent.
 
 **Credential isolation.** Both harness actions run the agent as a separate
 non-sudo `tend-sandbox` user, sharing the GitHub proxy machinery under the
@@ -335,9 +370,9 @@ Tend can stop it during teardown. The agent holds only a dummy PAT and the
 local inference endpoint. Under subscription auth, it additionally receives an
 expiring access-only `auth.json`, but not the rotating refresh token. A
 different UID with no sudo cannot read either proxy's
-`/proc/<pid>/environ`, the credential `actions/checkout` persists in
-`.git/config` is stripped before the workspace is handed over, and the PAT and
-API credentials are never written to the agent's env or disk. The injection
+`/proc/<pid>/environ`; the runner checkout and its persisted checkout
+credential never enter the sandbox; and the PAT and API credentials are never
+written to the agent's env or disk. The injection
 allowlist is exact-match on the connection's real destination, so a request to
 a lookalike host gets no token. The GitHub proxy is launched by a pinned `uv`
 that Tend installs into its own directory, off `$PATH`, so the process holding the PAT
@@ -348,26 +383,18 @@ system and hosted-toolcache PATH entries remain available to the sandbox. Tend
 appends a pinned `uv` fallback after those paths before `sandbox_setup:` runs. A
 runner-home PATH entry may select an independently seeded directory already
 owned by the sandbox user; runner-home files themselves stay off the sandbox
-PATH except for checkout paths. Tend does not infer which files under the
+PATH. Tend does not infer which files under the
 runner home are runtimes rather than secrets; later home-scoped changes must be
 made as the sandbox user with `sandbox_setup:`. A generic failure shim keeps a
 dropped home-selected command from silently falling through to a different
 same-named system tool.
 
 **Session-log upload.** The token-usage step uploads the agent's session JSONL
-as an artifact, so the runner has to read a tree the sandbox user owns. It
-copies as root and chowns the result rather than making the source readable,
-since a `chmod -R` aimed through a symlink the agent planted would grant read on
-whatever tree it named.
-
-The agent chooses the input to every check that follows. The copy waits for the
-harness to reap every sandbox process, so nothing is left alive to change
-what was checked. The session directory and the dot-directory above it are
-refused if either is a symlink. The copied modes are reset to the runner's,
-since deleting an entry needs write on its parent and those modes came from the
-agent. Every entry that is not a regular file or a directory is deleted before
-`upload-artifact` reads it: a symlink it would otherwise resolve as the runner,
-a FIFO it would block on until the job times out.
+only after the SRT process tree and sandbox UID are quiescent. One privileged
+helper opens every source component and descendant relative to no-follow file
+descriptors, copies regular files only, and enforces per-file, total-byte, and
+file-count bounds. Symlinks, devices, and FIFOs never enter the runner-owned
+artifact tree.
 
 The weekly subscription refresh job checks out no adopter code and gives Codex
 only Tend's fixed refresh prompt. Codex receives the full refresh bundle there;
@@ -406,7 +433,7 @@ base64-encoded or embedded in JSON, the redaction misses it.
 
 ## Remaining risks
 
-**The agent executes attacker-controlled code.** This is the biggest open gap.
+**The agent executes attacker-controlled code.** This remains expected behavior.
 When an agent runs tests or build commands on a fork PR, it executes code the
 attacker wrote. A `Makefile`, `package.json` postinstall hook, or
 `conftest.py` can do anything the sandbox user can and send data over the
@@ -415,13 +442,11 @@ expiring access token is the deliberate exception described below. Config
 pinning prevents
 *Claude Code's own* startup hooks from being hijacked, but it can't prevent
 an agent from voluntarily running `make test` on a repo where `make test` has
-been weaponized. The experimental Codex harness currently defaults to
-`sandbox: danger-full-access`. On the standard GitHub-hosted Ubuntu 24.04
-runner, Codex's restricted Linux sandbox cannot initialize bubblewrap's
-loopback network, so those modes do not currently run in Tend's default
-environment. The ephemeral runner VM contains local execution, and the
-separate UID plus credential proxy keeps the PAT and API credentials outside
-the agent process.
+been weaponized. Anthropic Sandbox Runtime contains that process tree to the
+disposable checkout, sandbox home, scratch paths, and brokered network. This
+protects the runner checkout and host authority; it does not make the checked
+out repository content confidential or prevent the agent from deliberately
+publishing content it can read.
 
 **Write access still starts workflows.** With the operational secrets
 environment-gated, a write-scoped actor can no longer read them out of a
@@ -433,12 +458,13 @@ GitHub holds rather than to the payload.
 
 **Data exfiltration via side channels.** An attacker who gets code execution
 can exfiltrate repository contents and agent-visible context via DNS queries,
-HTTP requests to an external server, or workflow logs; on GitHub-hosted
-runners there's no way to restrict outbound network access. Credential
-isolation keeps the PAT and API credentials out of what a hijacked session can
-send. A Codex subscription session can send its expiring access token, but it
-never receives the rotating refresh token or the PAT that rewrites environment
-secrets.
+HTTP requests to an external server, or workflow logs. SRT removes direct
+network access, but Tend's HTTP broker currently tunnels arbitrary destinations
+because the agent needs general package and GitHub access; destination
+allowlisting is deferred. Credential isolation keeps the PAT and API
+credentials out of what a hijacked session can send. A Codex subscription
+session can send its expiring access token, but it never receives the rotating
+refresh token or the PAT that rewrites environment secrets.
 
 **Credential theft.** Isolation minimizes the chance that a hijacked session
 can steal the long-lived tokens, but it does not protect against compromise of
@@ -466,4 +492,4 @@ and the experiment is refused for private repositories. It is not hidden from
 the session: the agent's proxied bot access can list the account's Gists.
 
 Deferred hardening options (Haiku pre-screening, read-only fork PRs, and
-network isolation) live in `TODO.md`.
+outbound destination allowlisting) live in `TODO.md`.

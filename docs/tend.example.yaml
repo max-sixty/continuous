@@ -198,8 +198,10 @@ bot_name: my-project-bot
 # ## Sandbox setup (both harnesses)
 #
 # `setup:` above runs as the RUNNER user, around the composite action. The
-# harness runs the agent as a separate, non-sudo sandbox user with a
-# fixed env allowlist. Shared system/hosted-toolcache paths and independently
+# harness creates a disposable event checkout and runs the agent as a separate,
+# non-sudo user inside Anthropic Sandbox Runtime with a fixed env allowlist.
+# The runner checkout remains on reviewed code for `setup:` and local-action
+# POST cleanup. Shared system/hosted-toolcache paths and independently
 # seeded paths already present under the sandbox home carry over. Changes that
 # `setup:` makes under the runner's home do not: that home may contain
 # credentials, and Tend does not classify its files as tools or secrets. Use
@@ -217,7 +219,7 @@ bot_name: my-project-bot
 #     sandbox_path:
 #       - /opt/my-tool/bin
 #
-#   A runner-home source path outside the checkout is refused.
+#   A runner-home source path outside the disposable checkout is refused.
 #
 # - `sandbox_env`: NAME: VALUE pairs added to the agent's launch env. Reserved
 #   keys are rejected at `init`, and again inside the sandbox so a hand-edited
@@ -229,6 +231,7 @@ bot_name: my-project-bot
 #   - credential and Codex configuration variables — `GH_TOKEN`,
 #     `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
 #     `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_AUTH_JSON`, `CODEX_HOME`
+#   - the disposable checkout identity — `GITHUB_WORKSPACE`
 #   - prompt suppression — `CLAUDE_CODE_REMOTE`
 #   - the sandbox's own locations — `HOME`, `PATH`, `XDG_CONFIG_HOME`,
 #     `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`
@@ -242,8 +245,9 @@ bot_name: my-project-bot
 #   add it explicitly.
 #
 # - `sandbox_setup`: shell commands run as the sandbox user after the toolchain
-#   and plugins install and before the agent runs, with the workspace as cwd.
-#   The workspace holds the PR's tree by then, so this is where installing the
+#   and plugins install and before the agent runs, with the disposable checkout
+#   as cwd. It shares one SRT process lifetime with the agent. The disposable
+#   checkout holds the PR's tree, so this is where installing the
 #   project's dependencies belongs (`uv sync`, `npm ci`), alongside other
 #   on-disk effects like warming a cache. Env-only tweaks don't persist across
 #   the command's shell — use sandbox_path/sandbox_env. End installer commands
@@ -264,9 +268,6 @@ bot_name: my-project-bot
 #     sandbox_setup:
 #       - 'if [ "$GITHUB_WORKFLOW" = tend-weekly ]; then nix --version; fi'
 #
-# The codex harness runs the agent on the runner, so its `setup:` section
-# already reaches the agent env; these keys are inert (and warn) under codex.
-
 # ## Memory Gist (experimental, Claude harness)
 #
 # `memory_gist: true` restores Claude Code's model-authored auto memory from a

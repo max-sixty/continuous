@@ -7,7 +7,7 @@ set -euo pipefail
 set_inputs() {
   export TEND_GH_TOKEN=dummy
   export TEND_ANTHROPIC_OAUTH_TOKEN=dummy
-  export ACTION_PATH="$GITHUB_WORKSPACE"
+  export ACTION_PATH="$TEND_TEST_ACTION_PATH"
   export TEND_UV_DIR="$RUNNER_TEMP/tend-uv"
   export UV_CACHE_DIR="$RUNNER_TEMP/tend-mitmproxy-uv"
 }
@@ -17,8 +17,15 @@ plant() {
   bin="$HOME/.cargo-install/tend-probe/bin"
   seeded="$HOME/.tend-seeded/bin"
   shared="/opt/tend-sandbox-test-$GITHUB_RUN_ID/bin"
-  workspace_explicit="$GITHUB_WORKSPACE/.tend-explicit/bin"
-  workspace_path="$GITHUB_WORKSPACE/.tend-path/bin"
+  TEND_AGENT_WORKSPACE="$RUNNER_TEMP/tend-agent-workspace-1"
+  TEND_RUNNER_WORKSPACE="$GITHUB_WORKSPACE"
+  TEND_TEST_ACTION_PATH="$RUNNER_TEMP/tend-action"
+  git clone --no-local --no-hardlinks "$GITHUB_WORKSPACE" "$TEND_AGENT_WORKSPACE"
+  mkdir -p "$TEND_TEST_ACTION_PATH"
+  cp -a "$GITHUB_WORKSPACE/proxy" "$GITHUB_WORKSPACE/shared" \
+    "$TEND_TEST_ACTION_PATH/"
+  workspace_explicit="$TEND_AGENT_WORKSPACE/.tend-explicit/bin"
+  workspace_path="$TEND_AGENT_WORKSPACE/.tend-path/bin"
   mkdir -p "$bin" "$seeded" "$workspace_explicit" "$workspace_path"
   printf '#!/bin/sh\necho probe\n' >"$bin/tend-probe"
   printf '#!/bin/sh\necho runner-home-uv\n' >"$bin/uv"
@@ -55,6 +62,11 @@ plant() {
   echo "$seeded" >>"$GITHUB_PATH"
   echo "$bin" >>"$GITHUB_PATH"
   ln -s "$bin" "$RUNNER_TEMP/tend-runner-home-alias"
+  {
+    echo "TEND_AGENT_WORKSPACE=$TEND_AGENT_WORKSPACE"
+    echo "TEND_RUNNER_WORKSPACE=$TEND_RUNNER_WORKSPACE"
+    echo "TEND_TEST_ACTION_PATH=$TEND_TEST_ACTION_PATH"
+  } >> "$GITHUB_ENV"
 }
 
 setup() {
@@ -63,7 +75,7 @@ setup() {
   # The workspace path leads; a literal `~` exercises expansion against the
   # sandbox home. The configured directory may be populated later.
   # shellcheck disable=SC2088
-  export TEND_SANDBOX_PATH="$GITHUB_WORKSPACE/.tend-explicit/bin"$'\n~/.tend-tilde/bin'
+  export TEND_SANDBOX_PATH="$TEND_AGENT_WORKSPACE/.tend-explicit/bin"$'\n~/.tend-tilde/bin'
   # `sandbox_env` reserves the credential and routing names, not the GITHUB_*
   # context, so this entry is accepted and lands in $AGENT_ENV_FILE. That the
   # real workflow name then beats it is _sandbox.py's
@@ -105,7 +117,7 @@ setup() {
   test -n "$agent_path"
   while IFS= read -r path_entry; do
     case "$path_entry" in
-      "$GITHUB_WORKSPACE" | "$GITHUB_WORKSPACE"/*) ;;
+      "$TEND_AGENT_WORKSPACE" | "$TEND_AGENT_WORKSPACE"/*) ;;
       "$HOME" | "$HOME"/*)
         echo "::error::a non-workspace runner-home entry reached the sandbox PATH: $path_entry"
         exit 1
@@ -113,7 +125,7 @@ setup() {
     esac
   done < <(tr : '\n' <<<"$agent_path")
   case "$agent_path" in
-    "$GITHUB_WORKSPACE/.tend-explicit/bin":*) ;;
+    "$TEND_AGENT_WORKSPACE/.tend-explicit/bin":*) ;;
     *) echo "::error::sandbox_path did not lead the PATH: $agent_path"; exit 1 ;;
   esac
   case ":$agent_path:" in
@@ -229,7 +241,7 @@ verify_refusals() {
 # and proves the runner's GitHub and OpenAI credentials do not reach Codex.
 verify_codex_launch() {
   local stub launch_env argv_file github_output dummy_token
-  stub="$GITHUB_WORKSPACE/.tend-explicit/bin/codex-stub"
+  stub="$TEND_AGENT_WORKSPACE/.tend-explicit/bin/codex-stub"
   launch_env="$TEND_RUN_DIR/codex-launch-env.txt"
   argv_file="$TEND_RUN_DIR/codex-argv.txt"
   github_output="$RUNNER_TEMP/codex-github-output"
@@ -253,7 +265,7 @@ verify_codex_launch() {
 
   CODEX_BIN="$stub" AUTH_MODE=api-key \
     CODEX_PROXY_URL=http://127.0.0.1:1234 \
-    CODEX_SANDBOX_MODE=danger-full-access MODEL=stub-model EFFORT=high \
+    MODEL=stub-model EFFORT=high \
     PROMPT='stub prompt' BOT_NAME=stub-bot BOT_ID=123 \
     GITHUB_TOKEN=runner-token-must-not-cross \
     OPENAI_API_KEY=runner-openai-key-must-not-cross \
@@ -277,7 +289,8 @@ verify_codex_launch() {
     echo "::error::a runner command-file path crossed into Codex"
     exit 1
   fi
-  grep -qxF danger-full-access "$RUNNER_TEMP/codex-argv.txt"
+  grep -qxF -- '--dangerously-bypass-approvals-and-sandbox' \
+    "$RUNNER_TEMP/codex-argv.txt"
   grep -qxF 'model_provider="tend-openai"' "$RUNNER_TEMP/codex-argv.txt"
   test "$(sed -n 's/^final_message=//p' "$github_output" | base64 -d)" = \
     'codex final'
@@ -293,7 +306,7 @@ verify_codex_launch() {
 # redirects, the supervisor, and the reap, not the model.
 verify_launch() {
   local stub launch_env argv_file rc want workflow
-  stub="$GITHUB_WORKSPACE/.tend-explicit/bin/claude"
+  stub="$TEND_AGENT_WORKSPACE/.tend-explicit/bin/claude"
   launch_env="$TEND_RUN_DIR/launch-env.txt"
   argv_file="$TEND_RUN_DIR/argv.txt"
 
@@ -365,9 +378,9 @@ verify_launch() {
     || { echo "::error::sandbox_env displaced the real GITHUB_WORKFLOW"; exit 1; }
 
   # Composed for the agent, written as the sandbox user into its workspace.
-  sudo -u "$SANDBOX" test -r "$GITHUB_WORKSPACE/.claude/settings.local.json"
+  sudo -u "$SANDBOX" test -r "$TEND_AGENT_WORKSPACE/.claude/settings.local.json"
   sudo -u "$SANDBOX" grep -q bypassPermissions \
-    "$GITHUB_WORKSPACE/.claude/settings.local.json"
+    "$TEND_AGENT_WORKSPACE/.claude/settings.local.json"
 
   # --- a turn that overruns and refuses to die ---
   # The stub traps TERM and sleeps past the bound, so the supervisor's TERM
@@ -416,13 +429,66 @@ verify_launch() {
   echo "[test-setup-sandbox] launch, argv, supervision and teardown verified"
 }
 
+verify_srt() {
+  local github_output probe_info probe_pid probe_port rc tool_root
+  github_output="$RUNNER_TEMP/srt-github-output"
+  probe_info="$RUNNER_TEMP/srt-network-probe"
+  tool_root="$RUNNER_TEMP/tend-codex-probe"
+  : > "$github_output"
+  mkdir -p "$tool_root/bin"
+  printf '#!/bin/sh\necho tend-srt-tool-ok\n' > "$tool_root/bin/probe"
+  chmod +x "$tool_root/bin/probe"
+  /usr/bin/python3 - "$probe_info" <<'PY' &
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import sys
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"tend-srt-network-ok\n"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+Path(sys.argv[1]).write_text(str(server.server_port))
+server.serve_forever()
+PY
+  probe_pid=$!
+  for _ in {1..50}; do
+    [ -s "$probe_info" ] && break
+    sleep 0.1
+  done
+  probe_port=$(cat "$probe_info")
+  rc=0
+  ACTION_PATH="$TEND_TEST_ACTION_PATH" \
+    TEND_HARNESS=probe \
+    TEND_LIFECYCLE="$TEND_TEST_ACTION_PATH/shared/steps/agent_lifecycle.py" \
+    TEND_SANDBOX_SETUP='' \
+    TEND_BOUNDARY_PROBE_URL="http://127.0.0.1:$probe_port/" \
+    TEND_BOUNDARY_PROBE_EXECUTABLE="$tool_root/bin/probe" \
+    TEND_CODEX_ROOT="$tool_root" \
+    GITHUB_OUTPUT="$github_output" \
+    /usr/bin/python3 -E -s shared/steps/launch_sandbox_runtime.py || rc=$?
+  kill "$probe_pid" 2>/dev/null || true
+  wait "$probe_pid" 2>/dev/null || true
+  test "$rc" -eq 0
+  grep -qx 'sandbox_reaped=true' "$github_output"
+  test ! -e "$TEND_RUNNER_WORKSPACE/.tend-srt-wrote-here"
+  echo "[test-setup-sandbox] SRT capability boundary verified"
+}
+
 cleanup() {
   local shared
   shared="/opt/tend-sandbox-test-$GITHUB_RUN_ID/bin"
   if [ -n "${SANDBOX:-}" ]; then
-    /usr/bin/sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+    /usr/bin/sudo rm -rf -- "$TEND_AGENT_WORKSPACE"
+    /usr/bin/sudo rm -rf -- "$TEND_TEST_ACTION_PATH"
   fi
-  /usr/bin/sudo rm -f "$GITHUB_WORKSPACE/.claude/settings.local.json"
   /usr/bin/sudo rm -f /usr/local/bin/tend-probe "$shared/tend-shared" "$shared/uv"
   /usr/bin/sudo rmdir "$shared" "${shared%/bin}" 2>/dev/null || true
   /usr/bin/sudo rm -f /etc/skel/.tend-seeded/bin/tend-seeded
@@ -438,9 +504,10 @@ case "${1:-}" in
   verify-refusals) verify_refusals ;;
   verify-codex-launch) verify_codex_launch ;;
   verify-launch) verify_launch ;;
+  verify-srt) verify_srt ;;
   cleanup) cleanup ;;
   *)
-    echo "usage: $0 {plant|setup|install-agent-uv|verify|verify-refusals|verify-codex-launch|verify-launch|cleanup}" >&2
+    echo "usage: $0 {plant|setup|install-agent-uv|verify|verify-refusals|verify-codex-launch|verify-launch|verify-srt|cleanup}" >&2
     exit 2
     ;;
 esac

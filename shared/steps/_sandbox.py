@@ -1,13 +1,11 @@
 """The environment the sandbox user is launched with.
 
-Every step that hands the sandbox an environment does so through
-``sudo -u "$SANDBOX" env``: ``env_reset`` drops the runner's, so only the names
-on that line reach the child. The two crossings that put the ADOPTER's code on
-the far side build that line here — the agent launch (``run_claude.py``) and
-their ``sandbox_setup:`` commands (``sandbox_setup.py``) — so a
-``sandbox_setup:`` command can gate an install on the variable the skill it
-installs for will read. The crossings that run tend's own code take no GitHub
-context. Which side of that line a new crossing falls on is who wrote what runs
+The outer supervisor crosses the UID boundary once with a clean ``env -i``;
+inside SRT, both adopter ``sandbox_setup:`` and the harness child rebuild their
+environment here. This keeps the same context and dummy-credential contract for
+setup and the agent without creating another privilege seam. Trusted setup
+commands that run before SRT use :func:`agent_env` and receive no GitHub
+context. Which side of that line a new command falls on is who wrote what runs
 there, not how much context looks useful.
 
 Pass ``GITHUB_*`` through as a denylist rather than an explicit allowlist: most
@@ -32,12 +30,16 @@ from pathlib import Path
 #: the proxy. (The file's dummy must not be overridden, so this entry is
 #: load-bearing.)
 #:
+#: ``GITHUB_WORKSPACE`` — the context names the trusted Actions checkout; the
+#: agent env file supplies the disposable clone instead.
+#:
 #: ``GITHUB_{ENV,PATH,OUTPUT,STATE,STEP_SUMMARY}`` — paths the runner re-reads
 #: after the step exits; the sandbox must not be handed a channel into later
 #: steps' env / PATH / outputs / job summary.
 WITHHELD = frozenset(
     {
         "GITHUB_TOKEN",
+        "GITHUB_WORKSPACE",
         "GITHUB_ENV",
         "GITHUB_PATH",
         "GITHUB_OUTPUT",
