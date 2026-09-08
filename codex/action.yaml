@@ -442,9 +442,10 @@ runs:
     # Codex writes rollouts under the sandbox user's ~/.codex/sessions. The
     # step consolidates them into a runner-owned directory only after reaping
     # the sandbox and drops every symlink before artifact upload.
-    # Each event includes a token_count field (input/output/cached). Sum
-    # them. Cost is left at 0 — Codex CLI doesn't surface API list prices
-    # and computing them ourselves would require maintaining a price table.
+    # Token-count events are cumulative within each rollout. Take the last
+    # complete total from every rollout, then sum the independent rollouts.
+    # Cost is left at 0 — Codex CLI doesn't surface API list prices and
+    # computing it ourselves would require maintaining a price table.
     # Shares shared/steps/token_usage.py with the Claude harness, which is
     # what keeps the record's shape and the summary table's shell the same
     # across harnesses; the rows and the parsers differ per `--harness`.
