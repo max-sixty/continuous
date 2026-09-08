@@ -139,8 +139,8 @@ prerequisite before acting.
 
 ## Browser sessions
 
-Step 6 (when the bot account must be created) and step 8's mint paths
-(8a/8b) need a browser session logged in as the bot. Check whether
+Step 6 (when the bot account must be created), step 7b's Codex subscription
+setup, and step 8's mint paths (8a/8b) need a browser session. Check whether
 `mcp__claude-in-chrome__*` is connected (`tabs_context_mcp`) before the
 first browser step, or any question that would offer one as an option.
 When it is, drive the browser steps yourself rather than offering a
@@ -774,52 +774,43 @@ depends on Codex's internal auth mode. Use an isolated Codex login: the weekly
 workflow will rotate its refresh-token chain, so copying the user's ordinary
 `~/.codex/auth.json` would eventually break their local Codex login.
 
-Run `codex login --device-auth` with a fresh temporary `CODEX_HOME`, then verify
-that it produced a normal refreshable ChatGPT bundle without displaying it:
+Run the bundled provisioner yourself. The user approves the device login in
+their browser; they do not run commands or handle the resulting Codex
+credentials. Start it in the background, surface the URL and one-time code from
+its output, and keep reading until it exits:
 
 ```bash
-TEND_CODEX_HOME=$(mktemp -d)
-CODEX_HOME="$TEND_CODEX_HOME" codex \
-  -c 'cli_auth_credentials_store="file"' login --device-auth
-jq -e '
-  .auth_mode == "chatgpt" and
-  ([.tokens.access_token, .tokens.refresh_token, .tokens.id_token, .tokens.account_id]
-   | all(type == "string" and length > 0))
-' "$TEND_CODEX_HOME/auth.json" >/dev/null
+python3 "${CLAUDE_SKILL_DIR}/scripts/install_codex_subscription_auth.py" provision --repo "$REPO"
 ```
 
-If `codex` is not installed, use `npx -y @openai/codex@latest -c
-'cli_auth_credentials_store="file"' login --device-auth` with the same
-`CODEX_HOME` assignment.
+The provisioner uses `codex`, or `npx -y @openai/codex@latest` when the CLI is
+absent. It validates and splits the login, stores both GitHub secrets without
+printing them, verifies the secret names, and removes its temporary Codex home.
 
-Store the full bundle first, then its access-only projection:
+The serialized refresh workflow also needs a fine-grained PAT scoped only to
+`$REPO`, with repository permission **Environments: Read and write**;
+`GITHUB_TOKEN` cannot replace environment secrets. GitHub does not provide an
+API for minting this PAT. Open a prefilled token form, then select **Only select
+repositories** and `$REPO`; the user handles any password or 2FA prompt and
+clicks **Generate token**, then **Copy**:
 
 ```bash
-gh secret set CODEX_REFRESH_AUTH_JSON --repo "$REPO" --env tend < "$TEND_CODEX_HOME/auth.json"
-jq -c '
-  .auth_mode = "chatgptAuthTokens" |
-  .OPENAI_API_KEY = null |
-  .tokens.refresh_token = ""
-' "$TEND_CODEX_HOME/auth.json" |
-  gh secret set CODEX_AUTH_JSON --repo "$REPO" --env tend
+python3 "${CLAUDE_SKILL_DIR}/scripts/install_codex_subscription_auth.py" pat-url --repo "$REPO"
 ```
 
-The user creates a fine-grained PAT scoped only to `$REPO`, with repository
-permission **Environments: Read and write**, then runs this themselves and
-pastes it at the prompt. It lets the scheduled workflow replace the two
-environment secrets; `GITHUB_TOKEN` cannot do that.
+When the browser and shell share a clipboard, pipe the copied token to the
+provisioner without displaying it. Use the host's clipboard reader; on macOS:
 
 ```bash
-gh secret set CODEX_REFRESH_PAT --repo "$REPO" --env tend
+pbpaste | python3 "${CLAUDE_SKILL_DIR}/scripts/install_codex_subscription_auth.py" store-pat --repo "$REPO"
 ```
 
-After all three secret names appear in the listing, tell the user the temporary
-directory printed by the following command still contains the refresh token
-and should be deleted when they no longer need it locally:
-
-```bash
-printf '%s\n' "$TEND_CODEX_HOME"
-```
+The provisioner validates the fine-grained-token prefix, stores the secret,
+and verifies all three subscription secret names. If no shared clipboard is
+available, have the user run `gh secret set
+CODEX_REFRESH_PAT --repo "$REPO" --env tend` in their own terminal and paste
+the token at its hidden prompt. Never ask them to paste it into chat. Finish
+only after all three secret names appear in the environment's secret listing.
 
 For **API key**, the user takes a key from
 `https://platform.openai.com/api-keys` and runs this themselves, pasting it at
