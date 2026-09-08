@@ -9,7 +9,7 @@ GitHub classifies authors of comments and events by `author_association`. Use th
 gh api repos/{owner}/{repo}/issues/comments/{comment_id} --jq '.author_association'
 ```
 
-`authorAssociation` is a field *on* the comment and review objects, not a top-level `--json` key. `gh issue view <n> --json comments --jq '.comments[].authorAssociation'` and `gh pr view <n> --json reviews --jq '.reviews[].authorAssociation'` both work, and cover every comment or review in one call. `gh issue view <n> --json authorAssociation` errors with `Unknown JSON field` — for the issue or PR author's own tier, use the REST call above.
+`authorAssociation` is a field *on* the comment and review objects, not a top-level `--json` key. `gh issue view <n> --json comments --jq '.comments[].authorAssociation'` and `gh pr view <n> --json reviews --jq '.reviews[].authorAssociation'` both work, and cover every comment or review in one call. `gh issue view <n> --json authorAssociation` errors with `Unknown JSON field` — for the issue or PR author's own tier, use `gh api repos/{owner}/{repo}/issues/{number} --jq '.author_association'`; the block above is the per-comment form.
 
 | Tier | Values | Meaning |
 |---|---|---|
