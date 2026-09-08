@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
@@ -32,6 +33,10 @@ FULL_AUTH = {
     },
 }
 
+ACTION_AUTH_SCRIPT = (
+    Path(__file__).parents[5] / "shared" / "steps" / "codex_subscription_auth.py"
+)
+
 
 def _executable(path: Path, source: str) -> None:
     path.write_text(f"#!{sys.executable}\n{source}")
@@ -46,6 +51,25 @@ def test_consumer_auth_removes_refresh_capability() -> None:
     assert consumer["tokens"]["refresh_token"] == ""
     assert consumer["tokens"]["access_token"] == "access"
     assert FULL_AUTH["tokens"]["refresh_token"] == "refresh"
+
+
+def test_consumer_auth_is_accepted_by_action(tmp_path: Path) -> None:
+    destination = tmp_path / "auth.json"
+    consumer = consumer_auth(FULL_AUTH)
+    result = subprocess.run(
+        [sys.executable, ACTION_AUTH_SCRIPT, "prepare", destination],
+        env={
+            **os.environ,
+            "CODEX_AUTH_JSON": json.dumps(consumer),
+            "OPENAI_API_KEY": "",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(destination.read_text()) == consumer
 
 
 @pytest.mark.parametrize(
