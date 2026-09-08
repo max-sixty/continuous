@@ -1989,11 +1989,11 @@ def test_args_render_as_exact_action_arguments(tmp_path: Path, harness: str) -> 
 
 
 def test_codex_default_model(tmp_path: Path) -> None:
-    """Codex without an explicit model leaves selection to the pinned CLI."""
+    """Generated Codex workflows pin Tend's current Sol-tier default."""
     cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
-    assert cfg.model == ""
+    assert cfg.model == "gpt-5.6-sol"
     wf = next(w for w in generate_all(cfg) if w.filename == "tend-triage.yaml")
-    assert "model:" not in wf.content
+    assert "model: gpt-5.6-sol" in wf.content
 
 
 def test_unknown_engine_rejected(tmp_path: Path) -> None:
@@ -2027,7 +2027,7 @@ def test_per_workflow_harness_override_targets_only_named_workflow(
     # The override carries the harness's own secret shape, not the top level's.
     assert "openai_api_key" in nightly.content
     assert "claude_code_oauth_token" not in nightly.content
-    assert "model:" not in nightly.content
+    assert "model: gpt-5.6-sol" in nightly.content
 
     # Sibling workflows still use the top-level claude harness.
     review = workflows["tend-review.yaml"]
@@ -2079,7 +2079,7 @@ def test_per_workflow_harness_change_uses_target_default_model(
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     nightly = workflows["tend-nightly.yaml"]
     assert f"max-sixty/tend/codex@{ACTION_VERSION}" in nightly.content
-    assert "model:" not in nightly.content
+    assert "model: gpt-5.6-sol" in nightly.content
 
 
 def test_per_workflow_harness_change_uses_claude_default_model(

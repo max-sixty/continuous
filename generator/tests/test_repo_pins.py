@@ -18,6 +18,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 from ruamel.yaml import YAML
+from tend.config import DEFAULT_MODEL_BY_HARNESS
 from tend.workflows import UV_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +54,28 @@ def test_claude_transcript_summary_is_opt_in() -> None:
     )
 
     assert action["inputs"]["show_full_output"]["default"] == "false"
+
+
+def test_codex_action_does_not_choose_a_model_for_direct_callers() -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "action.yaml").read_text()
+    )
+
+    assert "default" not in action["inputs"]["model"]
+
+
+def test_codex_generated_default_is_documented_for_new_installs() -> None:
+    model = DEFAULT_MODEL_BY_HARNESS["codex"]
+    docs = (REPO_ROOT / "docs" / "tend.example.yaml").read_text()
+    readme = (REPO_ROOT / "README.md").read_text()
+    install_skill = (
+        REPO_ROOT / "plugins" / "install-tend" / "skills" / "install-tend" / "SKILL.md"
+    ).read_text()
+
+    assert model
+    assert f"harness: codex   — {model} (default)" in docs
+    assert f"# model: {model}" in readme
+    assert f"# model: {model}" in install_skill
 
 
 def test_codex_agent_never_receives_the_pat_or_api_key() -> None:

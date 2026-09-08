@@ -35,8 +35,7 @@ needs the release sequence:
 2. Cut a release so the new tag (with `codex/action.yaml`) is what the
    version-pinned action ref resolves to.
 3. Edit `.config/tend.yaml`: add `harness: codex` (and optionally
-   `effort: medium`). Set `model:` only to pin a specific model; otherwise
-   the Codex CLI selects its recommended model.
+   `effort: medium`) and `model: gpt-5.6-sol`.
 4. Set `OPENAI_API_KEY` secret on `max-sixty/tend`.
    Drop `CLAUDE_CODE_OAUTH_TOKEN` from `secrets.allowed` once unused.
 5. `uvx tend@latest init` to regenerate workflows. Commit both the config

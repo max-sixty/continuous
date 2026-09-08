@@ -34,10 +34,12 @@ bot_name: my-project-bot
 # Model to use for all workflows. Valid values depend on the harness:
 #
 # - harness: claude  — opus (default), sonnet, haiku
-# - harness: codex   — the Codex CLI's recommended model (default), or any
-#                      string Codex CLI accepts
+# - harness: codex   — gpt-5.6-sol (default), or any string Codex CLI accepts
 #
 # model: opus
+
+# Codex installs write their model explicitly. During a Tend upgrade, move an
+# explicit pin to a newer model only within the same capability and price tier.
 
 # ## Effort
 #

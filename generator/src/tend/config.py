@@ -215,8 +215,7 @@ KNOWN_MODELS_BY_HARNESS = {
 }
 DEFAULT_MODEL_BY_HARNESS = {
     "claude": "opus",
-    # Let the pinned Codex CLI select the recommended model for the account.
-    "codex": "",
+    "codex": "gpt-5.6-sol",
 }
 
 

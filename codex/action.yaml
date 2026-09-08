@@ -36,11 +36,10 @@ inputs:
       before invocation, so `$skill-name` mentions resolve to the
       corresponding SKILL.md (e.g. `$review`, `$triage`).
   model:
-    default: ""
     description: >-
-      Codex model to use. Empty lets the pinned Codex CLI choose its
-      recommended model for the account. The available models are server-side
-      and per-account, so they are not enumerated here.
+      Optional Codex model. When omitted, the pinned Codex CLI chooses its
+      recommended model for the account. Tend-generated workflows pass the
+      model selected by their configuration.
   effort:
     default: ""
     description: >-

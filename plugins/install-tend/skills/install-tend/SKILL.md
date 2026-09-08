@@ -164,9 +164,13 @@ README.md "Harnesses" for the comparison.
 bot_name: <bot-name>
 # For Codex:
 # harness: codex
+# model: gpt-5.6-sol
 # Both harnesses optionally accept:
 # effort: medium   # low | medium | high | xhigh; Claude Opus/Sonnet also accept max
 ```
+
+Write the Codex model into the config. It is the installation's reviewed pin;
+the raw action deliberately has no model default.
 
 List the secrets the repo already holds:
 
