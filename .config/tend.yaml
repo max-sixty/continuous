@@ -10,5 +10,3 @@ workflows:
   review-runs:
     harness: codex
     model: gpt-5.6-sol
-  codex-auth-refresh:
-    enabled: false
