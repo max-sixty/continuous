@@ -238,90 +238,27 @@ def _eyes_steps(steps: list[dict[str, object]]) -> list[dict[str, object]]:
     return [s for s in steps if "content=eyes" in str(s.get("run", ""))]
 
 
-def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
-    """Index of the step that puts the loaded tree's local setup actions back."""
-    for i, step in enumerate(steps):
-        run = str(step.get("run", ""))
-        if "git checkout" in run and "$GITHUB_SHA" in run:
-            return i
-    return None
-
-
-@pytest.mark.parametrize(
-    ("name", "job", "switch"),
-    [
-        (
-            "review",
-            "review",
-            lambda s: (
-                s.get("uses", "").startswith("actions/checkout")
-                and "ref" in s.get("with", {})
-            ),
-        ),
-        (
-            "mention",
-            "handle",
-            lambda s: "gh pr checkout" in str(s.get("run", "")),
-        ),
-    ],
-)
-def test_local_setup_action_restored_for_post_cleanup(
-    tmp_path: Path,
-    name: str,
-    job: str,
-    switch: object,
+@pytest.mark.parametrize(("name", "job"), [("review", "review"), ("mention", "handle")])
+def test_local_setup_action_keeps_runner_checkout_stable(
+    tmp_path: Path, name: str, job: str
 ) -> None:
-    """review and mention land the PR's tree over the workspace a local `setup:`
-    composite was loaded from. To dispatch the POST steps of the actions nested
-    inside it the runner re-reads that file and matches it against the step list
-    it cached at load time, so a PR that resizes or deletes the file fails
-    cleanup (actions/runner#2816). Put the loaded version back before the POST
-    chain walks.
-
-    `always()` covers a failed session so cleanup still sees the version the
-    runner loaded. The runtime switch still applies because a disabled job
-    never loaded the local action."""
+    """PR topology is selected only inside the harness's disposable clone."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
-
-    idx = _restore_step_index(steps)
-    assert idx is not None, f"{name}: nothing restores the local setup action"
-    assert ".github/actions/tend-setup" in str(steps[idx]["run"])
-    condition = str(steps[idx].get("if", ""))
-    assert condition.startswith("always()"), (
-        f"{name}: the restore has to run even when the session fails"
+    checkouts = [
+        step
+        for step in steps
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert len(checkouts) == 1
+    assert all("gh pr checkout" not in str(step.get("run", "")) for step in steps)
+    agent = next(
+        step
+        for step in steps
+        if str(step.get("uses", "")).startswith("max-sixty/tend/")
     )
-    assert condition.strip() == (
-        "always()\n&& (steps.tend_enabled.outputs.enabled == 'true')"
-    ), f"{name}: restore has an unexpected gate"
-    switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
-    assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
-
-
-def test_restore_step_quotes_the_setup_path(tmp_path: Path) -> None:
-    """The path reaches both the `git` operand and the warning text through a
-    shell variable, so a `$` can't expand and a `"` can't end the string early
-    and fail the one step whose job is to never turn a working run red."""
-    extra = "setup:\n  - uses: './weird/$HOME\"; rm -rf /; echo \"'\n"
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    steps = yaml.safe_load(generate_mention(cfg).content)["jobs"]["handle"]["steps"]
-    run = str(steps[_restore_step_index(steps)]["run"])
-
-    assert """dir='weird/$HOME"; rm -rf /; echo "'""" in run
-    assert 'git checkout "$GITHUB_SHA" -- "$dir"' in run
-    # Nothing but the single-quoted assignment carries the raw path.
-    assert run.count("rm -rf /") == 1
-
-
-def test_no_restore_step_without_a_local_setup_action(tmp_path: Path) -> None:
-    """A remote `uses:` resolves from the action cache, not the workspace, so
-    there is nothing to put back."""
-    extra = "setup:\n  - uses: astral-sh/setup-uv@v6\n"
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in generate_all(cfg):
-        for job in yaml.safe_load(wf.content)["jobs"].values():
-            assert _restore_step_index(job.get("steps", [])) is None, wf.filename
+    assert agent["with"]["checkout_mode"] == name
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -982,47 +919,21 @@ def test_cli_init_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert len(list(wf_dir.glob("tend-*.yaml"))) == 7
 
 
-def test_review_probes_merge_ref_and_falls_back_to_head(tmp_path: Path) -> None:
-    """tend-review must probe refs/pull/N/merge and fall back to /head on 404.
-
-    GitHub only materializes the merge ref for mergeable PRs, so without a
-    fallback the checkout 404s on every conflicting PR and the whole review
-    job cascades as skipped. The probe step wires its output into checkout's
-    `ref:` so review always runs.
-    """
+def test_review_delegates_pr_topology_to_disposable_clone(tmp_path: Path) -> None:
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     data = yaml.safe_load(workflows["tend-review.yaml"].content)
     steps = data["jobs"]["review"]["steps"]
-    probe_idx = next(i for i, s in enumerate(steps) if s.get("id") == "pr_ref")
-    checkout_idx = _pr_tree_checkout_idx(steps)
-    assert probe_idx < checkout_idx
-    probe = steps[probe_idx]
-    assert "gh api" in probe["run"]
-    assert "refs/pull/$PR/merge" in probe["run"]
-    assert "refs/pull/$PR/head" in probe["run"]
-    assert steps[checkout_idx]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
-
-
-def _pr_tree_checkout_idx(steps: list[dict]) -> int:
-    """Index of review's second checkout — the one carrying the fork PR ref."""
-    return next(
-        i
-        for i, s in enumerate(steps)
-        if s.get("uses") == "actions/checkout@v7" and "ref" in s.get("with", {})
+    assert sum(s.get("uses") == "actions/checkout@v7" for s in steps) == 1
+    assert all(s.get("id") != "pr_ref" for s in steps)
+    agent = next(
+        s for s in steps if str(s.get("uses", "")).startswith("max-sixty/tend/")
     )
+    assert agent["with"]["checkout_mode"] == "review"
+    assert agent["with"]["base_branch"] == "${{ github.event.pull_request.base.ref }}"
 
 
-def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
-    """Review checks out the base tree, runs `setup:`, then lands the PR tree.
-
-    `setup:` runs as the runner user, outside the sandbox the harness builds
-    and before it strips the checkout PAT from `.git/config`. Against the PR
-    tree it would execute a contributor's build backend, dependencies, and
-    local `uses: ./` actions with that access, which is the boundary the
-    sandbox exists to draw. The PR checkout keeps `clean: false` so it does
-    not delete what setup wrote into the workspace.
-    """
+def test_setup_runs_on_stable_base_tree_in_review(tmp_path: Path) -> None:
     extra = "setup:\n  - uses: ./.github/actions/my-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
@@ -1035,22 +946,21 @@ def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
     setup_idx = next(
         i for i, s in enumerate(steps) if s.get("uses") == "./.github/actions/my-setup"
     )
-    pr_idx = _pr_tree_checkout_idx(steps)
+    agent_idx = next(
+        i
+        for i, s in enumerate(steps)
+        if str(s.get("uses", "")).startswith("max-sixty/tend/")
+    )
 
-    assert base_idx < setup_idx < pr_idx
+    assert base_idx < setup_idx < agent_idx
+    assert sum(s.get("uses") == "actions/checkout@v7" for s in steps) == 1
     assert "ref" not in steps[base_idx].get("with", {}), (
         "the pre-setup checkout must take the event's base ref, not a fork ref"
     )
-    assert steps[pr_idx]["with"]["clean"] is False
 
 
 def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
-    """The base checkout is setup's, so it renders only alongside setup.
-
-    With nothing to run against the base tree, a second full-history clone is
-    pure overhead. `clean` goes with it — the action consults it only when it
-    finds an existing repo, which a lone checkout never does.
-    """
+    """The one runner checkout is always the trusted base tree."""
     cfg = Config.load(_minimal_config(tmp_path))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     data = yaml.safe_load(workflows["tend-review.yaml"].content)
@@ -1058,7 +968,7 @@ def test_review_without_setup_checks_out_once(tmp_path: Path) -> None:
 
     checkouts = [s for s in steps if s.get("uses") == "actions/checkout@v7"]
     assert len(checkouts) == 1
-    assert checkouts[0]["with"]["ref"] == "${{ steps.pr_ref.outputs.ref }}"
+    assert "ref" not in checkouts[0]["with"]
     assert "clean" not in checkouts[0]["with"]
 
 
@@ -1205,12 +1115,8 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
     assert "repository_dispatch" in verify_if
     assert "pull_request_review" not in verify_if
 
-    # Handle job checks out PR branch for this event
+    # The harness selects the PR branch only in its disposable clone.
     handle_steps = data["jobs"]["handle"]["steps"]
-    checkout_step = next(
-        s for s in handle_steps if s.get("name") == "Check out PR branch"
-    )
-    assert "repository_dispatch" in checkout_step["if"]
 
     # Prompt keeps the review-kind and mention/participation branches apart,
     # keyed on the payload's kind and verify's judged reason — never on a
@@ -1220,6 +1126,8 @@ def test_mention_handles_pull_request_review(tmp_path: Path) -> None:
         for s in handle_steps
         if s.get("uses", "").startswith("max-sixty/tend/claude@")
     )
+    assert tend_step["with"]["checkout_mode"] == "mention"
+    assert all(s.get("name") != "Check out PR branch" for s in handle_steps)
     prompt = tend_step["with"]["prompt"]
     assert "needs.verify.outputs.reason == 'mention'" in prompt
     assert "needs.verify.outputs.url" in prompt
@@ -1330,23 +1238,16 @@ def test_mention_handle_job_queues_not_cancels(tmp_path: Path) -> None:
 
 
 def test_setup_before_pr_checkout_in_mention(tmp_path: Path) -> None:
-    """Setup runs against the default branch, before switching to the PR branch.
-
-    A PR opened before a referenced local composite action existed (and never
-    rebased) carries a tree without that action; running setup after
-    `gh pr checkout` would 404 with `Can't find 'action.yml'` and drop the
-    maintainer's mention silently.
-    """
+    """Setup and POST remain on the default-branch runner checkout."""
     extra = "setup:\n  - uses: ./.github/actions/my-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
     initial_checkout_idx = mention.content.index("actions/checkout@v7")
     setup_idx = mention.content.index("./.github/actions/my-setup")
-    pr_checkout_idx = mention.content.index("Check out PR branch")
-    assert initial_checkout_idx < setup_idx < pr_checkout_idx, (
-        "Setup must run after the initial checkout and before PR-branch switch"
-    )
+    agent_idx = mention.content.index(f"max-sixty/tend/claude@{ACTION_VERSION}")
+    assert initial_checkout_idx < setup_idx < agent_idx
+    assert "Check out PR branch" not in mention.content
 
 
 def test_mention_handle_has_queue_delay(tmp_path: Path) -> None:
@@ -1816,9 +1717,7 @@ def test_workflow_with_setup_regtest(
 def test_workflow_with_local_setup_regtest(
     regtest: object, tmp_path: Path, name: str
 ) -> None:
-    """Snapshot the two workflows that swap the workspace tree after `setup:`,
-    with a local composite in it — locks the restore step the POST chain needs
-    (actions/runner#2816)."""
+    """Local setup composites keep one stable runner checkout through POST."""
     extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     wf = GENERATORS[name](cfg)

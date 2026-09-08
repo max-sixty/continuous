@@ -4,11 +4,12 @@
 # ///
 """Prepare the non-sudo agent user and its credential-injecting proxy.
 
-This program runs as the privileged Actions runner. It exports the sandbox
-paths through ``GITHUB_ENV``, removes checkout's persisted GitHub credential,
-hands the worktree to ``tend-sandbox``, and starts mitmproxy with the real
-GitHub credential and, for Claude, the real model credential. The agent
-receives only dummy credentials.
+This program runs as the privileged Actions runner after the independent agent
+clone has been prepared. It exports the sandbox paths through ``GITHUB_ENV``,
+hands only that disposable clone to ``tend-sandbox``, and starts mitmproxy with
+the real GitHub credential and, for Claude, the real model credential. The
+runner checkout remains runner-owned and the agent receives only dummy
+credentials.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ PROXY_PORT = 8899
 PROXY_URL = f"http://127.0.0.1:{PROXY_PORT}"
 PROXY_CA_CERT = Path("/usr/local/share/ca-certificates/tend-proxy.crt")
 TEND_RUN_DIR = AGENT_HOME / "run"
+TEND_STEP_SUMMARY_DIR = Path("/tmp/claude")
 TEND_AGENT_UV_DIR = AGENT_HOME / ".tend-uv/bin"
 ALLOW_HOSTS = (
     r"^((api\.|codeload\.|uploads\.)?github\.com|raw\.githubusercontent\.com|"
@@ -58,6 +60,7 @@ RESERVED_SANDBOX_ENV = {
     "REQUESTS_CA_BUNDLE",
     "GH_TOKEN",
     "GITHUB_TOKEN",
+    "GITHUB_WORKSPACE",
     "CLAUDE_CODE_REMOTE",
     "ANTHROPIC_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -130,7 +133,9 @@ def append_unique(values: list[str], value: str) -> None:
 @dataclass(frozen=True)
 class Paths:
     workspace: Path
+    runner_workspace: Path
     runner_temp: Path
+    runtime_root: Path
     action_path: Path
     tend_uv_dir: Path
     github_env: Path
@@ -138,7 +143,7 @@ class Paths:
 
     @property
     def agent_env_file(self) -> Path:
-        return self.runner_temp / "tend-agent-env"
+        return self.runtime_root / "agent-env"
 
     @property
     def confdir(self) -> Path:
@@ -280,7 +285,10 @@ def install_blocked_commands(plan: PathPlan) -> None:
 
 
 def base_agent_env(
-    agent_path: str, anthropic_dummy: tuple[str, str] | None
+    agent_path: str,
+    anthropic_dummy: tuple[str, str] | None,
+    *,
+    workspace: Path,
 ) -> list[str]:
     """Return the newline-delimited assignments passed across the UID boundary."""
     values = {
@@ -294,13 +302,12 @@ def base_agent_env(
         "HTTP_PROXY": PROXY_URL,
         "https_proxy": PROXY_URL,
         "http_proxy": PROXY_URL,
-        "NO_PROXY": "localhost,127.0.0.1",
-        "no_proxy": "localhost,127.0.0.1",
         "NODE_EXTRA_CA_CERTS": str(PROXY_CA_CERT),
         "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
         "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
         "GH_TOKEN": GITHUB_DUMMY,
         "GITHUB_TOKEN": GITHUB_DUMMY,
+        "GITHUB_WORKSPACE": str(workspace),
         "CLAUDE_CODE_REMOTE": "1",
     }
     if anthropic_dummy:
@@ -329,7 +336,7 @@ def write_agent_environment(
     *, paths: Paths, plan: PathPlan, anthropic_dummy: tuple[str, str] | None
 ) -> str:
     agent_path = os.pathsep.join(plan.agent_path)
-    assignments = base_agent_env(agent_path, anthropic_dummy)
+    assignments = base_agent_env(agent_path, anthropic_dummy, workspace=paths.workspace)
     assignments.extend(adopter_env(os.environ.get("TEND_SANDBOX_ENV", "")))
     paths.agent_env_file.write_text("\n".join(assignments) + "\n", encoding="utf-8")
     exports = {
@@ -337,11 +344,12 @@ def write_agent_environment(
         "AGENT_HOME": str(AGENT_HOME),
         "TEND_AGENT_UV_DIR": str(TEND_AGENT_UV_DIR),
         "PROXY_URL": PROXY_URL,
+        "TEND_PROXY_PORT": str(PROXY_PORT),
         "TEND_RUN_DIR": str(TEND_RUN_DIR),
+        "TEND_STEP_SUMMARY_DIR": str(TEND_STEP_SUMMARY_DIR),
         "PROXY_CA_CERT": str(PROXY_CA_CERT),
         "AGENT_ENV_FILE": str(paths.agent_env_file),
-        "AGENT_PATH": agent_path,
-        "TEND_BLOCKED_PATH": str(plan.blocked_path or ""),
+        "TEND_RUNNER_HOME": str(paths.runner_home),
     }
     with paths.github_env.open("a", encoding="utf-8") as stream:
         for name, value in exports.items():
@@ -438,11 +446,19 @@ def strip_checkout_credentials(paths: Paths) -> bool:
 
 
 def handoff_workspace(paths: Paths) -> bool:
-    parent = paths.workspace.parent
-    while parent != Path("/"):
-        sudo("/usr/bin/chmod", "o+x", str(parent), check=False, capture=True)
-        parent = parent.parent
-    sudo("/usr/bin/chown", "-R", f"{SANDBOX}:{SANDBOX}", str(paths.workspace))
+    """Give the sandbox UID only its disposable checkout."""
+    if paths.workspace == paths.runner_workspace or within(
+        paths.workspace, paths.runner_workspace
+    ):
+        error("agent workspace must be independent of the runner checkout")
+        return False
+    sudo(
+        "/usr/bin/chown",
+        "--recursive",
+        "--no-dereference",
+        f"{SANDBOX}:{SANDBOX}",
+        str(paths.workspace),
+    )
     readable = (
         sudo(
             "/usr/bin/test",
@@ -458,6 +474,7 @@ def handoff_workspace(paths: Paths) -> bool:
         return False
     log(f"workspace handed to {SANDBOX}")
     sudo("/usr/bin/mkdir", "-p", str(TEND_RUN_DIR), user=SANDBOX)
+    sudo("/usr/bin/mkdir", "-p", str(TEND_STEP_SUMMARY_DIR), user=SANDBOX)
     log(f"run dir {TEND_RUN_DIR}")
     return True
 
@@ -564,18 +581,23 @@ def main() -> int:
     version = os.environ.get("MITMPROXY_VERSION", "")
     if not version:
         return error("MITMPROXY_VERSION is unset; the action must pin it")
-    workspace_value = os.environ.get("GITHUB_WORKSPACE", "")
+    workspace_value = os.environ.get("TEND_AGENT_WORKSPACE", "")
     if not workspace_value or not Path(workspace_value).is_dir():
-        return error("GITHUB_WORKSPACE must name the checked-out repository directory")
+        return error("TEND_AGENT_WORKSPACE must name the prepared disposable checkout")
     workspace = resolved(workspace_value)
     if workspace == Path("/"):
-        return error("GITHUB_WORKSPACE may not be the filesystem root")
-    os.environ["GITHUB_WORKSPACE"] = str(workspace)
+        return error("TEND_AGENT_WORKSPACE may not be the filesystem root")
+    runner_workspace_value = os.environ.get("GITHUB_WORKSPACE", "")
+    if not runner_workspace_value or not Path(runner_workspace_value).is_dir():
+        return error("GITHUB_WORKSPACE must name the runner checkout")
+    runner_workspace = resolved(runner_workspace_value)
 
     try:
         paths = Paths(
             workspace=workspace,
+            runner_workspace=runner_workspace,
             runner_temp=required_path("RUNNER_TEMP"),
+            runtime_root=required_path("TEND_RUNTIME_ROOT"),
             action_path=required_path("ACTION_PATH"),
             tend_uv_dir=required_path("TEND_UV_DIR"),
             github_env=required_path("GITHUB_ENV"),

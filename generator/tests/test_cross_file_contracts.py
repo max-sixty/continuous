@@ -286,9 +286,12 @@ def test_runner_helper_directory_is_python_only() -> None:
 def test_codex_harness_delegates_stateful_phases_to_its_runner() -> None:
     """Keep CLI parsing and cross-step files out of action-inline Bash."""
     action = _read("codex", "action.yaml")
+    lifecycle = _read("shared", "steps", "agent_lifecycle.py")
 
-    for command in ("install-plugin", "stage-agents", "run"):
+    for command in ("install-plugin", "stage-agents"):
         assert f'runner.py" {command}' in action
+    assert "TEND_CODEX_RUNNER" in action
+    assert '["/usr/bin/python3", "-E", "-s", str(runner), "run"]' in lifecycle
     assert "awk" not in action
 
 

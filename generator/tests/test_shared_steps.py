@@ -194,6 +194,15 @@ _PINNED = {
 
 
 def _pin(script: Path, repo: Path, event: Path) -> subprocess.CompletedProcess[str]:
+    payload = json.loads(event.read_text())
+    base_ref = payload.get("pull_request", {}).get("base", {}).get("ref", "")
+    base = subprocess.run(
+        ["git", "rev-parse", f"origin/{base_ref}"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     return subprocess.run(
         [BASH, str(script)],
         cwd=repo,
@@ -201,6 +210,9 @@ def _pin(script: Path, repo: Path, event: Path) -> subprocess.CompletedProcess[s
             "PATH": tool_path(),
             "GITHUB_EVENT_NAME": "pull_request_target",
             "GITHUB_EVENT_PATH": str(event),
+            "TEND_CONFIG_BASE_SHA": (
+                base.stdout.strip() if base.returncode == 0 else "0" * 40
+            ),
         },
         capture_output=True,
         text=True,
@@ -246,6 +258,40 @@ def test_restore_sensitive_config_matches_base_for_every_instruction_path(
         text=True,
     )
     assert staged.stdout == "", staged.stdout
+
+
+def test_restore_sensitive_config_pins_relayed_review_dispatch(
+    tmp_path: Path,
+) -> None:
+    """A relayed review uses the base commit chosen by content ingress."""
+    repo, outside, event = _tampered_checkout(tmp_path)
+    event.write_text(json.dumps({"client_payload": {"pr": 7}}))
+    base = subprocess.run(
+        ["git", "rev-parse", "origin/main"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    result = subprocess.run(
+        [BASH, str(RESTORE_SENSITIVE_CONFIG)],
+        cwd=repo,
+        env={
+            "PATH": tool_path(),
+            "GITHUB_EVENT_NAME": "repository_dispatch",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REPOSITORY": "owner/repo",
+            "TEND_CONFIG_BASE_SHA": base,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tree(repo) == _PINNED
+    assert _tree(outside) == _OUTSIDE
 
 
 @pytest.mark.parametrize(

@@ -54,18 +54,21 @@ Four pieces:
    — no floating `v1`). Every action lives under a harness-named path; there
    is no bare-root default. The two harness runners are:
    - `max-sixty/tend/claude@X.Y.Z` (Claude) — runs the official `claude`
-     binary headless (`claude -p`) as a non-sudo sandbox user behind the
-     credential-injecting proxy; completion is the process exit code.
+     binary headless (`claude -p`) inside the shared Anthropic Sandbox Runtime
+     boundary; completion is the process exit code plus result event.
      Inputs in `claude/action.yaml`.
    - `max-sixty/tend/codex@X.Y.Z` (Codex) — installs `@openai/codex` and
      shells out to `codex exec`. Skills are staged on disk and an
      `AGENTS.md` in `$CODEX_HOME` teaches Codex to resolve
      `/tend-ci-runner:NAME` slash commands. Inputs in `codex/action.yaml`.
-     Shares the cross-harness preflight/teardown scripts under `shared/steps/`.
+     Shares the cross-harness workspace, SRT lifecycle, preflight, and teardown
+     scripts under `shared/steps/`.
 
    Both harness runners resolve the bot's numeric ID at runtime, run security
-   and rate-limit preflight, and upload session logs. They don't know or care
-   about triggers, checkout, or project setup.
+   and rate-limit preflight, prepare an independent event checkout, run
+   `sandbox_setup:` and the complete agent turn in one SRT process tree, reap
+   it, and upload bounded session logs. The generated workflow's checkout stays
+   runner-owned on reviewed code for setup and local-action POST chains.
 
    `max-sixty/tend/codex/refresh@X.Y.Z` is the Codex support action. A generated
    serialized workflow runs it weekly to rotate Plus/Pro credentials and
@@ -94,9 +97,9 @@ Four pieces:
    runtime.
 
 Generated workflows are standalone — full `steps:` jobs, not
-`workflow_call`. The generator owns the entire file. Project setup (build
-tools, caches, env vars) is defined in the `setup:` section of the config
-and rendered into each workflow.
+`workflow_call`. The generator owns the entire file. Trusted runner setup
+(system tools and Actions caches) is defined in `setup:`; dependency setup
+against the event tree is defined in `sandbox_setup:` and runs inside SRT.
 
 ## Structure
 
@@ -182,7 +185,8 @@ session runs the pin.
 | Permissions | Generator | generated workflow |
 | Checkout | Generator | generated workflow |
 | Composite action call | Generator | generated workflow |
-| Project setup (build tools, cache) | Adopter | `setup:` in `.config/tend.yaml` |
+| Runner setup (system tools, Actions cache) | Adopter | `setup:` in `.config/tend.yaml` |
+| Event-tree setup (dependencies, generated files) | Adopter | `sandbox_setup:` in `.config/tend.yaml` |
 | Bot identity, auth config | Adopter | `.config/tend.yaml` |
 | Skills (generic) | Tend | `tend` plugin (marketplace) |
 | Skills (project-specific) | Adopter | `.claude/skills/` in their repo |
@@ -218,9 +222,9 @@ workflows:
 ```
 
 Workflow-level (`workflow_extra`) and job-level (`jobs.<name>`) overrides
-are supported; step-level is not — the `setup:` mechanism handles step
-injection. No allowlist of override keys; unknown job names produce a
-warning.
+are supported; step-level is not — `setup:` handles trusted runner steps and
+`sandbox_setup:` handles event-workspace commands. No allowlist of override
+keys; unknown job names produce a warning.
 
 When overrides are present, the generator renders the base template,
 parses it, merges the overrides, and re-serializes. Output YAML formatting

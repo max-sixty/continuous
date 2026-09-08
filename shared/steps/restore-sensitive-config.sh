@@ -17,11 +17,13 @@
 # those edits reverted for the duration of this run. Same tradeoff
 # claude-code-action makes — narrow UX cost for closing the RCE surface.
 #
-# Runs before the credential-isolation handoff: it needs the git credential
-# actions/checkout persisted, which setup_sandbox.py strips.
+# Invoked by prepare_agent_workspace.py against the runner-owned disposable
+# clone before its ownership handoff. That content-ingress bottleneck selects
+# and verifies TEND_CONFIG_BASE_SHA and disables inherited Git configuration,
+# so this script does not re-derive topology, need a credential, or execute a
+# runner-configured filter.
 #
-# Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME, GITHUB_EVENT_PATH
-# (from Actions).
+# Input (env): TEND_CONFIG_BASE_SHA. Empty means this is not a PR worktree.
 set -eo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -30,31 +32,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 SENSITIVE=(.mcp.json .claude.json .gitmodules .ripgreprc .husky)
 
-case "$GITHUB_EVENT_NAME" in
-  pull_request_target|pull_request_review|pull_request_review_comment)
-    BASE_REF=$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
-    ;;
-  issue_comment)
-    PR_URL=$(jq -r '.issue.pull_request.url // empty' "$GITHUB_EVENT_PATH")
-    if [ -z "$PR_URL" ]; then
-      echo "issue_comment on issue (not PR); nothing to restore"
-      exit 0
-    fi
-    BASE_REF=$(gh api "${PR_URL#https://api.github.com/}" --jq '.base.ref')
-    ;;
-  *)
-    echo "Event $GITHUB_EVENT_NAME is not a PR event; nothing to restore"
-    exit 0
-    ;;
-esac
-
-if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
-  echo "::warning::Could not determine base ref; skipping config restoration"
+if [ -z "${TEND_CONFIG_BASE_SHA:-}" ]; then
+  echo "No PR base commit selected; nothing to restore"
   exit 0
 fi
 
-# `--no-recurse-submodules` keeps an attacker-controlled .gitmodules from
-# sending the fetch to a host of the fork's choosing.
-git fetch origin "$BASE_REF" --depth=1 --no-recurse-submodules
-
-pin_to_base "origin/$BASE_REF" "${SENSITIVE[@]}" "${INSTRUCTION_PATHSPECS[@]}"
+pin_to_base "$TEND_CONFIG_BASE_SHA" "${SENSITIVE[@]}" "${INSTRUCTION_PATHSPECS[@]}"

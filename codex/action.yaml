@@ -54,15 +54,6 @@ inputs:
     description: >-
       Additional Codex CLI arguments, one exact argument per line. They are
       passed before Tend's managed arguments; Codex validates conflicts.
-  sandbox:
-    # Restricted modes cannot currently initialize bubblewrap's loopback
-    # network on the standard GitHub-hosted Ubuntu 24.04 runner. Tend defaults
-    # to full local execution inside that ephemeral runner; the separate UID
-    # and credential proxies below remain the credential boundary.
-    default: danger-full-access
-    description: >-
-      Codex sandbox mode. Restricted modes require a compatible Linux runner;
-      GitHub-hosted Ubuntu 24.04 currently requires danger-full-access.
   codex_version:
     default: "0.153.4"
     description: >-
@@ -93,6 +84,16 @@ inputs:
     default: ""
     description: >-
       Shell commands run as the sandbox user after tools and plugins install.
+  checkout_mode:
+    default: "base"
+    description: >-
+      Internal generator contract selecting base, review, or mention topology.
+  base_branch:
+    default: "main"
+    description: Base branch used to seed the disposable agent clone.
+  sandbox_runtime_version:
+    default: "0.0.75"
+    description: Pinned Anthropic Sandbox Runtime version.
   allowed_bots:
     default: "*"
     description: Bots allowed to trigger workflows (engagement gate, not used yet)
@@ -174,6 +175,14 @@ runs:
         UV_VERSION: ${{ inputs.uv_version }}
         UV_INSTALL_DIR: ${{ runner.temp }}/tend-uv
 
+    - name: Install Anthropic Sandbox Runtime
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/install-sandbox-runtime.sh"
+      env:
+        BASH_ENV: ""
+        SRT_VERSION: ${{ inputs.sandbox_runtime_version }}
+        TEND_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+
     # Install the Codex CLI from npm. `@openai/codex` ships a prebuilt
     # per-platform binary, so this is ~3 s with no Rust toolchain. We pin
     # an explicit version (`codex_version`) rather than floating on
@@ -183,32 +192,45 @@ runs:
     # stable ships it now, so the pin tracks `latest` and drops back to a
     # prerelease only for a fix that hasn't been released yet.
     - name: Install Codex and Responses proxy
-      shell: bash
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
         CODEX_VERSION: ${{ inputs.codex_version }}
       run: |
-        npm install -g \
-          "@openai/codex@$CODEX_VERSION" \
-          "@openai/codex-responses-api-proxy@$CODEX_VERSION"
-        NODE_BIN=$(command -v node)
-        CODEX_BIN=$(command -v codex)
-        CODEX_PROXY_BIN=$(command -v codex-responses-api-proxy)
+        set +x
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
+        PATH="${NODE_BIN%/node}:$PATH"
+        export PATH
+        codex_root="$TEND_RUNTIME_ROOT/codex"
+        /usr/bin/env -i \
+          PATH="$PATH" HOME="$RUNNER_TEMP" \
+          "$NODE_BIN" "$TEND_NPM_CLI" install --prefix "$codex_root" \
+            --userconfig "$TEND_NPM_USERCONFIG" \
+            --globalconfig "$TEND_NPM_GLOBALCONFIG" \
+            --ignore-scripts --no-audit --no-fund \
+            "@openai/codex@$CODEX_VERSION" \
+            "@openai/codex-responses-api-proxy@$CODEX_VERSION"
+        CODEX_BIN="$codex_root/node_modules/.bin/codex"
+        CODEX_PROXY_BIN="$codex_root/node_modules/.bin/codex-responses-api-proxy"
         "$CODEX_BIN" --version
         {
           echo "NODE_BIN=$NODE_BIN"
           echo "CODEX_BIN=$CODEX_BIN"
           echo "CODEX_PROXY_BIN=$CODEX_PROXY_BIN"
+          echo "TEND_CODEX_ROOT=$codex_root"
         } >> "$GITHUB_ENV"
 
-    # Restore PR-authored startup config before the credential handoff. This
-    # needs the git credential actions/checkout persisted; setup_sandbox.py
-    # removes it from disk.
-    - name: Restore sensitive config from base branch (PRs)
+    - name: Prepare disposable agent workspace
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sensitive-config.sh"
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/prepare_agent_workspace.py"
       env:
         BASH_ENV: ""
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        TEND_CHECKOUT_MODE: ${{ inputs.checkout_mode }}
+        TEND_BASE_BRANCH: ${{ inputs.base_branch }}
 
     - name: Cache mitmproxy
       uses: actions/cache@v6
@@ -246,10 +268,13 @@ runs:
           LANG=C.UTF-8 \
           GITHUB_ENV="$GITHUB_ENV" \
           GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+          TEND_AGENT_WORKSPACE="$TEND_AGENT_WORKSPACE" \
+          TEND_RUNNER_WORKSPACE="$TEND_RUNNER_WORKSPACE" \
           RUNNER_TEMP="$RUNNER_TEMP" \
           TEND_GH_TOKEN="$TEND_GH_TOKEN" \
           TEND_GITHUB_ONLY="$TEND_GITHUB_ONLY" \
           ACTION_PATH="$ACTION_PATH" \
+          TEND_RUNTIME_ROOT="$TEND_RUNTIME_ROOT" \
           MITMPROXY_VERSION="$MITMPROXY_VERSION" \
           TEND_UV_DIR="$TEND_UV_DIR" \
           UV_CACHE_DIR="$UV_CACHE_DIR" \
@@ -329,7 +354,7 @@ runs:
       shell: bash
       run: |
         mapfile -t AGENT_ENV < "$AGENT_ENV_FILE"
-        sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" codex --version
+        sudo -u "$SANDBOX" env "${AGENT_ENV[@]}" "$CODEX_BIN" --version
 
     - name: Install agent uv fallback (sandbox)
       shell: bash
@@ -368,12 +393,6 @@ runs:
         BOT_NAME: ${{ steps.bot.outputs.login }}
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" stage-agents
 
-    - name: Run adopter sandbox setup
-      shell: bash
-      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/sandbox_setup.py"
-      env:
-        TEND_SANDBOX_SETUP: ${{ inputs.sandbox_setup }}
-
     - name: Run Codex
       id: codex
       shell: bash
@@ -384,38 +403,45 @@ runs:
         MODEL: ${{ inputs.model }}
         EFFORT: ${{ inputs.effort }}
         EXTRA_ARGS: ${{ inputs.args }}
-        CODEX_SANDBOX_MODE: ${{ inputs.sandbox }}
         AUTH_MODE: ${{ steps.codex_auth.outputs.mode }}
+        TEND_HARNESS: codex
+        TEND_LIFECYCLE: ${{ github.action_path }}/../shared/steps/agent_lifecycle.py
+        TEND_CODEX_RUNNER: ${{ github.action_path }}/runner.py
+        TEND_SANDBOX_SETUP: ${{ inputs.sandbox_setup }}
+        ACTION_PATH: ${{ github.action_path }}/..
       # runner.py preserves the final message even when codex exits non-zero.
       # Base64 keeps arbitrary agent output in one GITHUB_OUTPUT line; consumers
       # decode it with `base64 -d`.
-      run: /usr/bin/python3 -E -s "${{ github.action_path }}/runner.py" run
+      run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/launch_sandbox_runtime.py"
 
-    # Stop every process owned by the sandbox before any runner-owned step
-    # reads agent-controlled paths, then restore checkout ownership.
-    - name: Reap sandbox and restore workspace ownership
+    - name: Stop OpenAI Responses proxy
       if: always()
-      id: sandbox_reap
-      shell: bash
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
       run: |
-        if [ -n "${SANDBOX:-}" ]; then
-          sudo pkill -KILL -u "$SANDBOX" 2>/dev/null || true
-          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
-        fi
+        set +x
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
         if [ -n "${CODEX_PROXY_URL:-}" ]; then
-          curl --fail --silent --show-error "$CODEX_PROXY_URL/shutdown" || true
+          /usr/bin/curl --fail --silent --show-error --max-time 10 "$CODEX_PROXY_URL/shutdown" || true
         fi
-        echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
 
-    - name: Append skill step summary
+    - name: Dispose sandbox resources
       if: always()
-      shell: bash
-      run: |
-        if [ -f /tmp/claude/step-summary.md ]; then
-          sudo -u "$SANDBOX" cat /tmp/claude/step-summary.md \
-            | tee -a "$GITHUB_STEP_SUMMARY" >/dev/null
-          echo >> "$GITHUB_STEP_SUMMARY"
-        fi
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/dispose_sandbox_resources.py"
+      env:
+        BASH_ENV: ""
+
+    - name: Restore Sandbox Runtime host policy
+      if: always()
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sandbox-runtime-host.sh"
+      env:
+        BASH_ENV: ""
 
     # Codex writes rollouts under the sandbox user's ~/.codex/sessions. The
     # step consolidates them into a runner-owned directory only after reaping
@@ -432,7 +458,7 @@ runs:
       shell: bash
       env:
         MODEL: ${{ inputs.model }}
-        SANDBOX_REAPED: ${{ steps.sandbox_reap.outputs.sandbox_reaped }}
+        SANDBOX_REAPED: ${{ steps.codex.outputs.sandbox_reaped }}
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/token_usage.py" --harness codex
 
     - name: Mark event notification read

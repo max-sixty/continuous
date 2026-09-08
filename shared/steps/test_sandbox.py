@@ -18,8 +18,6 @@ from pathlib import Path
 
 import _sandbox
 import pytest
-import run_claude
-import sandbox_setup
 
 WITHHELD = (
     "GITHUB_TOKEN",
@@ -143,58 +141,3 @@ def test_launch_env_carries_a_value_that_is_not_utf_8(
         [sys.executable, "-c", echo, pairs[0]], capture_output=True, check=True
     )
     assert echoed.stdout == b"TEND_X=raw\xe9byte"
-
-
-# Both adopter-code crossings compose the GitHub context the same way: through
-# `launch_env`, with tend's own assignments after it. `env` takes the final
-# assignment of a name, so a GITHUB_*-named one appended by either caller would
-# displace the real context — the failure this pins, scoped to the single argv
-# rather than to file order, because "later in this argv" is what decides who
-# wins.
-CROSSING_CONTEXT = {"GITHUB_WORKFLOW": "tend-weekly", "GITHUB_ACTOR": "someone"}
-
-
-def _crossings(agent_env_file: str) -> dict[str, list[str]]:
-    return {
-        "run_claude.launch_argv": run_claude.launch_argv(
-            sandbox="tend-sandbox",
-            agent_env_file=agent_env_file,
-            model="m",
-            allowed_tools="Bash",
-            system_prompt="s",
-            prompt="p",
-            subprocess_env_scrub="0",
-            bot_name="bot",
-            bot_id="1",
-            ci="true",
-        ),
-        "sandbox_setup.setup_argv": sandbox_setup.setup_argv(
-            "echo hi", sandbox="tend-sandbox", agent_env_file=agent_env_file
-        ),
-    }
-
-
-def test_every_crossing_carries_the_context_and_lets_nothing_displace_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    for name in list(os.environ):
-        if name.startswith("GITHUB_"):
-            monkeypatch.delenv(name)
-    for name, value in CROSSING_CONTEXT.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.setenv("GITHUB_TOKEN", "the-real-pat")
-    env_file = tmp_path / "agent-env"
-    env_file.write_text("HOME=/sandbox\nGITHUB_TOKEN=dummy\n")
-
-    for name, argv in _crossings(str(env_file)).items():
-        assert argv[:4] == ["sudo", "-u", "tend-sandbox", "env"], name
-        assert "GITHUB_TOKEN=the-real-pat" not in argv, (
-            f"{name}: the runner's real PAT crossed into the sandbox"
-        )
-        for key, value in CROSSING_CONTEXT.items():
-            pair = f"{key}={value}"
-            assert pair in argv, f"{name}: the crossing dropped {key}"
-            after = argv[argv.index(pair) + 1 :]
-            assert not [a for a in after if a.startswith(f"{key}=")], (
-                f"{name}: a later assignment displaces the real {key}: {after}"
-            )

@@ -108,18 +108,120 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
         {"OPENAI_API_KEY", "CODEX_AUTH_JSON", "GH_TOKEN", "GITHUB_TOKEN"}
         & run_env.keys()
     )
-    assert steps["Run Codex"]["run"].endswith('runner.py" run')
-    assert run_env["CODEX_SANDBOX_MODE"] == "${{ inputs.sandbox }}"
+    assert steps["Run Codex"]["run"].endswith('launch_sandbox_runtime.py"')
+    assert "CODEX_SANDBOX_MODE" not in run_env
     assert run_env["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
     runner = (REPO_ROOT / "codex" / "runner.py").read_text()
-    assert "_sandbox.launch_env" in runner
+    supervisor = (REPO_ROOT / "shared/steps/launch_sandbox_runtime.py").read_text()
+    assert "_sandbox.launch_env" in supervisor
     assert 'model_provider="tend-openai"' in runner
-    reap = steps["Reap sandbox and restore workspace ownership"]
-    assert reap["id"] == "sandbox_reap"
-    assert 'echo "sandbox_reaped=true" >> "$GITHUB_OUTPUT"' in reap["run"]
     assert steps["Token usage"]["env"]["SANDBOX_REAPED"] == (
-        "${{ steps.sandbox_reap.outputs.sandbox_reaped }}"
+        "${{ steps.codex.outputs.sandbox_reaped }}"
     )
+
+
+def test_sandbox_runtime_pin_is_identical_in_actions_and_hosted_probe() -> None:
+    yaml = YAML(typ="safe", pure=True)
+    versions = {
+        yaml.load((REPO_ROOT / harness / "action.yaml").read_text())["inputs"][
+            "sandbox_runtime_version"
+        ]["default"]
+        for harness in ("claude", "codex")
+    }
+    workflow = yaml.load((REPO_ROOT / ".github/workflows/ci.yaml").read_text())
+    sandbox_steps = workflow["jobs"]["test-sandbox"]["steps"]
+    install = next(
+        step
+        for step in sandbox_steps
+        if step.get("name") == "Install pinned Sandbox Runtime capabilities"
+    )
+    versions.add(install["env"]["SRT_VERSION"])
+
+    assert len(versions) == 1, f"Sandbox Runtime pins diverged: {versions}"
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_sandbox_resources_are_removed_immediately_after_agent_reap(
+    harness: str,
+) -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / harness / "action.yaml").read_text()
+    )
+    steps = action["runs"]["steps"]
+    run_name = "Run Claude" if harness == "claude" else "Run Codex"
+    run_at = next(index for index, step in enumerate(steps) if step["name"] == run_name)
+    cleanup_at = run_at + (2 if harness == "codex" else 1)
+    if harness == "codex":
+        stop = steps[run_at + 1]
+        assert stop["name"] == "Stop OpenAI Responses proxy"
+        assert stop["if"] == "always()"
+        assert "/usr/bin/curl" in stop["run"]
+        assert "--max-time 10" in stop["run"]
+    cleanup = steps[cleanup_at]
+
+    assert cleanup["name"] == "Dispose sandbox resources"
+    assert cleanup["if"] == "always()"
+    assert cleanup["run"].endswith('/dispose_sandbox_resources.py"')
+    restore = steps[cleanup_at + 1]
+    assert restore["name"] == "Restore Sandbox Runtime host policy"
+    assert restore["if"] == "always()"
+    assert restore["run"].endswith('/restore-sandbox-runtime-host.sh"')
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_srt_install_receives_trusted_runner_environment(harness: str) -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / harness / "action.yaml").read_text()
+    )
+    install = next(
+        step
+        for step in action["runs"]["steps"]
+        if step["name"] == "Install Anthropic Sandbox Runtime"
+    )
+
+    assert install["env"]["TEND_RUNNER_ENVIRONMENT"] == "${{ runner.environment }}"
+
+
+def test_srt_host_policy_records_rollback_before_the_host_change() -> None:
+    install = (REPO_ROOT / "shared/steps/install-sandbox-runtime.sh").read_text()
+    marker = install.index('echo "TEND_RESTORE_APPARMOR_USERNS=true"')
+    change = install.index("kernel.apparmor_restrict_unprivileged_userns=0")
+
+    assert marker < change
+    assert 'TEND_RUNNER_ENVIRONMENT:-}" = github-hosted' in install
+    assert "Leaving self-hosted AppArmor policy unchanged" in install
+
+
+def test_hosted_srt_probe_launches_only_from_the_action_copy() -> None:
+    script = (REPO_ROOT / "proxy" / "test-setup-sandbox.sh").read_text()
+    invocation = (
+        '"$TEND_TEST_ACTION_PATH/shared/steps/launch_sandbox_runtime.py" || rc=$?'
+    )
+
+    assert script.count(invocation) == 2
+    assert "-s shared/steps/launch_sandbox_runtime.py" not in script
+
+
+def test_npm_installs_use_distinct_empty_config_files() -> None:
+    install = (
+        REPO_ROOT / "shared" / "steps" / "install-sandbox-runtime.sh"
+    ).read_text()
+    assert 'mktemp "$RUNNER_TEMP/tend-npm-user.XXXXXX"' in install
+    assert 'mktemp "$RUNNER_TEMP/tend-npm-global.XXXXXX"' in install
+    assert (
+        '--userconfig "$npm_userconfig" --globalconfig "$npm_globalconfig"' in install
+    )
+
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "action.yaml").read_text()
+    )
+    codex_install = next(
+        step["run"]
+        for step in action["runs"]["steps"]
+        if step.get("name") == "Install Codex and Responses proxy"
+    )
+    assert '--userconfig "$TEND_NPM_USERCONFIG"' in codex_install
+    assert '--globalconfig "$TEND_NPM_GLOBALCONFIG"' in codex_install
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -381,7 +483,7 @@ def test_codex_action_passes_selected_auth_mode_to_runner() -> None:
     run = next(step for step in doc["runs"]["steps"] if step.get("name") == "Run Codex")
 
     assert run["env"]["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
-    assert run["run"].endswith('/runner.py" run')
+    assert run["run"].endswith('/launch_sandbox_runtime.py"')
 
 
 def test_codex_refresher_keeps_the_secret_writer_pat_out_of_the_model_step() -> None:

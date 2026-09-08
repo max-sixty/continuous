@@ -27,10 +27,12 @@ from pathlib import Path
 from typing import Any
 
 import _common
+from _safe_files import read_regular_nofollow
 
 BASELINE_FILE = ".tend-gist-baseline.json"
 SETTINGS_FILE = ".tend-settings.json"
 MAX_FILE_BYTES = 1_000_000
+MAX_BASELINE_BYTES = 64 * 1024 * 1024
 
 _GIST_ID = re.compile(r"^[A-Za-z0-9]+$")
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -198,8 +200,13 @@ def _read_baseline(
     repository: str, directory: Path, baseline_key: str
 ) -> dict[str, str]:
     try:
-        value = json.loads(_baseline_path(directory).read_text())
-    except (OSError, json.JSONDecodeError) as error:
+        body = read_regular_nofollow(
+            _baseline_path(directory), max_bytes=MAX_BASELINE_BYTES
+        )
+        if body is None:
+            raise FileNotFoundError(_baseline_path(directory))
+        value = json.loads(body.decode())
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise GistMemoryError("memory baseline is missing or malformed") from error
     if (
         not isinstance(value, dict)
@@ -234,11 +241,15 @@ def _local_files(directory: Path) -> dict[str, str]:
             continue
         if not _is_memory_filename(path.name):
             raise GistMemoryError(f"unsupported memory filename: {path.name!r}")
-        content = path.read_text()
-        if len(content.encode()) > MAX_FILE_BYTES:
+        try:
+            body = read_regular_nofollow(path, max_bytes=MAX_FILE_BYTES)
+            if body is None:
+                continue
+            content = body.decode()
+        except (OSError, UnicodeError, ValueError) as error:
             raise GistMemoryError(
-                f"memory file exceeds the 1 MB inline limit: {path.name}"
-            )
+                f"memory file is invalid or exceeds the 1 MB inline limit: {path.name}"
+            ) from error
         files[path.name] = content
     if "MEMORY.md" not in files:
         raise GistMemoryError("local memory has no MEMORY.md entrypoint")

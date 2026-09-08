@@ -74,40 +74,43 @@ jobs:
           grep -qF 'HTTP(S) proxy listening at 127.0.0.1:' "$log"
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
-  # setup_sandbox.py and sandbox_setup.py need a second uid, sudo, and a runner
-  # PATH to derive from, so no Python test reaches them. Running them for real
-  # leaves the runner changed — checkout's persisted git credential deleted,
-  # o+x along the workspace's ancestors, the proxy CA in the system trust store,
-  # mitmdump still on 8899 — so a step added after these needs to expect that;
-  # only the workspace ownership is restored. This job runs both for
-  # real, against the new boundary: shared paths cross, runner-home paths do
-  # not, same-name system fallbacks are blocked, Tend preserves a shared uv,
-  # and sandbox_setup can install a required home-scoped tool explicitly. It
-  # then runs both harness launchers against stub agents. Those are the only
-  # places run_claude.py and codex/runner.py cross the uid boundary at all —
-  # the unit tests replace subprocess.run, and an adopter otherwise first runs
-  # either crossing after a release.
+  # setup_sandbox.py and the SRT lifecycle need a second uid, sudo, and a runner
+  # PATH to derive from, so no Python test reaches the full boundary. Running
+  # them for real leaves the runner changed — the disposable clone belongs to
+  # the sandbox UID, the proxy CA is in the system trust store, and mitmdump
+  # remains on 8899 — so a later step must expect that state. This job exercises
+  # the real boundary: shared paths cross, runner-home paths do not, same-name
+  # system fallbacks are blocked, and Tend preserves a shared uv. It then drives
+  # sandbox_setup and both harness adapters inside their real SRT lifecycle.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - name: Install pinned Sandbox Runtime capabilities
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+        run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash shared/steps/install-sandbox-runtime.sh
+        env:
+          BASH_ENV: ""
+          SRT_VERSION: "0.0.75"
+          TEND_RUNNER_ENVIRONMENT: ${{ runner.environment }}
       - name: Plant PATH-boundary fixtures
         run: bash proxy/test-setup-sandbox.sh plant
       - name: Set up the sandbox
         run: bash proxy/test-setup-sandbox.sh setup
       - name: Install agent uv fallback
         run: bash proxy/test-setup-sandbox.sh install-agent-uv
-      - name: Verify the boundary and sandbox_setup
+      - name: Verify the prepared UID and PATH boundary
         run: bash proxy/test-setup-sandbox.sh verify
-      - name: Verify the Codex credential crossing
-        run: bash proxy/test-setup-sandbox.sh verify-codex-launch
-      - name: Launch, supervise and tear down the agent
-        run: bash proxy/test-setup-sandbox.sh verify-launch
+      - name: Verify complete Claude and Codex SRT lifecycles
+        run: bash proxy/test-setup-sandbox.sh verify-srt
       - name: Refuse unsafe sandbox configuration
         run: bash proxy/test-setup-sandbox.sh verify-refusals
-      - name: Restore workspace ownership for checkout cleanup
+      - name: Clean up sandbox fixtures
         if: always()
         run: bash proxy/test-setup-sandbox.sh cleanup
+      - name: Restore Sandbox Runtime host policy
+        if: always()
+        run: bash shared/steps/restore-sandbox-runtime-host.sh
 
   # Gate Codex version bumps on the credential-free parts of the action's CLI
   # and Responses-proxy contracts. Live model behavior needs an authenticated

@@ -116,12 +116,12 @@ Both actions run the same security and rate-limit preflight checks and
 resolve bot identity. They differ in how the agent runs:
 
 - **Claude harness** — runs the official `claude` binary headless
-  (`claude -p`) as a non-sudo sandbox user behind a local
+  (`claude -p`) as a non-sudo user inside Anthropic Sandbox Runtime, behind a local
   credential-injecting proxy, so the bot token and Anthropic credential
   never enter the agent's environment. Each workflow's prompt is a slash
   command (`/tend-ci-runner:review`) that loads the matching skill.
 - **Codex harness** — installs the `@openai/codex` CLI, then runs
-  `codex exec` as the same non-sudo sandbox user. GitHub calls use Tend's
+  `codex exec` inside the same boundary. GitHub calls use Tend's
   exact-host proxy. API-key model calls use OpenAI's narrow Responses API
   proxy; subscription sessions receive only an expiring access token.
   An AGENTS.md staged into `$CODEX_HOME` teaches Codex to resolve
@@ -163,8 +163,11 @@ steers. It flags any repo-level secret not explicitly listed in
 `tend check --fix` creates the environment and sets its policy; moving the
 secrets into it stays manual — their values can't be read back.
 
-**Credential isolation** — both harnesses run the agent as a separate non-sudo
-user. Tend's exact-host proxy holds the bot token; Claude model auth uses the
+**Disposable execution boundary** — both harnesses create an independent event
+checkout and run `sandbox_setup:` plus the whole agent turn as one process tree
+inside the pinned Anthropic Sandbox Runtime, under a separate non-sudo user.
+The stable Actions checkout remains runner-owned for setup and POST cleanup.
+Tend's exact-host proxy holds the bot token; Claude model auth uses the
 same mechanism, while API-key Codex auth uses OpenAI's proxy that forwards only
 Responses API calls upstream. The proxies authenticate the agent without
 placing the PAT or API credentials in its environment. Subscription-mode Codex
@@ -248,8 +251,8 @@ skills.
 
 ### Claude (default)
 
-Runs the official `claude` binary headless (`claude -p`) as a non-sudo
-sandbox user behind a local credential-injecting proxy: the bot token and
+Runs the official `claude` binary headless (`claude -p`) in the shared SRT
+boundary behind a local credential-injecting proxy: the bot token and
 the Anthropic credential live only in the proxy, never in the agent's
 environment. Two auth modes:
 
@@ -266,17 +269,16 @@ agent itself only ever holds a dummy.
 
 ### Codex (experimental alternative)
 
-Installs `@openai/codex` and invokes `codex exec` as the non-sudo sandbox user.
+Installs `@openai/codex` and invokes `codex exec` in the shared SRT boundary.
 GitHub access goes through Tend's exact-host proxy. Under API auth, the OpenAI
 key is read from stdin by OpenAI's narrow Responses API proxy and is never
 placed in the agent's environment. Under subscription auth, the sandbox gets
 an expiring access-only `auth.json`, never the rotating refresh token. A bundled
 `AGENTS.md` teaches Codex to resolve tend's slash commands to skill markdown.
 
-Codex currently runs with `danger-full-access` inside the ephemeral runner.
-Its restricted Linux modes cannot initialize bubblewrap's loopback network on
-the standard GitHub-hosted Ubuntu 24.04 runner; the separate UID and credential
-proxies remain the credential boundary.
+Codex's own nested sandbox is disabled. The pinned Anthropic Sandbox Runtime is
+the single filesystem, network, seccomp, and process-lifetime boundary for both
+harnesses.
 
 Two auth modes:
 

@@ -1,14 +1,10 @@
-"""The environment the sandbox user is launched with.
+"""Compose the environment at the single runner-to-SRT boundary.
 
-Every step that hands the sandbox an environment does so through
-``sudo -u "$SANDBOX" env``: ``env_reset`` drops the runner's, so only the names
-on that line reach the child. The two crossings that put the ADOPTER's code on
-the far side build that line here — the agent launch (``run_claude.py``) and
-their ``sandbox_setup:`` commands (``sandbox_setup.py``) — so a
-``sandbox_setup:`` command can gate an install on the variable the skill it
-installs for will read. The crossings that run tend's own code take no GitHub
-context. Which side of that line a new crossing falls on is who wrote what runs
-there, not how much context looks useful.
+The outer supervisor crosses the UID boundary once with a clean ``env -i``.
+SRT then finalizes proxy variables for its network namespace, and every command
+inside the lifecycle inherits that environment unchanged. Trusted preparation
+commands that run before SRT use :func:`agent_env` and receive no GitHub
+context.
 
 Pass ``GITHUB_*`` through as a denylist rather than an explicit allowlist: most
 ``GITHUB_*`` vars are informational (``GITHUB_ACTOR``, ``GITHUB_API_URL``,
@@ -32,12 +28,16 @@ from pathlib import Path
 #: the proxy. (The file's dummy must not be overridden, so this entry is
 #: load-bearing.)
 #:
+#: ``GITHUB_WORKSPACE`` — the context names the trusted Actions checkout; the
+#: agent env file supplies the disposable clone instead.
+#:
 #: ``GITHUB_{ENV,PATH,OUTPUT,STATE,STEP_SUMMARY}`` — paths the runner re-reads
 #: after the step exits; the sandbox must not be handed a channel into later
 #: steps' env / PATH / outputs / job summary.
 WITHHELD = frozenset(
     {
         "GITHUB_TOKEN",
+        "GITHUB_WORKSPACE",
         "GITHUB_ENV",
         "GITHUB_PATH",
         "GITHUB_OUTPUT",
@@ -70,7 +70,7 @@ def agent_env(agent_env_file: str | os.PathLike[str]) -> list[str]:
 
 
 def launch_env(agent_env_file: str | os.PathLike[str]) -> list[str]:
-    """The ``NAME=VALUE`` arguments for adopter code in the sandbox.
+    """The ``NAME=VALUE`` arguments for the outer SRT launch.
 
     The file's lines (proxy routing, CA trust, dummy credentials, and the
     adopter's own ``sandbox_env:`` additions) come first, then the GitHub

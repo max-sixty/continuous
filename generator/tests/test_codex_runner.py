@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import importlib.util
 import subprocess
 from pathlib import Path
@@ -171,14 +170,12 @@ def test_stage_agents_writes_as_the_sandbox_user(
     )
 
 
-def test_run_withholds_runner_credentials_and_exports_message_on_failure(
+def test_run_withholds_runner_credentials_and_preserves_message_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, agent_home, _ = _set_sandbox_env(tmp_path, monkeypatch)
-    github_output = tmp_path / "github-output"
     run_dir = agent_home / "run"
     run_dir.mkdir()
-    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
     monkeypatch.setenv("GITHUB_TOKEN", "real-github-token")
     monkeypatch.setenv("GITHUB_ENV", "/runner/github-env")
     monkeypatch.setenv("GITHUB_ACTOR", "octocat")
@@ -186,7 +183,6 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     monkeypatch.setenv("TEND_RUN_DIR", str(run_dir))
     monkeypatch.setenv("CODEX_PROXY_URL", "http://127.0.0.1:1234")
     monkeypatch.setenv("MODEL", "gpt-test")
-    monkeypatch.setenv("CODEX_SANDBOX_MODE", "danger-full-access")
     monkeypatch.setenv("EFFORT", "high")
     monkeypatch.setenv(
         "EXTRA_ARGS", "--skip-git-repo-check\n--config\nproject_doc_max_bytes=8192"
@@ -195,12 +191,13 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     monkeypatch.setenv("BOT_NAME", "tend-bot")
     monkeypatch.setenv("BOT_ID", "123")
     monkeypatch.setenv("AUTH_MODE", "api-key")
+    monkeypatch.setenv("TEND_INSIDE_SANDBOX", "1")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "localhost,127.0.0.1")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def run(args: list[str], **kwargs: object):
         calls.append((args, kwargs))
-        if "/usr/bin/base64" in args:
-            return _result(args, stdout=base64.b64encode(b"final\n").decode())
         if "/opt/codex/bin/codex" in args:
             return _result(args, returncode=7)
         return _result(args)
@@ -208,8 +205,9 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     monkeypatch.setattr(codex_runner, "_run", run)
 
     assert codex_runner.main(["run"]) == 7
-    assert github_output.read_text() == (
-        "final_message=" + base64.b64encode(b"final\n").decode() + "\n"
+    codex = next(args for args, _kwargs in calls if "/opt/codex/bin/codex" in args)
+    assert codex[codex.index("--output-last-message") + 1] == str(
+        run_dir / "codex-final-message.md"
     )
     launch, kwargs = next(
         (args, options) for args, options in calls if "/opt/codex/bin/codex" in args
@@ -218,10 +216,10 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     assert "GITHUB_TOKEN=real-github-token" not in launch
     assert "GITHUB_ENV=/runner/github-env" not in launch
     assert "OPENAI_API_KEY=real-openai-key" not in launch
-    assert "GITHUB_TOKEN=ghp_tendproxydummy" in launch
-    assert "GITHUB_ACTOR=octocat" in launch
     assert "BOT_NAME=tend-bot" in launch
     assert "BOT_ID=123" in launch
+    assert "NO_PROXY=" in launch
+    assert "no_proxy=" in launch
     codex_at = launch.index("/opt/codex/bin/codex")
     assert launch[codex_at:] == [
         "/opt/codex/bin/codex",
@@ -231,8 +229,7 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
         "project_doc_max_bytes=8192",
         "--model",
         "gpt-test",
-        "--sandbox",
-        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--output-last-message",
         str(run_dir / "codex-final-message.md"),
         "--config",
@@ -243,19 +240,14 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
         "--config",
         'model_provider="tend-openai"',
         "--config",
+        'shell_environment_policy.set.NO_PROXY="127.0.0.1,localhost"',
+        "--config",
+        'shell_environment_policy.set.no_proxy="localhost,127.0.0.1"',
+        "--config",
         'cli_auth_credentials_store="file"',
         "--config",
         'model_reasoning_effort="high"',
         "Review this",
-    ]
-    encoded = calls[-1][0]
-    assert encoded == [
-        "/usr/bin/sudo",
-        "-u",
-        "tend-sandbox",
-        "/usr/bin/base64",
-        "-w0",
-        str(run_dir / "codex-final-message.md"),
     ]
 
 
@@ -267,10 +259,12 @@ def test_run_uses_staged_subscription_auth_without_responses_proxy(
     run_dir.mkdir()
     monkeypatch.setenv("TEND_RUN_DIR", str(run_dir))
     monkeypatch.setenv("MODEL", "gpt-test")
-    monkeypatch.setenv("CODEX_SANDBOX_MODE", "danger-full-access")
     monkeypatch.setenv("PROMPT", "Review this")
     monkeypatch.setenv("AUTH_MODE", "subscription")
+    monkeypatch.setenv("TEND_INSIDE_SANDBOX", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "also-configured")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "localhost,127.0.0.1")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def run(args: list[str], **kwargs: object):
@@ -287,17 +281,27 @@ def test_run_uses_staged_subscription_auth_without_responses_proxy(
     )
     assert kwargs["check"] is False
     assert all(not item.startswith("OPENAI_API_KEY=") for item in launch)
+    assert "NO_PROXY=" not in launch
+    assert "no_proxy=" not in launch
     codex_at = launch.index("/opt/codex/bin/codex")
     assert launch[codex_at:] == [
         "/opt/codex/bin/codex",
         "exec",
         "--model",
         "gpt-test",
-        "--sandbox",
-        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--output-last-message",
         str(run_dir / "codex-final-message.md"),
         "--config",
         'cli_auth_credentials_store="file"',
         "Review this",
     ]
+
+
+def test_run_refuses_to_create_a_second_execution_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_sandbox_env(tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="only inside the SRT lifecycle"):
+        codex_runner.main(["run"])

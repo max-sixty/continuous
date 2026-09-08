@@ -14,7 +14,7 @@
    present), treating empty as absent. Codex likewise emits both paths; the
    action prefers the access-only subscription bundle when present. Its weekly
    refresh workflow is the only process that receives the rotating token. #}
-{% macro agent_step(cfg, prompt_body, if_condition='') %}
+{% macro agent_step(cfg, prompt_body, if_condition='', checkout_mode='base', base_branch='${{ github.event.repository.default_branch }}') %}
 {% if cfg.harness == 'claude' %}
       - uses: max-sixty/tend/claude@<<tend_version>>
 {% else %}
@@ -38,6 +38,8 @@
 {% endif %}
           bot_name: <<cfg.bot_name>>
           model: <<cfg.model>>
+          checkout_mode: <<checkout_mode>>
+          base_branch: <<base_branch>>
 {% if cfg.effort %}
           effort: <<cfg.effort>>
 {% endif %}
@@ -251,41 +253,6 @@
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.<<bot_token_secret>> }}
-{%- endmacro %}
-
-{# Put the local composites named by `setup:` back the way the job loaded them,
-   for the workflows that swap the workspace tree afterwards (review, mention).
-
-   A `uses: ./path` is read from the workspace, and the runner reads it a second
-   time at job end to dispatch the POST steps of the actions nested inside it —
-   `Swatinem/rust-cache` and friends — indexing into the step list it cached the
-   first time. By then the PR's own tree is on disk, so a PR that edits the
-   composite's step count fails cleanup with `Index was out of range`, and one
-   that drops the file entirely with `Can't find 'action.yml'`. Both paint the
-   job red after a session that did its work correctly. actions/runner#2816.
-
-   `$GITHUB_SHA` names the tree the job's first checkout took: both callers give
-   that checkout no `ref`, and `actions/checkout` then resolves the triggering
-   event's own commit. So it is by construction the tree the composite loaded
-   from, whatever branch the event put there. Every main step runs ahead of
-   every POST step, so any position below the tree switch is early enough.
-   `run_body` is empty for a `setup:` that names no local action, rendering this
-   away.
-
-   #}
-{% macro restore_local_actions(run_body, if_condition='') %}
-{% if run_body %}
-
-
-      - name: Restore local setup actions for POST cleanup
-{% if if_condition %}
-<<step_if("always()\n&& (" ~ if_condition ~ ")")>>
-{% else %}
-        if: always()
-{% endif %}
-        run: |
-<<run_body|indent(10, first=True)>>
-{%- endif %}
 {%- endmacro %}
 
 {# A multi-line action input, as a YAML block scalar at column 10 with the text

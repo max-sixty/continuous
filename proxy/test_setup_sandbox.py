@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,17 +13,23 @@ import setup_sandbox
 
 def _paths(tmp_path: Path) -> setup_sandbox.Paths:
     runner_home = tmp_path / "runner"
-    workspace = runner_home / "work/repo"
-    workspace.mkdir(parents=True)
+    runner_workspace = runner_home / "work/repo"
+    runner_workspace.mkdir(parents=True)
     runner_temp = tmp_path / "temp"
     runner_temp.mkdir()
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    workspace = runner_temp / "agent-repo"
+    workspace.mkdir()
     action = tmp_path / "action"
     action.mkdir()
     uv = tmp_path / "uv"
     uv.mkdir()
     return setup_sandbox.Paths(
         workspace=workspace.resolve(),
+        runner_workspace=runner_workspace.resolve(),
         runner_temp=runner_temp.resolve(),
+        runtime_root=runtime_root.resolve(),
         action_path=action.resolve(),
         tend_uv_dir=uv.resolve(),
         github_env=tmp_path / "github-env",
@@ -101,7 +108,7 @@ def test_adopter_environment_preserves_values_after_the_first_equals() -> None:
 
 def test_every_fixed_agent_assignment_is_reserved() -> None:
     assignments = setup_sandbox.base_agent_env(
-        "/usr/bin", ("ANTHROPIC_API_KEY", "dummy")
+        "/usr/bin", ("ANTHROPIC_API_KEY", "dummy"), workspace=Path("/agent")
     )
     assert {line.split("=", 1)[0] for line in assignments} <= (
         setup_sandbox.RESERVED_SANDBOX_ENV
@@ -109,7 +116,9 @@ def test_every_fixed_agent_assignment_is_reserved() -> None:
 
 
 def test_github_only_agent_environment_has_no_model_credential() -> None:
-    assignments = setup_sandbox.base_agent_env("/usr/bin", None)
+    assignments = setup_sandbox.base_agent_env(
+        "/usr/bin", None, workspace=Path("/agent")
+    )
 
     assert not any(
         line.startswith(("ANTHROPIC_API_KEY=", "CLAUDE_CODE_OAUTH_TOKEN="))
@@ -119,6 +128,30 @@ def test_github_only_agent_environment_has_no_model_credential() -> None:
     assert "CODEX_API_KEY" in setup_sandbox.RESERVED_SANDBOX_ENV
     assert "CODEX_AUTH_JSON" in setup_sandbox.RESERVED_SANDBOX_ENV
     assert "CODEX_HOME" in setup_sandbox.RESERVED_SANDBOX_ENV
+    assert "GITHUB_WORKSPACE=/agent" in assignments
+    assert not any(line.startswith(("NO_PROXY=", "no_proxy=")) for line in assignments)
+
+
+def test_workspace_handoff_never_dereferences_pr_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    def sudo(*args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(setup_sandbox, "sudo", sudo)
+
+    assert setup_sandbox.handoff_workspace(paths)
+    assert calls[0] == (
+        "/usr/bin/chown",
+        "--recursive",
+        "--no-dereference",
+        f"{setup_sandbox.SANDBOX}:{setup_sandbox.SANDBOX}",
+        str(paths.workspace),
+    )
 
 
 def test_proxy_uvx_isolated_from_adopter_python_and_uv_configuration(

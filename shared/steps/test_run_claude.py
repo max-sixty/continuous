@@ -1,9 +1,8 @@
 """The agent launch and the verdict it produces.
 
-The launch tests replace ``subprocess.run``: what is under test is the crossing
-this module composes — argv, env order, the runner-owned redirects, the bound
-and the reap — not a second uid. ``proxy/test-setup-sandbox.sh``'s
-``verify-launch`` phase drives the real thing on a hosted runner.
+The launch tests replace ``subprocess.run``: what is under test is the harness
+argv, fixed inner files, bound, and process-group reap. The hosted sandbox test
+drives the same code through the complete SRT lifecycle.
 
 The verdict tests need no agent, no credential and no second uid — every input
 is a file or a scalar — so each branch is reachable from a fixture.
@@ -21,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import _sandbox
 import pytest
 import run_claude
 from _fakes import GithubFiles
@@ -378,7 +376,7 @@ class Recorded:
 
 @dataclass
 class FakeAgent:
-    """A launched `sudo` whose `wait` follows the scenario, recording the order.
+    """A launched agent whose `wait` follows the scenario, recording the order.
 
     Every wait goes into the shared call log beside the signals, so a test reads
     one ordered sequence rather than correlating two lists.
@@ -388,13 +386,13 @@ class FakeAgent:
     returncode: int
     times_out: bool
     term_ends_it: bool
+    pid: int = 1234
 
     def wait(self, timeout: float | None = None) -> int:
         self.calls.append(Recorded(["wait"], {"timeout": timeout}))
         if timeout is None:
             # The reap after the KILL. SIGKILL cannot be blocked, so the agent
-            # is already gone and `sudo` exits with it — this returns at once
-            # whatever the run did before.
+            # is already gone; this returns at once with the prior outcome.
             return -9 if self.times_out else self.returncode
         if not self.times_out:
             return self.returncode
@@ -425,8 +423,8 @@ class Launch:
         for call in self.calls:
             if call.argv == ["wait"]:
                 steps.append(f"wait({call.kwargs['timeout']})")
-            elif "pkill" in call.argv:
-                steps.append(" ".join(call.argv[1:3]))
+            elif call.argv[:1] == ["killpg"]:
+                steps.append(call.argv[2])
         return steps
 
 
@@ -450,27 +448,15 @@ def launch(
         timed_out: bool = False,
         term_ends_it: bool = True,
         launch_error: Exception | None = None,
-        agent_env_text: str = "HOME=/sandbox\nGITHUB_TOKEN=dummy\nPATH=/usr/bin\n",
         **overrides: str,
     ) -> Launch:
         runner_temp = tmp_path / "runner-temp"
         workspace = tmp_path / "workspace"
-        agent_env = tmp_path / "agent-env"
         runner_temp.mkdir(exist_ok=True)
         workspace.mkdir(exist_ok=True)
-        agent_env.write_text(agent_env_text)
-
-        # github_files owns the withheld names; clearing the rest makes the
-        # composed argv the fixture's, not the developer's shell's.
-        for name in list(os.environ):
-            if name.startswith("GITHUB_") and name not in _sandbox.WITHHELD:
-                monkeypatch.delenv(name)
-        monkeypatch.setenv("GITHUB_TOKEN", "the-real-pat")
-        monkeypatch.setenv("GITHUB_WORKFLOW", "tend-weekly")
         monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("TEND_INSIDE_SANDBOX", "1")
         env = {
-            "SANDBOX": "tend-sandbox",
-            "AGENT_ENV_FILE": str(agent_env),
             "RUNNER_TEMP": str(runner_temp),
             "GITHUB_WORKSPACE": str(workspace),
             "TEND_MODEL": "opus",
@@ -503,14 +489,17 @@ def launch(
             kwargs["stderr"].write(stderr_text.encode())
             return FakeAgent(calls, returncode, timed_out, term_ends_it)
 
+        def fake_killpg(pid: int, sent: signal.Signals) -> None:
+            calls.append(Recorded(["killpg", str(pid), sent.name], {}))
+
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(os, "killpg", fake_killpg)
         try:
             code = run_claude.main()
         except BaseException:
-            assert any("pkill" in call.argv for call in calls), (
-                "the launch failed and the sandbox uid was never reaped"
-            )
+            if launch_error is None:
+                assert any(call.argv[:1] == ["killpg"] for call in calls)
             raise
         return Launch(
             calls,
@@ -574,56 +563,43 @@ def test_launch_passes_extra_args_before_tend_managed_args(launch: Launcher) -> 
     assert argv[-3:] == ["--effort", "xhigh", "review the PR"]
 
 
-def test_launch_adds_the_restored_auto_memory_settings(launch: Launcher) -> None:
+def test_launch_adds_the_restored_auto_memory_settings(
+    launch: Launcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
     settings_file = "/home/tend-sandbox/run/auto-memory/.tend-settings.json"
+    monkeypatch.setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
     result = launch(
         stream=_ev_result(),
         TEND_AUTO_MEMORY_SETTINGS=settings_file,
-        agent_env_text=(
-            "HOME=/sandbox\n"
-            "GITHUB_TOKEN=dummy\n"
-            "PATH=/usr/bin\n"
-            "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1\n"
-        ),
     )
     argv = result.command("claude").argv
 
     assert argv[-3:] == ["--settings", settings_file, "review the PR"]
-    assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1" not in argv
+    assert argv[1:3] == ["-u", "CLAUDE_CODE_DISABLE_AUTO_MEMORY"]
 
 
-def test_launch_composes_the_file_then_the_context_then_tends_own_names(
+def test_launch_only_adds_harness_names_inside_srt(
     launch: Launcher,
 ) -> None:
-    """`sudo env` replaces the environment, so this list is all the agent gets.
-
-    The order is `_sandbox.launch_env`'s postcondition, plus tend's own
-    assignments last; this pins the whole crossing as one argv.
-    """
+    """The curated and SRT-adjusted environment is inherited, not replayed."""
     result = launch(stream=_ev_result())
     argv = result.command("claude").argv
-    crossing = argv[argv.index("env") + 1 : argv.index("claude")]
+    crossing = argv[1 : argv.index("claude")]
 
     assert crossing == [
-        "HOME=/sandbox",
-        "GITHUB_TOKEN=dummy",
-        "PATH=/usr/bin",
-        "GITHUB_WORKFLOW=tend-weekly",
-        f"GITHUB_WORKSPACE={result.stream_json.parent.parent / 'workspace'}",
         "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0",
         "BOT_NAME=tend-bot",
         "BOT_ID=42",
         "CI=true",
     ]
-    assert argv[:4] == ["sudo", "-u", "tend-sandbox", "env"]
+    assert argv[0] == "/usr/bin/env"
 
 
-def test_launch_writes_the_settings_as_the_sandbox_user(launch: Launcher) -> None:
-    """The agent has to read it back, and its uid is not the runner's."""
+def test_launch_writes_settings_inside_the_existing_sandbox(launch: Launcher) -> None:
     result = launch(stream=_ev_result())
     tee = result.command("tee")
 
-    assert tee.argv[:3] == ["sudo", "-u", "tend-sandbox"]
+    assert tee.argv[0] == "tee"
     assert tee.argv[-1].endswith("/.claude/settings.local.json")
     assert json.loads(tee.kwargs["input"]) == {
         "permissions": {
@@ -634,10 +610,8 @@ def test_launch_writes_the_settings_as_the_sandbox_user(launch: Launcher) -> Non
         "attribution": {"commit": "", "pr": ""},
     }
     mkdir = result.command("mkdir")
-    assert mkdir.argv[:3] == ["sudo", "-u", "tend-sandbox"]
-    assert mkdir.kwargs["stdin"] is subprocess.DEVNULL, (
-        "without a tty, a `sudo` that wants a password waits on the step's stdin"
-    )
+    assert mkdir.argv[0] == "mkdir"
+    assert mkdir.kwargs["stdin"] is subprocess.DEVNULL
 
 
 def test_launch_captures_the_streams_into_runner_owned_files(
@@ -652,7 +626,7 @@ def test_launch_captures_the_streams_into_runner_owned_files(
     kwargs = result.command("claude").kwargs
 
     assert kwargs["stdin"] is subprocess.DEVNULL
-    assert result.supervision() == ["wait(900)", "pkill -KILL", "wait(None)"]
+    assert result.supervision() == ["wait(900)", "SIGKILL", "wait(None)"]
     assert result.stream_json.read_text() == _ev_result()
     assert result.stderr_log.read_text() == "a warning\n"
     assert re.fullmatch(
@@ -661,36 +635,13 @@ def test_launch_captures_the_streams_into_runner_owned_files(
     ), result.out
 
 
-def test_launch_publishes_the_stream_json_output(
-    launch: Launcher, github_files: GithubFiles
-) -> None:
-    """The Token usage step and the session-logs artifact both read it."""
-    result = launch(stream=_ev_result())
-
-    assert github_files.outputs() == {
-        "stream_json": str(result.stream_json),
-        "sandbox_reaped": "true",
-    }
-
-
-def test_launch_reaps_the_sandbox_uid_after_every_run(launch: Launcher) -> None:
-    """`sudo` relays nothing, so only a signal by uid reaches the agent."""
+def test_launch_reaps_the_agent_process_group_after_every_run(launch: Launcher) -> None:
     for result in (
         launch(stream=_ev_result()),
         launch(stream=_ev_result("error_max_turns")),
         launch(timed_out=True),
     ):
-        assert result.supervision()[-2:] == ["pkill -KILL", "wait(None)"], (
-            "the step returned while `sudo` and the agent under it were still "
-            "alive, racing the steps that hand the workspace back"
-        )
-        assert [c for c in result.calls if "pkill" in c.argv][-1].argv == [
-            "sudo",
-            "pkill",
-            "-KILL",
-            "-u",
-            "tend-sandbox",
-        ]
+        assert result.supervision()[-2:] == ["SIGKILL", "wait(None)"]
 
 
 def test_launch_asks_the_agent_to_stop_before_making_it(launch: Launcher) -> None:
@@ -704,9 +655,9 @@ def test_launch_asks_the_agent_to_stop_before_making_it(launch: Launcher) -> Non
 
     assert result.supervision() == [
         "wait(900)",
-        "pkill -TERM",
+        "SIGTERM",
         "wait(5)",
-        "pkill -KILL",
+        "SIGKILL",
         "wait(None)",
     ]
     assert result.code == 1
@@ -723,9 +674,9 @@ def test_launch_kills_a_run_the_term_does_not_end(launch: Launcher) -> None:
 
     assert result.supervision() == [
         "wait(900)",
-        "pkill -TERM",
+        "SIGTERM",
         "wait(5)",
-        "pkill -KILL",
+        "SIGKILL",
         "wait(None)",
     ]
     assert result.code == 1
@@ -733,20 +684,15 @@ def test_launch_kills_a_run_the_term_does_not_end(launch: Launcher) -> None:
     assert "claude_exit=none" in result.out
 
 
-def test_launch_reaps_the_sandbox_uid_even_when_the_launch_itself_fails(
+def test_launch_failure_surfaces_before_a_process_group_exists(
     launch: Launcher,
 ) -> None:
-    """The reap is what stops the agent, so no path out of the supervisor skips it.
-
-    A launch that cannot start — no `sudo`, no permission — is the case where a
-    reap placed after the call would be skipped, leaving sandbox-uid processes
-    running into the steps that follow.
-    """
+    """A failed spawn has no process group to reap."""
     with pytest.raises(FileNotFoundError):
-        launch(launch_error=FileNotFoundError("sudo"))
+        launch(launch_error=FileNotFoundError("claude"))
 
 
-def test_supervise_reaps_the_sandbox_uid_when_the_runner_cancels_the_job(
+def test_supervise_reaps_the_process_group_when_the_runner_cancels_the_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A cancelled job arrives as a signal, which no `finally` sees by itself.
@@ -765,6 +711,7 @@ def test_supervise_reaps_the_sandbox_uid_when_the_runner_cancels_the_job(
 
         def __init__(self) -> None:
             self.waits = 0
+            self.pid = 1234
 
         def wait(self, timeout: float | None = None) -> int:
             self.waits += 1
@@ -773,19 +720,17 @@ def test_supervise_reaps_the_sandbox_uid_when_the_runner_cancels_the_job(
                 raise run_claude.Cancelled("signal 15")
             return -9
 
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
-        calls.append(Recorded(list(argv), kwargs))
-        return subprocess.CompletedProcess(argv, 0)
+    def fake_killpg(pid: int, sent: signal.Signals) -> None:
+        calls.append(Recorded(["killpg", str(pid), sent.name], {}))
 
     agent = CancelledAgent()
-    monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: agent)
+    monkeypatch.setattr(os, "killpg", fake_killpg)
     before = signal.getsignal(signal.SIGTERM)
 
     with pytest.raises(run_claude.Cancelled):
         run_claude.supervise(
-            ["sudo", "-u", "tend-sandbox", "claude"],
-            sandbox="tend-sandbox",
+            ["claude"],
             timeout_sec=900,
             stream_json=tmp_path / "stream.json",
             stderr_log=tmp_path / "stderr.log",
@@ -795,10 +740,8 @@ def test_supervise_reaps_the_sandbox_uid_when_the_runner_cancels_the_job(
     assert signal.getsignal(signal.SIGTERM) is before, (
         "the handler outlived the supervision it was installed for"
     )
-    assert [call.argv for call in calls] == [
-        ["sudo", "pkill", "-KILL", "-u", "tend-sandbox"]
-    ]
-    assert agent.waits == 2, "`sudo` was left unreaped after the KILL"
+    assert [call.argv for call in calls] == [["killpg", "1234", "SIGKILL"]]
+    assert agent.waits == 2, "the agent process was left unreaped after the KILL"
 
 
 def test_launch_reports_a_signalled_child_in_shell_convention(
@@ -825,8 +768,6 @@ def test_main_refuses_to_start_without_an_input_it_needs_late(
     ordinary run green and surface months later, mid-outage, as a bare exit 1.
     """
     for name in (
-        "SANDBOX",
-        "AGENT_ENV_FILE",
         "RUNNER_TEMP",
         "GITHUB_WORKSPACE",
         "TEND_MODEL",
@@ -839,7 +780,17 @@ def test_main_refuses_to_start_without_an_input_it_needs_late(
         "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
     ):
         monkeypatch.setenv(name, "set")
+    monkeypatch.setenv("TEND_INSIDE_SANDBOX", "1")
     monkeypatch.delenv("TEND_TIMEOUT_SEC", raising=False)
 
     with pytest.raises(SystemExit, match="TEND_TIMEOUT_SEC"):
+        run_claude.main()
+
+
+def test_main_refuses_to_create_a_second_execution_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEND_INSIDE_SANDBOX", raising=False)
+
+    with pytest.raises(RuntimeError, match="only inside the SRT lifecycle"):
         run_claude.main()
