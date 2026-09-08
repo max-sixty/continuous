@@ -129,7 +129,7 @@ uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/nightly_survey_files.py"
 ```
 
-The rotation is deterministic in both directions, so a bucket returns to the same files every cycle. The script therefore drops any path an open PR already changes, printing `# skipped <path> (#N)` on stderr for each: whatever the survey would find there is either already in that PR or belongs as a comment on it, and the PR is where a maintainer is already looking. Carry the skipped paths into the Step 9 summary.
+The script drops any path an open PR already changes — a file with a pending PR is where a maintainer is already looking — printing `# skipped <path> (#N)` on stderr for each. Carry the skipped paths into the Step 9 summary.
 
 Skip files that aren't meaningfully reviewable: lock files (`uv.lock`, `Cargo.lock`, `package-lock.json`), binary assets, vendored dependencies, and generated files (build output, compiled protobuf, auto-generated workflow YAML). When unsure, check the file — a quick glance is cheaper than missing something.
 
