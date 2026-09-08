@@ -27,6 +27,7 @@ from tend.config import (
     OPENAI_KEY_SECRET,
     Config,
     WorkflowConfig,
+    _effective_model,
 )
 
 # Variable delimiters are swapped from `{{`/`}}` to `<<`/`>>` so GitHub
@@ -227,9 +228,9 @@ def _effective_cfg(cfg: Config, wf: WorkflowConfig) -> Config:
 
     Per-workflow `harness`, `model`, `effort`, and `args` let an adopter trial
     a different harness on one workflow (e.g. codex on nightly only) without
-    flipping the whole bot. Validation (model compatibility, known-harness
-    check) happens in `Config.load`; this helper just produces the effective
-    config the renderer sees.
+    flipping the whole bot. A harness change does not carry the other harness's
+    model with it. Validation happens in `Config.load`; this helper just
+    produces the effective config the renderer sees.
     """
     if (
         wf.harness is None
@@ -241,8 +242,10 @@ def _effective_cfg(cfg: Config, wf: WorkflowConfig) -> Config:
     updates = {}
     if wf.harness is not None:
         updates["harness"] = wf.harness
-    if wf.model is not None:
-        updates["model"] = wf.model
+    if wf.harness is not None or wf.model is not None:
+        updates["model"] = _effective_model(
+            cfg.harness, cfg.model, wf.harness, wf.model
+        )
     if wf.effort is not None:
         updates["effort"] = wf.effort
     if wf.args is not None:

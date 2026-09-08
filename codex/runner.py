@@ -206,12 +206,12 @@ def run_codex() -> int:
         raise ValueError(f"unknown AUTH_MODE: {auth_mode or '<unset>'}")
     output_file = _required_path("TEND_RUN_DIR") / "codex-final-message.md"
     _run(["/usr/bin/rm", "-f", "--", str(output_file)])
+    model = os.environ.get("MODEL", "")
     args = [
         codex,
         "exec",
         *(arg for arg in os.environ.get("EXTRA_ARGS", "").splitlines() if arg),
-        "--model",
-        os.environ.get("MODEL", ""),
+        *(["--model", model] if model else []),
         # SRT is the sole execution sandbox. A nested Codex sandbox creates a
         # second, divergent policy surface and is deliberately not selected.
         "--dangerously-bypass-approvals-and-sandbox",

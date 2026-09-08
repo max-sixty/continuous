@@ -34,7 +34,8 @@ bot_name: my-project-bot
 # Model to use for all workflows. Valid values depend on the harness:
 #
 # - harness: claude  — opus (default), sonnet, haiku
-# - harness: codex   — gpt-5.5 (default); any string Codex CLI accepts
+# - harness: codex   — the Codex CLI's recommended model (default), or any
+#                      string Codex CLI accepts
 #
 # model: opus
 
@@ -42,8 +43,7 @@ bot_name: my-project-bot
 #
 # Reasoning effort for the selected model. Codex and Claude's Opus and Sonnet
 # models accept low, medium, high, and xhigh; Claude's also accept max. Haiku
-# does not support effort. Empty (default) leaves the choice to the harness CLI
-# (high for Claude's default Opus model, medium for Codex's default gpt-5.5).
+# does not support effort. Empty (default) leaves the choice to the harness CLI.
 #
 # effort: medium
 

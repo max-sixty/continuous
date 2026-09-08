@@ -36,19 +36,16 @@ inputs:
       before invocation, so `$skill-name` mentions resolve to the
       corresponding SKILL.md (e.g. `$review`, `$triage`).
   model:
-    default: gpt-5.5
+    default: ""
     description: >-
-      Codex model to use. The set of models a run can select is server-side
-      and per-account, so it is not enumerated here — read the account CI
-      runs as, whose visible models are the `"visibility": "list"` entries
-      in its `~/.codex/models_cache.json`. The action always passes
-      `--model`, so whatever Codex bundles as its no-model default never
-      applies; this value is what runs.
+      Codex model to use. Empty lets the pinned Codex CLI choose its
+      recommended model for the account. The available models are server-side
+      and per-account, so they are not enumerated here.
   effort:
     default: ""
     description: >-
       Reasoning effort — low, medium, high, or xhigh. Empty means leave
-      at Codex CLI default (medium for gpt-5.5).
+      at the selected model's Codex CLI default.
   args:
     default: ""
     description: >-

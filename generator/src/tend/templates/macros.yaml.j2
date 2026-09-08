@@ -37,7 +37,9 @@
           codex_auth_json: ${{ secrets.<<codex_auth_secret>> }}
 {% endif %}
           bot_name: <<cfg.bot_name>>
+{% if cfg.model %}
           model: <<cfg.model>>
+{% endif %}
           checkout_mode: <<checkout_mode>>
           base_branch: <<base_branch>>
 {% if cfg.effort %}
