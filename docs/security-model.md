@@ -298,9 +298,10 @@ Each transition is a bottleneck with one job:
   or open-PR head ref, pins startup configuration to the exact chosen base
   commit, removes the temporary credential, makes the otherwise-empty parent
   traversable but not listable, then changes ownership of that clone only.
-  `RUNNER_TEMP` remains runner-only. SRT, the Codex binaries, and the immutable
-  agent environment live in one dedicated runner-owned, sandbox-readable
-  runtime directory; the sandbox cannot write it.
+  `RUNNER_TEMP` remains unreadable except for the exact read-only event payload
+  named by `GITHUB_EVENT_PATH`. SRT, the Codex binaries, and the immutable agent
+  environment live in one dedicated runner-owned, sandbox-readable runtime
+  directory; the sandbox cannot write it.
 - **Launch and lifetime** invokes the adopter's `sandbox_setup:` and the whole
   Claude or Codex turn as one command under the pinned Anthropic Sandbox
   Runtime. Tend supplies absolute `node`, `bwrap`, `socat`, `rg`, and seccomp
