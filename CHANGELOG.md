@@ -6,6 +6,25 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.2.1
+
+### Improved
+
+- **Both harnesses run the event tree in a disposable sandbox workspace.** The reviewed runner checkout stays intact while `sandbox_setup:` and the full agent turn run together under one Sandbox Runtime process tree. Teardown reaps the sandbox user before exporting bounded outputs and deleting the per-run checkout and runtime. ([#1173](https://github.com/max-sixty/tend/pull/1173))
+- **Codex subscription authentication has an end-to-end install flow.** An isolated device login writes separate refreshable and access-only bundles to the gated environment without printing them, and a pre-scoped fine-grained PAT form supplies the weekly refresh workflow. Generated Codex installs pin `gpt-5.6-sol`; a per-workflow harness change now selects that harness's default model unless the workflow names one. ([#1179](https://github.com/max-sixty/tend/pull/1179))
+- **`tend check` verifies release integrity.** It requires an admin-gated all-tags ruleset and GitHub's immutable-release setting, and `tend check --fix` configures both. Codex agents now run as the sandbox user with the bot PAT outside their environment; API-key model requests use a narrow Responses API proxy, while subscription sessions receive only the expiring access token. ([#1160](https://github.com/max-sixty/tend/pull/1160))
+- **ci-fix handles cancelled watched workflows as well as failures**, using the same agent-driven diagnostic path for every unsuccessful run. ([#1160](https://github.com/max-sixty/tend/pull/1160))
+
+### Fixed
+
+- **`review-runs` finds failed default-branch workflows outside ci-fix's configured watch list.** It searches the full red-run history rather than the current review window, and uses each affected workflow's latest successful run to close older failures. ([#1170](https://github.com/max-sixty/tend/pull/1170))
+- **Outage enrichment keeps the diagnosis when a failed run is rerun successfully.** It reads annotations across all attempts and requests the failing attempt's log instead of defaulting to the latest, green attempt. ([#1166](https://github.com/max-sixty/tend/pull/1166))
+- **Codex token summaries parse cumulative rollout events.** Independent rollout totals are summed without double-counting, turns come from assistant responses, and the model is recovered from turn context when the action did not supply one. ([#1180](https://github.com/max-sixty/tend/pull/1180))
+
+### Internal
+
+- Weekly maintenance now reviews stable Claude Code and Codex releases for changes to Tend's integration surfaces, and Codex moves to 0.153.4. Tend's own generated and hand-maintained workflow pins were also advanced to 0.2.0 after that release. ([#1162](https://github.com/max-sixty/tend/pull/1162), [#1154](https://github.com/max-sixty/tend/pull/1154), [#1165](https://github.com/max-sixty/tend/pull/1165))
+
 ## 0.2.0
 
 ### Improved
