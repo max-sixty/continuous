@@ -304,14 +304,17 @@ Each transition is a bottleneck with one job:
 - **Launch and lifetime** invokes the adopter's `sandbox_setup:` and the whole
   Claude or Codex turn as one command under the pinned Anthropic Sandbox
   Runtime. Tend supplies absolute `node`, `bwrap`, `socat`, `rg`, and seccomp
-  paths, treats dependency warnings as fatal, and probes both AF_UNIX denial
-  and runner-checkout unreadability before setup executes. Ubuntu 24.04's
-  AppArmor policy strips the user-namespace capabilities SRT needs. Tend
-  temporarily applies SRT's documented sysctl prerequisite on disposable
-  GitHub-hosted VMs and restores it immediately after the sandbox is reaped;
-  Tend never changes self-hosted policy, where a scoped AppArmor profile may
-  satisfy the same prerequisite and SRT's capability probe fails closed if it
-  does not.
+  paths, treats dependency warnings as fatal, and probes AF_UNIX denial plus
+  runner-checkout unreadability before setup executes. The hosted integration
+  probe additionally asserts that direct host loopback is unreachable while
+  the HTTP broker remains reachable. Ubuntu 24.04's AppArmor policy strips the
+  user-namespace capabilities SRT needs. Tend temporarily applies SRT's
+  documented sysctl prerequisite on disposable GitHub-hosted VMs and restores
+  it immediately after the sandbox is reaped; Tend never changes self-hosted
+  policy, where a scoped AppArmor profile may satisfy the same prerequisite.
+  Without either, the run fails closed inside `bwrap` with `Failed
+  RTM_NEWADDR: Operation not permitted`, rather than with a capability
+  diagnosis.
 - **Authority brokerage** leaves long-lived credentials in runner-owned
   proxies. SRT supplies the isolated network namespace and routes HTTP through
   Tend's credential proxy; the agent gets dummy credentials. Codex and Claude
@@ -319,7 +322,12 @@ Each transition is a bottleneck with one job:
 - **Result export** begins only after SRT exits and the sandbox UID has no live
   process. The supervisor reads fixed result and skill-summary files, and the
   later token step copies bounded session data, all through no-follow reads;
-  the agent never receives GitHub's command-file paths.
+  the agent never receives GitHub's command-file paths. Codex then stops its
+  runner-owned Responses proxy, and one fixed cleanup deletes both the event
+  checkout and the per-run SRT/package directory before restoring any
+  temporary GitHub-hosted runner policy. Subsequent steps consume the bounded
+  exports or the sandbox user's session tree; none executes from the event
+  checkout or the deleted runtime.
 
 The Actions checkout is therefore orchestration state, not an agent
 workspace. Local `setup:` composites and all their POST chains continue to see

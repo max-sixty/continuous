@@ -67,7 +67,7 @@ default keeps an ad-hoc invocation working.
 
 ## Session Log Paths
 
-Artifact paths: `-home-runner-work-tend-tend/<session-id>.jsonl`
+Artifact paths: `-tmp-tend-agent-workspace-*-checkout/<session-id>.jsonl`
 
 `review-reviewers` runs produce one session log per matrix repo in
 `.github/workflows/review-reviewers.yaml`.

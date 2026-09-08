@@ -19,7 +19,6 @@ PASSTHROUGH = {
     "ACTION_PATH",
     "AGENT_ENV_FILE",
     "AGENT_HOME",
-    "AGENT_PATH",
     "AUTH_MODE",
     "BOT_ID",
     "BOT_NAME",
@@ -39,7 +38,6 @@ PASSTHROUGH = {
     "TEND_ARGS",
     "TEND_AUTO_MEMORY_SETTINGS",
     "TEND_AUTO_MEMORY_DIRECTORY",
-    "TEND_BLOCKED_PATH",
     "TEND_BOUNDARY_PROBE_URL",
     "TEND_BOUNDARY_PROBE_EXECUTABLE",
     "TEND_CODEX_RUNNER",
@@ -135,7 +133,6 @@ def main() -> int:
     export_dir.mkdir(mode=0o700)
     run_dir = Path(required("TEND_RUN_DIR"))
     step_summary_dir = Path(required("TEND_STEP_SUMMARY_DIR"))
-    inner_output = run_dir / "tend-step-output"
 
     environment = _sandbox.launch_env(required("AGENT_ENV_FILE"))
     environment.extend(
@@ -145,7 +142,6 @@ def main() -> int:
     )
     environment.extend(
         [
-            f"GITHUB_OUTPUT={inner_output}",
             f"GITHUB_STEP_SUMMARY={step_summary_dir / 'step-summary.md'}",
             f"RUNNER_TEMP={run_dir}",
         ]

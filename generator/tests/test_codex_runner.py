@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import importlib.util
 import subprocess
 from pathlib import Path
@@ -171,14 +170,12 @@ def test_stage_agents_writes_as_the_sandbox_user(
     )
 
 
-def test_run_withholds_runner_credentials_and_exports_message_on_failure(
+def test_run_withholds_runner_credentials_and_preserves_message_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, agent_home, _ = _set_sandbox_env(tmp_path, monkeypatch)
-    github_output = tmp_path / "github-output"
     run_dir = agent_home / "run"
     run_dir.mkdir()
-    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
     monkeypatch.setenv("GITHUB_TOKEN", "real-github-token")
     monkeypatch.setenv("GITHUB_ENV", "/runner/github-env")
     monkeypatch.setenv("GITHUB_ACTOR", "octocat")
@@ -201,8 +198,6 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
 
     def run(args: list[str], **kwargs: object):
         calls.append((args, kwargs))
-        if "/usr/bin/base64" in args:
-            return _result(args, stdout=base64.b64encode(b"final\n").decode())
         if "/opt/codex/bin/codex" in args:
             return _result(args, returncode=7)
         return _result(args)
@@ -210,8 +205,9 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
     monkeypatch.setattr(codex_runner, "_run", run)
 
     assert codex_runner.main(["run"]) == 7
-    assert github_output.read_text() == (
-        "final_message=" + base64.b64encode(b"final\n").decode() + "\n"
+    codex = next(args for args, _kwargs in calls if "/opt/codex/bin/codex" in args)
+    assert codex[codex.index("--output-last-message") + 1] == str(
+        run_dir / "codex-final-message.md"
     )
     launch, kwargs = next(
         (args, options) for args, options in calls if "/opt/codex/bin/codex" in args
@@ -252,12 +248,6 @@ def test_run_withholds_runner_credentials_and_exports_message_on_failure(
         "--config",
         'model_reasoning_effort="high"',
         "Review this",
-    ]
-    encoded = calls[-1][0]
-    assert encoded == [
-        "/usr/bin/base64",
-        "-w0",
-        str(run_dir / "codex-final-message.md"),
     ]
 
 

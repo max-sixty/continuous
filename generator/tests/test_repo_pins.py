@@ -141,7 +141,7 @@ def test_sandbox_runtime_pin_is_identical_in_actions_and_hosted_probe() -> None:
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_disposable_workspace_is_removed_immediately_after_agent_reap(
+def test_sandbox_resources_are_removed_immediately_after_agent_reap(
     harness: str,
 ) -> None:
     action = YAML(typ="safe", pure=True).load(
@@ -150,12 +150,18 @@ def test_disposable_workspace_is_removed_immediately_after_agent_reap(
     steps = action["runs"]["steps"]
     run_name = "Run Claude" if harness == "claude" else "Run Codex"
     run_at = next(index for index, step in enumerate(steps) if step["name"] == run_name)
-    cleanup = steps[run_at + 1]
+    cleanup_at = run_at + (2 if harness == "codex" else 1)
+    if harness == "codex":
+        stop = steps[run_at + 1]
+        assert stop["name"] == "Stop OpenAI Responses proxy"
+        assert stop["if"] == "always()"
+        assert "/usr/bin/curl" in stop["run"]
+    cleanup = steps[cleanup_at]
 
-    assert cleanup["name"] == "Dispose disposable agent workspace"
+    assert cleanup["name"] == "Dispose sandbox resources"
     assert cleanup["if"] == "always()"
-    assert cleanup["run"].endswith('/dispose_agent_workspace.py"')
-    restore = steps[run_at + 2]
+    assert cleanup["run"].endswith('/dispose_sandbox_resources.py"')
+    restore = steps[cleanup_at + 1]
     assert restore["name"] == "Restore Sandbox Runtime host policy"
     assert restore["if"] == "always()"
     assert restore["run"].endswith('/restore-sandbox-runtime-host.sh"')

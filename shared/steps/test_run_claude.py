@@ -575,7 +575,7 @@ def test_launch_adds_the_restored_auto_memory_settings(
     argv = result.command("claude").argv
 
     assert argv[-3:] == ["--settings", settings_file, "review the PR"]
-    assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1" not in argv
+    assert argv[1:3] == ["-u", "CLAUDE_CODE_DISABLE_AUTO_MEMORY"]
 
 
 def test_launch_only_adds_harness_names_inside_srt(
@@ -633,17 +633,6 @@ def test_launch_captures_the_streams_into_runner_owned_files(
         r"Supervisor: status=exited elapsed=\d+s claude_exit=0",
         result.out.splitlines()[0],
     ), result.out
-
-
-def test_launch_publishes_the_stream_json_output(
-    launch: Launcher, github_files: GithubFiles
-) -> None:
-    """The Token usage step and the session-logs artifact both read it."""
-    result = launch(stream=_ev_result())
-
-    assert github_files.outputs() == {
-        "stream_json": str(result.stream_json),
-    }
 
 
 def test_launch_reaps_the_agent_process_group_after_every_run(launch: Launcher) -> None:

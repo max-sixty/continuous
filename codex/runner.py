@@ -239,21 +239,6 @@ def run_codex() -> int:
         f"CI={os.environ.get('CI') or 'true'}",
     ]
     result = _run(launch, check=False)
-
-    exists = _run(
-        ["/usr/bin/test", "-f", str(output_file)],
-        check=False,
-    )
-    encoded = None
-    if exists.returncode == 0:
-        encoded = _run(
-            ["/usr/bin/base64", "-w0", str(output_file)],
-            capture=True,
-            check=False,
-        )
-    if encoded and encoded.returncode == 0:
-        with _required_path("GITHUB_OUTPUT").open("a", encoding="utf-8") as stream:
-            stream.write(f"final_message={encoded.stdout or ''}\n")
     return result.returncode
 
 

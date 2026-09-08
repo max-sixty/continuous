@@ -443,10 +443,10 @@ runs:
         ACTION_PATH: ${{ github.action_path }}/..
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/launch_sandbox_runtime.py"
 
-    - name: Dispose disposable agent workspace
+    - name: Dispose sandbox resources
       if: always()
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/dispose_agent_workspace.py"
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/dispose_sandbox_resources.py"
       env:
         BASH_ENV: ""
 

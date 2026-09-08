@@ -57,11 +57,6 @@ def fake_runtime(
         if args[:2] == ["/usr/bin/pgrep", "-u"]:
             return subprocess.CompletedProcess(args, 1 if reaped else 0)
         if "sandbox_runtime.mjs" in args[-1]:
-            # The inner GitHub output is deliberately attacker-writable. Its
-            # contents never cross; the outer supervisor exports fixed files.
-            (run_dir / "tend-step-output").write_text(
-                "sandbox_reaped=false\nstream_json=/etc/passwd\n"
-            )
             if harness == "claude":
                 (run_dir / "tend-stream.json").write_bytes(b'{"type":"result"}\n')
                 (run_dir / "tend-claude-stderr.log").write_bytes(b"diagnostic\n")
@@ -94,14 +89,13 @@ def test_claude_exports_only_fixed_runner_owned_files(
     assert (
         tmp_path / "runner-temp/tend-claude-stderr.log"
     ).read_bytes() == b"diagnostic\n"
-    assert values.get("stream_json") != "/etc/passwd"
     assert summary.read_bytes() == b"skill result\n\n"
     runtime = next(args for args in calls if "sandbox_runtime.mjs" in args[-1])
     assert "GITHUB_TOKEN=dummy" in runtime
     assert "GITHUB_ACTOR=octocat" in runtime
     assert not any("runner-token-must-not-cross" in arg for arg in runtime)
     assert not any("runner-key-must-not-cross" in arg for arg in runtime)
-    assert f"GITHUB_OUTPUT={run_dir / 'tend-step-output'}" in runtime
+    assert not any(arg.startswith("GITHUB_OUTPUT=") for arg in runtime)
     assert f"GITHUB_STEP_SUMMARY={run_dir.parent / 'step-summary.md'}" in runtime
 
 

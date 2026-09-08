@@ -14,7 +14,7 @@ if [ -r "$apparmor_userns" ] && [ "$(/usr/bin/cat "$apparmor_userns")" = 1 ]; th
     echo "TEND_RESTORE_APPARMOR_USERNS=true" >> "$GITHUB_ENV"
     /usr/bin/sudo /usr/sbin/sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
   else
-    echo "::notice::Leaving self-hosted AppArmor policy unchanged; SRT will verify that bwrap and apply-seccomp have capability-bearing user namespaces"
+    echo "::notice::Leaving self-hosted AppArmor policy unchanged; without a bwrap AppArmor profile granting unprivileged user namespaces, SRT fails as 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' — install such a profile or set kernel.apparmor_restrict_unprivileged_userns=0 on the runner"
   fi
 fi
 
@@ -46,6 +46,9 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 runtime_root=$(/usr/bin/mktemp -d /tmp/tend-runtime.XXXXXX)
+# Publish the cleanup target before any fallible install work. The later
+# always() cleanup can then remove a partial runtime too.
+echo "TEND_RUNTIME_ROOT=$runtime_root" >> "$GITHUB_ENV"
 srt_root="$runtime_root/srt"
 npm_userconfig=$(/usr/bin/mktemp "$RUNNER_TEMP/tend-npm-user.XXXXXX")
 npm_globalconfig=$(/usr/bin/mktemp "$RUNNER_TEMP/tend-npm-global.XXXXXX")
@@ -64,7 +67,6 @@ done
 /usr/bin/chmod 755 "$runtime_root"
 {
   echo "NODE_BIN=$node_bin"
-  echo "TEND_RUNTIME_ROOT=$runtime_root"
   echo "TEND_NPM_CLI=$npm_cli"
   echo "TEND_NPM_USERCONFIG=$npm_userconfig"
   echo "TEND_NPM_GLOBALCONFIG=$npm_globalconfig"

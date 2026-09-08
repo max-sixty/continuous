@@ -414,10 +414,25 @@ runs:
       # decode it with `base64 -d`.
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/launch_sandbox_runtime.py"
 
-    - name: Dispose disposable agent workspace
+    - name: Stop OpenAI Responses proxy
       if: always()
       shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/dispose_agent_workspace.py"
+      run: |
+        set +x
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
+        if [ -n "${CODEX_PROXY_URL:-}" ]; then
+          /usr/bin/curl --fail --silent --show-error "$CODEX_PROXY_URL/shutdown" || true
+        fi
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        SHELLOPTS: ""
+        PS4: ""
+
+    - name: Dispose sandbox resources
+      if: always()
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/dispose_sandbox_resources.py"
       env:
         BASH_ENV: ""
 
@@ -427,14 +442,6 @@ runs:
       run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sandbox-runtime-host.sh"
       env:
         BASH_ENV: ""
-
-    - name: Stop OpenAI Responses proxy
-      if: always()
-      shell: bash
-      run: |
-        if [ -n "${CODEX_PROXY_URL:-}" ]; then
-          curl --fail --silent --show-error "$CODEX_PROXY_URL/shutdown" || true
-        fi
 
     # Codex writes rollouts under the sandbox user's ~/.codex/sessions. The
     # step consolidates them into a runner-owned directory only after reaping

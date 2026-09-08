@@ -349,8 +349,6 @@ def write_agent_environment(
         "TEND_STEP_SUMMARY_DIR": str(TEND_STEP_SUMMARY_DIR),
         "PROXY_CA_CERT": str(PROXY_CA_CERT),
         "AGENT_ENV_FILE": str(paths.agent_env_file),
-        "AGENT_PATH": agent_path,
-        "TEND_BLOCKED_PATH": str(plan.blocked_path or ""),
         "TEND_RUNNER_HOME": str(paths.runner_home),
     }
     with paths.github_env.open("a", encoding="utf-8") as stream:

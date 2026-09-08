@@ -5,15 +5,15 @@ supervises it to exit or timeout, then turns the finished stream-json into the
 step's exit code and ``::error::`` annotation.
 
 Reads (env): ``RUNNER_TEMP``,
-``GITHUB_WORKSPACE``, ``GITHUB_OUTPUT``, ``TEND_MODEL``,
+``GITHUB_WORKSPACE``, ``TEND_MODEL``,
 ``TEND_EFFORT``, ``TEND_ARGS``, ``TEND_ALLOWED_TOOLS``,
 ``TEND_SYSTEM_PROMPT``, ``TEND_PROMPT``, ``TEND_TIMEOUT_SEC``,
 ``SHOW_FULL_OUTPUT``, ``BOT_NAME``, ``BOT_ID``, optional
 ``TEND_AUTO_MEMORY_SETTINGS``, ``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB``, plus the
 ``GITHUB_*`` context from Actions. ``GITHUB_STEP_SUMMARY`` is read only when
 rendering the transcript.
-Publishes the inner ``stream_json`` path. The trusted outer supervisor reaps
-the sandbox UID, copies that fixed file through a no-follow bounded read, and
+The trusted outer supervisor reaps the sandbox UID, copies the fixed
+``RUNNER_TEMP/tend-stream.json`` file through a no-follow bounded read, and
 publishes the runner-owned path plus ``sandbox_reaped``.
 
 Decisions this module owns:
@@ -117,7 +117,7 @@ def launch_argv(
     """
     argv = [
         "/usr/bin/env",
-        *(["CLAUDE_CODE_DISABLE_AUTO_MEMORY="] if settings_file else []),
+        *(["-u", "CLAUDE_CODE_DISABLE_AUTO_MEMORY"] if settings_file else []),
         f"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB={subprocess_env_scrub}",
         f"BOT_NAME={bot_name}",
         f"BOT_ID={bot_id}",
@@ -436,7 +436,6 @@ def main() -> int:
     env = _common.require_env(
         "RUNNER_TEMP",
         "GITHUB_WORKSPACE",
-        "GITHUB_OUTPUT",
         "TEND_MODEL",
         "TEND_ALLOWED_TOOLS",
         "TEND_SYSTEM_PROMPT",
@@ -484,11 +483,6 @@ def main() -> int:
         ci=os.environ.get("CI") or "true",
         settings_file=os.environ.get("TEND_AUTO_MEMORY_SETTINGS", ""),
     )
-    # Published before the launch: the path does not depend on the run, and the
-    # steps that read it — Token usage, the session-logs artifact — are
-    # `if: always()`, so they must still find it when the launch itself blows up.
-    _common.set_output("stream_json", str(stream_json))
-
     run = supervise(
         argv,
         timeout_sec=int(env["TEND_TIMEOUT_SEC"]),
