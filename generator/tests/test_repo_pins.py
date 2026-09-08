@@ -156,6 +156,7 @@ def test_sandbox_resources_are_removed_immediately_after_agent_reap(
         assert stop["name"] == "Stop OpenAI Responses proxy"
         assert stop["if"] == "always()"
         assert "/usr/bin/curl" in stop["run"]
+        assert "--max-time 10" in stop["run"]
     cleanup = steps[cleanup_at]
 
     assert cleanup["name"] == "Dispose sandbox resources"

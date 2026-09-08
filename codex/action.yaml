@@ -421,7 +421,7 @@ runs:
         set +x
         PATH=/usr/sbin:/usr/bin:/sbin:/bin
         if [ -n "${CODEX_PROXY_URL:-}" ]; then
-          /usr/bin/curl --fail --silent --show-error "$CODEX_PROXY_URL/shutdown" || true
+          /usr/bin/curl --fail --silent --show-error --max-time 10 "$CODEX_PROXY_URL/shutdown" || true
         fi
       env:
         BASH_ENV: ""
