@@ -13,8 +13,10 @@ boundary is structural and policy-dependent. Under `maintainer`, the bot cannot
 update the default branch. Under `yolo`, it receives a pull-request-only
 bypass, but direct pushes remain blocked and `.github/**` plus
 `.config/tend.yaml` require a fresh CODEOWNER approval the bot cannot bypass.
-The ownership block also protects every possible CODEOWNERS file, and its
-owner must be a maintainer GitHub user distinct from the bot.
+The ownership block also protects every possible CODEOWNERS file and every
+agent instruction path (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
+`AGENTS.override.md`, `.claude/`, and `.agents/`). Its owner must be a maintainer GitHub user
+distinct from the bot.
 Preflight reads GitHub's `current_user_can_bypass` answer with the bot's own
 token and requires the exact configured state: `never` or
 `pull_requests_only`.
@@ -103,10 +105,11 @@ triggers were probed rather than inferred, is the source repo's
 secrets.
 
 The composite action refuses to start if the default branch does not match the
-configured merge mode. After an agent run, it kills the sandbox and moves
-the agent-owned checkout away before `actions/checkout` POST cleanup; the POST
-step therefore sees no `.git/config` and cannot execute an agent-planted Git
-helper as the runner.
+configured merge mode. Runner-side `setup` accepts shell steps only; actions
+are refused because their deferred POST code can consume state the agent
+controlled. After a run, the harness kills the sandbox and moves the
+agent-owned checkout away before `actions/checkout` POST cleanup, leaving no
+`.git/config` from which an agent-planted helper could execute.
 
 Everything else (config pinning, rate limiting, fixed prompts) is defense
 in depth.

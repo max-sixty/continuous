@@ -94,9 +94,10 @@ Four pieces:
    runtime.
 
 Generated workflows are standalone — full `steps:` jobs, not
-`workflow_call`. The generator owns the entire file. Project setup (build
-tools, caches, env vars) is defined in the `setup:` section of the config
-and rendered into each workflow.
+`workflow_call`. The generator owns the entire file. Runner-side project setup
+is defined as shell commands in the `setup:` section of the config and rendered
+into each workflow; action steps are refused because their POST phase would run
+after the agent.
 
 ## Structure
 
@@ -182,7 +183,7 @@ session runs the pin.
 | Permissions | Generator | generated workflow |
 | Checkout | Generator | generated workflow |
 | Composite action call | Generator | generated workflow |
-| Project setup (build tools, cache) | Adopter | `setup:` in `.config/tend.yaml` |
+| Project setup commands | Adopter | `setup:` in `.config/tend.yaml` |
 | Bot identity, auth config | Adopter | `.config/tend.yaml` |
 | Skills (generic) | Tend | `tend` plugin (marketplace) |
 | Skills (project-specific) | Adopter | `.claude/skills/` in their repo |
@@ -218,8 +219,8 @@ workflows:
 ```
 
 Workflow-level (`workflow_extra`) and job-level (`jobs.<name>`) overrides
-are supported in maintainer merge mode; step-level is not — the `setup:`
-mechanism handles step injection. Yolo refuses both override forms and all
+are supported in maintainer merge mode; step-level is not — `setup:` injects
+runner-side `run` steps only. Yolo refuses both override forms and all
 runner-side `setup:` so credential-bearing jobs retain their audited shape.
 No allowlist of override keys; unknown job names produce a warning.
 
@@ -239,7 +240,7 @@ exist and are protected. A workflow the bot pushes to any other ref is
 refused them before its first step. In `maintainer` mode the bot cannot
 move any admitted branch. In `yolo`, it may merge pull requests to the
 default branch, while a CODEOWNERS-backed ruleset reserves Tend's workflows
-and config for a maintainer owner. Two things use the `gist` scope, both
+and config, CODEOWNERS, and agent instructions for a maintainer owner. Two things use the `gist` scope, both
 through bot-owned secret gists: `review-reviewers` keeps a per-month
 structured evidence store (avoids the 65 KB comment-body limit), and the
 experimental `memory_gist` setting persists Claude Code's auto memory

@@ -261,7 +261,7 @@ def check_branch_protection(
             "running the bot. See docs/security-model.md.",
         )
 
-    bypass = _update_ruleset_bypass(repo, branch, bot_name)
+    bypass = update_ruleset_bypass(repo, branch, bot_name)
     if bypass == expected_bypass:
         lifecycle = {
             rule_type: _ruleset_type_bypass(repo, branch, bot_name, rule_type)
@@ -736,7 +736,7 @@ def _ruleset_type_bypass(
     return "always"
 
 
-def _update_ruleset_bypass(repo: str, branch: str, bot_name: str) -> str | None:
+def update_ruleset_bypass(repo: str, branch: str, bot_name: str) -> str | None:
     """The effective bypass across all update rulesets on ``branch``."""
     return _ruleset_type_bypass(repo, branch, bot_name, "update")
 
@@ -793,7 +793,7 @@ def _has_restrict_updates_ruleset(repo: str, branch: str, bot_name: str) -> bool
     Uses the per-branch rules endpoint which resolves patterns like
     ~DEFAULT_BRANCH.
     """
-    bypass = _update_ruleset_bypass(repo, branch, bot_name)
+    bypass = update_ruleset_bypass(repo, branch, bot_name)
     return None if bypass is None else bypass == "never"
 
 

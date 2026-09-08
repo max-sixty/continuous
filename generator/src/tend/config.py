@@ -171,16 +171,15 @@ DICT_STEP_FIELDS = {"with", "env"}
 
 @dataclass
 class SetupStep:
-    """A single project setup step, mirroring GitHub's step schema.
+    """A single runner-side shell setup step.
 
-    Exactly one of `uses` or `run`, plus any of `with`, `env`, `name`,
-    `id`, `shell`, `working-directory`, `continue-on-error`,
-    `timeout-minutes`, `if`. In the workflows that pre-check whether the
-    agent needs to boot, the renderer adds that check to every step's `if:`.
-    A step's own condition narrows the check. For multi-step setup, add
-    multiple entries to the `setup:` list. Local actions are refused because
-    their POST steps re-read agent-controlled workspace state after the
-    sandbox exits.
+    `run` plus any of `env`, `name`, `id`, `shell`, `working-directory`,
+    `continue-on-error`, `timeout-minutes`, `if`. In workflows that pre-check
+    whether the agent needs to boot, the renderer adds that check to every
+    step's `if:`. A step's own condition narrows the check. For multi-step
+    setup, add multiple entries to the `setup:` list. Action steps are refused
+    because their POST phase runs after the agent and can consume state it
+    controlled.
     """
 
     fields: dict
@@ -466,12 +465,16 @@ class Config:
                 raise click.ClickException(
                     f"setup[{i}] must have exactly one of `uses` or `run`"
                 )
-            uses = entry.get("uses")
-            if isinstance(uses, str) and uses.startswith("./"):
+            if "uses" in entry:
                 raise click.ClickException(
-                    f"setup[{i}]: local actions are not supported. Use a pinned "
-                    "remote action, or move repository-controlled setup into "
-                    "sandbox_setup."
+                    f"setup[{i}]: action steps are not supported because their "
+                    "POST phase runs after the agent. Use a `run` step, or move "
+                    "repository-controlled setup into sandbox_setup."
+                )
+            if "with" in entry:
+                raise click.ClickException(
+                    f"setup[{i}]: `with` is only valid for action steps, which "
+                    "setup does not support"
                 )
             for k in DICT_STEP_FIELDS:
                 if k in entry and not isinstance(entry[k], dict):

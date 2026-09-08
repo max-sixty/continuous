@@ -90,12 +90,14 @@ The composite action verifies the bot's exact effective answer from
 Yolo adds `Control-plane review`, a default-branch pull-request rule that the
 bot cannot bypass. `tend init` puts a managed block last in the effective
 CODEOWNERS file, assigning `/.github/**`, `/.config/tend.yaml`, and every
-possible CODEOWNERS location to `control_plane_owner`, which must be one
-maintainer GitHub user distinct from the bot. Protecting the
-ownership files themselves prevents the bot from replacing the effective one
-before changing a workflow. GitHub therefore admits ordinary PRs with zero
-blanket approvals, but requires a fresh owner approval for workflow and
-Tend-config changes. Stale approvals are dismissed on push. Tend enables the
+possible CODEOWNERS location to `control_plane_owner`. The block also covers
+every `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`,
+`.claude/`, and `.agents/` path because these files steer later agent runs. The owner must be one
+maintainer GitHub user distinct from the bot. Protecting the ownership files
+themselves prevents the bot from replacing the effective one before changing
+another control-plane path. GitHub therefore admits ordinary PRs with zero
+blanket approvals, but requires a fresh owner approval for control-plane
+changes. Stale approvals are dismissed on push. Tend enables the
 yolo bypass only after `tend check` sees that CODEOWNERS block on the default
 branch. The exact-workflow check reconstructs the same repository owner,
 default branch, and config path that `tend init` used, so it compares the files
@@ -324,9 +326,9 @@ trust any third-party action's publisher; pinning to `X.Y.Z` (or a commit
 SHA) bounds that trust to a reviewed, immutable point.
 
 **Config pinning.** Before the agent starts, both harnesses restore every
-`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, and `.agents/` at any
-depth from the PR base branch. Their CLIs load nearby instruction files and
-skills from those directories. Both harnesses also restore RCE-relevant config
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`, `.claude/`,
+and `.agents/` at any depth from the PR base branch. Their CLIs load nearby
+instruction files and skills from those directories. Both harnesses also restore RCE-relevant config
 at the root: `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`, and
 `.husky`. A malicious PR's `SessionStart` hook, MCP server, or injected skill
 is reverted before an agent reads it. The restoration is
@@ -343,14 +345,14 @@ never see, such as the checkout credential in `.git/config`.
 user, which holds sudo and, until the sandbox setup strips it, the checkout
 PAT in `.git/config`. So every generated workflow checks out reviewed code
 before running them — the default branch, or in `tend-review` the PR's base
-branch — and lands the PR's tree only afterwards. Local actions are refused:
-their POST steps run after the agent and can cause the privileged runner to
-re-enter a workspace and `.git` directory the agent controlled. Yolo also
-refuses all runner-side `setup:` actions because even a trusted remote action
-can execute bot-editable repository configuration. It also refuses workflow
-and job overrides so generated credential-bearing jobs retain their audited
-shape. `sandbox_setup:` is the lever for commands that must see the loaded
-tree; both harnesses run it as the non-sudo sandbox user.
+branch — and lands the PR's tree only afterwards. Action steps are refused:
+both local and remote actions may defer a POST phase until after the agent
+and then consume workspace or external state it controlled. Maintainer mode
+therefore accepts only `run` setup steps. Yolo refuses all runner-side `setup:`
+because ordinary code can steer even a fixed shell command. It also refuses
+workflow and job overrides so generated credential-bearing jobs retain their
+audited shape. `sandbox_setup:` is the lever for commands that must see the
+loaded tree; both harnesses run it as the non-sudo sandbox user.
 
 **Credential isolation.** Both harness actions run the agent as a separate
 non-sudo `tend-sandbox` user, sharing the GitHub proxy machinery under the
@@ -391,7 +393,9 @@ agent-owned workspace away from `GITHUB_WORKSPACE`, then creates an empty
 replacement. This matters because `actions/checkout` runs Git again in its
 POST cleanup: without quarantine, an agent-planted Git helper could execute as
 the credential-bearing runner. Checkout sees no `.git/config` at its recorded
-path and returns without invoking Git.
+path and returns without invoking Git. Runner-side setup actions are refused,
+so no adopter-supplied action POST phase can retain a path into
+agent-controlled state.
 
 **Session-log upload.** The token-usage step uploads the agent's session JSONL
 as an artifact, so the runner has to read a tree the sandbox user owns. It

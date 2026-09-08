@@ -196,3 +196,38 @@ repos:
                 )
                 sys.exit(1)
         pass_filenames: false
+
+      # The generator writes the CODEOWNERS block and the standalone runtime
+      # preflight verifies the same bytes. They cannot import one another in an
+      # installed adopter workflow, so fail locally if the contract drifts.
+      - id: control-plane-paths-parity
+        name: control-plane paths stay in sync
+        language: system
+        files: ^(generator/src/tend/workflows\.py|shared/steps/security_preflight\.py)$
+        entry: python3
+        args:
+          - -c
+          - |
+            import ast, sys
+
+            def literal_tuple(path):
+                tree = ast.parse(open(path).read())
+                for node in tree.body:
+                    if not isinstance(node, ast.Assign):
+                        continue
+                    if any(
+                        isinstance(target, ast.Name)
+                        and target.id == "CONTROL_PLANE_PATHS"
+                        for target in node.targets
+                    ):
+                        return tuple(ast.literal_eval(node.value))
+                raise RuntimeError(f"CONTROL_PLANE_PATHS not found in {path}")
+
+            generator = literal_tuple("generator/src/tend/workflows.py")
+            runtime = literal_tuple("shared/steps/security_preflight.py")
+            if generator != runtime:
+                print("CONTROL_PLANE_PATHS differs between generator and runtime")
+                print(f"generator: {generator}")
+                print(f"runtime:   {runtime}")
+                sys.exit(1)
+        pass_filenames: false

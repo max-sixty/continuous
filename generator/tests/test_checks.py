@@ -521,6 +521,14 @@ def test_control_plane_codeowners_requires_generated_block_last() -> None:
         "/.config/tend.yaml @octocat\n"
         "/CODEOWNERS @octocat\n"
         "/docs/CODEOWNERS @octocat\n"
+        "**/CLAUDE.md @octocat\n"
+        "**/CLAUDE.local.md @octocat\n"
+        "**/AGENTS.md @octocat\n"
+        "**/AGENTS.override.md @octocat\n"
+        "**/.claude @octocat\n"
+        "**/.claude/** @octocat\n"
+        "**/.agents @octocat\n"
+        "**/.agents/** @octocat\n"
         "# END tend control plane\n"
     )
 
@@ -1640,6 +1648,14 @@ def test_run_all_checks_yolo_uses_separate_operational_and_credential_refs() -> 
         "/.config/tend.yaml @octocat\n"
         "/CODEOWNERS @octocat\n"
         "/docs/CODEOWNERS @octocat\n"
+        "**/CLAUDE.md @octocat\n"
+        "**/CLAUDE.local.md @octocat\n"
+        "**/AGENTS.md @octocat\n"
+        "**/AGENTS.override.md @octocat\n"
+        "**/.claude @octocat\n"
+        "**/.claude/** @octocat\n"
+        "**/.agents @octocat\n"
+        "**/.agents/** @octocat\n"
         "# END tend control plane\n"
     )
 
@@ -2169,7 +2185,7 @@ def test_cli_check_fix_repairs_tag_and_release_protection(
     fix_releases.assert_called_once_with("owner/repo")
 
 
-def test_cli_check_fix_keeps_maintainer_mode_while_yolo_credentials_fail(
+def test_cli_check_fix_bootstraps_maintainer_mode_while_yolo_credentials_fail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_config(
@@ -2188,6 +2204,7 @@ def test_cli_check_fix_keeps_maintainer_mode_while_yolo_credentials_fail(
     with (
         patch("tend.cli.run_all_checks", return_value=blocked),
         patch("tend.cli.detect_default_branch", return_value="main"),
+        patch("tend.cli.update_ruleset_bypass", return_value="never"),
         patch(
             "tend.cli.fix_branch_protection",
             return_value=CheckResult("branch-protection:main", True, "fixed"),
@@ -2198,6 +2215,61 @@ def test_cli_check_fix_keeps_maintainer_mode_while_yolo_credentials_fail(
     assert result.exit_code == 1
     fix.assert_called_once_with("owner/repo", "main", "test-bot", "maintainer", [])
     assert "credential-environments" in result.output
+
+
+def test_cli_check_fix_repairs_rules_without_demoting_live_yolo_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        'bot_name: test-bot\nmerge: yolo\ncontrol_plane_owner: "@octocat"\n',
+    )
+    monkeypatch.chdir(tmp_path)
+    blocked = [
+        CheckResult("branch-protection:main", False, "could not verify lifecycle"),
+        CheckResult("control-plane-ruleset", True, "ready"),
+        CheckResult("yolo-workflows", None, "release is ahead of regeneration"),
+    ]
+    with (
+        patch("tend.cli.run_all_checks", return_value=blocked),
+        patch("tend.cli.detect_default_branch", return_value="main"),
+        patch("tend.cli.update_ruleset_bypass", return_value="pull_requests_only"),
+        patch(
+            "tend.cli.fix_branch_protection",
+            return_value=CheckResult("branch-protection:main", True, "fixed"),
+        ) as fix,
+    ):
+        result = CliRunner().invoke(main, ["check", "--fix", "--repo", "owner/repo"])
+
+    assert result.exit_code == 1
+    fix.assert_called_once_with("owner/repo", "main", "test-bot", "yolo", [])
+    assert "preserving the existing pull-request-only merge access" in result.output
+
+
+def test_cli_check_fix_leaves_rules_unchanged_when_yolo_access_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        'bot_name: test-bot\nmerge: yolo\ncontrol_plane_owner: "@octocat"\n',
+    )
+    monkeypatch.chdir(tmp_path)
+    blocked = [
+        CheckResult("branch-protection:main", False, "could not verify lifecycle"),
+        CheckResult("control-plane-ruleset", True, "ready"),
+        CheckResult("yolo-workflows", None, "release is ahead of regeneration"),
+    ]
+    with (
+        patch("tend.cli.run_all_checks", return_value=blocked),
+        patch("tend.cli.detect_default_branch", return_value="main"),
+        patch("tend.cli.update_ruleset_bypass", return_value=None),
+        patch("tend.cli.fix_branch_protection") as fix,
+    ):
+        result = CliRunner().invoke(main, ["check", "--fix", "--repo", "owner/repo"])
+
+    assert result.exit_code == 1
+    fix.assert_not_called()
+    assert "leaving merge rulesets unchanged" in result.output
 
 
 def test_cli_check_fix_enables_yolo_only_after_prerequisites_pass(

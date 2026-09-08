@@ -70,6 +70,14 @@ CONTROL_PLANE_PATHS = (
     "/.config/tend.yaml",
     "/CODEOWNERS",
     "/docs/CODEOWNERS",
+    "**/CLAUDE.md",
+    "**/CLAUDE.local.md",
+    "**/AGENTS.md",
+    "**/AGENTS.override.md",
+    "**/.claude",
+    "**/.claude/**",
+    "**/.agents",
+    "**/.agents/**",
 )
 
 
@@ -277,7 +285,10 @@ def main() -> int:
             flush=True,
         )
         return 0
-    if update_ids and bypass is not None:
+    if any(
+        isinstance(ruleset, dict) and ruleset.get("current_user_can_bypass") != "never"
+        for ruleset in update_rulesets
+    ):
         return _common.fail(BYPASS_ERROR.format(branch=default_branch))
 
     # No update rules apply (or none were readable): fall back to requiring

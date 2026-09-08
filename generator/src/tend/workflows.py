@@ -107,6 +107,14 @@ CONTROL_PLANE_PATHS = (
     "/.config/tend.yaml",
     "/CODEOWNERS",
     "/docs/CODEOWNERS",
+    "**/CLAUDE.md",
+    "**/CLAUDE.local.md",
+    "**/AGENTS.md",
+    "**/AGENTS.override.md",
+    "**/.claude",
+    "**/.claude/**",
+    "**/.agents",
+    "**/.agents/**",
 )
 
 

@@ -529,6 +529,14 @@ def test_yolo_init_manages_the_effective_codeowners_file(
         "/.config/tend.yaml @octocat\n"
         "/CODEOWNERS @octocat\n"
         "/docs/CODEOWNERS @octocat\n"
+        "**/CLAUDE.md @octocat\n"
+        "**/CLAUDE.local.md @octocat\n"
+        "**/AGENTS.md @octocat\n"
+        "**/AGENTS.override.md @octocat\n"
+        "**/.claude @octocat\n"
+        "**/.claude/** @octocat\n"
+        "**/.agents @octocat\n"
+        "**/.agents/** @octocat\n"
         f"{CODEOWNERS_END}\n"
     )
     workflow = (_workflow_dir(tmp_path) / "tend-nightly.yaml").read_text()

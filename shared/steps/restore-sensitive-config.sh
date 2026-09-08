@@ -20,8 +20,8 @@
 # Runs before the credential-isolation handoff: it needs the git credential
 # actions/checkout persisted, which setup_sandbox.py strips.
 #
-# Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME, GITHUB_EVENT_PATH
-# (from Actions).
+# Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME, GITHUB_EVENT_PATH,
+# and GITHUB_REPOSITORY (from Actions).
 set -eo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -41,6 +41,14 @@ case "$GITHUB_EVENT_NAME" in
       exit 0
     fi
     BASE_REF=$(gh api "${PR_URL#https://api.github.com/}" --jq '.base.ref')
+    ;;
+  repository_dispatch)
+    PR=$(jq -r '.client_payload.pr // empty' "$GITHUB_EVENT_PATH")
+    if [ -z "$PR" ]; then
+      echo "repository_dispatch without a PR; nothing to restore"
+      exit 0
+    fi
+    BASE_REF=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.base.ref')
     ;;
   *)
     echo "Event $GITHUB_EVENT_NAME is not a PR event; nothing to restore"

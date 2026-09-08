@@ -141,10 +141,14 @@ layers:
 bot no bypass of the default branch's update rule. `yolo` gives that bot a
 pull-request-only bypass, so it can merge through GitHub but cannot push the
 branch directly. A separate CODEOWNERS rule requires fresh maintainer approval for
-changes to `.github/**`, `.config/tend.yaml`, and CODEOWNERS itself; additional
-protected branches and tags stay admin-only. Preflight asks GitHub for the bot's own effective
-bypass and refuses to run unless it exactly matches the configured policy.
-`tend check --fix` reconciles the rulesets.
+changes to `.github/**`, `.config/tend.yaml`, CODEOWNERS, and agent instruction
+files; additional protected branches and tags stay admin-only. Preflight asks
+GitHub for the bot's own effective bypass and refuses to run unless it exactly
+matches the configured policy. `tend check --fix` reconciles the rulesets.
+
+Runner-side `setup` accepts shell steps only. Actions can defer POST code until
+after the agent has controlled the job, so both local and remote action steps
+are refused; use `sandbox_setup` for work that must read the loaded tree.
 
 **Immutable releases** lock each release published after the setting is
 enabled, including its assets and tag. `tend check` requires the setting and
@@ -236,7 +240,7 @@ subscription trio.
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
 
-All other options — setup steps, protected branches, workflow overrides,
+All other options — setup commands, protected branches, workflow overrides,
 schedules — are documented in
 [`docs/tend.example.yaml`](docs/tend.example.yaml).
 

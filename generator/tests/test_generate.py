@@ -86,6 +86,14 @@ def test_codeowners_block_is_final_and_idempotent() -> None:
         /.config/tend.yaml @octo-org/security
         /CODEOWNERS @octo-org/security
         /docs/CODEOWNERS @octo-org/security
+        **/CLAUDE.md @octo-org/security
+        **/CLAUDE.local.md @octo-org/security
+        **/AGENTS.md @octo-org/security
+        **/AGENTS.override.md @octo-org/security
+        **/.claude @octo-org/security
+        **/.claude/** @octo-org/security
+        **/.agents @octo-org/security
+        **/.agents/** @octo-org/security
         {CODEOWNERS_END}
         """)
     assert codeowners_config(updated, "@octo-org/security") is None
@@ -104,6 +112,14 @@ def test_codeowners_block_is_removed_when_yolo_is_disabled() -> None:
         "/.config/tend.yaml @security\n"
         "/CODEOWNERS @security\n"
         "/docs/CODEOWNERS @security\n"
+        "**/CLAUDE.md @security\n"
+        "**/CLAUDE.local.md @security\n"
+        "**/AGENTS.md @security\n"
+        "**/AGENTS.override.md @security\n"
+        "**/.claude @security\n"
+        "**/.claude/** @security\n"
+        "**/.agents @security\n"
+        "**/.agents/** @security\n"
         f"{CODEOWNERS_END}\n"
     )
 
@@ -276,14 +292,12 @@ def test_runtime_enabled_check_rejects_yaml_merge_keys(tmp_path: Path) -> None:
 def test_setup_steps_rendered(tmp_path: Path) -> None:
     extra = dedent("""\
         setup:
-          - uses: actions/setup-python@v6
+          - run: python --version
           - run: echo FOO=bar >> $GITHUB_ENV
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     for wf in generate_all(cfg):
-        assert "actions/setup-python@v6" in wf.content, (
-            f"{wf.filename} missing uses step"
-        )
+        assert "python --version" in wf.content, f"{wf.filename} missing first run step"
         assert "echo FOO=bar >> $GITHUB_ENV" in wf.content, (
             f"{wf.filename} missing run step"
         )
@@ -294,11 +308,18 @@ def _eyes_steps(steps: list[dict[str, object]]) -> list[dict[str, object]]:
     return [s for s in steps if "content=eyes" in str(s.get("run", ""))]
 
 
-def test_local_setup_actions_are_rejected(tmp_path: Path) -> None:
-    """A local action can register runner-side POST code, then let the agent
-    replace its action definition before that privileged POST dispatches."""
-    extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
-    with pytest.raises(click.ClickException, match="local actions are not supported"):
+@pytest.mark.parametrize(
+    "action",
+    [
+        "./.github/actions/tend-setup",
+        "actions/setup-python@v6",
+        "Swatinem/rust-cache@v2",
+    ],
+)
+def test_setup_actions_are_rejected(tmp_path: Path, action: str) -> None:
+    """Any action may defer runner-side code until after the agent exits."""
+    extra = f"setup:\n  - uses: {action}\n"
+    with pytest.raises(click.ClickException, match="action steps are not supported"):
         Config.load(_minimal_config(tmp_path, extra))
 
 
@@ -454,39 +475,26 @@ def test_sandbox_levers_rendered_for_codex(tmp_path: Path) -> None:
             assert "sandbox_path" in inputs
 
 
-def test_setup_uses_with_parameters_gets_if_guard(tmp_path: Path) -> None:
-    """A `uses` setup step with `with:` parameters must still receive the
-    `if:` guard in the notifications workflow.
-
-    Without `with` support on `uses`, steps like `actions/setup-node@v4` that
-    require parameters are forced into `raw`, which cannot receive the guard —
-    so they run even when the pre-check has skipped checkout, failing with
-    "The specified node version file does not exist" (issue #281).
-    """
+def test_setup_action_with_parameters_is_rejected(tmp_path: Path) -> None:
     extra = dedent("""\
         setup:
           - uses: actions/setup-node@v4
             with:
               node-version-file: .node-version
     """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    notifications = workflows["tend-notifications.yaml"]
-    data = yaml.safe_load(notifications.content)
+    with pytest.raises(click.ClickException, match="action steps are not supported"):
+        Config.load(_minimal_config(tmp_path, extra))
 
-    steps = data["jobs"]["notifications"]["steps"]
-    setup_node = next(
-        (s for s in steps if s.get("uses") == "actions/setup-node@v4"), None
-    )
-    assert setup_node is not None, "setup-node step missing from notifications workflow"
-    assert setup_node.get("with") == {"node-version-file": ".node-version"}, (
-        "uses step must render `with:` parameters"
-    )
-    assert "if" in setup_node, (
-        "setup-node step must receive the `if:` guard so it is skipped when "
-        "checkout was skipped (otherwise .node-version is missing and the "
-        "step fails)"
-    )
+
+def test_setup_run_step_rejects_action_inputs(tmp_path: Path) -> None:
+    extra = dedent("""\
+        setup:
+          - run: node --version
+            with:
+              node-version: 24
+    """)
+    with pytest.raises(click.ClickException, match="`with` is only valid"):
+        Config.load(_minimal_config(tmp_path, extra))
 
 
 def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
@@ -495,13 +503,8 @@ def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
     """
     extra = dedent("""\
         setup:
-          - uses: actions/setup-node@v4
-            name: Setup Node
-            with:
-              node-version-file: .node-version
-            env:
-              FORCE_COLOR: "1"
           - run: cargo build --release
+            name: Build release
             shell: bash
             working-directory: ./crates/core
             env:
@@ -513,12 +516,8 @@ def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
     data = yaml.safe_load(review.content)
 
     steps = data["jobs"]["review"]["steps"]
-    node = next(s for s in steps if s.get("uses") == "actions/setup-node@v4")
-    assert node["name"] == "Setup Node"
-    assert node["with"] == {"node-version-file": ".node-version"}
-    assert node["env"] == {"FORCE_COLOR": "1"}
-
     build = next(s for s in steps if s.get("run") == "cargo build --release")
+    assert build["name"] == "Build release"
     assert build["shell"] == "bash"
     assert build["working-directory"] == "./crates/core"
     assert build["env"] == {"RUSTFLAGS": "-D warnings"}
@@ -999,7 +998,7 @@ def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
     sandbox exists to draw. The PR checkout keeps `clean: false` so it does
     not delete what setup wrote into the workspace.
     """
-    extra = "setup:\n  - uses: actions/setup-python@v6\n"
+    extra = "setup:\n  - run: python --version\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     data = yaml.safe_load(workflows["tend-review.yaml"].content)
@@ -1009,7 +1008,7 @@ def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
         i for i, s in enumerate(steps) if s.get("uses") == "actions/checkout@v7"
     )
     setup_idx = next(
-        i for i, s in enumerate(steps) if s.get("uses") == "actions/setup-python@v6"
+        i for i, s in enumerate(steps) if s.get("run") == "python --version"
     )
     pr_idx = _pr_tree_checkout_idx(steps)
 
@@ -1313,12 +1312,12 @@ def test_setup_before_pr_checkout_in_mention(tmp_path: Path) -> None:
     `gh pr checkout` would 404 with `Can't find 'action.yml'` and drop the
     maintainer's mention silently.
     """
-    extra = "setup:\n  - uses: actions/setup-python@v6\n"
+    extra = "setup:\n  - run: python --version\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
     initial_checkout_idx = mention.content.index("actions/checkout@v7")
-    setup_idx = mention.content.index("actions/setup-python@v6")
+    setup_idx = mention.content.index("python --version")
     pr_checkout_idx = mention.content.index("Check out PR branch")
     assert initial_checkout_idx < setup_idx < pr_checkout_idx, (
         "Setup must run after the initial checkout and before PR-branch switch"
@@ -1779,7 +1778,7 @@ def test_workflow_with_setup_regtest(
     regtest: object, tmp_path: Path, name: str
 ) -> None:
     """Snapshot each workflow's full YAML with a setup step."""
-    extra = "setup:\n  - uses: astral-sh/setup-uv@v6\n"
+    extra = "setup:\n  - run: uv --version\n"
     extra_cfg = _extra_for(name)
     if extra_cfg:
         extra += extra_cfg

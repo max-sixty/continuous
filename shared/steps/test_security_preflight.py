@@ -51,6 +51,14 @@ def _codeowners(fake_gh: FakeGh) -> None:
         "/.config/tend.yaml @octocat\n"
         "/CODEOWNERS @octocat\n"
         "/docs/CODEOWNERS @octocat\n"
+        "**/CLAUDE.md @octocat\n"
+        "**/CLAUDE.local.md @octocat\n"
+        "**/AGENTS.md @octocat\n"
+        "**/AGENTS.override.md @octocat\n"
+        "**/.claude @octocat\n"
+        "**/.claude/** @octocat\n"
+        "**/.agents @octocat\n"
+        "**/.agents/** @octocat\n"
         "# END tend control plane\n"
     )
     fake_gh.respond(
@@ -249,6 +257,17 @@ def test_an_unreadable_ruleset_falls_back_to_the_protected_floor(
         "Security preflight passed: default branch 'main' is protected"
         in capsys.readouterr().out
     )
+
+
+def test_a_readable_bypass_is_not_hidden_by_an_unreadable_ruleset(
+    fake_gh: FakeGh, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _repo(fake_gh, rules=[_update_rule(1), _update_rule(2)], protected=True)
+    _bypass(fake_gh, 1, "always")
+    fake_gh.respond("api", f"repos/{REPO}/rulesets/2", with_=1)
+
+    assert security_preflight.main() == 1
+    assert "can bypass every restrict-updates ruleset" in capsys.readouterr().out
 
 
 def test_no_update_rules_passes_on_a_protected_branch(

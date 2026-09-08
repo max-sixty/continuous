@@ -19,6 +19,7 @@ from tend.checks import (
     fix_tag_protection,
     operational_refs,
     run_all_checks,
+    update_ruleset_bypass,
 )
 from tend.config import Config
 from tend.migrate import migrate_toml_to_yaml, render_toml_as_yaml
@@ -323,8 +324,29 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         or result.name == "control-plane-ruleset"
         for result in failures
     )
-    if rules_fixable or activation_blockers:
-        merge_to_apply = "maintainer" if activation_blockers else cfg.merge
+    merge_to_apply = cfg.merge
+    if activation_blockers:
+        current_bypass = update_ruleset_bypass(repo, default_branch, cfg.bot_name)
+        if current_bypass == "pull_requests_only":
+            click.echo()
+            click.echo(
+                "Yolo prerequisites are not all verified; preserving the "
+                "existing pull-request-only merge access while these remain "
+                "unresolved: "
+                + ", ".join(result.name for result in activation_blockers)
+            )
+        elif current_bypass is None:
+            click.echo()
+            click.echo(
+                "Yolo prerequisites are not all verified, and the current "
+                "merge access could not be read; leaving merge rulesets "
+                "unchanged."
+            )
+            rules_fixable = False
+        else:
+            merge_to_apply = "maintainer"
+
+    if rules_fixable or (activation_blockers and merge_to_apply == "maintainer"):
         click.echo()
         if merge_to_apply != cfg.merge:
             click.echo(

@@ -126,7 +126,7 @@ user's request settles (the request, not the default, governs its step:
 an area that can't apply (no README → no badge option). The tool caps a
 question at 4 options, so a new area means grouping, not appending.
 
-- **Workflow config** — setup steps, workflow conditions, schedules, job
+- **Workflow config** — setup commands, workflow conditions, schedules, job
   permissions/timeouts, env vars (default: no overrides)
 - **Bot guidance overlay** — PR title format, labels, review routing,
   target branch, nightly actions (default: a placeholder overlay)
@@ -318,8 +318,8 @@ user create one first.
 If the user picked workflow config at Kickoff, ask via `AskUserQuestion`
 (`multiSelect: true`) which overrides to set — otherwise set none:
 
-- Setup steps and env vars (system deps, language version, pre-build
-  hooks, top-level env vars)
+- Setup commands and env vars (system deps, language version, pre-build
+  hooks, top-level env vars; `setup` accepts `run` steps, not actions)
 - Workflow conditions (e.g., skip review on `tend:dismissed` PRs — see below)
 - Schedule overrides (cron timing for nightly/weekly)
 - Permissions / timeouts on specific jobs
@@ -388,15 +388,19 @@ secrets. Fix every ref-protection finding now. Under `maintainer`, `Merge access
 keeps the default branch admin-only. Under `yolo`, it grants the bot user a
 pull-request-only bypass, while `Control-plane review` requires a fresh,
 non-bypassable CODEOWNER approval for `.github/**` and
-`.config/tend.yaml`, including the CODEOWNERS files themselves. `Protected
-branch access` keeps creation, updates, and deletion of every configured extra
-branch admin-only in both modes. `Tag operations` keeps all tags admin-only.
+`.config/tend.yaml`, including the CODEOWNERS files and agent instructions.
+`Protected branch access` keeps creation, updates, and deletion of every
+configured extra branch admin-only in both modes. `Tag operations` keeps all
+tags admin-only.
 
 Yolo bootstraps in two safe phases. Before the generated CODEOWNERS block and
 exact generated workflows are on the default branch, or while any credential
-check is unresolved, `--fix` installs maintainer mode and refuses to grant the
-bot a bypass. Merge the install PR manually and fix any credential gates, then
-rerun this section; only then does it enable the pull-request-only bypass.
+check is unresolved, `--fix` keeps maintainer mode and refuses to grant the bot
+a bypass. Merge the install PR manually and fix any credential gates, then
+rerun this section; only then does it enable the pull-request-only bypass. Once
+that bypass is active, an unresolved prerequisite makes `--fix` preserve the
+live merge rules, and an inconclusive ruleset read prevents it from changing
+them.
 The workflow check also rejects non-generated jobs with dynamic environment
 names or external or ref-qualified reusable workflows, because their use of
 the `tend` environment cannot be verified from the default-branch tree.

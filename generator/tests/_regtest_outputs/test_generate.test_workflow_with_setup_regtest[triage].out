@@ -113,7 +113,7 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: astral-sh/setup-uv@v6
+      - run: uv --version
         if: steps.tend_enabled.outputs.enabled == 'true'
 
       - uses: max-sixty/tend/claude@X.Y.Z

@@ -532,24 +532,24 @@ def test_very_long_prompt_nightly(tmp_path: Path) -> None:
 
 
 def test_duplicate_setup_steps_accepted(tmp_path: Path) -> None:
-    """Duplicate uses entries are accepted without warning or dedup."""
+    """Duplicate run entries are accepted without warning or dedup."""
     path = _write_config(
         tmp_path,
         dedent("""\
         bot_name: my-bot
         setup:
-          - uses: actions/setup-python@v6
-          - uses: actions/setup-python@v6
+          - run: python --version
+          - run: python --version
     """),
     )
     cfg = Config.load(path)
     assert len(cfg.setup) == 2
-    assert cfg.setup[0].fields == {"uses": "actions/setup-python@v6"}
-    assert cfg.setup[1].fields == {"uses": "actions/setup-python@v6"}
+    assert cfg.setup[0].fields == {"run": "python --version"}
+    assert cfg.setup[1].fields == {"run": "python --version"}
     # Both duplicates appear in generated YAML
     workflows = generate_all(cfg)
     for wf in workflows:
-        count = wf.content.count("actions/setup-python@v6")
+        count = wf.content.count("python --version")
         assert count == 2, f"{wf.filename} has {count} setup steps, expected 2"
 
 
@@ -756,28 +756,28 @@ def test_bot_name_yaml_injection_rejected(tmp_path: Path) -> None:
 
 
 def test_setup_steps_preserves_order(tmp_path: Path) -> None:
-    """setup as a YAML sequence preserves interleaved uses/run order."""
+    """setup as a YAML sequence preserves run-step order."""
     path = _write_config(
         tmp_path,
         dedent("""\
         bot_name: my-bot
         setup:
-          - uses: actions/setup-node@v6
+          - run: echo first
           - run: echo middle
-          - uses: actions/cache@v5
+          - run: echo last
     """),
     )
     cfg = Config.load(path)
     assert len(cfg.setup) == 3
-    assert cfg.setup[0].fields == {"uses": "actions/setup-node@v6"}
+    assert cfg.setup[0].fields == {"run": "echo first"}
     assert cfg.setup[1].fields == {"run": "echo middle"}
-    assert cfg.setup[2].fields == {"uses": "actions/cache@v5"}
+    assert cfg.setup[2].fields == {"run": "echo last"}
     # Verify order in generated YAML
     workflows = generate_all(cfg)
     for wf in workflows:
-        node_pos = wf.content.index("setup-node")
+        node_pos = wf.content.index("echo first")
         middle_pos = wf.content.index("echo middle")
-        cache_pos = wf.content.index("actions/cache")
+        cache_pos = wf.content.index("echo last")
         assert node_pos < middle_pos < cache_pos, f"Order wrong in {wf.filename}"
 
 

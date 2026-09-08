@@ -133,19 +133,19 @@ bot_name: my-project-bot
 
 # ## Setup steps
 #
-# Build tools, caches, and environment variables that run before Claude in every
-# workflow. A `setup:` entry mirrors a GitHub Actions step: give it exactly
-# one of `uses` or `run`, plus any of these optional fields:
+# Build tools, caches, and environment variables that run before the agent in
+# every workflow. A `setup:` entry is a GitHub Actions `run` step with any of
+# these optional fields:
 #
-#     name, id, if, with, env, shell, working-directory,
+#     name, id, if, env, shell, working-directory,
 #     continue-on-error, timeout-minutes
 #
 # For multi-step setup, add multiple entries to the `setup:` list — they
-# render in declared order. Local actions (`uses: ./...`) are refused because
-# their POST steps can re-enter agent-controlled workspace state after the
-# sandbox exits. In `yolo`, all `setup:` entries are refused because even a
-# trusted remote action can execute bot-editable repository configuration; use
-# `sandbox_setup:` for commands.
+# render in declared order. Action steps (`uses:`) are refused because their
+# POST phase can consume workspace or external state after the agent has
+# controlled it. Maintainer mode accepts `run` steps; in `yolo`, all `setup:`
+# entries are refused because ordinary code can steer even a fixed runner-side
+# command. Use `sandbox_setup:` for commands that must see the loaded tree.
 #
 # Setup runs against reviewed code — the default branch, or in `tend-review`
 # the PR's base branch, checked out before the PR's own tree lands. Project
@@ -159,41 +159,8 @@ bot_name: my-project-bot
 # job. Write it as a plain expression or one whole `${{ ... }}`; mixing the two
 # is rejected at `init`.
 #
-# Each form below shows the config and the YAML it produces inside the
-# `steps:` block. The guard is shown on the first example; it's added the same
-# way on every step.
-#
-# `uses`:
-#
-#     setup:
-#       - uses: astral-sh/setup-uv@v10.0.1
-#
-#     # renders as (in tend-notifications):
-#     #   - uses: astral-sh/setup-uv@v10.0.1
-#     #     if: steps.check.outputs.count != '0' || steps.check.outputs.conflict_count != '0' || github.event_name == 'workflow_dispatch'
-#     #
-#     # in other workflows:
-#     #   - uses: astral-sh/setup-uv@v10.0.1
-#
-# `uses` with action inputs and step-level env:
-#
-#     setup:
-#       - uses: actions/setup-node@v7
-#         name: Setup Node
-#         with:
-#           node-version-file: .node-version
-#         env:
-#           FORCE_COLOR: "1"
-#
-#     # renders as:
-#     #   - uses: actions/setup-node@v7
-#     #     name: Setup Node
-#     #     with:
-#     #       node-version-file: .node-version
-#     #     env:
-#     #       FORCE_COLOR: '1'
-#
-# `run` with shell and working directory:
+# This example shows the config and the YAML it produces inside the `steps:`
+# block. `tend-notifications` adds its no-work guard to the step as well.
 #
 #     setup:
 #       - run: cargo build --release
