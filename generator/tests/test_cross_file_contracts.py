@@ -389,6 +389,10 @@ def test_bot_pat_scope_set_is_stated_identically_everywhere() -> None:
     The audit fails a token that lacks any required scope and the nightly files
     a tracking issue for it, so a doc that offers a narrower alternative sends
     an adopter down a path the audit reports as broken every night.
+
+    Inside a tend PR session `CLAUDE.md` is pinned to the base branch, so this
+    fails there whenever the PR is the thing fixing it; read `git show
+    HEAD:CLAUDE.md` rather than re-applying the edit.
     """
     scopes = ["repo", "workflow", "notifications", "write:discussion", "gist", "user"]
 
