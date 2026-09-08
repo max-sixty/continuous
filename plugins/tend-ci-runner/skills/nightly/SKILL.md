@@ -129,6 +129,8 @@ uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/nightly_survey_files.py"
 ```
 
+The script prints `# covered <path> (#N author)` on stderr for each path an open PR already changes. Read that PR's diff before reading the file and drop the findings it already carries. Raise anything new as a comment on the covering PR only where the bot authored it; on anyone else's PR, open your own per Step 8 rather than commenting on their in-flight work. Carry the covered paths into the Step 9 summary.
+
 Skip files that aren't meaningfully reviewable: lock files (`uv.lock`, `Cargo.lock`, `package-lock.json`), binary assets, vendored dependencies, and generated files (build output, compiled protobuf, auto-generated workflow YAML). When unsure, check the file — a quick glance is cheaper than missing something.
 
 Before reviewing files, read the project's CLAUDE.md and any project-specific skills or review criteria it references. Apply the review checklist below to each file in full.
@@ -244,4 +246,4 @@ Keep the project's changelog up to date with recent changes. The `running-tend` 
 
 ## Step 9: Summary
 
-Report: commits reviewed, files surveyed, findings, actions taken, assessment (clean / minor issues / needs attention).
+Report: commits reviewed, files surveyed, files an open PR already covers (with that PR), findings, actions taken, assessment (clean / minor issues / needs attention).
