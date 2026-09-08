@@ -81,31 +81,6 @@ CONTROL_PLANE_PATHS = (
 )
 
 
-def update_ruleset_ids(rules: Any) -> list[int]:
-    """The ids of the rulesets contributing an ``update`` rule, deduped.
-
-    A ruleset can contribute several rules to one branch, and only the
-    ``update`` ones restrict who may move the branch.
-
-    Anything that is not a rule naming both a type and a ruleset id
-    contributes nothing, which is what the jq ``select`` this replaced did.
-    The listing is read best-effort, so a body that is an error object rather
-    than an array has to fall through to the ``.protected`` floor rather than
-    abort the gate.
-    """
-    if not isinstance(rules, list):
-        return []
-    return sorted(
-        {
-            rule["ruleset_id"]
-            for rule in rules
-            if isinstance(rule, dict)
-            and rule.get("type") == "update"
-            and isinstance(rule.get("ruleset_id"), int)
-        }
-    )
-
-
 def ruleset_ids(rules: Any, rule_type: str) -> list[int]:
     """The rulesets contributing ``rule_type`` to the branch, deduped."""
     if not isinstance(rules, list):
@@ -243,7 +218,7 @@ def main() -> int:
         details[ruleset_id] = ruleset if isinstance(ruleset, dict) else None
         return details[ruleset_id]
 
-    update_ids = update_ruleset_ids(rules)
+    update_ids = ruleset_ids(rules, "update")
     update_rulesets = [fetch(ruleset_id) for ruleset_id in update_ids]
     bypass = effective_update_bypass(update_rulesets) if update_ids else "always"
 

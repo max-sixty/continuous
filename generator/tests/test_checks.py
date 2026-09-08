@@ -17,7 +17,6 @@ from tend.checks import (
     ROLE_ID_WRITE,
     CheckResult,
     _control_plane_ruleset,
-    _has_restrict_updates_ruleset,
     _list_org_secrets,
     _restrict_updates_ruleset,
     check_bot_permission,
@@ -42,6 +41,7 @@ from tend.checks import (
     fix_tag_protection,
     operational_refs,
     run_all_checks,
+    update_ruleset_bypass,
 )
 from tend.cli import main
 from tend.config import (
@@ -203,7 +203,7 @@ def _gh_ruleset(
     ruleset_json: str | None = None,
     login: str | None = None,
 ) -> object:
-    """Build a `_gh` fake serving the calls `_has_restrict_updates_ruleset` makes:
+    """Build a `_gh` fake serving the calls `update_ruleset_bypass` makes:
     `/rules/branches/<branch>` returns `rules`; `/rulesets/<id>` returns a ruleset
     with `bypass_actors` (or `ruleset_json` verbatim if given, or returncode=1 if
     both are None); `users/<login>` returns `user_id`; `user` returns `login`
@@ -580,21 +580,21 @@ def test_control_plane_ruleset_must_not_be_bypassable_by_bot() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _has_restrict_updates_ruleset
+# update_ruleset_bypass
 # ---------------------------------------------------------------------------
 
 
 def test_no_rules_for_branch() -> None:
-    """No rules at all for this branch → False."""
+    """No rules at all for this branch → absent."""
     with patch("tend.checks._gh", return_value=_make_completed("[]\n")):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "absent"
 
 
 def test_update_rule_present() -> None:
-    """Update rule whose ruleset only admins bypass → True."""
+    """Update rule whose ruleset only admins bypass → never."""
     fake = _gh_ruleset(_make_branch_rules("update"), [_role_actor(ROLE_ID_ADMIN)])
     with patch("tend.checks._gh", side_effect=fake) as gh:
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
     assert any(c.args[-1] == "repos/owner/repo/rulesets/1" for c in gh.call_args_list)
 
 
@@ -605,7 +605,7 @@ def test_org_ruleset_read_via_repo_endpoint() -> None:
         [_role_actor(ROLE_ID_ADMIN)],
     )
     with patch("tend.checks._gh", side_effect=fake) as gh:
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
     assert any(c.args[-1] == "repos/owner/repo/rulesets/1" for c in gh.call_args_list)
 
 
@@ -624,7 +624,7 @@ def test_ruleset_bypass_list_not_visible() -> None:
         login="a-maintainer",
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 def test_ruleset_bypass_withheld_but_caller_is_bot() -> None:
@@ -639,7 +639,7 @@ def test_ruleset_bypass_withheld_but_caller_is_bot() -> None:
         login="My-Bot",
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
 
 
 def test_ruleset_bot_that_can_bypass_is_not_blocked() -> None:
@@ -658,24 +658,24 @@ def test_ruleset_bot_that_can_bypass_is_not_blocked() -> None:
         login="my-bot",
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "always"
 
 
 def test_only_non_update_rules() -> None:
-    """Branch has rules but none are update → False."""
+    """Branch has rules but none are update → absent."""
     data = _make_branch_rules("deletion", "required_linear_history")
     with patch("tend.checks._gh", return_value=_make_completed(data)):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "absent"
 
 
 def test_update_rule_among_others() -> None:
-    """Update rule mixed with other rules → True."""
+    """Update rule mixed with other rules → never."""
     fake = _gh_ruleset(
         _make_branch_rules("deletion", "update", "required_signatures"),
         [_role_actor(ROLE_ID_ADMIN)],
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
 
 
 def test_update_rule_bypassed_by_write() -> None:
@@ -686,7 +686,7 @@ def test_update_rule_bypassed_by_write() -> None:
     """
     fake = _gh_ruleset(_make_branch_rules("update"), [_role_actor(ROLE_ID_WRITE)])
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "always"
 
 
 def test_update_rule_maintain_bypass_ok() -> None:
@@ -696,7 +696,7 @@ def test_update_rule_maintain_bypass_ok() -> None:
         [_role_actor(ROLE_ID_ADMIN), _role_actor(ROLE_ID_MAINTAIN)],
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
 
 
 def test_update_rule_org_admin_bypass_ok() -> None:
@@ -706,7 +706,7 @@ def test_update_rule_org_admin_bypass_ok() -> None:
         [{"actor_type": "OrganizationAdmin", "actor_id": None}],
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
 
 
 def test_update_rule_bot_user_bypass() -> None:
@@ -721,7 +721,7 @@ def test_update_rule_bot_user_bypass() -> None:
         user_id=999,
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "always"
 
 
 def test_update_rule_other_user_bypass_ok() -> None:
@@ -732,7 +732,7 @@ def test_update_rule_other_user_bypass_ok() -> None:
         user_id=999,
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
 
 
 def test_update_rule_user_bypass_unresolvable_login() -> None:
@@ -743,7 +743,7 @@ def test_update_rule_user_bypass_unresolvable_login() -> None:
         user_id=None,
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 def test_update_rule_team_bypass_unresolved() -> None:
@@ -753,7 +753,7 @@ def test_update_rule_team_bypass_unresolved() -> None:
         [{"actor_type": "Team", "actor_id": 42}],
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 def test_update_rule_write_bypass_beats_unresolved() -> None:
@@ -763,28 +763,28 @@ def test_update_rule_write_bypass_beats_unresolved() -> None:
         [{"actor_type": "Team", "actor_id": 42}, _role_actor(ROLE_ID_WRITE)],
     )
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is False
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "always"
 
 
 def test_update_rule_no_bypass_actors() -> None:
     """An empty bypass list means nobody bypasses → protected."""
     fake = _gh_ruleset(_make_branch_rules("update"), [])
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is True
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") == "never"
 
 
 def test_update_rule_ruleset_unreadable() -> None:
     """Update rule present but its ruleset can't be read → None, not a pass."""
     fake = _gh_ruleset(_make_branch_rules("update"), None)
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 def test_update_rule_without_ruleset_id() -> None:
     """An update rule we can't trace to a ruleset is unverified, not absent."""
     fake = _gh_ruleset(_make_branch_rules("update", ruleset_id=None), None)
     with patch("tend.checks._gh", side_effect=fake):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 def test_branch_rules_api_error() -> None:
@@ -793,13 +793,13 @@ def test_branch_rules_api_error() -> None:
         "tend.checks._gh",
         return_value=_make_completed(returncode=1, stderr="Not Found"),
     ):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 def test_branch_rules_no_gh() -> None:
     """gh CLI not found → None (can't check either endpoint)."""
     with patch("tend.checks._gh", return_value=None):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 def test_branch_rules_non_list_response() -> None:
@@ -808,7 +808,7 @@ def test_branch_rules_non_list_response() -> None:
         "tend.checks._gh",
         return_value=_make_completed('{"message": "Not Found"}'),
     ):
-        assert _has_restrict_updates_ruleset("owner/repo", "main", "my-bot") is None
+        assert update_ruleset_bypass("owner/repo", "main", "my-bot") is None
 
 
 # ---------------------------------------------------------------------------
@@ -2215,6 +2215,98 @@ def test_cli_check_fix_bootstraps_maintainer_mode_while_yolo_credentials_fail(
     assert result.exit_code == 1
     fix.assert_called_once_with("owner/repo", "main", "test-bot", "maintainer", [])
     assert "credential-environments" in result.output
+
+
+def test_cli_check_fix_creates_environment_during_yolo_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        'bot_name: test-bot\nmerge: yolo\ncontrol_plane_owner: "@octocat"\n',
+    )
+    monkeypatch.chdir(tmp_path)
+    before = [
+        CheckResult("branch-protection:main", False, "missing"),
+        CheckResult("control-plane-ruleset", False, "missing"),
+        CheckResult("environment", False, "missing"),
+        CheckResult("secrets", False, "missing"),
+    ]
+    after_environment = [
+        CheckResult("branch-protection:main", True, "maintainer-only"),
+        CheckResult("environment", True, "ready"),
+        CheckResult("secrets", False, "missing"),
+    ]
+    check_count = 0
+
+    def check_results(config: Config, repo: str) -> list[CheckResult]:
+        nonlocal check_count
+        check_count += 1
+        if check_count == 1:
+            return before
+        if check_count == 2:
+            branch = check_branch_protection(
+                repo,
+                "main",
+                config.bot_name,
+                expected_bypass=config.merge_policy.expected_runtime_bypass,
+            )
+            return [
+                branch,
+                CheckResult("environment", False, "missing"),
+                CheckResult("secrets", False, "missing"),
+            ]
+        return after_environment
+
+    with (
+        patch("tend.cli.run_all_checks", side_effect=check_results),
+        patch("tend.cli.detect_default_branch", return_value="main"),
+        patch("tend.cli.update_ruleset_bypass", return_value="absent"),
+        patch("tend.checks._gh", return_value=_make_completed("true\n")),
+        patch("tend.checks.update_ruleset_bypass", return_value="never"),
+        patch("tend.checks._ruleset_type_bypass", return_value="never"),
+        patch(
+            "tend.cli.fix_branch_protection",
+            return_value=CheckResult("branch-protection:main", True, "fixed"),
+        ),
+        patch(
+            "tend.cli.fix_environment",
+            return_value=CheckResult("environment", True, "fixed"),
+        ) as fix_environment,
+    ):
+        result = CliRunner().invoke(main, ["check", "--fix", "--repo", "owner/repo"])
+
+    assert result.exit_code == 1
+    assert check_count == 3
+    fix_environment.assert_called_once_with("owner/repo", ["main"])
+
+
+def test_cli_check_fix_does_not_create_environment_if_bootstrap_rules_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        'bot_name: test-bot\nmerge: yolo\ncontrol_plane_owner: "@octocat"\n',
+    )
+    monkeypatch.chdir(tmp_path)
+    before = [
+        CheckResult("branch-protection:main", False, "missing"),
+        CheckResult("environment", False, "missing"),
+        CheckResult("secrets", False, "missing"),
+    ]
+    with (
+        patch("tend.cli.run_all_checks", return_value=before),
+        patch("tend.cli.detect_default_branch", return_value="main"),
+        patch("tend.cli.update_ruleset_bypass", return_value="absent"),
+        patch(
+            "tend.cli.fix_branch_protection",
+            return_value=CheckResult("branch-protection:main", False, "failed"),
+        ),
+        patch("tend.cli.fix_environment") as fix_environment,
+    ):
+        result = CliRunner().invoke(main, ["check", "--fix", "--repo", "owner/repo"])
+
+    assert result.exit_code == 1
+    fix_environment.assert_not_called()
 
 
 def test_cli_check_fix_repairs_rules_without_demoting_live_yolo_access(

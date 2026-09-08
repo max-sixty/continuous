@@ -72,7 +72,7 @@ def _codeowners(fake_gh: FakeGh) -> None:
     fake_gh.respond("api", "user", with_={"login": "tend-bot"})
 
 
-def test_update_ruleset_ids_keeps_update_rules_once() -> None:
+def test_ruleset_ids_keeps_update_rules_once() -> None:
     """One ruleset contributing several rules to a branch is queried once."""
     rules = [
         {"type": "pull_request", "ruleset_id": 1},
@@ -81,10 +81,10 @@ def test_update_ruleset_ids_keeps_update_rules_once() -> None:
         _update_rule(7),
         _update_rule(3),
     ]
-    assert security_preflight.update_ruleset_ids(rules) == [3, 7]
+    assert security_preflight.ruleset_ids(rules, "update") == [3, 7]
 
 
-def test_update_ruleset_ids_ignores_a_body_it_cannot_read_as_rules() -> None:
+def test_ruleset_ids_ignores_a_body_it_cannot_read_as_rules() -> None:
     """The jq `select` this replaced dropped these; nothing may raise on one.
 
     The listing is read best-effort, so an error object under a 200, or an
@@ -92,9 +92,10 @@ def test_update_ruleset_ids_ignores_a_body_it_cannot_read_as_rules() -> None:
     `.protected` floor rather than abort a gate whose failure also suppresses
     the outage report.
     """
-    assert security_preflight.update_ruleset_ids({"message": "Not Found"}) == []
-    assert security_preflight.update_ruleset_ids(
-        [{"ruleset_id": 1}, {"type": "update"}, "not a rule", _update_rule(4)]
+    assert security_preflight.ruleset_ids({"message": "Not Found"}, "update") == []
+    assert security_preflight.ruleset_ids(
+        [{"ruleset_id": 1}, {"type": "update"}, "not a rule", _update_rule(4)],
+        "update",
     ) == [4]
 
 

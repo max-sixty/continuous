@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import click
@@ -370,7 +371,12 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
             # results, which the ruleset just changed. Re-read them, or the
             # policy would be written from the pre-fix picture — for a repo
             # whose only failure was the missing ruleset, an empty one.
-            results = run_all_checks(cfg, repo)
+            applied_cfg = (
+                cfg
+                if merge_to_apply == cfg.merge
+                else replace(cfg, merge=merge_to_apply)
+            )
+            results = run_all_checks(applied_cfg, repo)
             failures = [r for r in results if r.passed is False]
 
     if any(r.name == "immutable-releases" for r in failures):
@@ -389,14 +395,18 @@ def check(config_path: Path | None, repo: str | None, fix: bool) -> None:
         if fix_result.passed:
             fixed_any = True
 
-    if any(r.name == "environment" for r in failures) and not activation_blockers:
+    environment_refs = operational_refs(results)
+    can_fix_environment = not activation_blockers or (
+        merge_to_apply == "maintainer" and default_branch in environment_refs
+    )
+    if any(r.name == "environment" for r in failures) and can_fix_environment:
         click.echo()
         click.echo("Configuring the 'tend' environment...")
         # Read off the same run's branch-protection results, so the policy the
         # fix writes is the set the check just demanded — never a ref whose
         # protection this run could not verify. An empty set can't reach here:
         # the check reports unknown rather than failure when nothing verified.
-        fix_result = fix_environment(repo, operational_refs(results))
+        fix_result = fix_environment(repo, environment_refs)
         _print_check_results([fix_result])
         if fix_result.passed:
             fixed_any = True

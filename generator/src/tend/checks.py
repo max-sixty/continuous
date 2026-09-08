@@ -560,41 +560,6 @@ def _same_login(a: str, b: str) -> bool:
     return a.casefold() == b.casefold()
 
 
-def _bypass_actors_above_bot(actors: list[dict] | None, bot_name: str) -> bool | None:
-    """Whether every bypass actor in a ruleset outranks a write-access bot.
-
-    Returns False if one of them is the bot itself or a role at write or
-    below, None when the list is withheld (only ruleset admins see
-    `bypass_actors`) or names a principal this can't resolve (a team, app,
-    or deploy key, or any user once `bot_name` itself fails to resolve — the
-    ids have nothing to compare against). An empty list is True — nobody
-    bypasses at all.
-    """
-    if actors is None:
-        return None
-    # A user exemption is decidable: the bot's login resolves to the id the
-    # actor names. Naming the bot is the worst case — an explicit grant of the
-    # merge the restriction exists to deny.
-    bot_id = None
-    if any(a.get("actor_type") == "User" for a in actors):
-        bot_id = _user_id(bot_name)
-
-    unresolved = False
-    for actor in actors:
-        actor_type = actor.get("actor_type")
-        if actor_type == "RepositoryRole":
-            if actor.get("actor_id") not in BYPASS_ROLE_IDS:
-                return False
-        elif actor_type == "User":
-            if bot_id is None:
-                unresolved = True
-            elif actor.get("actor_id") == bot_id:
-                return False
-        elif actor_type not in BYPASS_ACTOR_TYPES_ABOVE_BOT:
-            unresolved = True
-    return None if unresolved else True
-
-
 def _ruleset_bot_bypass(data: dict, bot_name: str) -> str | None:
     """The bot's bypass level for one ruleset.
 
@@ -674,18 +639,6 @@ def _fetch_ruleset(repo: str, ruleset_id: int | str) -> dict | None:
     if not isinstance(data, dict):
         return None
     return data
-
-
-def _ruleset_blocks_bot(repo: str, ruleset_id: int, bot_name: str) -> bool | None:
-    """Whether a ruleset's bypass configuration keeps a write-access bot out.
-
-    None when the ruleset is unreadable or its bypass configuration
-    unverifiable.
-    """
-    data = _fetch_ruleset(repo, ruleset_id)
-    if data is None:
-        return None
-    return _ruleset_keeps_bot_out(data, bot_name)
 
 
 def _ruleset_type_bypass(
@@ -778,23 +731,6 @@ def _tags_admin_gated(repo: str, bot_name: str) -> bool | None:
             return True
         unresolved = unresolved or verdict is None
     return None if unresolved else False
-
-
-def _has_restrict_updates_ruleset(repo: str, branch: str, bot_name: str) -> bool | None:
-    """Check if an active ruleset stops the bot updating the branch.
-
-    An `update` rule alone isn't enough — a bypass actor at write or below
-    defeats it, and write is exactly what the bot holds. So each update rule is
-    followed back to its ruleset and its bypass list checked.
-
-    Returns True if found, False if confirmed absent or bypassable, None if
-    unable to check.
-
-    Uses the per-branch rules endpoint which resolves patterns like
-    ~DEFAULT_BRANCH.
-    """
-    bypass = update_ruleset_bypass(repo, branch, bot_name)
-    return None if bypass is None else bypass == "never"
 
 
 def check_bot_permission(repo: str, bot_name: str) -> CheckResult:
@@ -1040,7 +976,7 @@ def check_environment_deployments(repo: str) -> CheckResult:
         f"{path} job '{job_id}'"
         for path, text in sorted(files.items())
         if text is not None
-        for job_id in sorted(_parse_workflow(path, text, repo).filed_deployments)
+        for job_id in sorted(_parse_workflow(path, text).filed_deployments)
     ]
     if offenders:
         return CheckResult(
@@ -1163,7 +1099,7 @@ def _called_workflow(uses: str) -> str | None:
     return None
 
 
-def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
+def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     """Read one workflow's triggers, environments, and OIDC use.
 
     Anything the parse cannot decide (an unparsable file, an environment named
@@ -1340,9 +1276,7 @@ class _CredentialSurface:
     unresolved: tuple[str, ...]
 
 
-def _credential_surface(
-    repo: str, files: dict[str, str | None] | None
-) -> _CredentialSurface:
+def _credential_surface(files: dict[str, str | None] | None) -> _CredentialSurface:
     """Read the workflows into the facts the environment gates need.
 
     An unreadable tree yields an empty surface that says so, rather than no
@@ -1363,7 +1297,7 @@ def _credential_surface(
         if text is None:
             unresolved.append(f"{path} could not be read")
             continue
-        facts[path] = _parse_workflow(path, text, repo)
+        facts[path] = _parse_workflow(path, text)
 
     resolved, unreached = _effective_triggers(facts)
     env_steerable: dict[str, set[str]] = {}
@@ -1437,7 +1371,7 @@ def check_yolo_workflows(repo: str, cfg: Config) -> CheckResult:
     for filename, content in sorted(files.items()):
         if filename in expected or content is None:
             continue
-        facts = _parse_workflow(filename, content, repo)
+        facts = _parse_workflow(filename, content)
         if TEND_ENVIRONMENT.casefold() in facts.environments:
             extra_holders.append(filename)
         if facts.unresolved:
@@ -1653,7 +1587,7 @@ def check_credential_environments(
             name, None, f"Could not list environments: {listed.stderr.strip()}"
         )
 
-    surface = _credential_surface(repo, _fetch_workflow_files(repo))
+    surface = _credential_surface(_fetch_workflow_files(repo))
     tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
     ungated: list[str] = []

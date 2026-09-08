@@ -76,7 +76,6 @@ KNOWN_TOP_LEVEL = {
 KNOWN_HARNESSES = {"claude", "codex"}
 KNOWN_MERGE_POLICIES = {"maintainer", "yolo"}
 KNOWN_SECRETS_KEYS = {"allowed"}
-REMOVED_TOP_LEVEL_KEYS = {"landing": "merge"}
 
 # The operational secrets, by fixed name. Claude reads the OAuth token
 # (subscription) or the API key (console.anthropic.com) — adopters set one;
@@ -333,15 +332,6 @@ class Config:
         if not isinstance(raw, dict):
             raise click.ClickException(
                 f"{path} must contain a YAML mapping at the top level"
-            )
-
-        removed_top_level = sorted(set(raw) & set(REMOVED_TOP_LEVEL_KEYS))
-        if removed_top_level:
-            renames = ", ".join(
-                f"{key} → {REMOVED_TOP_LEVEL_KEYS[key]}" for key in removed_top_level
-            )
-            raise click.ClickException(
-                f"Removed config key(s): {renames}. Rename each key."
             )
 
         if "bot_name" not in raw:

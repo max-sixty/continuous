@@ -176,13 +176,6 @@ def test_merge_defaults_to_maintainer(tmp_path: Path) -> None:
     assert cfg.merge_policy.expected_runtime_bypass == "never"
 
 
-def test_removed_landing_key_is_rejected(tmp_path: Path) -> None:
-    path = _write_config(tmp_path, "bot_name: my-bot\nlanding: yolo\n")
-
-    with pytest.raises(ClickException, match="landing → merge"):
-        Config.load(path)
-
-
 def test_yolo_merge_requires_one_control_plane_owner(tmp_path: Path) -> None:
     path = _write_config(
         tmp_path,
