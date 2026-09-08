@@ -298,6 +298,8 @@ jobs:
         if: (steps.tend_enabled.outputs.enabled == 'true') && (steps.check.outputs.count != '0' || steps.check.outputs.conflict_count != '0' || github.event_name == 'workflow_dispatch')
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
+          merge: maintainer
+          control_plane_owner: ""
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
           bot_name: test-bot

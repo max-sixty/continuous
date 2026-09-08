@@ -16,13 +16,20 @@ AUTONOMY_DIRECTIVE = (
 )
 
 
-def _substitute_bot_name(text: str, bot_name: str) -> str:
-    return text.replace("${BOT_NAME}", bot_name).replace("$BOT_NAME", bot_name)
+def _substitute_runtime(text: str, bot_name: str, merge: str) -> str:
+    return (
+        text.replace("${BOT_NAME}", bot_name)
+        .replace("$BOT_NAME", bot_name)
+        .replace("${TEND_MERGE}", merge)
+        .replace("$TEND_MERGE", merge)
+    )
 
 
 def main() -> int:
     shared = Path(os.environ["SYSTEM_PROMPT_FILE"]).read_text()
-    base = _substitute_bot_name(shared, os.environ["BOT_NAME"]).rstrip("\n")
+    base = _substitute_runtime(
+        shared, os.environ["BOT_NAME"], os.environ["TEND_MERGE"]
+    ).rstrip("\n")
     parts = [CLAUDE_DIRECTIVE, AUTONOMY_DIRECTIVE, base]
     extra = os.environ.get("EXTRA", "")
     if extra:

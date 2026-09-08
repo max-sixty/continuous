@@ -48,7 +48,7 @@ def test_migrate_full_config_round_trips_through_config_load(tmp_path: Path) -> 
         allowed = ["CODECOV_TOKEN"]
 
         [[setup]]
-        uses = "astral-sh/setup-uv@v6"
+        run = "uv --version"
 
         [[setup]]
         run = "echo hi"
@@ -71,7 +71,7 @@ def test_migrate_full_config_round_trips_through_config_load(tmp_path: Path) -> 
     assert cfg.model == "sonnet"
     assert cfg.allowed_repo_secrets == ["CODECOV_TOKEN"]
     assert len(cfg.setup) == 2
-    assert cfg.setup[0].fields == {"uses": "astral-sh/setup-uv@v6"}
+    assert cfg.setup[0].fields == {"run": "uv --version"}
     assert cfg.setup[1].fields == {"run": "echo hi", "env": {"FOO": "bar"}}
     assert cfg.workflows["ci-fix"].watched_workflows == ["ci"]
     assert cfg.workflows["review"].jobs == {"review": {"timeout-minutes": 240}}
@@ -94,7 +94,7 @@ def test_migrate_generates_identical_workflows(tmp_path: Path) -> None:
         protected_branches = ["v1"]
 
         [[setup]]
-        uses = "astral-sh/setup-uv@v6"
+        run = "uv --version"
 
         [workflows.ci-fix]
         watched_workflows = ["ci"]
@@ -242,7 +242,7 @@ def test_workflows_from_migrated_config_match_workflows_built_from_toml_dict(
         protected_branches = ["v1"]
 
         [[setup]]
-        uses = "astral-sh/setup-uv@v6"
+        run = "uv --version"
 
         [workflows.ci-fix]
         watched_workflows = ["ci"]

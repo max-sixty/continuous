@@ -12,9 +12,12 @@ def test_composes_directives_shared_prompt_and_extra(
 ) -> None:
     shared = tmp_path / "system-prompt.md"
     output = tmp_path / "github-output"
-    shared.write_text("Act as **${BOT_NAME}**. Keep `$GH_TOKEN` intact.\n")
+    shared.write_text(
+        "Act as **${BOT_NAME}** under ${TEND_MERGE}. Keep `$GH_TOKEN` intact.\n"
+    )
     monkeypatch.setenv("SYSTEM_PROMPT_FILE", str(shared))
     monkeypatch.setenv("BOT_NAME", "tend-bot")
+    monkeypatch.setenv("TEND_MERGE", "maintainer")
     monkeypatch.setenv("EXTRA", "One more rule.")
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
 
@@ -26,6 +29,6 @@ def test_composes_directives_shared_prompt_and_extra(
     assert match.group(2) == (
         f"{compose_system_prompt.CLAUDE_DIRECTIVE}\n\n"
         f"{compose_system_prompt.AUTONOMY_DIRECTIVE}\n\n"
-        "Act as **tend-bot**. Keep `$GH_TOKEN` intact.\n\n"
+        "Act as **tend-bot** under maintainer. Keep `$GH_TOKEN` intact.\n\n"
         "One more rule."
     )

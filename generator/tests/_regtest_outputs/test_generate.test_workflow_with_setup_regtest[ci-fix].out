@@ -109,13 +109,15 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: astral-sh/setup-uv@v6
+      - run: uv --version
         if: steps.tend_enabled.outputs.enabled == 'true'
 
       - uses: max-sixty/tend/claude@X.Y.Z
         if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
+          merge: maintainer
+          control_plane_owner: ""
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           bot_name: test-bot

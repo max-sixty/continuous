@@ -26,9 +26,12 @@ from tend.config import (
     Config,
 )
 from tend.workflows import (
+    CODEOWNERS_BEGIN,
+    CODEOWNERS_END,
     GENERATORS,
     _deep_merge,
     _inline_script,
+    codeowners_config,
     generate_all,
     generate_codex_auth_refresh,
     generate_install_test,
@@ -56,6 +59,75 @@ def _minimal_config(tmp_path: Path, extra: str = "") -> Path:
 
 def test_standard_workflow_registry_matches_the_generators() -> None:
     assert STANDARD_WORKFLOWS == set(GENERATORS)
+
+
+def test_codeowners_block_is_final_and_idempotent() -> None:
+    existing = dedent(f"""\
+        *.py @python-team
+
+        {CODEOWNERS_BEGIN}
+        /.github/** @old-owner
+        /.config/tend.yaml @old-owner
+        {CODEOWNERS_END}
+
+        * @fallback
+        """)
+
+    updated = codeowners_config(existing, "@octo-org/security")
+
+    assert updated == dedent(f"""\
+        *.py @python-team
+
+
+        * @fallback
+
+        {CODEOWNERS_BEGIN}
+        /.github/** @octo-org/security
+        /.config/tend.yaml @octo-org/security
+        /CODEOWNERS @octo-org/security
+        /docs/CODEOWNERS @octo-org/security
+        **/CLAUDE.md @octo-org/security
+        **/CLAUDE.local.md @octo-org/security
+        **/AGENTS.md @octo-org/security
+        **/AGENTS.override.md @octo-org/security
+        **/.claude @octo-org/security
+        **/.claude/** @octo-org/security
+        **/.agents @octo-org/security
+        **/.agents/** @octo-org/security
+        {CODEOWNERS_END}
+        """)
+    assert codeowners_config(updated, "@octo-org/security") is None
+
+
+def test_codeowners_rejects_a_malformed_managed_block() -> None:
+    with pytest.raises(click.ClickException, match="malformed tend control-plane"):
+        codeowners_config(f"{CODEOWNERS_BEGIN}\n/.github/** @owner\n", "@owner")
+
+
+def test_codeowners_block_is_removed_when_yolo_is_disabled() -> None:
+    existing = (
+        "*.py @python\n\n"
+        f"{CODEOWNERS_BEGIN}\n"
+        "/.github/** @security\n"
+        "/.config/tend.yaml @security\n"
+        "/CODEOWNERS @security\n"
+        "/docs/CODEOWNERS @security\n"
+        "**/CLAUDE.md @security\n"
+        "**/CLAUDE.local.md @security\n"
+        "**/AGENTS.md @security\n"
+        "**/AGENTS.override.md @security\n"
+        "**/.claude @security\n"
+        "**/.claude/** @security\n"
+        "**/.agents @security\n"
+        "**/.agents/** @security\n"
+        f"{CODEOWNERS_END}\n"
+    )
+
+    assert codeowners_config(existing, None) == "*.py @python\n"
+
+
+def test_maintainer_mode_leaves_an_unmanaged_codeowners_file_byte_stable() -> None:
+    assert codeowners_config("*.py @python", None) is None
 
 
 def test_minimal_config_generates_seven_workflows(tmp_path: Path) -> None:
@@ -220,14 +292,12 @@ def test_runtime_enabled_check_rejects_yaml_merge_keys(tmp_path: Path) -> None:
 def test_setup_steps_rendered(tmp_path: Path) -> None:
     extra = dedent("""\
         setup:
-          - uses: ./.github/actions/my-setup
+          - run: python --version
           - run: echo FOO=bar >> $GITHUB_ENV
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     for wf in generate_all(cfg):
-        assert "./.github/actions/my-setup" in wf.content, (
-            f"{wf.filename} missing uses step"
-        )
+        assert "python --version" in wf.content, f"{wf.filename} missing first run step"
         assert "echo FOO=bar >> $GITHUB_ENV" in wf.content, (
             f"{wf.filename} missing run step"
         )
@@ -238,96 +308,23 @@ def _eyes_steps(steps: list[dict[str, object]]) -> list[dict[str, object]]:
     return [s for s in steps if "content=eyes" in str(s.get("run", ""))]
 
 
-def _restore_step_index(steps: list[dict[str, object]]) -> int | None:
-    """Index of the step that puts the loaded tree's local setup actions back."""
-    for i, step in enumerate(steps):
-        run = str(step.get("run", ""))
-        if "git checkout" in run and "$GITHUB_SHA" in run:
-            return i
-    return None
-
-
 @pytest.mark.parametrize(
-    ("name", "job", "switch"),
+    "action",
     [
-        (
-            "review",
-            "review",
-            lambda s: (
-                s.get("uses", "").startswith("actions/checkout")
-                and "ref" in s.get("with", {})
-            ),
-        ),
-        (
-            "mention",
-            "handle",
-            lambda s: "gh pr checkout" in str(s.get("run", "")),
-        ),
+        "./.github/actions/tend-setup",
+        "actions/setup-python@v6",
+        "Swatinem/rust-cache@v2",
     ],
 )
-def test_local_setup_action_restored_for_post_cleanup(
-    tmp_path: Path,
-    name: str,
-    job: str,
-    switch: object,
-) -> None:
-    """review and mention land the PR's tree over the workspace a local `setup:`
-    composite was loaded from. To dispatch the POST steps of the actions nested
-    inside it the runner re-reads that file and matches it against the step list
-    it cached at load time, so a PR that resizes or deletes the file fails
-    cleanup (actions/runner#2816). Put the loaded version back before the POST
-    chain walks.
-
-    `always()` covers a failed session so cleanup still sees the version the
-    runner loaded. The runtime switch still applies because a disabled job
-    never loaded the local action."""
-    extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    steps = yaml.safe_load(GENERATORS[name](cfg).content)["jobs"][job]["steps"]
-
-    idx = _restore_step_index(steps)
-    assert idx is not None, f"{name}: nothing restores the local setup action"
-    assert ".github/actions/tend-setup" in str(steps[idx]["run"])
-    condition = str(steps[idx].get("if", ""))
-    assert condition.startswith("always()"), (
-        f"{name}: the restore has to run even when the session fails"
-    )
-    assert condition.strip() == (
-        "always()\n&& (steps.tend_enabled.outputs.enabled == 'true')"
-    ), f"{name}: restore has an unexpected gate"
-    switch_idx = next(i for i, s in enumerate(steps) if switch(s))  # type: ignore[operator]
-    assert idx > switch_idx, f"{name}: the restore has to follow the tree switch"
-
-
-def test_restore_step_quotes_the_setup_path(tmp_path: Path) -> None:
-    """The path reaches both the `git` operand and the warning text through a
-    shell variable, so a `$` can't expand and a `"` can't end the string early
-    and fail the one step whose job is to never turn a working run red."""
-    extra = "setup:\n  - uses: './weird/$HOME\"; rm -rf /; echo \"'\n"
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    steps = yaml.safe_load(generate_mention(cfg).content)["jobs"]["handle"]["steps"]
-    run = str(steps[_restore_step_index(steps)]["run"])
-
-    assert """dir='weird/$HOME"; rm -rf /; echo "'""" in run
-    assert 'git checkout "$GITHUB_SHA" -- "$dir"' in run
-    # Nothing but the single-quoted assignment carries the raw path.
-    assert run.count("rm -rf /") == 1
-
-
-def test_no_restore_step_without_a_local_setup_action(tmp_path: Path) -> None:
-    """A remote `uses:` resolves from the action cache, not the workspace, so
-    there is nothing to put back."""
-    extra = "setup:\n  - uses: astral-sh/setup-uv@v6\n"
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    for wf in generate_all(cfg):
-        for job in yaml.safe_load(wf.content)["jobs"].values():
-            assert _restore_step_index(job.get("steps", [])) is None, wf.filename
+def test_setup_actions_are_rejected(tmp_path: Path, action: str) -> None:
+    """Any action may defer runner-side code until after the agent exits."""
+    extra = f"setup:\n  - uses: {action}\n"
+    with pytest.raises(click.ClickException, match="action steps are not supported"):
+        Config.load(_minimal_config(tmp_path, extra))
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-@pytest.mark.parametrize(
-    "extra", ["", "setup:\n  - uses: ./.github/actions/tend-setup\n"]
-)
+@pytest.mark.parametrize("extra", [""])
 def test_generated_workflows_survive_the_whitespace_hooks(
     tmp_path: Path, extra: str, harness: str
 ) -> None:
@@ -478,39 +475,26 @@ def test_sandbox_levers_rendered_for_codex(tmp_path: Path) -> None:
             assert "sandbox_path" in inputs
 
 
-def test_setup_uses_with_parameters_gets_if_guard(tmp_path: Path) -> None:
-    """A `uses` setup step with `with:` parameters must still receive the
-    `if:` guard in the notifications workflow.
-
-    Without `with` support on `uses`, steps like `actions/setup-node@v4` that
-    require parameters are forced into `raw`, which cannot receive the guard —
-    so they run even when the pre-check has skipped checkout, failing with
-    "The specified node version file does not exist" (issue #281).
-    """
+def test_setup_action_with_parameters_is_rejected(tmp_path: Path) -> None:
     extra = dedent("""\
         setup:
           - uses: actions/setup-node@v4
             with:
               node-version-file: .node-version
     """)
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    workflows = {wf.filename: wf for wf in generate_all(cfg)}
-    notifications = workflows["tend-notifications.yaml"]
-    data = yaml.safe_load(notifications.content)
+    with pytest.raises(click.ClickException, match="action steps are not supported"):
+        Config.load(_minimal_config(tmp_path, extra))
 
-    steps = data["jobs"]["notifications"]["steps"]
-    setup_node = next(
-        (s for s in steps if s.get("uses") == "actions/setup-node@v4"), None
-    )
-    assert setup_node is not None, "setup-node step missing from notifications workflow"
-    assert setup_node.get("with") == {"node-version-file": ".node-version"}, (
-        "uses step must render `with:` parameters"
-    )
-    assert "if" in setup_node, (
-        "setup-node step must receive the `if:` guard so it is skipped when "
-        "checkout was skipped (otherwise .node-version is missing and the "
-        "step fails)"
-    )
+
+def test_setup_run_step_rejects_action_inputs(tmp_path: Path) -> None:
+    extra = dedent("""\
+        setup:
+          - run: node --version
+            with:
+              node-version: 24
+    """)
+    with pytest.raises(click.ClickException, match="`with` is only valid"):
+        Config.load(_minimal_config(tmp_path, extra))
 
 
 def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
@@ -519,13 +503,8 @@ def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
     """
     extra = dedent("""\
         setup:
-          - uses: actions/setup-node@v4
-            name: Setup Node
-            with:
-              node-version-file: .node-version
-            env:
-              FORCE_COLOR: "1"
           - run: cargo build --release
+            name: Build release
             shell: bash
             working-directory: ./crates/core
             env:
@@ -537,12 +516,8 @@ def test_setup_step_passthrough_fields(tmp_path: Path) -> None:
     data = yaml.safe_load(review.content)
 
     steps = data["jobs"]["review"]["steps"]
-    node = next(s for s in steps if s.get("uses") == "actions/setup-node@v4")
-    assert node["name"] == "Setup Node"
-    assert node["with"] == {"node-version-file": ".node-version"}
-    assert node["env"] == {"FORCE_COLOR": "1"}
-
     build = next(s for s in steps if s.get("run") == "cargo build --release")
+    assert build["name"] == "Build release"
     assert build["shell"] == "bash"
     assert build["working-directory"] == "./crates/core"
     assert build["env"] == {"RUSTFLAGS": "-D warnings"}
@@ -1023,7 +998,7 @@ def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
     sandbox exists to draw. The PR checkout keeps `clean: false` so it does
     not delete what setup wrote into the workspace.
     """
-    extra = "setup:\n  - uses: ./.github/actions/my-setup\n"
+    extra = "setup:\n  - run: python --version\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     data = yaml.safe_load(workflows["tend-review.yaml"].content)
@@ -1033,7 +1008,7 @@ def test_setup_runs_on_base_tree_in_review(tmp_path: Path) -> None:
         i for i, s in enumerate(steps) if s.get("uses") == "actions/checkout@v7"
     )
     setup_idx = next(
-        i for i, s in enumerate(steps) if s.get("uses") == "./.github/actions/my-setup"
+        i for i, s in enumerate(steps) if s.get("run") == "python --version"
     )
     pr_idx = _pr_tree_checkout_idx(steps)
 
@@ -1162,7 +1137,7 @@ def test_setup_raw_rejected_with_migration_hint(tmp_path: Path) -> None:
                 with:
                   save-if: false
     """)
-    with pytest.raises(click.ClickException, match="composite action"):
+    with pytest.raises(click.ClickException, match="sandbox_setup"):
         Config.load(_minimal_config(tmp_path, extra))
 
 
@@ -1337,12 +1312,12 @@ def test_setup_before_pr_checkout_in_mention(tmp_path: Path) -> None:
     `gh pr checkout` would 404 with `Can't find 'action.yml'` and drop the
     maintainer's mention silently.
     """
-    extra = "setup:\n  - uses: ./.github/actions/my-setup\n"
+    extra = "setup:\n  - run: python --version\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
     mention = workflows["tend-mention.yaml"]
     initial_checkout_idx = mention.content.index("actions/checkout@v7")
-    setup_idx = mention.content.index("./.github/actions/my-setup")
+    setup_idx = mention.content.index("python --version")
     pr_checkout_idx = mention.content.index("Check out PR branch")
     assert initial_checkout_idx < setup_idx < pr_checkout_idx, (
         "Setup must run after the initial checkout and before PR-branch switch"
@@ -1803,23 +1778,10 @@ def test_workflow_with_setup_regtest(
     regtest: object, tmp_path: Path, name: str
 ) -> None:
     """Snapshot each workflow's full YAML with a setup step."""
-    extra = "setup:\n  - uses: astral-sh/setup-uv@v6\n"
+    extra = "setup:\n  - run: uv --version\n"
     extra_cfg = _extra_for(name)
     if extra_cfg:
         extra += extra_cfg
-    cfg = Config.load(_minimal_config(tmp_path, extra))
-    wf = GENERATORS[name](cfg)
-    print(wf.content, end="", file=regtest)  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize("name", ["review", "mention"])
-def test_workflow_with_local_setup_regtest(
-    regtest: object, tmp_path: Path, name: str
-) -> None:
-    """Snapshot the two workflows that swap the workspace tree after `setup:`,
-    with a local composite in it — locks the restore step the POST chain needs
-    (actions/runner#2816)."""
-    extra = "setup:\n  - uses: ./.github/actions/tend-setup\n"
     cfg = Config.load(_minimal_config(tmp_path, extra))
     wf = GENERATORS[name](cfg)
     print(wf.content, end="", file=regtest)  # type: ignore[arg-type]

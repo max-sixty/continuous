@@ -4,9 +4,11 @@ Tend gives an AI agent write access to a repository and runs it on
 attacker-controlled input (PR diffs, issue bodies, comments, CI logs). The
 agent uses authenticated GitHub and model connections to push commits, post
 reviews, and create PRs. The security model keeps the PAT and long-lived model
-credentials outside the agent process and requires a human to land code. The
-agent is expected to use the GitHub API for any repository the bot account can
-access, including repositories other than the one that started the run.
+credentials outside the agent process. Merge authority is explicit: the
+default mode requires a maintainer, while yolo lets the bot merge ordinary
+code but keeps the repository control plane maintainer-owned. The agent is expected to use the GitHub
+API for any repository the bot account can access, including repositories
+other than the one that started the run.
 
 Each adopting repo should document its specific configuration (admin accounts,
 token names, protected environments) in its own
@@ -39,9 +41,8 @@ the attacker controls the entire PR diff, which Claude reads and reasons
 about. `tend-weekly` is the least exposed — triggered on a cron with no
 user-controlled input.
 
-The merge restriction, the environment gate on the operational secrets, and
-fixed prompts apply to every workflow; the table lists what is specific to
-each.
+The merge rulesets, environment gates, credential isolation, and fixed
+prompts apply to every workflow; the table lists what is specific to each.
 
 | Workflow | Injection surface | Attacker control | Specific mitigations |
 |----------|-------------------|-------------------|-------------|
@@ -53,14 +54,21 @@ each.
 
 ## What we do
 
-Three load-bearing boundaries:
+Three load-bearing boundaries, with one deliberate policy choice:
 
-1. **The bot cannot land code.** A merge restriction keeps every protected
-   branch behind a human; where releases rely on tags, an all-tags ruleset
-   does the same for tags.
-2. **A run the bot can cause reads no secrets.** Every stored secret sits
-   behind a gate the bot cannot pass, or is explicitly allowlisted in the
-   tend config as accepted repo-level exposure.
+1. **Merge authority is explicit.** Under the default `maintainer` mode, the
+   bot cannot update the default branch. Under `yolo`, it can merge ordinary
+   PRs but cannot push directly; changes to `.github/**` or
+   `.config/tend.yaml` still need fresh CODEOWNER approval. Extra protected
+   branches and tags remain admin-only in both policies.
+2. **A run the bot can cause cannot extract protected secrets.** Generic
+   credentials sit behind a gate the bot cannot pass, or are explicitly
+   allowlisted as accepted repo-level exposure. Tend's own environment is the
+   deliberate yolo exception: Tend verifies the exact generated workflows,
+   reserves this environment for them, and rejects other workflows whose
+   environment use is dynamic or hidden in an external or ref-qualified
+   reusable workflow.
+   Their harness isolates the long-lived credentials from agent code.
 3. **Future published releases cannot be rewritten.** GitHub immutable
    releases lock the release record, its assets, and the associated tag from
    the point the repository setting is enabled.
@@ -69,23 +77,45 @@ Three load-bearing boundaries:
 passing check *is* the claim for future releases. GitHub does not apply the
 setting retroactively.
 
-**Merge restriction.** A GitHub ruleset (or branch protection) prevents the
-bot from merging to protected branches (the default branch plus any in
-`protected_branches`) regardless of review status. The composite action's
-preflight verifies this as the bot itself: `current_user_can_bypass` on
-each applying ruleset is GitHub's own evaluation of the bot's standing —
-teams, custom roles, and org-level rulesets included — and the run aborts
-if the bot can bypass every restrict-updates ruleset, or if the branch is
-unprotected entirely.
+**Merge rulesets.** Tend separates default-branch merge access from protection of
+other long-lived refs. `Merge access` targets only the default branch. In
+`maintainer`, only admins bypass its update rule. In `yolo`, the bot user also gets
+GitHub's `pull_request` bypass mode: it may update the branch through a PR but
+not by direct push. `Protected branch access` targets only configured
+`protected_branches` and stays admin-only. Both rulesets protect ref creation,
+updates, and deletion, so a bot cannot delete and recreate an admitted ref.
+The composite action verifies the bot's exact effective answer from
+`current_user_can_bypass`: `never` for maintainer, `pull_requests_only` for yolo.
+
+Yolo adds `Control-plane review`, a default-branch pull-request rule that the
+bot cannot bypass. `tend init` puts a managed block last in the effective
+CODEOWNERS file, assigning `/.github/**`, `/.config/tend.yaml`, and every
+possible CODEOWNERS location to `control_plane_owner`. The block also covers
+every `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`,
+`.claude/`, and `.agents/` path because these files steer later agent runs. The owner must be one
+maintainer GitHub user distinct from the bot. Protecting the ownership files
+themselves prevents the bot from replacing the effective one before changing
+another control-plane path. GitHub therefore admits ordinary PRs with zero
+blanket approvals, but requires a fresh owner approval for control-plane
+changes. Stale approvals are dismissed on push. Tend enables the
+yolo bypass only after `tend check` sees that CODEOWNERS block on the default
+branch. The exact-workflow check reconstructs the same repository owner,
+default branch, and config path that `tend init` used, so it compares the files
+against the output that belongs in this repository rather than generic
+generator defaults.
 
 **Environment-gated secrets.** A job that names a GitHub Environment runs
 only if the run's `GITHUB_REF` matches the environment's deployment branch
 policy; otherwise the job is refused before its first step, and the
 environment's secrets are released only to jobs that name it. Pinning the
-policy to refs only admins can move therefore decides secret access by
-ref. The bot has write, so it can move neither the default branch (merge
-restriction) nor any tag (tag ruleset), and managing environments — the
-policy and the secrets inside — requires admin, which the bot also lacks.
+policy to authorized refs therefore decides secret access by ref. In maintainer
+mode those are refs the bot cannot move. In yolo, Tend's own environment also
+admits the default branch because generated workflows run there; that is safe
+only in conjunction with the control-plane rule and the harness's credential
+isolation. Generic credential environments do not inherit that exception: a
+default-branch policy is insufficient in yolo and they need a non-bot required
+reviewer. Tags remain admin-only, and managing environments requires admin,
+which the bot lacks.
 
 The claim in sentence 2 is the conjunction of three checks, each keyed on
 where a credential can live:
@@ -121,8 +151,10 @@ where a credential can live:
 
 What a pushed workflow holds, then, is only what GitHub gives every run:
 its ephemeral `GITHUB_TOKEN`, at whatever permissions the file declares —
-bounded by the same rulesets (it cannot merge or tag), unable to read any
-secret value back through the API, and expiring with the job.
+bounded by the same merge mode, unable to read any secret value back
+through the API, and expiring with the job. Under yolo it can merge ordinary
+code, but control-plane paths still require a CODEOWNER and tags remain
+admin-only.
 
 *Operational secrets* — the bot PAT, harness auth, the Codex subscription
 refresher's credential, and optional auto-memory Gist ID — live in the `tend`
@@ -232,7 +264,7 @@ required reviewer can, since it holds every trigger regardless of ref. The
 sweep therefore refuses a ref-gated environment that a workflow reaches on
 one of the three. A workflow that must run on one puts its secrets in a
 second environment behind a required reviewer instead of a branch policy,
-so each run waits for a human; the sweep verifies any such environment,
+so each run waits for a maintainer; the sweep verifies any such environment,
 keyed on the credential rather than the name, with the bot excluded from
 the reviewer list since a bot that can approve its own run makes the wait
 a formality.
@@ -255,14 +287,14 @@ migration therefore keeps working on its repo-level secrets, with exactly
 its old exposure — the gate protects nothing until the policy is set, the
 secrets are moved, and the repo-level copies are deleted. `tend check`
 fails on each missing piece until then: it verifies the environment exists,
-its policy is a named list matching exactly the branches whose protection
-that same run confirmed, the operational secrets are present in it, and no
+its policy is a named list matching exactly the branches that same run
+confirmed for Tend's runtime, the operational secrets are present in it, and no
 repo-level copy remains. Confirmed, not configured: a branch named in
 `protected_branches` that does not exist yet cannot be admitted, or the
-policy would name a ref the bot can create — and the merge restriction
-gates `update`, not `creation`. `tend check --fix` creates the environment and
-reconciles its policy; moving the secrets stays manual, since their values
-cannot be read back.
+policy would claim safety for a ref whose live protection cannot be checked.
+The canonical ruleset still blocks its future creation, update, and deletion.
+`tend check --fix` creates the environment and reconciles its policy; moving
+the secrets stays manual, since their values cannot be read back.
 
 The policy must be that named list rather than GitHub's "protected
 branches" mode, which keys on whether *a* rule covers the branch and not on
@@ -271,9 +303,8 @@ by `required_linear_history` — which blocks no push — took a plain push and
 then read an environment secret, while an unprotected branch was refused
 with zero steps.
 
-Both environment chains inherit the merge restriction's assumption that the
-bot holds no role that can bypass; an admin session voids all of it the
-same way. Configuration recipe:
+Both environment chains assume the bot remains at write permission; an admin
+bot voids their ruleset and reviewer boundaries. Configuration recipe:
 `plugins/install-tend/skills/install-tend/references/security-model.md`.
 
 Everything else in this section is defense in depth: useful, but not
@@ -295,9 +326,9 @@ trust any third-party action's publisher; pinning to `X.Y.Z` (or a commit
 SHA) bounds that trust to a reviewed, immutable point.
 
 **Config pinning.** Before the agent starts, both harnesses restore every
-`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, and `.agents/` at any
-depth from the PR base branch. Their CLIs load nearby instruction files and
-skills from those directories. Both harnesses also restore RCE-relevant config
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`, `.claude/`,
+and `.agents/` at any depth from the PR base branch. Their CLIs load nearby
+instruction files and skills from those directories. Both harnesses also restore RCE-relevant config
 at the root: `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`, and
 `.husky`. A malicious PR's `SessionStart` hook, MCP server, or injected skill
 is reverted before an agent reads it. The restoration is
@@ -314,11 +345,14 @@ never see, such as the checkout credential in `.git/config`.
 user, which holds sudo and, until the sandbox setup strips it, the checkout
 PAT in `.git/config`. So every generated workflow checks out reviewed code
 before running them — the default branch, or in `tend-review` the PR's base
-branch — and lands the PR's tree only afterwards. A contributor's build
-backend, added dependencies, and local `uses: ./` actions therefore execute
-under the agent, inside the sandbox, rather than ahead of it. `sandbox_setup:`
-is the lever for project setup that must see the PR's own manifests. Both
-harnesses run it as the non-sudo sandbox user.
+branch — and lands the PR's tree only afterwards. Action steps are refused:
+both local and remote actions may defer a POST phase until after the agent
+and then consume workspace or external state it controlled. Maintainer mode
+therefore accepts only `run` setup steps. Yolo refuses all runner-side `setup:`
+because ordinary code can steer even a fixed shell command. It also refuses
+workflow and job overrides so generated credential-bearing jobs retain their
+audited shape. `sandbox_setup:` is the lever for commands that must see the
+loaded tree; both harnesses run it as the non-sudo sandbox user.
 
 **Credential isolation.** Both harness actions run the agent as a separate
 non-sudo `tend-sandbox` user, sharing the GitHub proxy machinery under the
@@ -353,6 +387,15 @@ runner home are runtimes rather than secrets; later home-scoped changes must be
 made as the sandbox user with `sandbox_setup:`. A generic failure shim keeps a
 dropped home-selected command from silently falling through to a different
 same-named system tool.
+
+After the agent exits, Tend kills every sandbox process and moves the whole
+agent-owned workspace away from `GITHUB_WORKSPACE`, then creates an empty
+replacement. This matters because `actions/checkout` runs Git again in its
+POST cleanup: without quarantine, an agent-planted Git helper could execute as
+the credential-bearing runner. Checkout sees no `.git/config` at its recorded
+path and returns without invoking Git. Runner-side setup actions are refused,
+so no adopter-supplied action POST phase can retain a path into
+agent-controlled state.
 
 **Session-log upload.** The token-usage step uploads the agent's session JSONL
 as an artifact, so the runner has to read a tree the sandbox user owns. It
@@ -445,8 +488,11 @@ can steal the long-lived tokens, but it does not protect against compromise of
 the runner-owned proxy or the runner itself. A stolen classic PAT remains valid
 until revoked and grants access to every repository both its scope and the bot
 account can reach. A stolen subscription access token remains valid until it
-expires. The merge restriction, environment gate, and immutable releases limit
-what the stolen GitHub credential can do.
+expires. Under maintainer mode, the merge restriction prevents that credential
+from landing code. Under yolo, it can land ordinary code by design, while the
+control-plane rule, environment gates, and immutable releases still prevent
+repository takeover and release rewriting unless one of those runner-owned
+boundaries is separately compromised.
 
 **Prompt injection without code execution.** Even without hijacking the
 tools, an attacker who controls what Claude reads can influence its behavior.

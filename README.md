@@ -64,8 +64,10 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 - A compromise of the runner or credential proxy could expose the bot PAT or
   long-lived model credential. The agent cannot read those during normal
   operation; subscription-mode Codex receives only an expiring access token.
-  The merge restriction, environment gate, and immutable releases limit what a
-  stolen bot credential can do.
+  In the default `maintainer` merge mode, the merge restriction prevents a
+  stolen bot credential from landing code. `yolo` deliberately gives that up
+  for ordinary code while retaining maintainer ownership of Tend's workflows and
+  config, admin-only tags and extra protected branches, and credential gates.
 
 ## Workflows
 
@@ -76,7 +78,7 @@ file](docs/tend.example.yaml) and a repo-local `/running-tend` skill.
 | **triage**        | Issue opened               | Classifies the issue, checks for duplicates, reproduces bugs, attempts conservative fixes.                                                                  |
 | **ci-fix**        | CI fails or is cancelled   | Diagnoses the unsuccessful default-branch run, searches for the same pattern elsewhere, and opens a fix PR when needed.                                  |
 | **nightly**       | Daily                      | Resolves conflicts on open PRs, reviews recent commits, surveys ~10 files for bugs and stale docs, closes resolved issues, regenerates tend workflow files. |
-| **weekly**        | Weekly                     | Reviews dependency PRs, approves safe patch and minor updates (the bot never merges — a merge restriction is the security boundary).                        |
+| **weekly**        | Weekly                     | Reviews dependency PRs and approves safe patch and minor updates; merging follows the configured mode.                                                     |
 | **notifications** | Every 15 minutes           | Drains unread notifications as a recovery queue and repairs conflicts on bot-authored PRs.                                                                  |
 | **review-runs**   | Daily                      | Reviews recent CI runs for behavioral problems and proposes skill/config improvements.                                                                      |
 | **codex-auth-refresh** | Weekly                 | When any workflow uses Codex, renews experimental Plus/Pro auth through its single-writer credential; no-ops for API-key installs.                           |
@@ -135,25 +137,36 @@ on every `tend@latest init`.
 Tend gives an agent write access to a repository. The security model has seven
 layers:
 
-**Merge restriction** is the primary boundary. A GitHub ruleset prevents the
-bot from merging to protected branches — bot-authored PRs require human
-approval. The bot proves this against itself on every run: preflight asks
-GitHub whether the bot's own credentials can bypass any ruleset covering the
-default branch (`current_user_can_bypass` — GitHub's evaluation, so teams,
-custom roles, and org-level rulesets are all accounted for) and refuses to
-start unless the answer is no. `tend check` verifies the setup;
-`tend check --fix` creates the ruleset.
+**Merge mode** is explicit. `maintainer` (the default) gives the write-access
+bot no bypass of the default branch's update rule. `yolo` gives that bot a
+pull-request-only bypass, so it can merge through GitHub but cannot push the
+branch directly. A separate CODEOWNERS rule requires fresh maintainer approval for
+changes to `.github/**`, `.config/tend.yaml`, CODEOWNERS, and agent instruction
+files; additional protected branches and tags stay admin-only. Preflight asks
+GitHub for the bot's own effective bypass and refuses to run unless it exactly
+matches the configured policy. `tend check --fix` reconciles the rulesets.
+
+Runner-side `setup` accepts shell steps only. Actions can defer POST code until
+after the agent has controlled the job, so both local and remote action steps
+are refused; use `sandbox_setup` for work that must read the loaded tree.
 
 **Immutable releases** lock each release published after the setting is
 enabled, including its assets and tag. `tend check` requires the setting and
 `--fix` enables it before the next release.
 
-**Environment-gated credentials** — a workflow the bot can cause to run
-reaches no credential: not the bot token, not the model auth, not a release
+**Environment-gated credentials** — generic credentials remain behind a gate
+the bot cannot pass. In yolo, Tend verifies the exact generated workflows,
+rejects any other workflow whose environment use is dynamic or hidden behind
+an external or ref-qualified reusable workflow, and reserves Tend's operational
+environment for the generated jobs. The harness keeps its long-lived credentials out of the
+agent process. A bot-controlled workflow cannot reach the bot token,
+model auth, or a release
 token or a trusted-publishing identity. The bot token and model auth live in
 the repo's `tend` GitHub Environment, whose deployment policy admits only
-the refs `tend check` confirmed the merge restriction covers, so a workflow
-pushed to any other branch is refused them before its first step. The same
+the refs `tend check` confirmed for Tend's hardened runtime, so a workflow
+pushed to any other branch is refused them before its first step. In `yolo`,
+the default branch is not accepted as a sufficient ref gate for other
+credential environments; those need a non-bot required reviewer. The same
 check sweeps every other credential-holding environment — one that stores a
 secret, or that a job requesting `id-token: write` deploys to — for a gate
 the bot cannot pass: a non-bot required reviewer, or a policy naming only
@@ -227,7 +240,7 @@ subscription trio.
 [docs/security-model.md](docs/security-model.md) has the full leak
 breakdown.
 
-All other options — setup steps, protected branches, workflow overrides,
+All other options — setup commands, protected branches, workflow overrides,
 schedules — are documented in
 [`docs/tend.example.yaml`](docs/tend.example.yaml).
 

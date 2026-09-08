@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from contextlib import ExitStack
 from itertools import takewhile
 from pathlib import Path
 from textwrap import dedent
@@ -19,7 +20,12 @@ import pytest
 from click.testing import CliRunner
 from tend.checks import CheckResult
 from tend.cli import main
-from tend.workflows import ACTIONLINT_QUEUE_IGNORE, ACTIONLINT_TEND_GLOB
+from tend.workflows import (
+    ACTIONLINT_QUEUE_IGNORE,
+    ACTIONLINT_TEND_GLOB,
+    CODEOWNERS_BEGIN,
+    CODEOWNERS_END,
+)
 
 from tests import ACTION_VERSION, BASH, UV, tool_path
 from tests import _yaml as yaml
@@ -497,6 +503,134 @@ def test_init_wires_detected_owner_into_workflows(
     assert "github.repository_owner == 'PRQL'" in content
 
 
+def test_yolo_init_manages_the_effective_codeowners_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        dedent("""\
+            bot_name: test-bot
+            merge: yolo
+            control_plane_owner: "@octocat"
+            """),
+    )
+    codeowners = tmp_path / "CODEOWNERS"
+    codeowners.write_text("*.py @python-team\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init()
+
+    assert result.exit_code == 0
+    assert not (tmp_path / ".github" / "CODEOWNERS").exists()
+    content = codeowners.read_text()
+    assert content.endswith(
+        f"{CODEOWNERS_BEGIN}\n"
+        "/.github/** @octocat\n"
+        "/.config/tend.yaml @octocat\n"
+        "/CODEOWNERS @octocat\n"
+        "/docs/CODEOWNERS @octocat\n"
+        "**/CLAUDE.md @octocat\n"
+        "**/CLAUDE.local.md @octocat\n"
+        "**/AGENTS.md @octocat\n"
+        "**/AGENTS.override.md @octocat\n"
+        "**/.claude @octocat\n"
+        "**/.claude/** @octocat\n"
+        "**/.agents @octocat\n"
+        "**/.agents/** @octocat\n"
+        f"{CODEOWNERS_END}\n"
+    )
+    workflow = (_workflow_dir(tmp_path) / "tend-nightly.yaml").read_text()
+    assert "merge: yolo" in workflow
+
+
+def test_yolo_init_output_passes_exact_workflow_check_with_same_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check must reconstruct init's owner, default branch, and custom
+    config path before comparing generated workflow bytes."""
+    config_path = tmp_path / "config" / "custom-tend.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        dedent("""\
+            bot_name: test-bot
+            merge: yolo
+            control_plane_owner: "@octocat"
+            """),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("tend.cli._detect_default_branch_local", lambda: "trunk")
+    monkeypatch.setattr("tend.cli.detect_canonical_owner", lambda: "canonical-org")
+
+    initialized = CliRunner().invoke(main, ["init", "-c", str(config_path)])
+    assert initialized.exit_code == 0, initialized.output
+    files = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in _workflow_dir(tmp_path).glob("*.yaml")
+    }
+
+    passing_checks = {
+        "check_branch_protection": "branch-protection:trunk",
+        "check_control_plane_codeowners": "control-plane-codeowners",
+        "check_control_plane_ruleset": "control-plane-ruleset",
+        "check_bot_permission": "bot-permission",
+        "check_tag_protection": "tag-protection",
+        "check_immutable_releases": "immutable-releases",
+        "check_environment": "environment",
+        "check_environment_deployments": "environment-deployments",
+        "check_credential_environments": "credential-environments",
+        "check_secrets": "secrets",
+        "check_claude_auth": "claude-auth",
+        "check_repo_secret_allowlist": "repo-secret-allowlist",
+    }
+    patchers = [
+        patch(
+            f"tend.checks.{function}",
+            return_value=CheckResult(name, True, "ready"),
+        )
+        for function, name in passing_checks.items()
+    ]
+    with ExitStack() as stack:
+        stack.enter_context(patch("shutil.which", return_value="/usr/bin/gh"))
+        stack.enter_context(
+            patch("tend.checks.detect_default_branch", return_value="trunk")
+        )
+        stack.enter_context(
+            patch(
+                "tend.checks.detect_canonical_owner",
+                return_value="canonical-org",
+            )
+        )
+        stack.enter_context(
+            patch("tend.checks._fetch_workflow_files", return_value=files)
+        )
+        for patcher in patchers:
+            stack.enter_context(patcher)
+        checked = CliRunner().invoke(
+            main,
+            ["check", "-c", str(config_path), "--repo", "fork/repo"],
+        )
+
+    assert checked.exit_code == 0, checked.output
+    assert "PASS  yolo-workflows" in checked.output
+
+
+def test_yolo_init_dry_run_does_not_write_codeowners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_config(
+        tmp_path,
+        'bot_name: test-bot\nmerge: yolo\ncontrol_plane_owner: "@octocat"\n',
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_init(["--dry-run"])
+
+    assert result.exit_code == 0
+    assert "would update .github/CODEOWNERS" in result.output
+    assert not (tmp_path / ".github" / "CODEOWNERS").exists()
+
+
 def test_check_passes_repo_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -554,11 +688,12 @@ def _fake_gh_all_pass(*args: str, **kwargs: str) -> subprocess.CompletedProcess[
             json.dumps(
                 [
                     {
-                        "type": "update",
+                        "type": rule_type,
                         "ruleset_id": 1,
                         "ruleset_source_type": "Repository",
                         "ruleset_source": "owner/repo",
                     }
+                    for rule_type in ("creation", "update", "deletion")
                 ]
             )
         )

@@ -27,7 +27,6 @@ import pytest
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PIN_INSTRUCTION_FILES = REPO_ROOT / "shared" / "steps" / "pin-instruction-files.sh"
 RESTORE_SENSITIVE_CONFIG = (
     REPO_ROOT / "shared" / "steps" / "restore-sensitive-config.sh"
 )
@@ -41,6 +40,7 @@ _BASE = {
     "README.md": "base readme\n",
     "CLAUDE.md": "root guidance\n",
     "AGENTS.md": "-> CLAUDE.md",
+    "AGENTS.override.md": "root override\n",
     ".agents/plugins/marketplace.json": "base plugins\n",
     ".agents/skills": "-> ../.claude/skills",
     ".claude/skills/running-tend/SKILL.md": "root skill\n",
@@ -149,6 +149,7 @@ def _tampered_checkout(tmp_path: Path) -> tuple[Path, Path, Path]:
         _write(repo / "README.md", "fork readme\n")
         _write(repo / "CLAUDE.md", "EVIL root\n")
         _write(repo / "AGENTS.md", f"-> {outside / 'AGENTS.md'}")
+        _write(repo / "AGENTS.override.md", "EVIL override\n")
         _write(repo / ".agents/plugins/marketplace.json", "EVIL plugins\n")
         (repo / ".agents/skills").unlink()
         _write(repo / ".agents/skills/fork-only/SKILL.md", "EVIL\n")
@@ -172,6 +173,7 @@ def _tampered_checkout(tmp_path: Path) -> tuple[Path, Path, Path]:
         _write(repo / "apps/web", f"-> {outside}")
         _write(repo / "fork-only/CLAUDE.md", "EVIL\n")
         _write(repo / "fork-only/AGENTS.md", "EVIL\n")
+        _write(repo / "fork-only/AGENTS.override.md", "EVIL\n")
         _write(repo / "notes/skills/deploy/SKILL.md", "EVIL\n")
         _write(repo / "site/.claude", "-> ../notes")
         _write(repo / "dir/CLAUDE.md/child", "not an instruction file\n")
@@ -193,34 +195,26 @@ _PINNED = {
 }
 
 
-def _pin(script: Path, repo: Path, event: Path) -> subprocess.CompletedProcess[str]:
+def _pin(
+    script: Path,
+    repo: Path,
+    event: Path,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = {
+        "PATH": tool_path(),
+        "GITHUB_EVENT_NAME": "pull_request_target",
+        "GITHUB_EVENT_PATH": str(event),
+    }
+    env.update(extra_env or {})
     return subprocess.run(
         [BASH, str(script)],
         cwd=repo,
-        env={
-            "PATH": tool_path(),
-            "GITHUB_EVENT_NAME": "pull_request_target",
-            "GITHUB_EVENT_PATH": str(event),
-        },
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
-
-
-def test_pin_instruction_files_matches_base_for_every_instruction_path(
-    tmp_path: Path,
-) -> None:
-    """Codex harness on a fork PR: every instruction path ends at its base
-    version, fork-added ones are gone, a fork symlink is replaced rather than
-    written or deleted through, and the rest of the PR stays."""
-    repo, outside, event = _tampered_checkout(tmp_path)
-
-    result = _pin(PIN_INSTRUCTION_FILES, repo, event)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _tree(repo) == _PINNED
-    assert _tree(outside) == _OUTSIDE
 
 
 def test_restore_sensitive_config_matches_base_for_every_instruction_path(
@@ -248,11 +242,35 @@ def test_restore_sensitive_config_matches_base_for_every_instruction_path(
     assert staged.stdout == "", staged.stdout
 
 
-@pytest.mark.parametrize(
-    "script", [PIN_INSTRUCTION_FILES, RESTORE_SENSITIVE_CONFIG], ids=["codex", "claude"]
-)
+def test_restore_sensitive_config_pins_relayed_pr_event(
+    tmp_path: Path,
+) -> None:
+    repo, outside, event = _tampered_checkout(tmp_path)
+    event.write_text(json.dumps({"client_payload": {"pr": 42}}))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text("#!/bin/sh\nprintf 'main\\n'\n")
+    fake_gh.chmod(0o755)
+
+    result = _pin(
+        RESTORE_SENSITIVE_CONFIG,
+        repo,
+        event,
+        {
+            "PATH": f"{fake_bin}:{tool_path()}",
+            "GITHUB_EVENT_NAME": "repository_dispatch",
+            "GITHUB_REPOSITORY": "owner/repo",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tree(repo) == _PINNED
+    assert _tree(outside) == _OUTSIDE
+
+
 def test_pinning_leaves_a_pr_that_touches_no_instruction_path_alone(
-    tmp_path: Path, script: Path
+    tmp_path: Path,
 ) -> None:
     """The usual PR: nothing the pin covers changed, so there is nothing to
     restore and the step still exits cleanly."""
@@ -262,17 +280,14 @@ def test_pinning_leaves_a_pr_that_touches_no_instruction_path_alone(
         lambda repo: _write(repo / "README.md", "fork readme\n"),
     )
 
-    result = _pin(script, repo, event)
+    result = _pin(RESTORE_SENSITIVE_CONFIG, repo, event)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert _tree(repo) == {"README.md": "fork readme\n"}
 
 
-@pytest.mark.parametrize(
-    "script", [PIN_INSTRUCTION_FILES, RESTORE_SENSITIVE_CONFIG], ids=["codex", "claude"]
-)
 def test_pinning_fails_when_the_base_ref_is_missing(
-    tmp_path: Path, script: Path
+    tmp_path: Path,
 ) -> None:
     """A base the checkout doesn't hold fails the step. The alternative, a diff
     against nothing that lists nothing, would let the agent start on the
@@ -284,7 +299,7 @@ def test_pinning_fails_when_the_base_ref_is_missing(
         base_ref="missing",
     )
 
-    result = _pin(script, repo, event)
+    result = _pin(RESTORE_SENSITIVE_CONFIG, repo, event)
 
     assert result.returncode != 0, result.stdout + result.stderr
 

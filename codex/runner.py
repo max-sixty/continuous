@@ -138,8 +138,13 @@ def install_plugin() -> int:
     return 0
 
 
-def _substitute_bot_name(text: str, bot_name: str) -> str:
-    return text.replace("${BOT_NAME}", bot_name).replace("$BOT_NAME", bot_name)
+def _substitute_runtime(text: str, bot_name: str, merge: str) -> str:
+    return (
+        text.replace("${BOT_NAME}", bot_name)
+        .replace("$BOT_NAME", bot_name)
+        .replace("${TEND_MERGE}", merge)
+        .replace("$TEND_MERGE", merge)
+    )
 
 
 def stage_agents() -> int:
@@ -148,13 +153,16 @@ def stage_agents() -> int:
     bot_name = os.environ.get("BOT_NAME", "")
     if not bot_name:
         raise ValueError("BOT_NAME is unset")
+    merge = os.environ.get("TEND_MERGE", "")
+    if merge not in {"maintainer", "yolo"}:
+        raise ValueError(f"unknown TEND_MERGE: {merge or '<unset>'}")
     shared = (action_path.parent / "shared/system-prompt.md").read_text()
     tail = (action_path / "agents-tail.md").read_text()
     body = (
         "# Tend CI guidance (Codex harness)\n\n"
-        + _substitute_bot_name(shared, bot_name).rstrip("\n")
+        + _substitute_runtime(shared, bot_name, merge).rstrip("\n")
         + "\n\n"
-        + _substitute_bot_name(tail, bot_name).rstrip("\n")
+        + _substitute_runtime(tail, bot_name, merge).rstrip("\n")
         + "\n"
     )
     sandbox = os.environ.get("SANDBOX", "")

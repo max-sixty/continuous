@@ -461,9 +461,11 @@ def test_a_humans_reply_container_on_a_bot_pr_still_runs(env: dict[str, str]) ->
 
 @pytest.mark.parametrize("state", ["APPROVED", "approved"])
 def test_a_bare_approval_asks_for_nothing(env: dict[str, str], state: str) -> None:
-    """No body, no inline comments, and the bot cannot merge on its own. REST
-    reports the state uppercase where a webhook payload's is lowercase, so the
-    gate has to read one normalized shape."""
+    """No body and no inline comments means there is no request to handle.
+
+    REST reports the state uppercase where a webhook payload's is lowercase,
+    so the gate has to read one normalized shape.
+    """
     _review(env, state=state)
     _write(env, "PR_AUTHOR_JSON", {"author": {"login": BOT}})
 

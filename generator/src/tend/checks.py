@@ -1,11 +1,12 @@
 """Security checks for tend setup.
 
-Verifies the boundaries docs/security-model.md claims: the bot cannot land
-code (protected branches and tag operations), future releases are immutable,
-and a run the bot can cause reaches no credential (the `tend` environment's
-deployment branch policy, every other credential-holding environment's gate,
-the operational secrets living in the environment, and no repo-level secret
-outside the allowlist).
+Verifies the boundaries docs/security-model.md claims: the configured merge
+policy is exact, the yolo control plane remains maintainer-owned, extra protected
+branches and future releases are immutable, and a run the bot can cause
+reaches no unintended credential (the `tend` environment's deployment branch
+policy, every other credential-holding environment's gate, the operational
+secrets living in the environment, and no repo-level secret outside the
+allowlist).
 
 Uses the `gh` CLI for GitHub API access. Checks degrade gracefully when
 gh is unavailable or the token lacks permission. Everything read here is
@@ -20,11 +21,12 @@ listed principal tend cannot resolve — reports unknown.
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from urllib.parse import quote
 
@@ -42,7 +44,13 @@ from tend.config import (
     OPENAI_KEY_SECRET,
     Config,
 )
-from tend.workflows import TEND_ENVIRONMENT
+from tend.workflows import (
+    CODEOWNERS_BEGIN,
+    CODEOWNERS_END,
+    CONTROL_PLANE_PATHS,
+    TEND_ENVIRONMENT,
+    generate_all,
+)
 
 # GitHub's base repository role IDs, as they appear in a ruleset's
 # `bypass_actors`. The IDs are not ordered by privilege — maintain (2) sits
@@ -125,7 +133,7 @@ def detect_repo() -> str | None:
     return None
 
 
-def detect_canonical_owner() -> str | None:
+def detect_canonical_owner(repo: str | None = None) -> str | None:
     """Detect the *canonical* owner of the repo this directory is associated with.
 
     Tend's generated workflows are committed and shipped to the canonical
@@ -142,7 +150,7 @@ def detect_canonical_owner() -> str | None:
     treat that as "skip the guard"; we never silently ship a fork owner
     in the guard string.
     """
-    repo = detect_repo()
+    repo = repo or detect_repo()
     if repo is None:
         return None
     result = _gh("api", f"repos/{repo}")
@@ -225,12 +233,18 @@ def check_tag_protection(repo: str, bot_name: str) -> CheckResult:
     )
 
 
-def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResult:
-    """Check if a branch is protected against bot merges.
+def check_branch_protection(
+    repo: str,
+    branch: str,
+    bot_name: str,
+    *,
+    expected_bypass: str = "never",
+) -> CheckResult:
+    """Check that a branch gives the bot exactly the configured merge access.
 
-    Checks both that the branch is protected and that the protection actually
-    prevents the bot from merging (via required reviews or a restrict-updates
-    ruleset).
+    ``never`` is maintainer-only. ``pull_requests_only`` is yolo: the
+    bot may merge through GitHub's pull-request API, but may not push the ref
+    directly. Extra protected branches always use ``never``.
     """
     name = f"branch-protection:{branch}"
     result = _gh("api", f"repos/{repo}/branches/{branch}", "--jq", ".protected")
@@ -243,19 +257,79 @@ def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResul
         return CheckResult(
             name,
             False,
-            f"Branch '{branch}' is NOT protected. "
-            "The bot must not be able to merge PRs — this is the primary security boundary. "
-            "Add a branch protection rule or ruleset. See docs/security-model.md.",
+            f"Branch '{branch}' is NOT protected. Add the Tend ruleset before "
+            "running the bot. See docs/security-model.md.",
         )
 
-    # Branch is protected — now check if the bot can still merge.
-    # A restrict-updates ruleset is sufficient (and preferred).
-    ruleset = _has_restrict_updates_ruleset(repo, branch, bot_name)
-    if ruleset is True:
+    bypass = update_ruleset_bypass(repo, branch, bot_name)
+    if bypass == expected_bypass:
+        lifecycle = {
+            rule_type: _ruleset_type_bypass(repo, branch, bot_name, rule_type)
+            for rule_type in ("creation", "deletion")
+        }
+        if any(value is None for value in lifecycle.values()):
+            return CheckResult(
+                name,
+                None,
+                f"Branch '{branch}' update access is correct, but its creation "
+                "and deletion rules could not be verified.",
+            )
+        unrestricted = [
+            rule_type
+            for rule_type, value in lifecycle.items()
+            if value in {"absent", "always"}
+        ]
+        if unrestricted:
+            return CheckResult(
+                name,
+                False,
+                f"Branch '{branch}' lets the bot {', '.join(unrestricted)} the "
+                "ref. Tend protects creation, update, and deletion as one "
+                "lifecycle.",
+            )
+        access = (
+            "may merge pull requests but cannot push directly"
+            if bypass == "pull_requests_only"
+            else "cannot update the branch"
+        )
         return CheckResult(
             name,
             True,
-            f"Branch '{branch}' is protected (restrict-updates ruleset)",
+            f"Branch '{branch}' is protected; the bot {access}.",
+        )
+
+    if expected_bypass == "pull_requests_only":
+        if bypass is None:
+            return CheckResult(
+                name,
+                None,
+                f"Branch '{branch}' is protected but the bot's effective "
+                "ruleset bypass could not be verified.",
+            )
+        if bypass == "never":
+            return CheckResult(
+                name,
+                False,
+                f"Branch '{branch}' blocks the bot from merging pull requests; "
+                "yolo requires a pull-request-only bypass.",
+            )
+        return CheckResult(
+            name,
+            False,
+            f"Branch '{branch}' lets the bot push directly. Yolo requires a "
+            "pull-request-only bypass.",
+        )
+
+    # A ruleset that positively grants the bot a bypass is authoritative. Do
+    # not fall back to classic branch protection: rulesets layer on top of it,
+    # and a pull-request-only bypass is exactly the yolo authority that a
+    # switch back to maintainer mode must remove.
+    if bypass in {"pull_requests_only", "always"}:
+        return CheckResult(
+            name,
+            False,
+            f"Branch '{branch}' still gives the bot a ruleset bypass. "
+            "Maintainer mode requires removing that bypass.",
         )
 
     # Fall back to checking branch protection rules for required reviews.
@@ -281,7 +355,7 @@ def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResul
         )
 
     # Neither required reviews nor a confirmed restrict-updates ruleset.
-    if ruleset is None:
+    if bypass is None:
         # Ruleset check was inconclusive — don't false-positive.
         return CheckResult(
             name,
@@ -304,6 +378,154 @@ def check_branch_protection(repo: str, branch: str, bot_name: str) -> CheckResul
         "the bot cannot bypass). Either require at least 1 approving review, or "
         "add a 'Restrict updates' ruleset whose bypass actors are all above write. "
         "See docs/security-model.md.",
+    )
+
+
+def _default_branch_file(repo: str, branch: str, path: str) -> str | None:
+    """Read one file from the default branch, returning None when absent."""
+    result = _gh(
+        "api",
+        f"repos/{repo}/contents/{path}?ref={quote(branch, safe='')}",
+    )
+    if result is None or result.returncode != 0:
+        return None
+    try:
+        encoded = json.loads(result.stdout)["content"]
+        return base64.b64decode(encoded).decode()
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def check_control_plane_codeowners(
+    repo: str, branch: str, owner: str, bot_name: str
+) -> CheckResult:
+    """Check that Tend's final CODEOWNERS block protects its control plane."""
+    name = "control-plane-codeowners"
+    if owner.casefold() == f"@{bot_name}".casefold():
+        return CheckResult(
+            name,
+            False,
+            "control_plane_owner is the Tend bot; yolo requires an independent "
+            "GitHub user.",
+        )
+    for path in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"):
+        content = _default_branch_file(repo, branch, path)
+        if content is None:
+            continue
+        lines = [CODEOWNERS_BEGIN]
+        lines.extend(f"{protected} {owner}" for protected in CONTROL_PLANE_PATHS)
+        lines.append(CODEOWNERS_END)
+        block = "\n".join(lines)
+        if (
+            content.count(CODEOWNERS_BEGIN) == 1
+            and content.count(CODEOWNERS_END) == 1
+            and content.rstrip().endswith(block)
+        ):
+            begin_line = content.splitlines().index(CODEOWNERS_BEGIN) + 1
+            errors_result = _gh(
+                "api",
+                f"repos/{repo}/codeowners/errors?ref={quote(branch, safe='')}",
+            )
+            if errors_result is None or errors_result.returncode != 0:
+                return CheckResult(
+                    name, None, "Could not verify GitHub's CODEOWNERS validation"
+                )
+            try:
+                errors = json.loads(errors_result.stdout).get("errors", [])
+            except (json.JSONDecodeError, AttributeError):
+                return CheckResult(
+                    name, None, "GitHub returned unreadable CODEOWNERS errors"
+                )
+            managed_lines = range(begin_line, begin_line + len(lines))
+            managed_errors = [
+                error
+                for error in errors
+                if not isinstance(error, dict)
+                or error.get("line") in managed_lines
+                or error.get("line") is None
+            ]
+            if managed_errors:
+                return CheckResult(
+                    name,
+                    False,
+                    "GitHub reports an error in Tend's generated CODEOWNERS block; "
+                    "verify that control_plane_owner exists and has repository "
+                    "write access.",
+                )
+            return CheckResult(
+                name,
+                True,
+                f"{path} gives {owner} final ownership of Tend's control plane.",
+            )
+        return CheckResult(
+            name,
+            False,
+            f"{path} does not end with Tend's generated control-plane ownership "
+            "block. Run `tend init`, commit it, and merge it before `tend check "
+            "--fix` enables yolo merge mode.",
+        )
+    return CheckResult(
+        name,
+        False,
+        "No effective CODEOWNERS file exists on the default branch. Run `tend "
+        "init`, commit it, and merge it before `tend check --fix` enables yolo "
+        "merge mode.",
+    )
+
+
+def check_control_plane_ruleset(repo: str, branch: str, bot_name: str) -> CheckResult:
+    """Check for a non-bypassable stale-dismissed CODEOWNERS review rule."""
+    name = "control-plane-ruleset"
+    result = _gh("api", f"repos/{repo}/rules/branches/{branch}")
+    if result is None or result.returncode != 0:
+        return CheckResult(name, None, "Could not list rules on the default branch")
+    try:
+        rules = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return CheckResult(name, None, "GitHub returned unreadable branch rules")
+    if not isinstance(rules, list):
+        return CheckResult(name, None, "GitHub returned unreadable branch rules")
+
+    unresolved = False
+    ruleset_ids = {
+        rule.get("ruleset_id")
+        for rule in rules
+        if isinstance(rule, dict)
+        and rule.get("type") == "pull_request"
+        and rule.get("ruleset_id") is not None
+    }
+    for ruleset_id in ruleset_ids:
+        data = _fetch_ruleset(repo, ruleset_id)
+        if data is None:
+            unresolved = True
+            continue
+        bypass = _ruleset_bot_bypass(data, bot_name)
+        if bypass is None:
+            unresolved = True
+            continue
+        if bypass != "never":
+            continue
+        for rule in data.get("rules", []):
+            parameters = rule.get("parameters", {})
+            if (
+                rule.get("type") == "pull_request"
+                and parameters.get("require_code_owner_review") is True
+                and parameters.get("dismiss_stale_reviews_on_push") is True
+            ):
+                return CheckResult(
+                    name,
+                    True,
+                    "Control-plane changes require a fresh CODEOWNER approval "
+                    "that the bot cannot bypass.",
+                )
+    if unresolved:
+        return CheckResult(name, None, "Could not verify the control-plane ruleset")
+    return CheckResult(
+        name,
+        False,
+        "No active rule requires fresh, non-bypassable CODEOWNER approval. "
+        "Run `tend check --fix` after the generated CODEOWNERS block is on the "
+        "default branch.",
     )
 
 
@@ -338,60 +560,67 @@ def _same_login(a: str, b: str) -> bool:
     return a.casefold() == b.casefold()
 
 
-def _bypass_actors_above_bot(actors: list[dict] | None, bot_name: str) -> bool | None:
-    """Whether every bypass actor in a ruleset outranks a write-access bot.
+def _ruleset_bot_bypass(data: dict, bot_name: str) -> str | None:
+    """The bot's bypass level for one ruleset.
 
-    Returns False if one of them is the bot itself or a role at write or
-    below, None when the list is withheld (only ruleset admins see
-    `bypass_actors`) or names a principal this can't resolve (a team, app,
-    or deploy key, or any user once `bot_name` itself fails to resolve — the
-    ids have nothing to compare against). An empty list is True — nobody
-    bypasses at all.
+    GitHub evaluates this directly when the caller is the bot. An admin sees
+    the actor list instead, so Tend resolves user and repository-role entries
+    against the bot's known write access. Unknown principals remain unknown.
     """
+    current = data.get("current_user_can_bypass")
+    if current in {"never", "pull_requests_only", "always", "exempt"}:
+        login = _current_login()
+        if login is not None and _same_login(login, bot_name):
+            return "always" if current == "exempt" else current
+
+    actors = data.get("bypass_actors")
     if actors is None:
         return None
-    # A user exemption is decidable: the bot's login resolves to the id the
-    # actor names. Naming the bot is the worst case — an explicit grant of the
-    # merge the restriction exists to deny.
     bot_id = None
-    if any(a.get("actor_type") == "User" for a in actors):
+    if any(actor.get("actor_type") == "User" for actor in actors):
         bot_id = _user_id(bot_name)
 
+    applicable: list[str] = []
     unresolved = False
     for actor in actors:
         actor_type = actor.get("actor_type")
+        actor_id = actor.get("actor_id")
+        applies = False
         if actor_type == "RepositoryRole":
-            if actor.get("actor_id") not in BYPASS_ROLE_IDS:
-                return False
+            applies = actor_id not in BYPASS_ROLE_IDS
         elif actor_type == "User":
             if bot_id is None:
                 unresolved = True
-            elif actor.get("actor_id") == bot_id:
-                return False
-        elif actor_type not in BYPASS_ACTOR_TYPES_ABOVE_BOT:
+                continue
+            applies = actor_id == bot_id
+        elif actor_type in BYPASS_ACTOR_TYPES_ABOVE_BOT:
+            continue
+        else:
             unresolved = True
-    return None if unresolved else True
+            continue
+        if not applies:
+            continue
+        mode = actor.get("bypass_mode")
+        if mode in {"always", "exempt"}:
+            applicable.append("always")
+        elif mode == "pull_request":
+            applicable.append("pull_requests_only")
+        else:
+            unresolved = True
+
+    if "always" in applicable:
+        return "always"
+    if applicable and not unresolved:
+        return "pull_requests_only"
+    if unresolved:
+        return None
+    return "never"
 
 
 def _ruleset_keeps_bot_out(data: dict, bot_name: str) -> bool | None:
-    """Whether a fetched ruleset's bypass configuration keeps the bot out.
-
-    Every ruleset response carries `current_user_can_bypass` — GitHub's own
-    evaluation of the *caller* against the full bypass list, principals tend
-    can't resolve included. When the caller is the bot, that verdict is
-    exactly the question, so it outranks inferring from `bypass_actors`
-    (which the API withholds below repo admin, and which the inference reads
-    assuming the bot sits at write — wrong for a fixture bot that holds
-    admin). Any other caller's verdict says nothing about the bot, so the
-    actor-list inference is all that's left. Only "never" gates: a
-    `pull_requests_only` bypass is the merge path a branch restriction
-    exists to close.
-    """
-    if data.get("current_user_can_bypass") is not None:
-        login = _current_login()
-        if login is not None and _same_login(login, bot_name):
-            return data["current_user_can_bypass"] == "never"
-    return _bypass_actors_above_bot(data.get("bypass_actors"), bot_name)
+    """Whether a fetched ruleset gives the bot no bypass at all."""
+    bypass = _ruleset_bot_bypass(data, bot_name)
+    return None if bypass is None else bypass == "never"
 
 
 def _fetch_ruleset(repo: str, ruleset_id: int | str) -> dict | None:
@@ -412,16 +641,57 @@ def _fetch_ruleset(repo: str, ruleset_id: int | str) -> dict | None:
     return data
 
 
-def _ruleset_blocks_bot(repo: str, ruleset_id: int, bot_name: str) -> bool | None:
-    """Whether a ruleset's bypass configuration keeps a write-access bot out.
+def _ruleset_type_bypass(
+    repo: str, branch: str, bot_name: str, rule_type: str
+) -> str | None:
+    """The effective bypass across all ``rule_type`` rulesets on a branch.
 
-    None when the ruleset is unreadable or its bypass configuration
-    unverifiable.
+    Rulesets layer, so the most restrictive one wins: ``never`` blocks every
+    update, then ``pull_requests_only``, then ``always``. ``absent`` means no
+    rule of this type applies, which lets classic branch protection remain a
+    distinct fallback. An unreadable ruleset makes the exact effective level
+    unknown unless another readable ruleset already blocks all updates.
     """
-    data = _fetch_ruleset(repo, ruleset_id)
-    if data is None:
+    result = _gh("api", f"repos/{repo}/rules/branches/{branch}")
+    if result is None or result.returncode != 0:
         return None
-    return _ruleset_keeps_bot_out(data, bot_name)
+    try:
+        rules = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(rules, list):
+        return None
+
+    matching_rules = [
+        rule
+        for rule in rules
+        if isinstance(rule, dict) and rule.get("type") == rule_type
+    ]
+    if not matching_rules:
+        return "absent"
+
+    bypasses: list[str] = []
+    unresolved = False
+    for rule in matching_rules:
+        ruleset_id = rule.get("ruleset_id")
+        data = _fetch_ruleset(repo, ruleset_id) if ruleset_id is not None else None
+        bypass = _ruleset_bot_bypass(data, bot_name) if data is not None else None
+        if bypass == "never":
+            return "never"
+        if bypass is None:
+            unresolved = True
+        else:
+            bypasses.append(bypass)
+    if unresolved:
+        return None
+    if "pull_requests_only" in bypasses:
+        return "pull_requests_only"
+    return "always"
+
+
+def update_ruleset_bypass(repo: str, branch: str, bot_name: str) -> str | None:
+    """The effective bypass across all update rulesets on ``branch``."""
+    return _ruleset_type_bypass(repo, branch, bot_name, "update")
 
 
 def _tags_admin_gated(repo: str, bot_name: str) -> bool | None:
@@ -457,50 +727,6 @@ def _tags_admin_gated(repo: str, bot_name: str) -> bool | None:
         if not {"creation", "update"} <= {r.get("type") for r in data.get("rules", [])}:
             continue
         verdict = _ruleset_keeps_bot_out(data, bot_name)
-        if verdict is True:
-            return True
-        unresolved = unresolved or verdict is None
-    return None if unresolved else False
-
-
-def _has_restrict_updates_ruleset(repo: str, branch: str, bot_name: str) -> bool | None:
-    """Check if an active ruleset stops the bot updating the branch.
-
-    An `update` rule alone isn't enough — a bypass actor at write or below
-    defeats it, and write is exactly what the bot holds. So each update rule is
-    followed back to its ruleset and its bypass list checked.
-
-    Returns True if found, False if confirmed absent or bypassable, None if
-    unable to check.
-
-    Uses the per-branch rules endpoint which resolves patterns like
-    ~DEFAULT_BRANCH.
-    """
-    result = _gh("api", f"repos/{repo}/rules/branches/{branch}")
-    if result is None or result.returncode != 0:
-        return None
-    try:
-        rules = json.loads(result.stdout)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(rules, list):
-        return None
-
-    update_rules = [r for r in rules if r.get("type") == "update"]
-    if not update_rules:
-        return False
-
-    # Several rulesets can contribute an update rule; one the bot can't bypass
-    # is enough to protect the branch. A rule we can't trace back to its
-    # ruleset is unverified, not absent.
-    unresolved = False
-    for rule in update_rules:
-        ruleset_id = rule.get("ruleset_id")
-        verdict = (
-            _ruleset_blocks_bot(repo, ruleset_id, bot_name)
-            if ruleset_id is not None
-            else None
-        )
         if verdict is True:
             return True
         unresolved = unresolved or verdict is None
@@ -627,12 +853,13 @@ def _branch_policies(repo: str, env_name: str) -> list[dict] | None:
 
 
 def check_environment(repo: str, admitted: list[str]) -> CheckResult:
-    """The environment exists and admits only the refs the bot cannot write.
+    """The Tend environment admits only verified operational refs.
 
     This is the whole mechanism: a job naming the environment runs only from a
     ref in its deployment branch policy, so a workflow pushed to a feature
-    branch is refused before its first step. A policy that admits anything the
-    bot can push gives the secrets back.
+    branch is refused before its first step. Under yolo, the default branch is
+    admitted because its generated workflows are protected as control-plane
+    code and run the agent inside Tend's credential-isolation sandbox.
     """
     name = "environment"
     if not admitted:
@@ -749,7 +976,7 @@ def check_environment_deployments(repo: str) -> CheckResult:
         f"{path} job '{job_id}'"
         for path, text in sorted(files.items())
         if text is not None
-        for job_id in sorted(_parse_workflow(path, text, repo).filed_deployments)
+        for job_id in sorted(_parse_workflow(path, text).filed_deployments)
     ]
     if offenders:
         return CheckResult(
@@ -839,7 +1066,8 @@ class _WorkflowFacts:
     steerable: frozenset[str] = frozenset()  # bot-steerable triggers it carries
     call_only: bool = False  # `workflow_call` is the only thing that starts it
     calls: frozenset[str] = frozenset()  # local reusable workflows it invokes
-    external_calls: frozenset[str] = frozenset()  # job ids calling out of the repo
+    # job ids whose reusable workflow is not the same-commit ``./`` form
+    external_calls: frozenset[str] = frozenset()
     external_oidc: frozenset[str] = frozenset()  # …of those, ones granting OIDC
     environments: frozenset[str] = frozenset()  # environments its jobs deploy to
     oidc_environments: frozenset[str] = frozenset()  # …of those, ones minting OIDC
@@ -857,27 +1085,21 @@ def _permissions_grant_oidc(permissions: object) -> bool:
     return False
 
 
-def _called_workflow(uses: str, repo: str) -> str | None:
-    """The workflow file in this repo that a job-level `uses:` names, or None.
+def _called_workflow(uses: str) -> str | None:
+    """The same-commit local workflow that a job-level ``uses:`` names.
 
-    Two spellings reach the same file: the relative form, and the
-    `owner/repo/.github/workflows/x.yaml@ref` form a repo may use on its own
-    workflow to pin the ref it runs. A call that leaves the repo returns None,
-    not because it deploys elsewhere — the callee's jobs deploy to *this*
-    repo's environments (see `_effective_triggers`) — but because its file
-    cannot be read from here, which `_credential_surface` reports as unread
-    rather than passes over.
+    Only ``./.github/workflows/...`` is inspectable from the fetched tree. An
+    ``owner/repo/...@ref`` call is unresolved even when owner/repo is this
+    repository: the ref may name historical workflow code with different
+    environment use.
     """
     relative = "./.github/workflows/"
     if uses.startswith(relative):
         return uses[len(relative) :]
-    absolute = f"{repo}/.github/workflows/"
-    if repo and uses.casefold().startswith(absolute.casefold()):
-        return uses[len(absolute) :].partition("@")[0]
     return None
 
 
-def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
+def _parse_workflow(path: str, text: str) -> _WorkflowFacts:
     """Read one workflow's triggers, environments, and OIDC use.
 
     Anything the parse cannot decide (an unparsable file, an environment named
@@ -934,7 +1156,7 @@ def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
             # which is what `external_calls` records. Its `permissions:` only
             # cap what the callee may request, so a callee mints OIDC on this
             # repo's behalf exactly when the calling job grants it.
-            called = _called_workflow(uses, repo) if isinstance(uses, str) else None
+            called = _called_workflow(uses) if isinstance(uses, str) else None
             if called is not None:
                 calls.add(called)
             else:
@@ -958,6 +1180,10 @@ def _parse_workflow(path: str, text: str, repo: str) -> _WorkflowFacts:
                 f"{path} job '{job_id}' names its environment dynamically"
             )
             continue
+        # GitHub environment names are case-insensitive. Keep one canonical
+        # representation everywhere facts are compared; retain the API's
+        # spelling only where it is needed to address or display the object.
+        environment = environment.casefold()
         environments.add(environment)
         # The operational-secret environment is a secret scope, so a job naming
         # it deploys nothing and the record GitHub would file for it is pure
@@ -1050,9 +1276,7 @@ class _CredentialSurface:
     unresolved: tuple[str, ...]
 
 
-def _credential_surface(
-    repo: str, files: dict[str, str | None] | None
-) -> _CredentialSurface:
+def _credential_surface(files: dict[str, str | None] | None) -> _CredentialSurface:
     """Read the workflows into the facts the environment gates need.
 
     An unreadable tree yields an empty surface that says so, rather than no
@@ -1073,7 +1297,7 @@ def _credential_surface(
         if text is None:
             unresolved.append(f"{path} could not be read")
             continue
-        facts[path] = _parse_workflow(path, text, repo)
+        facts[path] = _parse_workflow(path, text)
 
     resolved, unreached = _effective_triggers(facts)
     env_steerable: dict[str, set[str]] = {}
@@ -1102,8 +1326,9 @@ def _credential_surface(
             triggers = ", ".join(f"`{t}`" for t in sorted(resolved[path]))
             jobs = ", ".join(f"'{j}'" for j in sorted(f.external_calls))
             unresolved.append(
-                f"{path} runs on {triggers} and calls another repo's workflow "
-                f"({jobs}), whose jobs deploy to this repo's environments"
+                f"{path} runs on {triggers} and calls a ref-qualified or "
+                f"external workflow ({jobs}), whose environment use is not "
+                "visible from this tree"
             )
         unresolved.extend(
             f"{path} job '{job}' grants `id-token: write` to another repo's "
@@ -1117,6 +1342,79 @@ def _credential_surface(
         oidc_environments=frozenset(oidc_environments),
         ungated_oidc=tuple(sorted(ungated_oidc)),
         unresolved=tuple(sorted(set(unresolved))),
+    )
+
+
+def check_yolo_workflows(repo: str, cfg: Config) -> CheckResult:
+    """Require the default branch to contain only the audited generated jobs.
+
+    The ``tend`` environment may release operational secrets on main in yolo,
+    so its exception cannot extend to an adopter workflow or a stale generated
+    workflow that still executes repository code as the runner.
+    """
+    name = "yolo-workflows"
+    files = _fetch_workflow_files(repo)
+    if files is None:
+        return CheckResult(
+            name, None, "Could not read workflows from the default branch"
+        )
+
+    expected = {workflow.filename: workflow.content for workflow in generate_all(cfg)}
+    mismatched = sorted(
+        filename
+        for filename, content in expected.items()
+        if files.get(filename) != content
+    )
+    extra_holders: list[str] = []
+    unresolved: list[str] = []
+    external_calls: list[str] = []
+    for filename, content in sorted(files.items()):
+        if filename in expected or content is None:
+            continue
+        facts = _parse_workflow(filename, content)
+        if TEND_ENVIRONMENT.casefold() in facts.environments:
+            extra_holders.append(filename)
+        if facts.unresolved:
+            unresolved.append(filename)
+        if facts.external_calls:
+            external_calls.append(filename)
+    unread = sorted(filename for filename, content in files.items() if content is None)
+    if mismatched or extra_holders or unresolved or external_calls:
+        details = []
+        if mismatched:
+            details.append(f"not current generated output: {', '.join(mismatched)}")
+        if extra_holders:
+            details.append(
+                "non-generated files use the tend environment: "
+                f"{', '.join(extra_holders)}"
+            )
+        if unresolved:
+            details.append(
+                f"environment use could not be resolved in: {', '.join(unresolved)}"
+            )
+        if external_calls:
+            details.append(
+                "external or ref-qualified reusable workflows may use the "
+                "tend environment: "
+                f"{', '.join(external_calls)}"
+            )
+        return CheckResult(
+            name,
+            False,
+            "Yolo requires Tend's operational secrets to reach only the audited "
+            f"generated workflows ({'; '.join(details)}). Run `tend init`, "
+            "merge its control-plane changes, and move any other job to a "
+            "separate reviewer-gated environment.",
+        )
+    if unread:
+        return CheckResult(
+            name, None, f"Workflow files could not be read: {', '.join(unread)}"
+        )
+    return CheckResult(
+        name,
+        True,
+        "The default branch has the exact generated yolo workflows and no other "
+        "workflow uses the tend environment.",
     )
 
 
@@ -1289,7 +1587,7 @@ def check_credential_environments(
             name, None, f"Could not list environments: {listed.stderr.strip()}"
         )
 
-    surface = _credential_surface(repo, _fetch_workflow_files(repo))
+    surface = _credential_surface(_fetch_workflow_files(repo))
     tags_ok = cache(lambda: _tags_admin_gated(repo, cfg.bot_name))
 
     ungated: list[str] = []
@@ -1305,6 +1603,7 @@ def check_credential_environments(
     for env_name in listed.stdout.splitlines():
         if not env_name:
             continue
+        normalized_env = env_name.casefold()
         secrets = _gh(
             "api",
             "--paginate",
@@ -1318,10 +1617,13 @@ def check_credential_environments(
                 None,
                 f"Could not list secrets in '{env_name}' (requires admin access)",
             )
-        if not secrets.stdout.split() and env_name not in surface.oidc_environments:
+        if (
+            not secrets.stdout.split()
+            and normalized_env not in surface.oidc_environments
+        ):
             continue
         holders.append(env_name)
-        if env_name == TEND_ENVIRONMENT:
+        if normalized_env == TEND_ENVIRONMENT.casefold():
             continue  # Gated by its branch policy; `environment` verifies that.
         detail = _gh("api", f"repos/{repo}/environments/{_env_path(env_name)}")
         if detail is None or detail.returncode != 0:
@@ -1339,7 +1641,7 @@ def check_credential_environments(
             env,
             admitted,
             tags_ok,
-            surface.env_steerable.get(env_name, frozenset()),
+            surface.env_steerable.get(normalized_env, frozenset()),
         )
         if gap is None:
             continue
@@ -1589,16 +1891,36 @@ def check_repo_secret_allowlist(repo: str, allowed: set[str]) -> CheckResult:
     return CheckResult("repo-secret-allowlist", True, msg)
 
 
-def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
-    """Build the JSON body for a restrict-updates ruleset.
-
-    Always includes ~DEFAULT_BRANCH. Extra branches are added as
-    refs/heads/<name> patterns.
-    """
-    include = ["~DEFAULT_BRANCH"] + [f"refs/heads/{b}" for b in extra_branches]
+def _restrict_updates_ruleset(
+    extra_branches: list[str],
+    *,
+    name: str = "Merge access",
+    include_default: bool = True,
+    bot_id: int | None = None,
+    bot_bypass_mode: str | None = None,
+) -> str:
+    """Build one canonical branch update ruleset."""
+    include = (["~DEFAULT_BRANCH"] if include_default else []) + [
+        f"refs/heads/{branch}" for branch in extra_branches
+    ]
+    bypass_actors = [
+        {
+            "actor_id": ROLE_ID_ADMIN,
+            "actor_type": "RepositoryRole",
+            "bypass_mode": "exempt",
+        }
+    ]
+    if bot_id is not None and bot_bypass_mode is not None:
+        bypass_actors.append(
+            {
+                "actor_id": bot_id,
+                "actor_type": "User",
+                "bypass_mode": bot_bypass_mode,
+            }
+        )
     return json.dumps(
         {
-            "name": "Merge access",
+            "name": name,
             "target": "branch",
             "enforcement": "active",
             "conditions": {
@@ -1607,7 +1929,37 @@ def _restrict_updates_ruleset(extra_branches: list[str]) -> str:
                     "exclude": [],
                 }
             },
-            "rules": [{"type": "update"}],
+            "rules": [
+                {"type": "creation"},
+                {"type": "update"},
+                {"type": "deletion"},
+            ],
+            "bypass_actors": bypass_actors,
+        }
+    )
+
+
+def _control_plane_ruleset() -> str:
+    """Build the CODEOWNERS-backed review rule used by yolo merge mode."""
+    return json.dumps(
+        {
+            "name": "Control-plane review",
+            "target": "branch",
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+            "rules": [
+                {
+                    "type": "pull_request",
+                    "parameters": {
+                        "allowed_merge_methods": ["merge", "squash", "rebase"],
+                        "dismiss_stale_reviews_on_push": True,
+                        "require_code_owner_review": True,
+                        "require_last_push_approval": False,
+                        "required_approving_review_count": 0,
+                        "required_review_thread_resolution": False,
+                    },
+                }
+            ],
             "bypass_actors": [
                 {
                     "actor_id": ROLE_ID_ADMIN,
@@ -1644,18 +1996,8 @@ def _tag_operations_ruleset() -> str:
     )
 
 
-def admitted_refs(results: list[CheckResult]) -> list[str]:
-    """The refs the environment may admit, read off the branch-protection runs.
-
-    Every admitted ref must be one the bot cannot write, so the admitted set is
-    exactly the branches whose protection check *passed* — not the branches the
-    config names. A configured branch that does not exist yet answers 404, which
-    the protection check reports as unverified; admitting it would name a ref the
-    bot can then create, and the merge restriction gates `update`, not
-    `creation`, so nothing would stop it carrying a workflow that reads the
-    secrets. Deriving both the check and the fix from one list also keeps them
-    from disagreeing about what the policy should say.
-    """
+def operational_refs(results: list[CheckResult]) -> list[str]:
+    """Branches verified for Tend's own generated, sandboxed workflows."""
     prefix = "branch-protection:"
     return list(
         dict.fromkeys(
@@ -1664,6 +2006,22 @@ def admitted_refs(results: list[CheckResult]) -> list[str]:
             if r.name.startswith(prefix) and r.passed is True
         )
     )
+
+
+def credential_safe_refs(
+    results: list[CheckResult], cfg: Config, default_branch: str
+) -> list[str]:
+    """Refs that may gate credentials outside Tend's hardened runtime.
+
+    In yolo mode the bot can cause arbitrary ordinary code to land on the
+    default branch, so a generic credential environment may admit that branch
+    only when it also requires a non-bot reviewer. Extra protected branches stay
+    bot-inaccessible and remain safe ref gates.
+    """
+    refs = operational_refs(results)
+    if cfg.merge_policy.bot_can_merge:
+        return [branch for branch in refs if branch != default_branch]
+    return refs
 
 
 def fix_environment(repo: str, admitted: list[str]) -> CheckResult:
@@ -1793,41 +2151,140 @@ def fix_tag_protection(repo: str) -> CheckResult:
     )
 
 
+def _repository_rulesets(repo: str) -> dict[str, int] | None:
+    """Repository rulesets by name, or None when they cannot be listed."""
+    result = _gh(
+        "api",
+        "--paginate",
+        f"repos/{repo}/rulesets",
+        "--jq",
+        '.[] | select(.source_type == "Repository") | [.id, .name] | @tsv',
+    )
+    if result is None or result.returncode != 0:
+        return None
+    rulesets: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        try:
+            raw_id, name = line.split("\t", 1)
+            ruleset_id = int(raw_id)
+        except ValueError:
+            return None
+        if name in rulesets:
+            return None
+        rulesets[name] = ruleset_id
+    return rulesets
+
+
+def _reconcile_ruleset(
+    repo: str, existing: dict[str, int], name: str, body: str
+) -> str | None:
+    """Create or update one named ruleset; return an error message on failure."""
+    ruleset_id = existing.get(name)
+    method = "POST" if ruleset_id is None else "PUT"
+    endpoint = f"repos/{repo}/rulesets"
+    if ruleset_id is not None:
+        endpoint += f"/{ruleset_id}"
+    result = _gh("api", endpoint, "--method", method, "--input", "-", input=body)
+    if result is None:
+        return "gh CLI not found"
+    if result.returncode != 0:
+        return result.stderr.strip()
+    return None
+
+
+def _remove_ruleset(repo: str, existing: dict[str, int], name: str) -> str | None:
+    """Remove a named ruleset when it exists; return an error on failure."""
+    ruleset_id = existing.get(name)
+    if ruleset_id is None:
+        return None
+    result = _gh("api", "-X", "DELETE", f"repos/{repo}/rulesets/{ruleset_id}")
+    if result is None:
+        return "gh CLI not found"
+    if result.returncode != 0:
+        return result.stderr.strip()
+    return None
+
+
 def fix_branch_protection(
     repo: str,
     default_branch: str,
+    bot_name: str,
+    merge: str,
     extra_branches: list[str] | None = None,
 ) -> CheckResult:
-    """Create a restrict-updates ruleset covering protected branches.
-
-    Always covers the default branch. Extra branches from config are included
-    in the same ruleset. Only admins can bypass.
-    """
-    extra = [b for b in (extra_branches or []) if b != default_branch]
-    body = _restrict_updates_ruleset(extra)
-    result = _gh(
-        "api",
-        f"repos/{repo}/rulesets",
-        "--method",
-        "POST",
-        "--input",
-        "-",
-        input=body,
-    )
+    """Reconcile the merge and extra-branch rulesets without a protection gap."""
     name = f"branch-protection:{default_branch}"
-    if result is None:
-        return CheckResult(name, None, "gh CLI not found")
-    if result.returncode != 0:
+    existing = _repository_rulesets(repo)
+    if existing is None:
+        return CheckResult(name, None, "Could not list repository rulesets")
+
+    extra = [b for b in (extra_branches or []) if b != default_branch]
+    protected_body = _restrict_updates_ruleset(
+        extra,
+        name="Protected branch access",
+        include_default=False,
+    )
+    if extra:
+        error = _reconcile_ruleset(
+            repo, existing, "Protected branch access", protected_body
+        )
+    else:
+        error = _remove_ruleset(repo, existing, "Protected branch access")
+    if error:
         return CheckResult(
             name,
             False,
-            f"Failed to create ruleset: {result.stderr.strip()}",
+            f"Failed to reconcile protected branches: {error}",
         )
-    branches = [default_branch] + extra
+
+    bot_id = None
+    bypass_mode = None
+    if merge == "yolo":
+        bot_id = _user_id(bot_name)
+        if bot_id is None:
+            return CheckResult(name, False, f"Could not resolve bot '{bot_name}'")
+        bypass_mode = "pull_request"
+        error = _reconcile_ruleset(
+            repo, existing, "Control-plane review", _control_plane_ruleset()
+        )
+        if error:
+            return CheckResult(
+                name, False, f"Failed to reconcile control-plane review: {error}"
+            )
+        verified = check_control_plane_ruleset(repo, default_branch, bot_name)
+        if verified.passed is not True:
+            return CheckResult(
+                name,
+                verified.passed,
+                "Control-plane review was written but did not verify; merge "
+                f"access remains maintainer-only: {verified.message}",
+            )
+
+    merge_body = _restrict_updates_ruleset(
+        [],
+        bot_id=bot_id,
+        bot_bypass_mode=bypass_mode,
+    )
+    error = _reconcile_ruleset(repo, existing, "Merge access", merge_body)
+    if error:
+        return CheckResult(name, False, f"Failed to reconcile merge access: {error}")
+    if merge == "maintainer":
+        error = _remove_ruleset(repo, existing, "Control-plane review")
+        if error:
+            return CheckResult(
+                name, False, f"Failed to remove yolo control-plane review: {error}"
+            )
+
+    access = (
+        "the bot may merge pull requests but cannot push directly"
+        if merge == "yolo"
+        else "only admins can update the default branch"
+    )
     return CheckResult(
         name,
         True,
-        f"Created 'Merge access' ruleset — only admins can merge ({', '.join(branches)})",
+        f"Reconciled branch rulesets: {access}; extra protected branches remain "
+        "admin-only.",
     )
 
 
@@ -1873,17 +2330,41 @@ def run_all_checks(cfg: Config, repo: str | None = None) -> list[CheckResult]:
     # closes. The allowlist check therefore flags them as unexpected.
     allowed = set(cfg.allowed_repo_secrets)
 
-    results = [check_branch_protection(repo, default_branch, cfg.bot_name)]
+    results = [
+        check_branch_protection(
+            repo,
+            default_branch,
+            cfg.bot_name,
+            expected_bypass=cfg.merge_policy.expected_runtime_bypass,
+        )
+    ]
     for branch in cfg.protected_branches:
         if branch != default_branch:
             results.append(check_branch_protection(repo, branch, cfg.bot_name))
+    if cfg.merge_policy.requires_control_plane_review:
+        generation_cfg = replace(
+            cfg,
+            default_branch=default_branch,
+            repo_owner=detect_canonical_owner(repo) or "",
+        )
+        results.append(
+            check_control_plane_codeowners(
+                repo, default_branch, cfg.control_plane_owner, cfg.bot_name
+            )
+        )
+        results.append(check_control_plane_ruleset(repo, default_branch, cfg.bot_name))
+        results.append(check_yolo_workflows(repo, generation_cfg))
     results.append(check_bot_permission(repo, cfg.bot_name))
     results.append(check_tag_protection(repo, cfg.bot_name))
     results.append(check_immutable_releases(repo))
-    admitted = admitted_refs(results)
-    results.append(check_environment(repo, admitted))
+    operational = operational_refs(results)
+    results.append(check_environment(repo, operational))
     results.append(check_environment_deployments(repo))
-    results.append(check_credential_environments(repo, cfg, admitted))
+    results.append(
+        check_credential_environments(
+            repo, cfg, credential_safe_refs(results, cfg, default_branch)
+        )
+    )
     results.append(check_secrets(repo, required_secrets))
     if cfg.memory_gist:
         results.append(check_memory_gist_repository(repo))

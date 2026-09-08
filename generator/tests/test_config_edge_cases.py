@@ -168,6 +168,104 @@ def test_protected_branches_empty_string_rejected(tmp_path: Path) -> None:
         Config.load(path)
 
 
+def test_merge_defaults_to_maintainer(tmp_path: Path) -> None:
+    cfg = Config.load(_write_config(tmp_path, "bot_name: my-bot\n"))
+
+    assert cfg.merge == "maintainer"
+    assert cfg.merge_policy.bot_can_merge is False
+    assert cfg.merge_policy.expected_runtime_bypass == "never"
+
+
+def test_yolo_merge_requires_one_control_plane_owner(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent("""\
+            bot_name: my-bot
+            merge: yolo
+            control_plane_owner: "@octocat"
+            """),
+    )
+
+    cfg = Config.load(path)
+
+    assert cfg.merge_policy.bot_can_merge is True
+    assert cfg.merge_policy.expected_runtime_bypass == "pull_requests_only"
+    assert cfg.merge_policy.requires_control_plane_review is True
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ("merge: fast\n", "merge 'fast' is not recognized"),
+        ("merge: yolo\n", "control_plane_owner is required"),
+        (
+            'merge: yolo\ncontrol_plane_owner: "octocat"\n',
+            "control_plane_owner must be one GitHub user",
+        ),
+        (
+            'merge: yolo\ncontrol_plane_owner: "@octocat @hubot"\n',
+            "control_plane_owner must be one GitHub user",
+        ),
+        (
+            'merge: yolo\ncontrol_plane_owner: "@octo-org/security"\n',
+            "teams are not accepted",
+        ),
+        (
+            'merge: yolo\ncontrol_plane_owner: "@my-bot"\n',
+            "must not be the Tend bot",
+        ),
+    ],
+)
+def test_invalid_merge_config_rejected(
+    tmp_path: Path, extra: str, message: str
+) -> None:
+    path = _write_config(tmp_path, f"bot_name: my-bot\n{extra}")
+
+    with pytest.raises(ClickException, match=message):
+        Config.load(path)
+
+
+@pytest.mark.parametrize(
+    "step",
+    ["run: make bootstrap", "uses: astral-sh/setup-uv@v10.0.1"],
+)
+def test_yolo_rejects_all_runner_setup(tmp_path: Path, step: str) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f"""\
+            bot_name: my-bot
+            merge: yolo
+            control_plane_owner: "@octocat"
+            setup:
+              - {step}
+            """),
+    )
+
+    with pytest.raises(ClickException, match="setup is not allowed.*sandbox_setup"):
+        Config.load(path)
+
+
+@pytest.mark.parametrize(
+    "override",
+    ["workflow_extra: {env: {X: y}}", "jobs: {review: {timeout-minutes: 5}}"],
+)
+def test_yolo_rejects_workflow_overrides(tmp_path: Path, override: str) -> None:
+    path = _write_config(
+        tmp_path,
+        dedent(f"""\
+            bot_name: my-bot
+            merge: yolo
+            control_plane_owner: "@octocat"
+            workflows:
+              review:
+                {override}
+            """),
+    )
+
+    with pytest.raises(ClickException, match="not allowed when merge is 'yolo'"):
+        Config.load(path)
+
+
 # ---------------------------------------------------------------------------
 # 2c. model
 # ---------------------------------------------------------------------------
@@ -427,24 +525,24 @@ def test_very_long_prompt_nightly(tmp_path: Path) -> None:
 
 
 def test_duplicate_setup_steps_accepted(tmp_path: Path) -> None:
-    """Duplicate uses entries are accepted without warning or dedup."""
+    """Duplicate run entries are accepted without warning or dedup."""
     path = _write_config(
         tmp_path,
         dedent("""\
         bot_name: my-bot
         setup:
-          - uses: ./.github/actions/setup
-          - uses: ./.github/actions/setup
+          - run: python --version
+          - run: python --version
     """),
     )
     cfg = Config.load(path)
     assert len(cfg.setup) == 2
-    assert cfg.setup[0].fields == {"uses": "./.github/actions/setup"}
-    assert cfg.setup[1].fields == {"uses": "./.github/actions/setup"}
+    assert cfg.setup[0].fields == {"run": "python --version"}
+    assert cfg.setup[1].fields == {"run": "python --version"}
     # Both duplicates appear in generated YAML
     workflows = generate_all(cfg)
     for wf in workflows:
-        count = wf.content.count("./.github/actions/setup")
+        count = wf.content.count("python --version")
         assert count == 2, f"{wf.filename} has {count} setup steps, expected 2"
 
 
@@ -651,28 +749,28 @@ def test_bot_name_yaml_injection_rejected(tmp_path: Path) -> None:
 
 
 def test_setup_steps_preserves_order(tmp_path: Path) -> None:
-    """setup as a YAML sequence preserves interleaved uses/run order."""
+    """setup as a YAML sequence preserves run-step order."""
     path = _write_config(
         tmp_path,
         dedent("""\
         bot_name: my-bot
         setup:
-          - uses: ./.github/actions/setup-node
+          - run: echo first
           - run: echo middle
-          - uses: ./.github/actions/setup-cache
+          - run: echo last
     """),
     )
     cfg = Config.load(path)
     assert len(cfg.setup) == 3
-    assert cfg.setup[0].fields == {"uses": "./.github/actions/setup-node"}
+    assert cfg.setup[0].fields == {"run": "echo first"}
     assert cfg.setup[1].fields == {"run": "echo middle"}
-    assert cfg.setup[2].fields == {"uses": "./.github/actions/setup-cache"}
+    assert cfg.setup[2].fields == {"run": "echo last"}
     # Verify order in generated YAML
     workflows = generate_all(cfg)
     for wf in workflows:
-        node_pos = wf.content.index("setup-node")
+        node_pos = wf.content.index("echo first")
         middle_pos = wf.content.index("echo middle")
-        cache_pos = wf.content.index("setup-cache")
+        cache_pos = wf.content.index("echo last")
         assert node_pos < middle_pos < cache_pos, f"Order wrong in {wf.filename}"
 
 
