@@ -129,6 +129,8 @@ uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/nightly_survey_files.py"
 ```
 
+The rotation is deterministic in both directions, so a bucket returns to the same files every cycle. The script therefore drops any path an open PR already changes, printing `# skipped <path> (#N)` on stderr for each: whatever the survey would find there is either already in that PR or belongs as a comment on it, and the PR is where a maintainer is already looking. Carry the skipped paths into the Step 9 summary.
+
 Skip files that aren't meaningfully reviewable: lock files (`uv.lock`, `Cargo.lock`, `package-lock.json`), binary assets, vendored dependencies, and generated files (build output, compiled protobuf, auto-generated workflow YAML). When unsure, check the file — a quick glance is cheaper than missing something.
 
 Before reviewing files, read the project's CLAUDE.md and any project-specific skills or review criteria it references. Apply the review checklist below to each file in full.
@@ -232,4 +234,4 @@ Keep the project's changelog up to date with recent changes. The `running-tend` 
 
 ## Step 9: Summary
 
-Report: commits reviewed, files surveyed, findings, actions taken, assessment (clean / minor issues / needs attention).
+Report: commits reviewed, files surveyed, files skipped for an open PR (with that PR), findings, actions taken, assessment (clean / minor issues / needs attention).

@@ -2,7 +2,14 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Select today's deterministic slice of tracked files for the nightly survey."""
+"""Select today's deterministic slice of tracked files for the nightly survey.
+
+Both the day and the path pick a bucket by arithmetic, so bucket *N* returns to
+the same file set every cycle. On a repository whose pull requests sit unmerged
+longer than that, a path whose last pass left an open PR would be re-surveyed on
+the anniversary and re-derive that PR's findings, so paths an open pull request
+already changes are dropped before the survey reads anything.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +17,9 @@ import subprocess
 import sys
 import time
 import zlib
+from typing import Any
+
+import github_cli
 
 CYCLE_LENGTH = 28
 
@@ -23,7 +33,21 @@ def survey_files(files: list[str], *, unix_day: int) -> tuple[int, list[str]]:
     return bucket, selected
 
 
-def main(argv: list[str] | None = None, *, now: float | None = None) -> int:
+def covering_pulls(pull_requests: list[dict[str, Any]]) -> dict[str, list[int]]:
+    """Map each path an open pull request changes to the pulls changing it."""
+    covering: dict[str, list[int]] = {}
+    for pull in pull_requests:
+        for changed in pull["files"]:
+            covering.setdefault(changed["path"], []).append(pull["number"])
+    return covering
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    now: float | None = None,
+    pull_requests: list[dict[str, Any]] | None = None,
+) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args:
         print(f"usage: {sys.argv[0]}", file=sys.stderr)
@@ -34,9 +58,23 @@ def main(argv: list[str] | None = None, *, now: float | None = None) -> int:
     bucket, selected = survey_files(
         tracked, unix_day=int(time.time() if now is None else now) // 86400
     )
+    if pull_requests is None:
+        pull_requests = github_cli.json_call(
+            "pr", "list", "--state", "open", "--limit", "200", "--json", "number,files"
+        )
+    covering = covering_pulls(pull_requests)
+    skipped = [path for path in selected if path in covering]
+    selected = [path for path in selected if path not in covering]
     if selected:
         print(*selected, sep="\n")
-    print(f"# bucket={bucket}/{CYCLE_LENGTH} files={len(selected)}", file=sys.stderr)
+    print(
+        f"# bucket={bucket}/{CYCLE_LENGTH} files={len(selected)}"
+        f" skipped={len(skipped)}",
+        file=sys.stderr,
+    )
+    for path in skipped:
+        pulls = ", ".join(f"#{number}" for number in covering[path])
+        print(f"# skipped {path} ({pulls})", file=sys.stderr)
     return 0
 
 
@@ -44,4 +82,4 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except subprocess.CalledProcessError as error:
-        raise SystemExit(error.returncode or 1) from None
+        raise SystemExit(github_cli.exit_code(error))
