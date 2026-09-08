@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 
 import pytest
-from _safe_files import read_regular_nofollow
 import token_usage
+from _safe_files import read_regular_nofollow
 
 
 def test_privileged_copy_exports_only_regular_files(tmp_path: Path) -> None:
@@ -19,9 +19,7 @@ def test_privileged_copy_exports_only_regular_files(tmp_path: Path) -> None:
     os.mkfifo(source / "blocking-fifo")
     destination = tmp_path / "destination"
 
-    token_usage.privileged_copy(
-        source, destination, uid=os.getuid(), gid=os.getgid()
-    )
+    token_usage.privileged_copy(source, destination, uid=os.getuid(), gid=os.getgid())
 
     assert (destination / "nested/session.jsonl").read_text() == "{}\n"
     assert not (destination / "secret-link").exists()

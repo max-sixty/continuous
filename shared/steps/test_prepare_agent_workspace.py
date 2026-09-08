@@ -5,8 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
 import prepare_agent_workspace as prepare
+import pytest
 
 
 def command(*args: str, cwd: Path) -> str:
@@ -55,9 +55,12 @@ def test_clone_is_independent_and_review_falls_back_to_head(tmp_path: Path) -> N
     assert not (destination / ".git/objects/info/alternates").exists()
     assert prepare.checkout_review(destination, 7) == "PR #7 head ref"
     assert (destination / "file").read_text() == "feature\n"
-    assert subprocess.run(
-        ["git", "symbolic-ref", "-q", "HEAD"], cwd=destination, check=False
-    ).returncode == 1
+    assert (
+        subprocess.run(
+            ["git", "symbolic-ref", "-q", "HEAD"], cwd=destination, check=False
+        ).returncode
+        == 1
+    )
 
 
 def test_review_checkout_does_not_inherit_runner_git_filters(
@@ -74,8 +77,22 @@ def test_review_checkout_does_not_inherit_runner_git_filters(
     hook.write_text('#!/bin/sh\ncat\n: > "$0.ran"\n')
     hook.chmod(0o755)
     runner_config = tmp_path / "runner.gitconfig"
-    command("config", "--file", str(runner_config), "filter.runner-hook.smudge", str(hook), cwd=tmp_path)
-    command("config", "--file", str(runner_config), "filter.runner-hook.required", "true", cwd=tmp_path)
+    command(
+        "config",
+        "--file",
+        str(runner_config),
+        "filter.runner-hook.smudge",
+        str(hook),
+        cwd=tmp_path,
+    )
+    command(
+        "config",
+        "--file",
+        str(runner_config),
+        "filter.runner-hook.required",
+        "true",
+        cwd=tmp_path,
+    )
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(runner_config))
     destination = tmp_path / "agent"
 

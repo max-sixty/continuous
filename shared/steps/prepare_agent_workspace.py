@@ -67,9 +67,7 @@ def run(
 def isolated_git_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
     """Return an environment that cannot inherit runner Git execution hooks."""
     environment = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith("GIT_")
+        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
     }
     environment.update(
         {
@@ -103,7 +101,7 @@ def api_json(path: str, token: str) -> dict[str, Any]:
     with urllib.request.urlopen(request, timeout=30) as response:
         value = json.load(response)
     if not isinstance(value, dict):
-        raise ValueError(f"GitHub API returned a non-object for {path}")
+        raise TypeError(f"GitHub API returned a non-object for {path}")
     return value
 
 
@@ -111,7 +109,7 @@ def event_payload() -> dict[str, Any]:
     with Path(required("GITHUB_EVENT_PATH")).open(encoding="utf-8") as handle:
         value = json.load(handle)
     if not isinstance(value, dict):
-        raise ValueError("GITHUB_EVENT_PATH must contain a JSON object")
+        raise TypeError("GITHUB_EVENT_PATH must contain a JSON object")
     return value
 
 
@@ -208,15 +206,17 @@ def checkout_mention(
 ) -> tuple[str, str]:
     pr = api_json(f"/repos/{repository}/pulls/{number}", token)
     if pr.get("state") != "open":
-        return checkout_base(workspace, base_branch, base_sha), pull_base_sha(pr, number)
+        return checkout_base(workspace, base_branch, base_sha), pull_base_sha(
+            pr, number
+        )
     head = pr.get("head")
     if not isinstance(head, dict) or not isinstance(head.get("repo"), dict):
-        raise ValueError(f"PR #{number} has no fetchable head repository")
+        raise TypeError(f"PR #{number} has no fetchable head repository")
     branch = head.get("ref")
     head_sha = head.get("sha")
     clone_url = head["repo"].get("clone_url")
     if not isinstance(branch, str) or not isinstance(clone_url, str):
-        raise ValueError(f"PR #{number} has an invalid head topology")
+        raise TypeError(f"PR #{number} has an invalid head topology")
     head_sha = validated_object_id(head_sha, f"PR #{number} head")
     git("check-ref-format", "--branch", branch, cwd=workspace)
     git("remote", "add", "tend-head", clone_url, cwd=workspace)
@@ -283,7 +283,9 @@ def clone_workspace(
             env=env,
         )
 
-    base_sha = git("rev-parse", "HEAD", cwd=runner_workspace, capture=True).stdout.strip()
+    base_sha = git(
+        "rev-parse", "HEAD", cwd=runner_workspace, capture=True
+    ).stdout.strip()
     # A full clone normally contains the exact trusted checkout commit. Fetch it
     # explicitly when the event names an object outside advertised refs.
     ensure_commit(destination, base_sha, token)
@@ -303,9 +305,16 @@ def main() -> int:
         )
         if mode not in {"base", "review", "mention"}:
             raise ValueError(f"unsupported checkout mode: {mode}")
-        destination = runner_temp / f"tend-agent-workspace-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
-        if destination == runner_workspace or destination.is_relative_to(runner_workspace):
-            raise ValueError("agent workspace must be independent of the runner checkout")
+        destination = (
+            runner_temp
+            / f"tend-agent-workspace-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+        )
+        if destination == runner_workspace or destination.is_relative_to(
+            runner_workspace
+        ):
+            raise ValueError(
+                "agent workspace must be independent of the runner checkout"
+            )
 
         base_sha = clone_workspace(
             runner_workspace=runner_workspace,
@@ -322,10 +331,9 @@ def main() -> int:
             if mode == "review":
                 selected = checkout_review(destination, number, token)
                 config_base_sha = pull_base_sha(payload, number)
-            elif (
-                os.environ.get("GITHUB_EVENT_NAME") == "issue_comment"
-                and not issue_comment_targets_pull_request(payload)
-            ):
+            elif os.environ.get(
+                "GITHUB_EVENT_NAME"
+            ) == "issue_comment" and not issue_comment_targets_pull_request(payload):
                 selected = checkout_base(destination, base_branch, base_sha)
                 config_base_sha = ""
             else:
@@ -351,7 +359,9 @@ def main() -> int:
         alternates = destination / ".git/objects/info/alternates"
         if alternates.exists():
             raise ValueError("agent clone unexpectedly shares a Git object store")
-        origin = git("remote", "get-url", "origin", cwd=destination, capture=True).stdout
+        origin = git(
+            "remote", "get-url", "origin", cwd=destination, capture=True
+        ).stdout
         if "@github.com" in origin or "x-access-token" in origin:
             raise ValueError("agent clone persisted a credential in its origin URL")
 

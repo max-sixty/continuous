@@ -201,7 +201,9 @@ def main() -> int:
                 step_summary_dir / "step-summary.md", max_bytes=MAX_STEP_SUMMARY
             )
         except (OSError, ValueError) as problem:
-            print(f"::warning::ignored invalid skill step summary: {problem}", flush=True)
+            print(
+                f"::warning::ignored invalid skill step summary: {problem}", flush=True
+            )
         else:
             if skill_summary:
                 with Path(required("GITHUB_STEP_SUMMARY")).open("ab") as summary:

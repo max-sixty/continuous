@@ -34,10 +34,12 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 srt_root="$RUNNER_TEMP/tend-srt"
+npm_userconfig=$(/usr/bin/mktemp "$RUNNER_TEMP/tend-npm-user.XXXXXX")
+npm_globalconfig=$(/usr/bin/mktemp "$RUNNER_TEMP/tend-npm-global.XXXXXX")
 /usr/bin/env -i \
   PATH="${node_bin%/node}:/usr/sbin:/usr/bin:/sbin:/bin" HOME="$RUNNER_TEMP" \
   "$node_bin" "$npm_cli" install --prefix "$srt_root" \
-    --userconfig /dev/null --globalconfig /dev/null \
+    --userconfig "$npm_userconfig" --globalconfig "$npm_globalconfig" \
     --ignore-scripts --no-audit --no-fund \
     "@anthropic-ai/sandbox-runtime@$SRT_VERSION"
 srt_package="$srt_root/node_modules/@anthropic-ai/sandbox-runtime"
@@ -49,6 +51,8 @@ done
 {
   echo "NODE_BIN=$node_bin"
   echo "TEND_NPM_CLI=$npm_cli"
+  echo "TEND_NPM_USERCONFIG=$npm_userconfig"
+  echo "TEND_NPM_GLOBALCONFIG=$npm_globalconfig"
   echo "TEND_SRT_ENTRY=$srt_entry"
   echo "TEND_SRT_SECCOMP=$srt_seccomp"
 } >> "$GITHUB_ENV"

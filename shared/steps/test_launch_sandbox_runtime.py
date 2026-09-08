@@ -9,8 +9,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import pytest
 import launch_sandbox_runtime as launch
+import pytest
 
 
 def configure(
@@ -88,7 +88,9 @@ def test_claude_exports_only_fixed_runner_owned_files(
     exported = Path(values["stream_json"])
     assert exported.read_bytes() == b'{"type":"result"}\n'
     assert exported.is_relative_to(tmp_path / "runner-temp")
-    assert (tmp_path / "runner-temp/tend-claude-stderr.log").read_bytes() == b"diagnostic\n"
+    assert (
+        tmp_path / "runner-temp/tend-claude-stderr.log"
+    ).read_bytes() == b"diagnostic\n"
     assert values.get("stream_json") != "/etc/passwd"
     assert summary.read_bytes() == b"skill result\n\n"
     runtime = next(args for args in calls if "sandbox_runtime.mjs" in args[-1])
@@ -138,9 +140,8 @@ def test_no_agent_owned_result_is_read_until_the_uid_is_quiescent(
 def test_runner_cancellation_is_raised_through_the_reap_path() -> None:
     previous = signal.getsignal(signal.SIGTERM)
 
-    with pytest.raises(launch.Cancelled) as raised:
-        with launch.raise_on_cancel():
-            os.kill(os.getpid(), signal.SIGTERM)
+    with pytest.raises(launch.Cancelled) as raised, launch.raise_on_cancel():
+        os.kill(os.getpid(), signal.SIGTERM)
 
     assert raised.value.signum == signal.SIGTERM
     assert signal.getsignal(signal.SIGTERM) is previous

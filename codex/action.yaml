@@ -207,7 +207,8 @@ runs:
         /usr/bin/env -i \
           PATH="$PATH" HOME="$RUNNER_TEMP" \
           "$NODE_BIN" "$TEND_NPM_CLI" install --prefix "$codex_root" \
-            --userconfig /dev/null --globalconfig /dev/null \
+            --userconfig "$TEND_NPM_USERCONFIG" \
+            --globalconfig "$TEND_NPM_GLOBALCONFIG" \
             --ignore-scripts --no-audit --no-fund \
             "@openai/codex@$CODEX_VERSION" \
             "@openai/codex-responses-api-proxy@$CODEX_VERSION"

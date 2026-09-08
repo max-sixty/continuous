@@ -119,6 +119,28 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
     )
 
 
+def test_npm_installs_use_distinct_empty_config_files() -> None:
+    install = (
+        REPO_ROOT / "shared" / "steps" / "install-sandbox-runtime.sh"
+    ).read_text()
+    assert 'mktemp "$RUNNER_TEMP/tend-npm-user.XXXXXX"' in install
+    assert 'mktemp "$RUNNER_TEMP/tend-npm-global.XXXXXX"' in install
+    assert (
+        '--userconfig "$npm_userconfig" --globalconfig "$npm_globalconfig"' in install
+    )
+
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / "codex" / "action.yaml").read_text()
+    )
+    codex_install = next(
+        step["run"]
+        for step in action["runs"]["steps"]
+        if step.get("name") == "Install Codex and Responses proxy"
+    )
+    assert '--userconfig "$TEND_NPM_USERCONFIG"' in codex_install
+    assert '--globalconfig "$TEND_NPM_GLOBALCONFIG"' in codex_install
+
+
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 def test_sensitive_config_restore_runs_only_in_the_disposable_checkout(
     harness: str,
