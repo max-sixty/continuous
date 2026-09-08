@@ -10,6 +10,8 @@ inline finding, an approval, or Tend's marker for a deliberately silent pass.
 Pending reviews never cover. GitHub's native dismissal timeline records
 invalidate earlier coverage on the same commit, so a failed replacement remains
 recoverable; a dismissal remains review context until a later bot approval.
+Any bot-owned pending review on the current head keeps demand open until a
+serialized pass either publishes or discards its verified contents.
 Ready-for-review is a separate generation latch: only a submitted bot review
 naming the exact timeline event acknowledges it.
 """
@@ -87,7 +89,7 @@ def review_complete_marker() -> str:
 
 
 def review_operation_marker(operation_id: str, review_mode: str) -> str:
-    """Return the marker identifying one private pending-review operation."""
+    """Return the marker identifying one review publication operation."""
     marker = f"<!-- tend:review-operation:{operation_id}:{review_mode} -->"
     if _REVIEW_OPERATION_RE.fullmatch(marker) is None:
         raise ValueError(
@@ -369,6 +371,14 @@ def review_state(
         }
         for review, operation_id, review_mode in pending
     ]
+    submitted_operation_ids = sorted(
+        {
+            operation[0]
+            for review in mine
+            if (operation := _review_operation(review.get("body") or "")) is not None
+        }
+    )
+    pending_at_head = any(review.get("sha") == head_sha for review in pending_records)
 
     return {
         "head_sha": head_sha,
@@ -408,8 +418,12 @@ def review_state(
         "acknowledged_ready_ids": acknowledged_ready_ids,
         "outstanding_ready_for_review": outstanding_ready,
         "pending_reviews": pending_records,
+        "submitted_operation_ids": submitted_operation_ids,
         "needs_review": (
-            not at_head or outstanding_ready is not None or conflicting_approval
+            not at_head
+            or outstanding_ready is not None
+            or conflicting_approval
+            or pending_at_head
         ),
         "fresh_approval_sha": (
             (fresh_approvals[-1].get("commit_id") or "") if fresh_approvals else ""

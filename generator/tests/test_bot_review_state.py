@@ -84,7 +84,6 @@ def env(tmp_path: Path) -> dict[str, str]:
         "GH_CALLS": str(tmp_path / "gh-calls.log"),
         "GITHUB_REPOSITORY": "owner/repo",
         "BOT_LOGIN": BOT,
-        "CHECKED_HEAD_DIR": str(tmp_path),
         "DISPATCH_INPUT": str(tmp_path / "dispatch-input.json"),
         **paths,
     }
@@ -198,6 +197,7 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["acknowledged_ready_ids"] == []
     assert state["outstanding_ready_for_review"] is None
     assert state["pending_reviews"] == []
+    assert state["submitted_operation_ids"] == []
     assert state["needs_review"] is True
 
 
@@ -1018,6 +1018,23 @@ def test_pending_inline_review_is_recoverable_but_never_coverage(
     assert state["last_substantive"] is None
     assert state["at_head"] is None
     assert state["acknowledged_ready_ids"] == []
+
+
+def test_owned_pending_review_reopens_a_covered_head(env: dict[str, str]) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(6, "2026-01-01T00:00:00Z", body="Earlier finding."),
+            _review(7, None, state="PENDING", body=REVIEW_OPERATION_MARKER),
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 6
+    assert state["pending_reviews"][0]["id"] == 7
+    assert state["needs_review"] is True
 
 
 def test_pending_review_on_another_head_remains_visible_for_cleanup(

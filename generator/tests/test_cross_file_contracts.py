@@ -267,9 +267,11 @@ def test_pending_reviews_have_a_serialized_daily_backstop() -> None:
     )
 
     assert "`recovery_pending_review_id`" in review
+    assert "`pending_review_ids`" in review
     assert "`pending_inline_comments`" in review
-    assert "bypass the already-reviewed and\ntrivial-increment silent exits" in review
-    assert "Do not take an ordinary prior-feedback silent exit" in review
+    assert "bypass the already-reviewed and trivial-" in review
+    assert "increment silent exits" in review
+    assert "Do not take an\nordinary prior-feedback silent exit" in review
     assert "daily `review-runs` live-work reconciliation" in review
     assert "no finalized bot review" in review_runs
     assert 'bot_review_state.py" request "$NUMBER"' in review_runs

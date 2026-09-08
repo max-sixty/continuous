@@ -32,6 +32,8 @@ Before reading the diff, run the initial snapshot. It pins the open head, resolv
 On `skip`, finish. The JSON fields replace the shell variables named below;
 `incremental_path` is either null or a file containing the commits and per-file
 line counts authored since the last review, excluding base-branch churn.
+`pending_review_ids` lists every bot-owned private PENDING review on the current
+head. It is non-empty until those unsubmitted findings are reconciled.
 `recovery_pending_review_id` is the one current-head private PENDING review
 compatible with this review mode, or null.
 `standing_approval_id` is the bot approval currently deciding the PR, or null.
@@ -59,9 +61,10 @@ for recovery. Review runs never acknowledge a PR notification themselves;
 the notifications poll decides whether the whole conversation, including
 questions and replies outside the code review, has a current outcome.
 
-When `recovery_pending_review_id` is non-null, bypass the already-reviewed and
-trivial-increment silent exits below. The private pending review has comments to
-reconcile but does not count as a finalized verdict.
+When `pending_review_ids` is non-empty, bypass the already-reviewed and trivial-
+increment silent exits below. Private pending reviews have comments to reconcile
+but do not count as a finalized verdict, including when their captured draft/full
+mode differs from the PR's current mode.
 
 When `standing_dismissal` is non-null, treat it as a prior merge-readiness
 decision, not disposable history. Read its native dismissal message and commit
@@ -89,8 +92,11 @@ Whenever both `standing_dismissal` and `standing_approval_id` are non-null,
 bypass the already-reviewed and trivial-increment shortcuts below. Reconcile
 the contradictory decisions in this pass: dismiss the approval when the
 dismissal reason still applies, or submit a fresh APPROVE after the full review
-shows that the reason is resolved. An earlier COMMENT may cover the code, but
-it cannot settle which merge-readiness decision stands.
+shows that the reason is resolved. If the full pass finds a new issue, submit
+the findings COMMENT with `--reconcile`, then dismiss the standing approval as
+step 6 requires. An earlier COMMENT may cover the code, but it cannot settle
+which merge-readiness decision stands or suppress a new finding from the pass
+that settles it.
 
 When `force_full_review` is true, bypass both the already-reviewed and trivial-
 increment shortcuts: becoming ready asks for a full non-draft review.
@@ -123,12 +129,13 @@ and comments against the current diff and recreate every still-valid finding
 in this pass's payload; do not let them trigger the ordinary “prior feedback
 already covers it” silent exit.
 
-If `recovery_pending_review_id` is non-null, rebuild or supersede that pending
-review in step 6. The publication commands delete captured pending records only
-at the final boundary. Do not take an ordinary prior-feedback silent exit: either
-recreate every still-valid finding, or, after verifying none remain, use
-`complete`. Pending comments from other review modes remain private context but
-cannot satisfy this run's verdict.
+If `pending_review_ids` is non-empty, rebuild or supersede the pending work in
+step 6. `recovery_pending_review_id` identifies the one record already compatible
+with this mode; pending comments from other modes remain private context and must
+be verified too, but cannot satisfy this run's verdict. The publication commands
+delete captured pending records only at the final boundary. Do not take an
+ordinary prior-feedback silent exit: either recreate every still-valid finding,
+or, after verifying none remain, use `complete`.
 
 **Apply the sibling-workflow dedup rule from `running-in-ci`** to both the review body and inline comments. If a prior bot comment in the conversation already covers a point — a previous review on this or an earlier commit, a `tend-mention` reply, a `tend-triage` post, anything from a tend workflow — omit it from this review and stick to diff-grounded findings. If that leaves no new diff-grounded finding on the incremental changes and the only outstanding concern is a still-unresolved thread from an earlier bot review, do not post a new review: that thread already blocks the PR, and restating "the prior thread still applies" on every push is noise. Resolve any bot threads the new commits addressed (step 8), then finish without posting. A fresh review is warranted only when the incremental diff introduces a new finding, or resolves the last open one (then approve with an empty body — the author-readiness gate under step 6 applies here too, since these are the bot's own findings closing out rather than the author's). When concurrent runs race (a new push while the first run is still responding), both see the same unanswered question — check whether a bot reply exists after the question's timestamp before answering. Address remaining unanswered questions in the review body (not via `gh pr comment`).
 
@@ -292,6 +299,11 @@ but does not update `/tmp/reviewed-head`. Read that entire file in chunks,
 update the review, then run `post` again. Only that second successful call
 accepts the delta and advances the reviewed-head pin. Do not publish or run
 `complete` after only the candidate pass.
+
+When `post` says a findings COMMENT requires `--reconcile`, add that flag to
+the step 6 `submit` command only if this pass has a new reader-facing finding.
+The submit boundary requires the exact dismissal and standing approval captured
+by `start` to remain live; otherwise it skips and requires a new pass.
 
 A non-zero exit from this commandless check means nothing was decided. Fix the
 error and re-run it. Publish only through `review_preflight.py submit`: it

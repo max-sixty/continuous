@@ -207,10 +207,14 @@ def _start(pr: str) -> int:
     force_full_review = not bool(initial["isDraft"]) and (
         ready_review_event_id is not None
     )
-    compatible_pending = [
+    current_head_pending = [
         review
         for review in review_state.get("pending_reviews", [])
         if review.get("sha") == head_sha
+    ]
+    compatible_pending = [
+        review
+        for review in current_head_pending
         if _compatible_pending_review(
             review,
             is_draft=bool(initial["isDraft"]),
@@ -220,6 +224,28 @@ def _start(pr: str) -> int:
     recovery_pending_review_id = (
         int(compatible_pending[-1]["id"]) if compatible_pending else None
     )
+    standing_dismissal = review_state.get("standing_dismissal")
+    standing_approval_id = review_state.get("standing_approval_id") or None
+    all_pending_ids = sorted(
+        int(review["id"]) for review in review_state.get("pending_reviews", [])
+    )
+    pending_anchor_id = all_pending_ids[0] if all_pending_ids else None
+    if (standing_dismissal and standing_approval_id) or all_pending_ids:
+        operation_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            ":".join(
+                (
+                    repo,
+                    pr,
+                    head_sha,
+                    str((standing_dismissal or {}).get("event_id") or ""),
+                    str(standing_approval_id or ""),
+                    str(pending_anchor_id or ""),
+                )
+            ),
+        ).hex
+    else:
+        operation_id = uuid.uuid4().hex
     force_pushed = bool(review_state.get("force_pushed_since"))
     last_review_sha = str((review_state.get("last_covered") or {}).get("sha") or "")
     incremental_path: str | None = None
@@ -252,11 +278,12 @@ def _start(pr: str) -> int:
         "last_review_sha": last_review_sha,
         "force_pushed_since": force_pushed,
         "incremental_path": incremental_path,
-        "standing_approval_id": review_state.get("standing_approval_id") or None,
-        "standing_dismissal": review_state.get("standing_dismissal"),
+        "standing_approval_id": standing_approval_id,
+        "standing_dismissal": standing_dismissal,
+        "pending_review_ids": [int(review["id"]) for review in current_head_pending],
         "ready_review_event_id": ready_review_event_id,
         "recovery_pending_review_id": recovery_pending_review_id,
-        "operation_id": uuid.uuid4().hex,
+        "operation_id": operation_id,
     }
     if not _emit_json(context):
         return 1
@@ -265,9 +292,11 @@ def _start(pr: str) -> int:
         {
             "operation_id": context["operation_id"],
             "review_mode": "draft" if bool(initial["isDraft"]) else "full",
-            "standing_dismissal_event_id": (
-                (review_state.get("standing_dismissal") or {}).get("event_id")
-            ),
+            "standing_dismissal_event_id": ((standing_dismissal or {}).get("event_id")),
+            "standing_approval_id": standing_approval_id,
+            "current_head_pending_review_ids": [
+                int(review["id"]) for review in current_head_pending
+            ],
             "ready_review_event_id": ready_review_event_id,
             "recovery_pending_review_id": recovery_pending_review_id,
             "pending_review_ids": [
@@ -299,12 +328,30 @@ def _captured_readiness_is_outstanding(review_state: dict[str, Any]) -> bool:
     )
 
 
+def _captured_pending_is_live(review_state: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    captured = context.get("current_head_pending_review_ids")
+    if not isinstance(captured, list):
+        return False
+    live_ids = {review.get("id") for review in review_state.get("pending_reviews", [])}
+    return any(review_id in live_ids for review_id in captured)
+
+
+def _captured_pending_records_are_live(review_state: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    captured = context.get("pending_review_ids")
+    if not isinstance(captured, list):
+        return False
+    live_ids = {review.get("id") for review in review_state.get("pending_reviews", [])}
+    return any(review_id in live_ids for review_id in captured)
+
+
 def _publication_snapshot(
     pr: str,
     *,
     allow_retarget: bool,
     allow_covered: bool = False,
-    allow_approval_reconciliation: bool = False,
+    allow_reconciliation: bool = False,
 ) -> tuple[int, dict[str, Any] | None]:
     repo = github_cli.repository()
     pin_file = _pin_path()
@@ -380,11 +427,17 @@ def _publication_snapshot(
     at_head = review_state.get("at_head")
     readiness_outstanding = _captured_readiness_is_outstanding(review_state)
     approval_reconciliation = bool(
-        allow_approval_reconciliation
+        allow_reconciliation
         and review_state.get("standing_dismissal")
         and review_state.get("standing_approval_id")
     )
-    if at_head is None or readiness_outstanding or approval_reconciliation:
+    pending_recovery = _captured_pending_is_live(review_state)
+    if (
+        at_head is None
+        or readiness_outstanding
+        or approval_reconciliation
+        or pending_recovery
+    ):
         already = ""
     else:
         already = f"already carries a {at_head['state']} review {at_head['id']}"
@@ -418,7 +471,7 @@ def _post(args: list[str]) -> int:
         print(f"usage: {sys.argv[0]} post <pr-number>", file=sys.stderr)
         return 1
     status, snapshot = _publication_snapshot(
-        args[0], allow_retarget=True, allow_approval_reconciliation=True
+        args[0], allow_retarget=True, allow_reconciliation=True
     )
     if snapshot is None:
         return status
@@ -430,6 +483,12 @@ def _post(args: list[str]) -> int:
     accepts_candidate = bool(
         snapshot["retargeted"] and context.get("retarget_candidate_head") == reviewed
     )
+    reconciliation_note = (
+        "post: a findings COMMENT requires --reconcile\n"
+        if snapshot["review_state"].get("standing_dismissal")
+        and snapshot["review_state"].get("standing_approval_id")
+        else ""
+    )
     if snapshot["retargeted"] and not accepts_candidate:
         output = (
             f"post: candidate head {reviewed} — read the delta, then run post again\n"
@@ -437,10 +496,14 @@ def _post(args: list[str]) -> int:
         )
         records_candidate = True
     elif snapshot["retargeted"]:
-        output = f"post: accepted reviewed delta through {reviewed}\n"
+        output = (
+            f"post: accepted reviewed delta through {reviewed}\n{reconciliation_note}"
+        )
         records_candidate = False
     else:
-        output = f"post: {reviewed} is still the head you reviewed\n"
+        output = (
+            f"post: {reviewed} is still the head you reviewed\n{reconciliation_note}"
+        )
         records_candidate = False
     try:
         sys.stdout.write(output)
@@ -527,13 +590,20 @@ def _review_id(result: dict[str, Any]) -> int:
     return review_id
 
 
-def _parse_submit(args: list[str]) -> tuple[str, dict[str, str]] | None:
+def _parse_submit(args: list[str]) -> tuple[str, dict[str, str], bool] | None:
     if not args or not args[0].isdigit():
         return None
     options: dict[str, str] = {}
+    reconcile = False
     rest = args[1:]
     while rest:
         option = rest.pop(0)
+        if option == "--reconcile":
+            if reconcile:
+                _error("--reconcile may be passed once")
+                return None
+            reconcile = True
+            continue
         if option not in {"--event", "--body-file", "--payload-file"}:
             _error(f"unexpected argument: {option}")
             return None
@@ -541,7 +611,18 @@ def _parse_submit(args: list[str]) -> tuple[str, dict[str, str]] | None:
             _error(f"{option} needs one value and may be passed once")
             return None
         options[option] = rest.pop(0)
-    return args[0], options
+    return args[0], options, reconcile
+
+
+def _captured_reconciliation_is_live(snapshot: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    live = snapshot["review_state"]
+    dismissal = live.get("standing_dismissal") or {}
+    return bool(
+        context.get("standing_dismissal_event_id") == dismissal.get("event_id")
+        and context.get("standing_approval_id") == live.get("standing_approval_id")
+        and context.get("standing_approval_id")
+    )
 
 
 def _report_api_error(error: subprocess.CalledProcessError) -> int:
@@ -559,9 +640,21 @@ def _discard_pending_reviews(snapshot: dict[str, Any]) -> int:
         review.get("id")
         for review in snapshot["review_state"].get("pending_reviews", [])
     }
-    for review_id in captured:
-        if not isinstance(review_id, int) or review_id <= 0 or review_id not in live:
-            continue
+    # The oldest pending ID anchors the deterministic publication operation.
+    # Delete newer records first so a partial cleanup can reconstruct the same
+    # operation and recognize that its replacement was already submitted.
+    review_ids = sorted(
+        (
+            review_id
+            for review_id in captured
+            if isinstance(review_id, int)
+            and not isinstance(review_id, bool)
+            and review_id > 0
+            and review_id in live
+        ),
+        reverse=True,
+    )
+    for review_id in review_ids:
         try:
             github_cli.run(
                 "api",
@@ -599,11 +692,21 @@ def _complete(args: list[str]) -> int:
             "a bot review was dismissed after this pass started; run start again"
         )
     snapshot["pr"] = pr
-    discard_status = _discard_pending_reviews(snapshot)
-    if discard_status:
-        return discard_status
     marker = _readiness_marker(snapshot)
     body = _body_with_markers("", readiness_marker=marker, complete=True)
+    pending_replacement = _captured_pending_records_are_live(snapshot["review_state"])
+    if pending_replacement:
+        context = _read_context() or {}
+        operation_id = str(context.get("operation_id") or "")
+        try:
+            operation_marker = bot_review_state.review_operation_marker(
+                operation_id, str(context.get("review_mode") or "")
+            )
+        except ValueError as error:
+            return _error(str(error))
+        if operation_id in snapshot["review_state"].get("submitted_operation_ids", []):
+            return _discard_pending_reviews(snapshot)
+        body = f"{body}\n\n{operation_marker}"
     try:
         posted = _review_id(
             _review_api(
@@ -620,6 +723,9 @@ def _complete(args: list[str]) -> int:
         return _report_api_error(error)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         return _error(str(error))
+    discard_status = _discard_pending_reviews(snapshot)
+    if discard_status:
+        return discard_status
     print(f"completed: review {posted}")
     return 0
 
@@ -630,11 +736,12 @@ def _submit(args: list[str]) -> int:
         print(
             f"usage: {sys.argv[0]} submit <pr-number> "
             "(--event APPROVE [--body-file <path>] | "
-            "--event COMMENT (--body-file <path> | --payload-file <path>))",
+            "--event COMMENT (--body-file <path> | --payload-file <path>) "
+            "[--reconcile])",
             file=sys.stderr,
         )
         return 1
-    pr, options = parsed
+    pr, options, reconcile = parsed
     event = options.get("--event")
     body_path = options.get("--body-file")
     payload_path = options.get("--payload-file")
@@ -644,15 +751,19 @@ def _submit(args: list[str]) -> int:
         return _error("--payload-file is exclusive to COMMENT")
     elif event == "COMMENT" and body_path is None and payload_path is None:
         return _error("COMMENT requires --body-file or --payload-file")
+    elif reconcile and event != "COMMENT":
+        return _error("--reconcile is exclusive to COMMENT")
 
     status, snapshot = _publication_snapshot(
         pr,
         allow_retarget=False,
-        allow_approval_reconciliation=event == "APPROVE",
+        allow_reconciliation=event == "APPROVE" or reconcile,
     )
     if snapshot is None:
         return status
     context = _read_context()
+    if reconcile and not _captured_reconciliation_is_live(snapshot):
+        return _skip("review reconciliation state changed; run start again")
     if event == "APPROVE" and (context or {}).get("review_mode") == "draft":
         return _skip("review started while PR was a draft; approval requires a new run")
     if event == "APPROVE" and snapshot["is_draft"]:
@@ -693,43 +804,61 @@ def _submit(args: list[str]) -> int:
         public_body = str(payload.get("body", ""))
         comments = raw_comments
 
+    operation_id = str((context or {}).get("operation_id") or "")
+    review_mode = str((context or {}).get("review_mode") or "")
+    pending_replacement = _captured_pending_records_are_live(snapshot["review_state"])
+    durable_operation = reconcile or pending_replacement
+    operation_marker = ""
+    if durable_operation or comments:
+        try:
+            operation_marker = bot_review_state.review_operation_marker(
+                operation_id, review_mode
+            )
+        except ValueError as error:
+            return _error(str(error))
+    if durable_operation and operation_id in snapshot["review_state"].get(
+        "submitted_operation_ids", []
+    ):
+        discard_status = _discard_pending_reviews(snapshot)
+        if discard_status:
+            return discard_status
+        return _skip("review operation was already published")
+
     final_body = _body_with_markers(
         public_body,
         readiness_marker=marker,
     )
     if comments and not final_body:
         final_body = "See the inline findings."
+    stored_body = (
+        "\n\n".join(part for part in (final_body, operation_marker) if part)
+        if durable_operation
+        else final_body
+    )
     endpoint_payload: dict[str, Any] = {
         "event": event,
         "commit_id": reviewed,
-        "body": final_body,
+        "body": stored_body,
     }
-    discard_status = _discard_pending_reviews(snapshot)
-    if discard_status:
-        return discard_status
-    if not comments:
+    if comments:
+        endpoint_payload["comments"] = comments
+    if not comments or pending_replacement:
         try:
             posted = _review_id(_review_api(repo, pr, payload=endpoint_payload))
         except subprocess.CalledProcessError as error:
             return _report_api_error(error)
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             return _error(str(error))
+        discard_status = _discard_pending_reviews(snapshot)
+        if discard_status:
+            return discard_status
         print(f"posted: review {posted}")
         return 0
 
-    operation_id = str((context or {}).get("operation_id") or "")
-    try:
-        review_mode = str((context or {}).get("review_mode") or "")
-        operation_marker = bot_review_state.review_operation_marker(
-            operation_id, review_mode
-        )
-    except ValueError as error:
-        return _error(str(error))
     endpoint_payload.pop("event")
     endpoint_payload["body"] = "\n\n".join(
         part for part in (final_body, operation_marker) if part
     )
-    endpoint_payload["comments"] = comments
     try:
         posted = _review_id(_review_api(repo, pr, payload=endpoint_payload, quiet=True))
     except subprocess.CalledProcessError as error:
@@ -754,7 +883,12 @@ def _submit(args: list[str]) -> int:
                 "POST",
                 "--input",
                 "-",
-                input=json.dumps({"event": "COMMENT", "body": final_body}),
+                input=json.dumps(
+                    {
+                        "event": "COMMENT",
+                        "body": endpoint_payload["body"] if reconcile else final_body,
+                    }
+                ),
             )
         )
     except subprocess.CalledProcessError as error:

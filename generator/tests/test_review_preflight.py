@@ -344,6 +344,7 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
         "incremental_path": context["incremental_path"],
         "standing_approval_id": None,
         "standing_dismissal": None,
+        "pending_review_ids": [],
         "ready_review_event_id": None,
         "recovery_pending_review_id": None,
         "operation_id": context["operation_id"],
@@ -353,6 +354,8 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
         "operation_id": context["operation_id"],
         "review_mode": "full",
         "standing_dismissal_event_id": None,
+        "standing_approval_id": None,
+        "current_head_pending_review_ids": [],
         "ready_review_event_id": None,
         "recovery_pending_review_id": None,
         "pending_review_ids": [],
@@ -451,7 +454,9 @@ def test_resolved_dismissal_can_publish_a_fresh_approval_over_prior_findings(
     assert pr.submitted()["event"] == "APPROVE"
 
 
-def test_dismissal_reconciliation_does_not_bypass_comment_dedup(pr: Fixture) -> None:
+def test_dismissal_reconciliation_requires_an_explicit_comment_bypass(
+    pr: Fixture,
+) -> None:
     pr.reviews(
         {**_review(pr.reviewed, "", state="DISMISSED"), "id": 1},
         {
@@ -481,11 +486,89 @@ def test_dismissal_reconciliation_does_not_bypass_comment_dedup(pr: Fixture) -> 
 
     started = pr.start()
     assert started.returncode == 0, started.stderr
+    assert "a findings COMMENT requires --reconcile" in pr.output()
 
     commented = pr.submit("--event", "COMMENT", "--body-file", str(body))
 
     assert commented.returncode == 0, commented.stderr
     assert "already carries a COMMENTED review 2" in commented.stdout
+    assert not (pr.tmp_path / "post-input.json").exists()
+
+    reconciled = pr.submit(
+        "--event", "COMMENT", "--body-file", str(body), "--reconcile"
+    )
+
+    assert reconciled.returncode == 0, reconciled.stderr
+    assert reconciled.stdout == "posted: review 42\n"
+    assert pr.submitted()["event"] == "COMMENT"
+    submitted_body = pr.submitted()["body"]
+    operation_id = json.loads(started.stdout)["operation_id"]
+    assert f"<!-- tend:review-operation:{operation_id}:full -->" in submitted_body
+
+    pr.reviews(
+        {**_review(pr.reviewed, "", state="DISMISSED"), "id": 1},
+        {
+            **_review(pr.reviewed, "Blocking finding."),
+            "id": 2,
+            "submitted_at": "2026-01-01T00:00:01Z",
+        },
+        {**_review(pr.reviewed, "", state="APPROVED"), "id": 3},
+        {
+            **_review(pr.reviewed, submitted_body),
+            "id": 4,
+            "submitted_at": "2026-01-03T00:00:00Z",
+        },
+    )
+    (pr.tmp_path / "post-input.json").unlink()
+    restarted = pr.start()
+    assert restarted.returncode == 0, restarted.stderr
+    assert json.loads(restarted.stdout)["operation_id"] == operation_id
+
+    retried = pr.submit("--event", "COMMENT", "--body-file", str(body), "--reconcile")
+
+    assert retried.returncode == 0, retried.stderr
+    assert retried.stdout == "skip: review operation was already published\n"
+    assert not (pr.tmp_path / "post-input.json").exists()
+
+
+def test_comment_reconciliation_requires_the_conflict_captured_by_start(
+    pr: Fixture,
+) -> None:
+    started = pr.start()
+    assert started.returncode == 0, started.stderr
+    pr.reviews(
+        {**_review(pr.reviewed, "", state="DISMISSED"), "id": 1},
+        {
+            **_review(pr.reviewed, "Blocking finding."),
+            "id": 2,
+            "submitted_at": "2026-01-01T00:00:01Z",
+        },
+        {**_review(pr.reviewed, "", state="APPROVED"), "id": 3},
+    )
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "event": "review_dismissed",
+                "id": 74,
+                "created_at": "2026-01-02T00:00:00Z",
+                "dismissed_review": {
+                    "review_id": 1,
+                    "state": "approved",
+                    "dismissal_message": "The earlier finding still applied.",
+                },
+            }
+        ],
+    )
+    body = pr.tmp_path / "review.md"
+    body.write_text("New finding.")
+
+    commented = pr.submit("--event", "COMMENT", "--body-file", str(body), "--reconcile")
+
+    assert commented.returncode == 0, commented.stderr
+    assert commented.stdout == (
+        "skip: review reconciliation state changed; run start again\n"
+    )
     assert not (pr.tmp_path / "post-input.json").exists()
 
 
@@ -614,6 +697,11 @@ def test_complete_discards_reconciled_private_pending_reviews(pr: Fixture) -> No
     )
     assert pr.start().returncode == 0
 
+    failed = pr.complete(POST_EXIT="22", POST_ERROR="temporary review failure")
+
+    assert failed.returncode == 22
+    assert "/reviews/77 --method DELETE" not in Path(pr.env()["GH_CALLS"]).read_text()
+
     completed = pr.complete()
 
     assert completed.returncode == 0, completed.stderr
@@ -700,8 +788,37 @@ def test_start_selects_only_a_mode_compatible_pending_review(
     result = pr.start()
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["recovery_pending_review_id"] == 77
+    output = json.loads(result.stdout)
+    assert output["pending_review_ids"] == [77, 88]
+    assert output["recovery_pending_review_id"] == 77
     assert json.loads(pr.context.read_text())["recovery_pending_review_id"] == 77
+
+
+def test_incompatible_pending_review_still_bypasses_covered_head_shortcuts(
+    pr: Fixture,
+) -> None:
+    pr.set_head(pr.reviewed, is_draft=True)
+    pr.reviews(
+        {
+            **_review(
+                pr.reviewed,
+                "Private full finding.\n\n"
+                "<!-- tend:review-operation:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:full -->",
+            ),
+            "state": "PENDING",
+            "submitted_at": None,
+            "id": 77,
+        },
+        {**_review(pr.reviewed, "Earlier draft finding."), "id": 88},
+    )
+
+    started = pr.start()
+
+    assert started.returncode == 0, started.stderr
+    output = json.loads(started.stdout)
+    assert output["last_review_sha"] == pr.reviewed
+    assert output["pending_review_ids"] == [77]
+    assert output["recovery_pending_review_id"] is None
 
 
 @pytest.mark.parametrize("state", ["CLOSED", "MERGED"])
@@ -1112,7 +1229,7 @@ def test_pending_review_submission_failure_leaves_an_explicit_recovery_target(
     assert "temporary submit failure" in result.stderr
 
 
-def test_submit_discards_a_recovered_pending_review_before_rebuilding(
+def test_submit_discards_a_recovered_pending_review_after_replacement(
     pr: Fixture, tmp_path: Path
 ) -> None:
     pr.reviews(
@@ -1140,14 +1257,75 @@ def test_submit_discards_a_recovered_pending_review_before_rebuilding(
         )
     )
 
+    failed = pr.submit(
+        "--event",
+        "COMMENT",
+        "--payload-file",
+        str(payload),
+        POST_EXIT="22",
+        POST_ERROR="temporary review failure",
+    )
+
+    assert failed.returncode == 22
+    assert "/reviews/77 --method DELETE" not in Path(pr.env()["GH_CALLS"]).read_text()
+
     result = pr.submit("--event", "COMMENT", "--payload-file", str(payload))
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "posted: review 42\n"
+    assert pr.submitted()["event"] == "COMMENT"
     assert "/reviews/77 --method DELETE" in Path(pr.env()["GH_CALLS"]).read_text()
 
 
-def test_finalized_coverage_makes_an_older_pending_review_inert(
+def test_partial_pending_cleanup_reuses_the_published_operation(pr: Fixture) -> None:
+    pending_marker = (
+        "<!-- tend:review-operation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:full -->"
+    )
+    pending = {
+        **_review(pr.reviewed, f"Recovered finding.\n\n{pending_marker}"),
+        "state": "PENDING",
+        "submitted_at": None,
+        "id": 77,
+    }
+    newer_pending = {**pending, "id": 88}
+    pr.reviews(pending, newer_pending)
+    started = pr.start()
+    assert started.returncode == 0, started.stderr
+    operation_id = json.loads(started.stdout)["operation_id"]
+    body = pr.tmp_path / "review.md"
+    body.write_text("Recovered finding.")
+
+    submitted = pr.submit("--event", "COMMENT", "--body-file", str(body))
+
+    assert submitted.returncode == 0, submitted.stderr
+    submitted_body = pr.submitted()["body"]
+    calls = Path(pr.env()["GH_CALLS"]).read_text()
+    assert calls.index("/reviews/88 --method DELETE") < calls.index(
+        "/reviews/77 --method DELETE"
+    )
+
+    # Model a restart after the newer record was deleted but the anchor was not.
+    pr.reviews(
+        pending,
+        {
+            **_review(pr.reviewed, submitted_body),
+            "id": 99,
+            "submitted_at": "2026-01-03T00:00:00Z",
+        },
+    )
+    (pr.tmp_path / "post-input.json").unlink()
+    restarted = pr.start()
+    assert restarted.returncode == 0, restarted.stderr
+    assert json.loads(restarted.stdout)["operation_id"] == operation_id
+
+    retried = pr.submit("--event", "COMMENT", "--body-file", str(body))
+
+    assert retried.returncode == 0, retried.stderr
+    assert retried.stdout == "skip: review operation was already published\n"
+    assert not (pr.tmp_path / "post-input.json").exists()
+
+
+def test_finalized_coverage_does_not_hide_a_private_pending_review(
     pr: Fixture,
 ) -> None:
     pr.reviews(
@@ -1166,8 +1344,28 @@ def test_finalized_coverage_makes_an_older_pending_review_inert(
     started = pr.start()
 
     assert started.returncode == 0, started.stderr
-    assert started.stdout == "skip: PR #7 has no outstanding review demand\n"
+    assert json.loads(started.stdout)["recovery_pending_review_id"] == 77
     assert "/reviews/77 --method DELETE" not in Path(pr.env()["GH_CALLS"]).read_text()
+    body = pr.tmp_path / "review.md"
+    body.write_text("Recovered finding.")
+
+    failed = pr.submit(
+        "--event",
+        "COMMENT",
+        "--body-file",
+        str(body),
+        POST_EXIT="22",
+        POST_ERROR="temporary review failure",
+    )
+
+    assert failed.returncode == 22
+    assert "/reviews/77 --method DELETE" not in Path(pr.env()["GH_CALLS"]).read_text()
+
+    submitted = pr.submit("--event", "COMMENT", "--body-file", str(body))
+
+    assert submitted.returncode == 0, submitted.stderr
+    assert submitted.stdout == "posted: review 42\n"
+    assert "/reviews/77 --method DELETE" in Path(pr.env()["GH_CALLS"]).read_text()
 
 
 def test_a_large_delta_is_preserved_for_chunked_reads(pr: Fixture) -> None:
