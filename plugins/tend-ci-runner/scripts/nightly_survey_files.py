@@ -8,10 +8,12 @@ Both the day and the path pick a bucket by arithmetic, so bucket *N* returns to
 the same file set every cycle. On a repository whose pull requests sit unmerged
 longer than that, a path whose last pass left an open PR comes round again and
 its findings get re-derived on the anniversary. So each path an open pull
-request already changes is reported with the pulls covering it, for the survey
-to read before it reads the file. The path stays in the list: on the repositories
-where this fires the backlog can cover most of the tree, and dropping those paths
-would leave them unsurveyed for as long as it stands.
+request already changes is reported with the pulls covering it and who wrote
+them, for the survey to read before it reads the file. The author decides where
+a new finding goes: onto the covering pull request where the bot wrote it, into
+a pull request of its own where anyone else did. The path stays in the list: on
+the repositories where this fires the backlog can cover most of the tree, and
+dropping those paths would leave them unsurveyed for as long as it stands.
 """
 
 from __future__ import annotations
@@ -36,12 +38,13 @@ def survey_files(files: list[str], *, unix_day: int) -> tuple[int, list[str]]:
     return bucket, selected
 
 
-def covering_pulls(pull_requests: list[dict[str, Any]]) -> dict[str, list[int]]:
+def covering_pulls(pull_requests: list[dict[str, Any]]) -> dict[str, list[str]]:
     """Map each path an open pull request changes to the pulls changing it."""
-    covering: dict[str, list[int]] = {}
+    covering: dict[str, list[str]] = {}
     for pull in pull_requests:
+        label = f"#{pull['number']} {pull['author']['login']}"
         for changed in pull["files"]:
-            covering.setdefault(changed["path"], []).append(pull["number"])
+            covering.setdefault(changed["path"], []).append(label)
     return covering
 
 
@@ -63,7 +66,14 @@ def main(
     )
     if pull_requests is None:
         pull_requests = github_cli.json_call(
-            "pr", "list", "--state", "open", "--limit", "200", "--json", "number,files"
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "200",
+            "--json",
+            "number,files,author",
         )
     covering = covering_pulls(pull_requests)
     covered = [path for path in selected if path in covering]
@@ -75,8 +85,7 @@ def main(
         file=sys.stderr,
     )
     for path in covered:
-        pulls = ", ".join(f"#{number}" for number in covering[path])
-        print(f"# covered {path} ({pulls})", file=sys.stderr)
+        print(f"# covered {path} ({', '.join(covering[path])})", file=sys.stderr)
     return 0
 
 

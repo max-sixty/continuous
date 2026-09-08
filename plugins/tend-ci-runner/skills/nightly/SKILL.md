@@ -129,7 +129,7 @@ uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/nightly_survey_files.py"
 ```
 
-The script prints `# covered <path> (#N)` on stderr for each path an open PR already changes. Read that PR's diff before reading the file: drop the findings it already carries, and raise anything new as a comment on that PR rather than a second PR against the same file. Carry the covered paths into the Step 9 summary.
+The script prints `# covered <path> (#N author)` on stderr for each path an open PR already changes. Read that PR's diff before reading the file and drop the findings it already carries. Raise anything new as a comment on the covering PR only where the bot authored it; on anyone else's PR, open your own per Step 8 rather than commenting on their in-flight work. Carry the covered paths into the Step 9 summary.
 
 Skip files that aren't meaningfully reviewable: lock files (`uv.lock`, `Cargo.lock`, `package-lock.json`), binary assets, vendored dependencies, and generated files (build output, compiled protobuf, auto-generated workflow YAML). When unsure, check the file — a quick glance is cheaper than missing something.
 

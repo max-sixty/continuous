@@ -74,7 +74,7 @@ def test_main_lists_the_tracked_files_in_the_fixed_days_bucket(
     assert captured.err == f"# bucket={bucket}/28 files={len(selected)} covered=0\n"
 
 
-def test_paths_an_open_pr_already_changes_stay_listed_and_are_named(
+def test_covered_paths_stay_listed_and_are_named_with_each_pulls_author(
     survey: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -94,8 +94,16 @@ def test_paths_an_open_pr_already_changes_stay_listed_and_are_named(
             [],
             now=10_000 * 86400,
             pull_requests=[
-                {"number": 7, "files": [{"path": covered}]},
-                {"number": 9, "files": [{"path": covered}, {"path": "untracked.py"}]},
+                {
+                    "number": 7,
+                    "author": {"login": "tend-agent"},
+                    "files": [{"path": covered}],
+                },
+                {
+                    "number": 9,
+                    "author": {"login": "a-human"},
+                    "files": [{"path": covered}, {"path": "untracked.py"}],
+                },
             ],
         )
         == 0
@@ -104,7 +112,8 @@ def test_paths_an_open_pr_already_changes_stay_listed_and_are_named(
     captured = capsys.readouterr()
     assert captured.out.splitlines() == selected
     assert captured.err == (
-        f"# bucket=4/28 files={len(selected)} covered=1\n# covered {covered} (#7, #9)\n"
+        f"# bucket=4/28 files={len(selected)} covered=1\n"
+        f"# covered {covered} (#7 tend-agent, #9 a-human)\n"
     )
 
 
@@ -127,7 +136,8 @@ def test_the_days_list_names_the_open_prs_gh_reports(
     bindir = fake_bin(
         tmp_path,
         gh=GH_PREAMBLE
-        + f"""emit '[{{"number": 12, "files": [{{"path": "{covered}"}}]}}]'\n""",
+        + """emit '[{"number": 12, "author": {"login": "tend-agent"}, """
+        + f""""files": [{{"path": "{covered}"}}]}}]'\n""",
     )
 
     result = subprocess.run(
@@ -140,7 +150,7 @@ def test_the_days_list_names_the_open_prs_gh_reports(
     )
 
     assert sorted(result.stdout.splitlines()) == sorted([covered, kept])
-    assert f"# covered {covered} (#12)" in result.stderr
+    assert f"# covered {covered} (#12 tend-agent)" in result.stderr
     assert calls.read_text().splitlines() == [
-        "pr list --state open --limit 200 --json number,files"
+        "pr list --state open --limit 200 --json number,files,author"
     ]
