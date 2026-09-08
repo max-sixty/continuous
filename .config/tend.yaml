@@ -7,3 +7,8 @@ setup:
 workflows:
   ci-fix:
     watched_workflows: ["ci"]
+  review-runs:
+    harness: codex
+    model: gpt-5.5
+  codex-auth-refresh:
+    enabled: false
