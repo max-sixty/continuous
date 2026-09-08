@@ -157,6 +157,16 @@ def test_disposable_workspace_is_removed_immediately_after_agent_reap(
     assert cleanup["run"].endswith('/dispose_agent_workspace.py"')
 
 
+def test_hosted_srt_probe_launches_only_from_the_action_copy() -> None:
+    script = (REPO_ROOT / "proxy" / "test-setup-sandbox.sh").read_text()
+    invocation = (
+        '"$TEND_TEST_ACTION_PATH/shared/steps/launch_sandbox_runtime.py" || rc=$?'
+    )
+
+    assert script.count(invocation) == 2
+    assert "-s shared/steps/launch_sandbox_runtime.py" not in script
+
+
 def test_npm_installs_use_distinct_empty_config_files() -> None:
     install = (
         REPO_ROOT / "shared" / "steps" / "install-sandbox-runtime.sh"

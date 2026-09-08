@@ -316,7 +316,8 @@ PY
     GITHUB_TOKEN=runner-token-must-not-cross \
     GITHUB_OUTPUT="$github_output" \
     GITHUB_STEP_SUMMARY="$runner_summary" \
-    /usr/bin/python3 -E -s shared/steps/launch_sandbox_runtime.py || rc=$?
+    /usr/bin/python3 -E -s \
+      "$TEND_TEST_ACTION_PATH/shared/steps/launch_sandbox_runtime.py" || rc=$?
   test "$rc" -eq 0
   grep -qx 'sandbox_reaped=true' "$github_output"
   stream_json=$(sed -n 's/^stream_json=//p' "$github_output")
@@ -358,7 +359,8 @@ PY
     OPENAI_API_KEY=runner-openai-key-must-not-cross \
     GITHUB_OUTPUT="$github_output" \
     GITHUB_STEP_SUMMARY="$runner_summary" \
-    /usr/bin/python3 -E -s shared/steps/launch_sandbox_runtime.py || rc=$?
+    /usr/bin/python3 -E -s \
+      "$TEND_TEST_ACTION_PATH/shared/steps/launch_sandbox_runtime.py" || rc=$?
   kill "$probe_pid" 2>/dev/null || true
   wait "$probe_pid" 2>/dev/null || true
   test "$rc" -eq 0
