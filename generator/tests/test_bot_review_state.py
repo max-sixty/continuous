@@ -32,9 +32,10 @@ RUNNING_IN_CI_SKILL = (
 BOT = "tend-bot"
 HEAD = "head000"
 DRAFT_REVIEW_MARKER = "<!-- tend:draft-review -->"
-LEGACY_DRAFT_REVIEW_LINE = (
-    "Reviewing as a draft — flagging anything that looks worth a quick fix. "
-    "Mark ready for a full review."
+READY_REVIEW_MARKER = "<!-- tend:ready-review:101 -->"
+REVIEW_COMPLETE_MARKER = "<!-- tend:review-complete -->"
+REVIEW_OPERATION_MARKER = (
+    "<!-- tend:review-operation:12345678123442348234123456789abc:full -->"
 )
 OLD = "old0000"
 
@@ -48,6 +49,7 @@ case "$*" in
   *"/pulls/"*"/comments"*) emit "$(cat "$INLINE_JSON")" ;;
   *"/issues/"*"/timeline"*) emit "$(cat "$TIMELINE_JSON")" ;;
   *"/dismissals"*)          emit '{}' ;;
+  *"/dispatches --method POST --input -"*) cat > "$DISPATCH_INPUT" ;;
   *"/pulls/"*"/reviews"*)   emit "$(cat "$REVIEWS_JSON")" ;;
   *) exit 1 ;;
 esac
@@ -82,7 +84,7 @@ def env(tmp_path: Path) -> dict[str, str]:
         "GH_CALLS": str(tmp_path / "gh-calls.log"),
         "GITHUB_REPOSITORY": "owner/repo",
         "BOT_LOGIN": BOT,
-        "CHECKED_HEAD_DIR": str(tmp_path),
+        "DISPATCH_INPUT": str(tmp_path / "dispatch-input.json"),
         **paths,
     }
 
@@ -140,6 +142,39 @@ def _rewrite_at(env: dict[str, str], *times: str) -> None:
     )
 
 
+def _ready_at(env: dict[str, str], *events: tuple[int, str]) -> None:
+    _write(
+        env,
+        "TIMELINE_JSON",
+        [
+            {"event": "ready_for_review", "id": event_id, "created_at": at}
+            for event_id, at in events
+        ],
+    )
+
+
+def _dismissed_at(
+    env: dict[str, str],
+    review_id: int,
+    at: str,
+    message: str = "The earlier approval no longer applies.",
+) -> None:
+    timeline = json.loads(Path(env["TIMELINE_JSON"]).read_text())
+    timeline.append(
+        {
+            "event": "review_dismissed",
+            "id": 1000 + review_id,
+            "created_at": at,
+            "dismissed_review": {
+                "review_id": review_id,
+                "state": "approved",
+                "dismissal_message": message,
+            },
+        }
+    )
+    _write(env, "TIMELINE_JSON", timeline)
+
+
 # ---------------------------------------------------------------------------
 # Substantive vs. synthetic reply containers
 # ---------------------------------------------------------------------------
@@ -151,35 +186,44 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["head_sha"] == HEAD
     assert state["bot_login"] == BOT
     assert state["last_substantive"] is None
+    assert state["last_covered"] is None
     assert state["at_head"] is None
-    assert state["orphan_id"] is None
     assert state["fresh_approval_sha"] == ""
     assert state["stale_approval_id"] == ""
     assert state["standing_approval_id"] == ""
+    assert state["standing_dismissal"] is None
     assert state["force_pushed_since"] is False
+    assert state["latest_ready_for_review"] is None
+    assert state["acknowledged_ready_ids"] == []
+    assert state["outstanding_ready_for_review"] is None
+    assert state["pending_reviews"] == []
+    assert state["submitted_operation_ids"] == []
+    assert state["needs_review"] is True
 
 
-def test_prepare_approval_pins_only_an_unapproved_head(env: dict[str, str]) -> None:
-    result = _run_cli(env, "prepare-approval", "7")
+def test_request_dispatches_only_canonical_outstanding_demand(
+    env: dict[str, str],
+) -> None:
+    requested = _run_cli(env, "request", "7")
 
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
-        "head_sha": HEAD,
-        "already_approved": False,
+    assert requested.returncode == 0, requested.stderr
+    assert requested.stdout == "requested: review for PR #7\n"
+    assert json.loads(Path(env["DISPATCH_INPUT"]).read_text()) == {
+        "event_type": "tend-review",
+        "client_payload": {"pr_number": 7},
     }
-    pin = Path(env["CHECKED_HEAD_DIR"]) / "checked-head-7"
-    assert pin.read_text() == f"{HEAD}\n"
 
+    Path(env["DISPATCH_INPUT"]).unlink()
     _write(
         env,
         "REVIEWS_JSON",
-        [_review(1, "2026-01-01T00:00:00Z", state="APPROVED")],
+        [_review(1, "2026-01-01T00:00:00Z", body="Complete review.")],
     )
-    result = _run_cli(env, "prepare-approval", "7")
+    covered = _run_cli(env, "request", "7")
 
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["already_approved"] is True
-    assert not pin.exists()
+    assert covered.returncode == 0, covered.stderr
+    assert covered.stdout == "skip: PR #7 has no outstanding review demand\n"
+    assert not Path(env["DISPATCH_INPUT"]).exists()
 
 
 def test_feedback_combines_conversation_reviews_and_inline_comments(
@@ -279,7 +323,131 @@ def test_feedback_combines_conversation_reviews_and_inline_comments(
                 "body": "inline",
             }
         ],
+        "pending_inline_comments": [],
+        "pending_reviews": [],
     }
+
+
+def test_feedback_separates_comments_from_private_pending_reviews(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                None,
+                state="PENDING",
+                body=f"Unsubmitted narrative.\n\n{REVIEW_OPERATION_MARKER}",
+            )
+        ],
+    )
+    _write(env, "PR_HEAD_JSON", {"comments": [], "reviews": []})
+    _write(
+        env,
+        "INLINE_JSON",
+        [
+            {
+                "path": "incomplete.py",
+                "line": 3,
+                "created_at": "2026-01-01T01:00:00Z",
+                "body": "partial finding",
+            }
+        ],
+    )
+    _write(
+        env,
+        "GRAPHQL_JSON",
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "author": {"login": BOT},
+                                                "path": "incomplete.py",
+                                                "line": 3,
+                                                "createdAt": "2026-01-01T01:00:00Z",
+                                                "body": "partial finding",
+                                                "pullRequestReview": {
+                                                    "author": {"login": BOT},
+                                                    "body": REVIEW_OPERATION_MARKER,
+                                                    "state": "PENDING",
+                                                    "fullDatabaseId": 7,
+                                                },
+                                            },
+                                            {
+                                                "author": {"login": BOT},
+                                                "path": "published.py",
+                                                "line": 4,
+                                                "createdAt": "2026-01-02T01:00:00Z",
+                                                "body": "published finding",
+                                                "pullRequestReview": {
+                                                    "author": {"login": BOT},
+                                                    "body": "Final review.",
+                                                    "state": "COMMENTED",
+                                                    "fullDatabaseId": 8,
+                                                },
+                                            },
+                                            {
+                                                "author": {"login": BOT},
+                                                "path": "human-review.py",
+                                                "line": 5,
+                                                "createdAt": "2026-01-03T01:00:00Z",
+                                                "body": "bot reply",
+                                                "pullRequestReview": {
+                                                    "author": {"login": "human"},
+                                                    "body": REVIEW_OPERATION_MARKER,
+                                                    "state": "COMMENTED",
+                                                    "fullDatabaseId": 9,
+                                                },
+                                            },
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    result = _run_cli(env, "feedback", "7")
+
+    assert result.returncode == 0, result.stderr
+    feedback = json.loads(result.stdout)
+    assert [item["body"] for item in feedback["inline_comments"]] == [
+        "published finding",
+        "bot reply",
+    ]
+    assert feedback["pending_inline_comments"] == [
+        {
+            "review_id": 7,
+            "path": "incomplete.py",
+            "line": 3,
+            "created_at": "2026-01-01T01:00:00Z",
+            "body": "partial finding",
+        }
+    ]
+    assert feedback["pending_reviews"] == [
+        {
+            "review_id": 7,
+            "sha": HEAD,
+            "review_mode": "full",
+            "ready_review_ids": [],
+            "body": "Unsubmitted narrative.",
+        }
+    ]
+    assert (
+        "pullRequestReview { author { login } body state fullDatabaseId }"
+        in Path(env["GH_CALLS"]).read_text()
+    )
 
 
 def test_threads_filters_to_unresolved_threads_started_by_the_bot(
@@ -350,7 +518,6 @@ def test_an_unsubmitted_review_anchors_nothing(env: dict[str, str]) -> None:
 
     assert state["last_substantive"] is None
     assert state["at_head"] is None
-    assert state["orphan_id"] is None
 
 
 def test_a_reply_container_does_not_read_as_a_review(env: dict[str, str]) -> None:
@@ -381,16 +548,9 @@ def test_a_review_with_content_anchors(
     assert _state(env)["at_head"]["id"] == 1, kind
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        f"Feedback on this work in progress.\n\n{DRAFT_REVIEW_MARKER}",
-        LEGACY_DRAFT_REVIEW_LINE,
-    ],
-)
-def test_at_head_identifies_a_tend_draft_review(env: dict[str, str], body: str) -> None:
-    """A ready-for-review pass may replace its earlier draft COMMENT, while
-    ordinary duplicate runs still stop on every other substantive review."""
+def test_a_dismissed_review_no_longer_covers_even_when_its_body_remains(
+    env: dict[str, str],
+) -> None:
     _write(
         env,
         "REVIEWS_JSON",
@@ -398,15 +558,231 @@ def test_at_head_identifies_a_tend_draft_review(env: dict[str, str], body: str) 
             _review(
                 1,
                 "2026-01-01T00:00:00Z",
-                body=body,
+                body="Approval context that GitHub retains after dismissal.",
+                state="DISMISSED",
             )
         ],
     )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z", "Superseded by another PR.")
 
-    assert _state(env)["at_head"]["draft_mode"] is True
+    state = _state(env)
+
+    assert state["last_substantive"] is None
+    assert state["last_covered"] is None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+    assert state["standing_dismissal"] == {
+        "event_id": 1001,
+        "review_id": 1,
+        "sha": HEAD,
+        "review_at": "2026-01-01T00:00:00Z",
+        "at": "2026-01-02T00:00:00Z",
+        "message": "Superseded by another PR.",
+        "prior_state": "approved",
+        "dismissal_commit_id": "",
+    }
 
 
-def test_at_head_does_not_call_an_ordinary_comment_draft_mode(
+@pytest.mark.parametrize(
+    "earlier_body",
+    ["Draft finding.", REVIEW_COMPLETE_MARKER],
+    ids=["comment", "silent-completion"],
+)
+def test_a_later_dismissal_invalidates_earlier_coverage_on_the_same_head(
+    env: dict[str, str], earlier_body: str
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", body=earlier_body),
+            _review(
+                2,
+                "2026-01-02T00:00:00Z",
+                body=READY_REVIEW_MARKER,
+                state="DISMISSED",
+            ),
+        ],
+    )
+    _dismissed_at(env, 2, "2026-01-03T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["last_covered"] is None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+def test_silent_completion_does_not_erase_standing_dismissal_context(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-03T00:00:00Z", body=REVIEW_COMPLETE_MARKER),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z", "Approach was rejected.")
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 2
+    assert state["needs_review"] is False
+    assert state["standing_dismissal"]["message"] == "Approach was rejected."
+
+
+def test_a_later_bot_approval_supersedes_standing_dismissal_context(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-03T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+
+    assert _state(env)["standing_dismissal"] is None
+
+
+def test_native_dismissal_accepts_githubs_documented_string_review_id(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", state="DISMISSED")],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+    timeline = json.loads(Path(env["TIMELINE_JSON"]).read_text())
+    timeline[0]["dismissed_review"]["review_id"] = "1"
+    _write(env, "TIMELINE_JSON", timeline)
+
+    assert _state(env)["standing_dismissal"]["review_id"] == 1
+
+
+def test_same_second_approval_cannot_erase_dismissal_context(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["standing_dismissal"] is not None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+def test_approval_before_a_later_dismissal_cannot_suppress_recovery(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-03T00:00:00Z", "A blocker still applies.")
+
+    state = _state(env)
+
+    assert state["standing_dismissal"] is not None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+def test_same_second_review_submissions_leave_coverage_open_for_retry(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-01T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["standing_dismissal"] is not None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+def test_findings_posted_after_approval_survive_its_later_dismissal(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", body="Blocking finding."),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-03T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 2
+    assert state["needs_review"] is False
+    assert state["standing_dismissal"] is not None
+
+
+def test_findings_cannot_hide_an_approval_that_conflicts_with_a_dismissal(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", body="Blocking finding."),
+            _review(3, "2026-01-03T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-04T00:00:00Z", "The finding still applies.")
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 2
+    assert state["standing_approval_id"] == 3
+    assert state["standing_dismissal"] is not None
+    assert state["needs_review"] is True
+
+
+def test_dismissed_review_without_native_timeline_metadata_fails_closed(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", state="DISMISSED")],
+    )
+
+    result = _run_cli(env, "state", "7")
+
+    assert result.returncode != 0
+    assert "dismissed bot review is missing timeline metadata" in result.stderr
+
+
+def test_at_head_uses_native_review_fields_not_prose_identity(
     env: dict[str, str],
 ) -> None:
     _write(
@@ -415,7 +791,400 @@ def test_at_head_does_not_call_an_ordinary_comment_draft_mode(
         [_review(1, "2026-01-01T00:00:00Z", body="One landing concern.")],
     )
 
-    assert _state(env)["at_head"]["draft_mode"] is False
+    assert _state(env)["at_head"] == {
+        "id": 1,
+        "state": "COMMENTED",
+        "at": "2026-01-01T00:00:00Z",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ready-for-review generations and private review metadata
+# ---------------------------------------------------------------------------
+
+
+def test_only_the_latest_exact_ready_generation_can_be_outstanding(
+    env: dict[str, str],
+) -> None:
+    """Events are state generations, not queued work: an acknowledgment of
+    the newest one semantically supersedes every older generation."""
+    _ready_at(
+        env,
+        (99, "2026-01-02T00:00:00Z"),
+        (101, "2026-01-03T00:00:00Z"),
+        (100, "2026-01-03T00:00:00Z"),
+    )
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-04T00:00:00Z",
+                body="Full pass.\n\n<!-- tend:ready-review:99 -->",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["latest_ready_for_review"] == {
+        "id": 101,
+        "at": "2026-01-03T00:00:00Z",
+    }
+    assert state["acknowledged_ready_ids"] == [99]
+    assert state["outstanding_ready_for_review"] == state["latest_ready_for_review"]
+
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                2,
+                "2026-01-05T00:00:00Z",
+                state="APPROVED",
+                body=READY_REVIEW_MARKER,
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+
+
+def test_submission_time_does_not_acknowledge_a_ready_generation(
+    env: dict[str, str],
+) -> None:
+    """A session can start before ready and post afterward without doing the
+    requested full pass; only the exact event marker proves observation."""
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-03T00:00:00Z", state="APPROVED")],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 1
+    assert state["outstanding_ready_for_review"]["id"] == 101
+
+
+def test_a_pending_review_cannot_acknowledge_readiness(env: dict[str, str]) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                None,
+                state="PENDING",
+                body=(
+                    f"Work-in-progress finding.\n{REVIEW_OPERATION_MARKER}\n"
+                    f"{READY_REVIEW_MARKER}"
+                ),
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"] is None
+    assert state["acknowledged_ready_ids"] == []
+    assert state["outstanding_ready_for_review"]["id"] == 101
+
+
+def test_only_a_finalized_bot_review_acknowledges_readiness(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                "2026-01-03T00:00:00Z",
+                author="human",
+                state="APPROVED",
+                body=READY_REVIEW_MARKER,
+            ),
+            _review(2, None, state="PENDING", body=READY_REVIEW_MARKER),
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == []
+    assert state["at_head"] is None
+    assert state["outstanding_ready_for_review"]["id"] == 101
+
+
+def test_a_readiness_marker_alone_acknowledges_without_becoming_coverage(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(3, "2026-01-03T00:00:00Z", body=READY_REVIEW_MARKER)],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+    assert state["last_substantive"] is None
+    assert state["at_head"] is None
+
+
+def test_a_completion_marker_is_durable_coverage_without_public_feedback(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                4,
+                "2026-01-03T00:00:00Z",
+                body=f"{REVIEW_COMPLETE_MARKER}\n\n{READY_REVIEW_MARKER}",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["last_substantive"] is None
+    assert state["last_covered"]["id"] == 4
+    assert state["at_head"]["id"] == 4
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+    assert state["needs_review"] is False
+
+
+def test_a_finalized_inline_review_acknowledges_readiness(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(5, "2026-01-03T00:00:00Z", body=READY_REVIEW_MARKER)],
+    )
+    _write(env, "INLINE_JSON", [{"pull_request_review_id": 5}])
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 5
+    assert state["acknowledged_ready_ids"] == [101]
+    assert state["outstanding_ready_for_review"] is None
+
+
+def test_pending_inline_review_is_recoverable_but_never_coverage(
+    env: dict[str, str],
+) -> None:
+    _ready_at(env, (101, "2026-01-02T00:00:00Z"))
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                None,
+                state="PENDING",
+                body=f"{REVIEW_OPERATION_MARKER}\n{READY_REVIEW_MARKER}",
+            )
+        ],
+    )
+    _write(env, "INLINE_JSON", [{"pull_request_review_id": 7}])
+
+    state = _state(env)
+
+    assert state["pending_reviews"] == [
+        {
+            "id": 7,
+            "sha": HEAD,
+            "operation_id": "12345678123442348234123456789abc",
+            "draft_mode": False,
+            "ready_review_ids": [101],
+            "body": "",
+        }
+    ]
+    assert state["last_substantive"] is None
+    assert state["at_head"] is None
+    assert state["acknowledged_ready_ids"] == []
+
+
+def test_owned_pending_review_reopens_a_covered_head(env: dict[str, str]) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(6, "2026-01-01T00:00:00Z", body="Earlier finding."),
+            _review(7, None, state="PENDING", body=REVIEW_OPERATION_MARKER),
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 6
+    assert state["pending_reviews"][0]["id"] == 7
+    assert state["needs_review"] is True
+
+
+def test_pending_review_on_another_head_remains_visible_for_cleanup(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                None,
+                state="PENDING",
+                body=REVIEW_OPERATION_MARKER,
+                sha=OLD,
+            )
+        ],
+    )
+    _rewrite_at(env, "2026-01-02T00:00:00Z")
+
+    assert _state(env)["pending_reviews"] == [
+        {
+            "id": 7,
+            "sha": OLD,
+            "operation_id": "12345678123442348234123456789abc",
+            "draft_mode": False,
+            "ready_review_ids": [],
+            "body": "",
+        }
+    ]
+
+
+def test_only_bot_pending_reviews_with_operation_ids_are_recoverable(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                1,
+                None,
+                author="human",
+                state="PENDING",
+                body=REVIEW_OPERATION_MARKER,
+            ),
+            _review(2, None, state="PENDING", body="unowned pending review"),
+            _review(
+                3,
+                "2026-01-01T00:00:00Z",
+                state="APPROVED",
+                body=REVIEW_OPERATION_MARKER,
+            ),
+        ],
+    )
+
+    assert _state(env)["pending_reviews"] == []
+
+
+def test_review_metadata_is_not_public_feedback(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "PR_HEAD_JSON",
+        {
+            "comments": [],
+            "reviews": [
+                {
+                    "author": {"login": BOT},
+                    "state": "PENDING",
+                    "submittedAt": None,
+                    "body": REVIEW_OPERATION_MARKER,
+                },
+                {
+                    "author": {"login": BOT},
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-01-02T00:00:00Z",
+                    "body": (
+                        f"Finding.\n\n{REVIEW_COMPLETE_MARKER}\n"
+                        f"{READY_REVIEW_MARKER}\n{DRAFT_REVIEW_MARKER}"
+                    ),
+                },
+            ],
+        },
+    )
+    _write(
+        env,
+        "GRAPHQL_JSON",
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}},
+    )
+
+    result = _run_cli(env, "feedback", "7")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["previous_reviews"] == [
+        {
+            "state": "COMMENTED",
+            "submitted_at": "2026-01-02T00:00:00Z",
+            "body": "Finding.",
+        }
+    ]
+
+
+def test_malformed_reserved_markers_cannot_become_public_metadata(
+    env: dict[str, str],
+) -> None:
+    """The parser accepts only canonical IDs, while public-body sanitization
+    reserves the whole namespace rather than leaking malformed lookalikes."""
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                "2026-01-03T00:00:00Z",
+                body=(
+                    "Finding.\n\n<!-- tend:ready-review:not-an-id -->\n"
+                    "<!-- tend:review-operation:NOT-A-UUID -->"
+                ),
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 7
+    assert state["acknowledged_ready_ids"] == []
+
+
+def test_metadata_sanitization_cannot_synthesize_a_reserved_marker(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(
+                7,
+                "2026-01-03T00:00:00Z",
+                body="<!-- tend:ready-<!-- tend:ready-review:999 -->review:42 -->",
+            )
+        ],
+    )
+
+    state = _state(env)
+
+    assert state["acknowledged_ready_ids"] == [999]
+    assert state["pending_reviews"] == []
+    assert state["pending_reviews"] == []
 
 
 def test_a_review_owning_a_fresh_inline_comment_anchors(env: dict[str, str]) -> None:
@@ -480,6 +1249,22 @@ def test_a_rewrite_after_the_review_invalidates_its_anchor(env: dict[str, str]) 
     assert state["last_substantive"]["id"] == 1
 
 
+def test_a_rewrite_tied_with_the_review_timestamp_wins_conservatively(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", body="findings")],
+    )
+    _rewrite_at(env, "2026-01-01T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["force_pushed_since"] is True
+    assert state["at_head"] is None
+
+
 def test_a_rewrite_before_the_review_leaves_it_standing(env: dict[str, str]) -> None:
     _write(env, "REVIEWS_JSON", [_review(1, "2026-01-03T00:00:00Z", body="findings")])
     _rewrite_at(env, "2026-01-02T00:00:00Z")
@@ -542,6 +1327,7 @@ def test_a_dismissed_approval_is_not_re_dismissed(env: dict[str, str]) -> None:
     relies on that to keep a later run from dismissing the same review again."""
     _write(env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="DISMISSED")])
     _rewrite_at(env, "2026-01-02T00:00:00Z")
+    _dismissed_at(env, 3, "2026-01-01T12:00:00Z")
 
     assert _state(env)["stale_approval_id"] == ""
 
@@ -573,6 +1359,7 @@ def test_a_dismissed_approval_is_not_standing(env: dict[str, str]) -> None:
     """Dismissing rewrites the record's state, so the next run's findings
     review does not dismiss it a second time."""
     _write(env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="DISMISSED")])
+    _dismissed_at(env, 3, "2026-01-01T12:00:00Z")
 
     assert _state(env)["standing_approval_id"] == ""
 
@@ -676,56 +1463,6 @@ def test_an_approval_whose_commit_was_deleted_has_no_fresh_sha(
 
 
 # ---------------------------------------------------------------------------
-# Orphan bodies from a partially-failed review POST
-# ---------------------------------------------------------------------------
-
-
-def test_a_body_bearing_review_on_the_head_is_the_orphan_to_edit(
-    env: dict[str, str],
-) -> None:
-    """A review POST whose inline comments are rejected still persists the
-    body. Retrying blind duplicates it."""
-    _write(env, "REVIEWS_JSON", [_review(5, "2026-01-01T00:00:00Z", body="findings")])
-
-    assert _state(env)["orphan_id"] == 5
-
-
-def test_a_reply_container_is_never_mistaken_for_an_orphan(
-    env: dict[str, str],
-) -> None:
-    """The body-length test is what separates them, and getting it wrong means
-    the recovery PUT overwrites an unrelated reply."""
-    _write(env, "REVIEWS_JSON", [_review(5, "2026-01-01T00:00:00Z")])
-
-    assert _state(env)["orphan_id"] is None
-
-
-def test_a_pre_rewrite_body_is_never_mistaken_for_an_orphan(
-    env: dict[str, str],
-) -> None:
-    """It reports commit_id == head and passes the body test, so without the
-    rewrite filter the PUT destroys a published review — overwriting its text
-    with this run's findings, over inline comments on code that is gone."""
-    _write(env, "REVIEWS_JSON", [_review(5, "2026-01-01T00:00:00Z", body="published")])
-    _rewrite_at(env, "2026-01-02T00:00:00Z")
-
-    assert _state(env)["orphan_id"] is None
-
-
-def test_the_newest_orphan_wins(env: dict[str, str]) -> None:
-    _write(
-        env,
-        "REVIEWS_JSON",
-        [
-            _review(5, "2026-01-01T00:00:00Z", body="first"),
-            _review(6, "2026-01-02T00:00:00Z", body="second"),
-        ],
-    )
-
-    assert _state(env)["orphan_id"] == 6
-
-
-# ---------------------------------------------------------------------------
 # Shape of the call
 # ---------------------------------------------------------------------------
 
@@ -734,8 +1471,8 @@ def test_the_head_comes_from_head_ref_oid(env: dict[str, str]) -> None:
     """`--json commits` caps at 100 and returns oldest-first, so on a long PR
     `.commits[-1]` is commit #100. Every head-keyed field then matches nothing
     and goes quiet: the pre-post guard stops firing and a re-run posts a second
-    review, the 422 recovery duplicates instead of editing the orphan, and
-    `weekly`'s redundant-approval guard lets approvals pile up on one commit."""
+    review, incomplete recovery cannot match its review, and `weekly`'s
+    redundant-approval guard lets approvals pile up on one commit."""
     assert _state(env)["head_sha"] == HEAD
 
     calls = Path(env["GH_CALLS"]).read_text()
@@ -770,7 +1507,7 @@ def test_review_skill_preserves_the_status_free_queue_contract() -> None:
         "If `force_full_review` is false and the incremental changes are trivial"
         in skill
     )
-    assert f"Include the exact hidden marker `{DRAFT_REVIEW_MARKER}`" in skill
+    assert "submit command uses the captured draft mode itself" in skill
     assert "Open the review body with this exact line" not in skill
     assert "Post at most one review per run." in skill
     assert "exception to one review per run" not in skill
@@ -798,8 +1535,8 @@ def test_review_skill_defines_every_id_its_dismissal_recipes_use() -> None:
     skill = REVIEW_SKILL.read_text()
 
     assert "$REVIEW_ID" not in skill
-    # Both dismissal sites invoke the same command, so there is one mechanism.
-    assert skill.count("dismiss <number>") == 2
+    # Every dismissal recipe invokes the same command, so there is one mechanism.
+    assert skill.count("dismiss <number>") == 3
     assert "reviews/$STANDING/dismissals" not in skill
 
 

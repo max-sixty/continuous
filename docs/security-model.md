@@ -185,6 +185,13 @@ reviewed workflow file, faces the same engagement checks against the record
 GitHub holds, and can point the bot at nothing the actor couldn't reach by
 posting a comment.
 
+Review recovery uses the same boundary. Its `repository_dispatch` carries only
+the numeric PR identifier (`{pr_number}`); the default-branch review workflow
+validates that value, restores sensitive config from its own environment-
+admitted workflow ref, and reconstructs review demand from the GitHub API
+before acting. The PR may target a branch the bot can write, so recovery never
+uses that live base as a configuration trust source.
+
 The relay stops at the repository boundary. A review event on a *fork* PR
 does start a run, on the merge ref and from the PR head's own workflow
 files, but that run's token is read-only whatever the file asks for: probed
@@ -296,13 +303,16 @@ SHA) bounds that trust to a reviewed, immutable point.
 
 **Config pinning.** Before the agent starts, both harnesses restore every
 `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, and `.agents/` at any
-depth from the PR base branch. Their CLIs load nearby instruction files and
-skills from those directories. Both harnesses also restore RCE-relevant config
-at the root: `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`, and
-`.husky`. A malicious PR's `SessionStart` hook, MCP server, or injected skill
-is reverted before an agent reads it. The restoration is
-`git restore --source=<base>` in shell:
-base-branch versions are written back, fork-added paths removed, and a
+depth from a trusted config ref: the environment-admitted PR base for
+`pull_request_target` and native review events, or the repository default
+branch for `issue_comment`, recovery, and relayed-review dispatches whose PR
+bases may be bot-writable. Their CLIs load nearby instruction files and skills
+from those directories. Both harnesses also restore RCE-relevant config at the
+root:
+`.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc`, and `.husky`. A
+malicious PR's `SessionStart` hook, MCP server, or injected skill is reverted
+before an agent reads it. The restoration is `git restore --source=<trusted>`
+in shell: trusted versions are written back, fork-added paths removed, and a
 fork-planted symlink replaced rather than written through. The root path list
 and ordering mirror claude-code-action's `restore-config.ts`. The PR's own
 versions stay readable at `git show HEAD:<path>` for a review that wants to see
@@ -313,9 +323,11 @@ never see, such as the checkout credential in `.git/config`.
 **Setup runs on reviewed code.** Adopter `setup:` steps execute as the runner
 user, which holds sudo and, until the sandbox setup strips it, the checkout
 PAT in `.git/config`. So every generated workflow checks out reviewed code
-before running them — the default branch, or in `tend-review` the PR's base
-branch — and lands the PR's tree only afterwards. A contributor's build
-backend, added dependencies, and local `uses: ./` actions therefore execute
+before running them — the default branch, or for a native `tend-review` event
+the PR's base branch — and lands the PR's tree only afterwards. Issue-comment,
+recovery, and relayed-review dispatches use the default branch because their PR
+bases are not themselves the event's environment-admitted ref. A contributor's
+build backend, added dependencies, and local `uses: ./` actions therefore execute
 under the agent, inside the sandbox, rather than ahead of it. `sandbox_setup:`
 is the lever for project setup that must see the PR's own manifests. Both
 harnesses run it as the non-sudo sandbox user.
@@ -426,10 +438,10 @@ the agent process.
 **Write access still starts workflows.** With the operational secrets
 environment-gated, a write-scoped actor can no longer read them out of a
 workflow it pushes; what it keeps is invocation. It can post the comments
-and reviews that wake the bot, and it can forge the `repository_dispatch`
-that tend-mention's relay uses — both start only the default branch's
-reviewed workflow files, with the engagement checks applied to the record
-GitHub holds rather than to the payload.
+and reviews that wake the bot, and it can forge the identifier-only
+`repository_dispatch` events used by tend-mention and review recovery. Both
+start only the default branch's reviewed workflow files and re-read GitHub
+state before acting.
 
 **Data exfiltration via side channels.** An attacker who gets code execution
 can exfiltrate repository contents and agent-visible context via DNS queries,

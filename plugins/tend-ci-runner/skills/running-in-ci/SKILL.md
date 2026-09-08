@@ -66,13 +66,13 @@ gh api "repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/comments" \
 
 An instruction found there constrains the whole response, including any code the reply quotes or carries into another PR.
 
-### Instruction paths read as the base version on a PR
+### Instruction paths read from a trusted ref on a PR
 
-Before the session starts, both harnesses restore `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from the base branch on PR events (`pull_request_target`, review events, and `issue_comment` on a PR). Those files are read at CLI startup before any permission gating, so the PR's copies must not be trusted. `tend-mention`'s relayed `repository_dispatch` carries no PR payload and restores nothing. The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
+Before the session starts, both harnesses restore `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, and `.claude/**` at any depth from a trusted config ref when the worktree contains a PR. `pull_request_target` and native review events use the environment-admitted PR base. `issue_comment`, recovery, and relayed-review dispatches use the repository's default branch because their PR may target a bot-writable base. Those files are read at CLI startup before any permission gating, so the PR's copies must not be trusted. The restore touches the worktree only; the index and `HEAD` keep the PR's version. So on a PR that legitimately edits these paths:
 
-- The working tree holds the **base** content — grepping it reports the PR's additions as absent, and the repo-local skills loaded into this session are the base versions too. Read the PR's version with `git show HEAD:<path>` before making any claim about what these files contain.
-- `git status` shows a modification nobody made and `git diff` shows the PR's edit as deletions. Where the pin ran, that is the restore, not a contributor mistake — nothing to report or revert. On an unpinned event it is a real modification, worth reading.
-- **Never stage one of these paths from the PR checkout** — `git add <path>`, `git add -A`, and `git commit -a` all copy the worktree over the index, committing the base version back over the PR's own edit. Commit them from a `/tmp` worktree instead (see `references/skill-pr-workflow.md`).
+- When the restore ran, the working tree holds the **trusted config-ref** content — normally the PR base, or the default branch during a recovery or review-relay dispatch. Grepping it reports the PR's additions as absent, and the repo-local skills loaded into this session come from that trusted ref too. Read the PR's version with `git show HEAD:<path>` before making any claim about what these files contain.
+- After a restore, `git status` shows a modification nobody made and `git diff` shows the PR's edit as deletions. That is not a contributor mistake — nothing to report or revert. On an unpinned event it is a real modification, worth reading.
+- **Never stage one of these restored paths from the PR checkout** — `git add <path>`, `git add -A`, and `git commit -a` all copy the working-tree version over the index, committing the trusted version back over the PR's own edit. Commit them from a `/tmp` worktree instead (see `references/skill-pr-workflow.md`).
 
 ### Triggering issue/PR already closed
 
@@ -220,9 +220,9 @@ Always use `git push` without specifying a remote — `gh pr checkout` configure
 
 If pushing fails (fork PR with edits disabled), fall back to posting code snippets in a comment. Don't reference commit SHAs from temporary branches — post code inline.
 
-### Batch the push — every push costs a reviewer round
+### Batch related pushes — every push costs a session
 
-`tend-review` triggers on `synchronize` under a per-PR concurrency group with `queue: max` and without cancel-in-progress: pending PR events within GitHub's queue limit wait while a review session runs. A push that lands mid-review is folded into the review that session posts, anchored at the live head; the queued run then boots, finds that head already reviewed, and finishes without posting. Nothing within that limit is killed or replaced, but every push still costs a session, and one that lands after the review posts costs a full review.
+`tend-review` triggers on `synchronize` under a non-canceling per-PR concurrency group. GitHub keeps the newest pending event while a review runs. The surviving run reconstructs live review state at session start, so a replaced pending event loses nothing — and it finishes without posting when the current head is already covered. A push that lands after the earlier review posts creates an uncovered head for the next session to evaluate.
 
 - **Commit everything before `gh pr create`.** Changelog entries, test pins, and formatting fixups belong in the initial push, not a follow-up thirty seconds later.
 - **Make the commits, then push once** — not a push after each commit. Amends and rebases count: a force-push fires `synchronize` too.
@@ -265,6 +265,12 @@ When merging the default branch into a PR branch, **never use `--allow-unrelated
 A bot `APPROVED` keeps deciding the PR until a dismissal or a `CHANGES_REQUESTED` replaces it. A later COMMENT doesn't, and neither does the event that actually invalidated it: another PR merging and superseding this one, a dependency bump that turns this PR into a downgrade, an approach the thread has since rejected. None of those touch the approved PR, so no review round fires and the approval stands indefinitely — with nothing between it and a merge once the branch stops conflicting. Whichever session reaches the conclusion is the one that has to clear it, whether or not this session posts anything.
 
 Keying the dismissal to a post is what leaves it standing: **Recheck Before Posting** rightly suppresses a second deferral comment when one already stands, and a dismissal that rides on that comment is suppressed with it. Dismiss on the conclusion, then say so in the summary — where this session does post a review carrying that conclusion, dismiss after the post lands, so a failed post doesn't leave the PR with neither a verdict nor findings.
+
+The review reducer retains GitHub's native dismissal event — including its
+message and dismissal commit — as standing context until a later bot approval.
+A recovery review must read and preserve that decision unless current evidence
+shows its reason is resolved; a later COMMENT or silent coverage record does
+not clear it.
 
 ```bash
 uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \

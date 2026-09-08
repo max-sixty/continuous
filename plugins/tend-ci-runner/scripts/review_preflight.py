@@ -2,23 +2,24 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""Bind a review post to the open PR head the session actually reviewed.
+"""Bind review sessions and publication to canonical state for the reviewed PR.
 
-The command prints ``post:`` when the outward action may proceed and ``skip:``
-when it must stop. If a compatible push moved the head, it also writes the
-incremental diff to a persistent temporary file and prints its path. Passing a
-command after ``--`` makes the check the final posting boundary; that form
-never retargets and propagates the command's exit status.
+``start`` records the consistent snapshot a session reviews. ``post`` reports
+whether a narrative review may proceed, and requires a second call to accept a
+queued delta after the agent reads it. ``submit`` is the final boundary for
+GitHub review API writes and never retargets onto a head the session did not
+inspect. ``complete`` durably records a completed pass which deliberately
+publishes no reader-facing review, including any ready-for-review generation it
+observed.
 
-``start`` records one consistent initial snapshot and prepares the prior-review
-incremental, while ``post`` protects the final outward action. Keeping both in
-one review-domain command makes the state passed between them explicit without
-turning unrelated runner helpers into a single application.
+Keeping snapshotting, re-targeting, completion, and submission in one review-
+domain command makes their shared state explicit without turning unrelated
+runner helpers into a single application.
 
 Run this script directly with ``/usr/bin/python3 -E -s``, not through ``uv``.
 The reviewed-head pin advances only after the status reaches stdout; ``uv run``
 reopens a closed stdout for its child and would hide a failed delivery. The
-action's system interpreter is the same isolated standard-library runtime used
+workflow's system interpreter is the same isolated standard-library runtime used
 by its shared step bodies, so this module and its imports stay Python 3.10+
 compatible for supported runner overrides.
 """
@@ -31,6 +32,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -60,15 +62,36 @@ def _pr_view(pr: str, repo: str, fields: str) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
-def _event_forces_review() -> bool:
-    path = os.environ.get("GITHUB_EVENT_PATH")
-    if not path:
-        return False
+def _context_path() -> Path:
+    return Path(os.environ.get("REVIEW_CONTEXT_FILE", "/tmp/tend-review-context.json"))
+
+
+def _pin_path() -> Path:
+    return Path(os.environ.get("REVIEWED_HEAD_FILE", "/tmp/reviewed-head"))
+
+
+def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", text=True
+    )
     try:
-        event = json.loads(Path(path).read_text())
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(value, stream, separators=(",", ":"))
+            stream.write("\n")
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def _read_context() -> dict[str, Any] | None:
+    try:
+        value = json.loads(_context_path().read_text())
     except (OSError, json.JSONDecodeError):
-        return False
-    return isinstance(event, dict) and event.get("action") == "ready_for_review"
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _write_delta(reviewed: str, current_head: str, base_sha: str) -> tuple[int, str]:
@@ -133,7 +156,25 @@ def _emit_json(value: dict[str, Any]) -> bool:
     return True
 
 
+def _compatible_pending_review(
+    review: dict[str, Any],
+    *,
+    is_draft: bool,
+    ready_review_event_id: int | None,
+) -> bool:
+    if is_draft:
+        return review.get("draft_mode") is True
+    if ready_review_event_id is not None:
+        return ready_review_event_id in review.get("ready_review_ids", [])
+    return review.get("draft_mode") is False and not review.get("ready_review_ids")
+
+
 def _start(pr: str) -> int:
+    context_path = _context_path()
+    pin_path = _pin_path()
+    context_path.unlink(missing_ok=True)
+    pin_path.unlink(missing_ok=True)
+
     repo = github_cli.repository()
     initial = _pr_view(pr, repo, "headRefOid,state,baseRefOid,author,isDraft")
     if not initial or not all(
@@ -156,10 +197,57 @@ def _start(pr: str) -> int:
         return _error(
             f"PR #{pr} head moved during the initial snapshot; run start again"
         )
+    if not review_state.get("needs_review"):
+        return _skip(f"PR #{pr} has no outstanding review demand")
 
-    force_full_review = _event_forces_review()
+    outstanding = review_state.get("outstanding_ready_for_review")
+    ready_review_event_id = (
+        int(outstanding["id"]) if isinstance(outstanding, dict) else None
+    )
+    force_full_review = not bool(initial["isDraft"]) and (
+        ready_review_event_id is not None
+    )
+    current_head_pending = [
+        review
+        for review in review_state.get("pending_reviews", [])
+        if review.get("sha") == head_sha
+    ]
+    compatible_pending = [
+        review
+        for review in current_head_pending
+        if _compatible_pending_review(
+            review,
+            is_draft=bool(initial["isDraft"]),
+            ready_review_event_id=ready_review_event_id,
+        )
+    ]
+    recovery_pending_review_id = (
+        int(compatible_pending[-1]["id"]) if compatible_pending else None
+    )
+    standing_dismissal = review_state.get("standing_dismissal")
+    standing_approval_id = review_state.get("standing_approval_id") or None
+    all_pending_ids = sorted(
+        int(review["id"]) for review in review_state.get("pending_reviews", [])
+    )
+    pending_anchor_id = all_pending_ids[0] if all_pending_ids else None
+    if (standing_dismissal and standing_approval_id) or all_pending_ids:
+        operation_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            ":".join(
+                (
+                    repo,
+                    pr,
+                    head_sha,
+                    str((standing_dismissal or {}).get("event_id") or ""),
+                    str(standing_approval_id or ""),
+                    str(pending_anchor_id or ""),
+                )
+            ),
+        ).hex
+    else:
+        operation_id = uuid.uuid4().hex
     force_pushed = bool(review_state.get("force_pushed_since"))
-    last_review_sha = str((review_state.get("last_substantive") or {}).get("sha") or "")
+    last_review_sha = str((review_state.get("last_covered") or {}).get("sha") or "")
     incremental_path: str | None = None
     if (
         last_review_sha
@@ -190,77 +278,110 @@ def _start(pr: str) -> int:
         "last_review_sha": last_review_sha,
         "force_pushed_since": force_pushed,
         "incremental_path": incremental_path,
+        "standing_approval_id": standing_approval_id,
+        "standing_dismissal": standing_dismissal,
+        "pending_review_ids": [int(review["id"]) for review in current_head_pending],
+        "ready_review_event_id": ready_review_event_id,
+        "recovery_pending_review_id": recovery_pending_review_id,
+        "operation_id": operation_id,
     }
     if not _emit_json(context):
         return 1
-    Path(os.environ.get("REVIEWED_HEAD_FILE", "/tmp/reviewed-head")).write_text(
-        f"{head_sha}\n"
+    _write_private_json(
+        context_path,
+        {
+            "operation_id": context["operation_id"],
+            "review_mode": "draft" if bool(initial["isDraft"]) else "full",
+            "standing_dismissal_event_id": ((standing_dismissal or {}).get("event_id")),
+            "standing_approval_id": standing_approval_id,
+            "current_head_pending_review_ids": [
+                int(review["id"]) for review in current_head_pending
+            ],
+            "ready_review_event_id": ready_review_event_id,
+            "recovery_pending_review_id": recovery_pending_review_id,
+            "pending_review_ids": [
+                int(review["id"]) for review in review_state.get("pending_reviews", [])
+            ],
+            "retarget_candidate_head": None,
+        },
     )
+    pin_path.write_text(f"{head_sha}\n")
     return 0
 
 
-def _parse_args(args: list[str]) -> tuple[str, str | None, list[str]] | None:
-    if not args or not args[0].isdigit():
-        return None
-    pr = args[0]
-    rest = args[1:]
-    edit_review: str | None = None
-    if rest[:1] == ["--edit-review"]:
-        if len(rest) < 2 or not rest[1].isdigit():
-            _error("--edit-review needs a numeric review id")
-            return None
-        edit_review = rest[1]
-        rest = rest[2:]
-    if rest[:1] == ["--"]:
-        command = rest[1:]
-        if not command:
-            _error("-- needs a command")
-            return None
-    elif rest:
-        _error(f"unexpected arguments: {' '.join(rest)}")
-        return None
-    else:
-        command = []
-    return pr, edit_review, command
+def _captured_readiness_is_outstanding(review_state: dict[str, Any]) -> bool:
+    context = _read_context()
+    if context is None:
+        return False
+    event_id = context.get("ready_review_event_id")
+    if not isinstance(event_id, int) or event_id <= 0:
+        return False
+    acknowledged = review_state.get("acknowledged_ready_ids", [])
+    if event_id in acknowledged:
+        return False
+    latest = review_state.get("latest_ready_for_review")
+    outstanding = review_state.get("outstanding_ready_for_review")
+    return not (
+        isinstance(latest, dict)
+        and latest.get("id") != event_id
+        and outstanding is None
+    )
 
 
-def _post(args: list[str]) -> int:
-    parsed = _parse_args(args)
-    if parsed is None:
-        if not args or not args[0].isdigit():
-            print(
-                f"usage: {sys.argv[0]} post <pr-number> "
-                "[--edit-review <id>] [-- command ...]",
-                file=sys.stderr,
-            )
-        return 1
-    pr, edit_review, command = parsed
+def _captured_pending_is_live(review_state: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    captured = context.get("current_head_pending_review_ids")
+    if not isinstance(captured, list):
+        return False
+    live_ids = {review.get("id") for review in review_state.get("pending_reviews", [])}
+    return any(review_id in live_ids for review_id in captured)
 
+
+def _captured_pending_records_are_live(review_state: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    captured = context.get("pending_review_ids")
+    if not isinstance(captured, list):
+        return False
+    live_ids = {review.get("id") for review in review_state.get("pending_reviews", [])}
+    return any(review_id in live_ids for review_id in captured)
+
+
+def _publication_snapshot(
+    pr: str,
+    *,
+    allow_retarget: bool,
+    allow_covered: bool = False,
+    allow_reconciliation: bool = False,
+) -> tuple[int, dict[str, Any] | None]:
     repo = github_cli.repository()
-    pin_file = Path(os.environ.get("REVIEWED_HEAD_FILE", "/tmp/reviewed-head"))
+    pin_file = _pin_path()
     try:
         reviewed = pin_file.read_text().strip()
     except OSError:
         reviewed = ""
     if not SHA_RE.fullmatch(reviewed):
-        return _error(f"{pin_file} does not hold a commit sha")
+        return _error(f"{pin_file} does not hold a commit sha"), None
 
-    initial = _pr_view(pr, repo, "headRefOid,state,baseRefOid")
+    initial = _pr_view(pr, repo, "headRefOid,state,baseRefOid,isDraft")
     if not initial or not all(
-        initial.get(key) for key in ("headRefOid", "state", "baseRefOid")
+        initial.get(key) is not None
+        for key in ("headRefOid", "state", "baseRefOid", "isDraft")
     ):
-        return _error(f"could not read PR #{pr}")
+        return _error(f"could not read PR #{pr}"), None
     current_head = str(initial["headRefOid"])
     state = str(initial["state"])
     base_sha = str(initial["baseRefOid"])
     if state != "OPEN":
-        return _skip(f"PR is {state}")
+        return _skip(f"PR is {state}"), None
 
     retargeted = current_head != reviewed
     delta_file: str | None = None
     if retargeted:
-        if command:
-            return _skip(f"HEAD moved to {current_head} before the outward action")
+        if not allow_retarget:
+            return (
+                _skip(f"HEAD moved to {current_head} before the outward action"),
+                None,
+            )
         subprocess.run(
             ["git", "fetch", "--no-tags", "--quiet", "origin", f"refs/pull/{pr}/head"],
             check=False,
@@ -274,9 +395,12 @@ def _post(args: list[str]) -> int:
             check=False,
         )
         if ancestor.returncode == 1:
-            return _skip(
-                f"cannot re-target onto {current_head} — {reviewed} is no longer "
-                "an ancestor; leaving it to the queued review"
+            return (
+                _skip(
+                    f"cannot re-target onto {current_head} — {reviewed} is no longer "
+                    "an ancestor; leaving it to the queued review"
+                ),
+                None,
             )
         if ancestor.returncode:
             print(
@@ -284,66 +408,496 @@ def _post(args: list[str]) -> int:
                 f"{ancestor.returncode}",
                 file=sys.stderr,
             )
-            return ancestor.returncode
+            return ancestor.returncode, None
         status, delta_file = _write_delta(reviewed, current_head, base_sha)
         if status:
-            return status
+            return status, None
         reviewed = current_head
 
     review_state = bot_review_state.fetch_review_state(pr, repo=repo)
     if review_state.get("head_sha") != reviewed:
-        return _skip(
-            "HEAD moved to "
-            f"{review_state.get('head_sha') or 'an unreadable value'} during the preflight"
+        return (
+            _skip(
+                "HEAD moved to "
+                f"{review_state.get('head_sha') or 'an unreadable value'} during the preflight"
+            ),
+            None,
         )
 
     at_head = review_state.get("at_head")
-    if edit_review is not None:
-        editable = (
-            isinstance(at_head, dict)
-            and str(at_head.get("id")) == edit_review
-            and str(review_state.get("orphan_id")) == edit_review
-        )
-        already = (
-            "" if editable else f"cannot edit requested orphan review {edit_review}"
-        )
-    elif at_head is None or (
-        _event_forces_review()
-        and isinstance(at_head, dict)
-        and at_head.get("draft_mode") is True
+    readiness_outstanding = _captured_readiness_is_outstanding(review_state)
+    approval_reconciliation = bool(
+        allow_reconciliation
+        and review_state.get("standing_dismissal")
+        and review_state.get("standing_approval_id")
+    )
+    pending_recovery = _captured_pending_is_live(review_state)
+    if (
+        at_head is None
+        or readiness_outstanding
+        or approval_reconciliation
+        or pending_recovery
     ):
         already = ""
     else:
         already = f"already carries a {at_head['state']} review {at_head['id']}"
-    if already:
-        return _skip(f"{reviewed} {already}")
+    if already and not allow_covered:
+        return _skip(f"{reviewed} {already}"), None
 
-    final = _pr_view(pr, repo, "headRefOid,state")
-    if not final or not all(final.get(key) for key in ("headRefOid", "state")):
-        return _error(f"could not re-read PR #{pr}")
+    final = _pr_view(pr, repo, "headRefOid,state,isDraft")
+    if not final or not all(
+        final.get(key) is not None for key in ("headRefOid", "state", "isDraft")
+    ):
+        return _error(f"could not re-read PR #{pr}"), None
     final_head = str(final["headRefOid"])
     final_state = str(final["state"])
     if final_state != "OPEN":
-        return _skip(f"PR is {final_state}")
+        return _skip(f"PR is {final_state}"), None
     if final_head != reviewed:
-        return _skip(f"HEAD moved to {final_head} during the preflight")
+        return _skip(f"HEAD moved to {final_head} during the preflight"), None
 
-    if retargeted:
+    return 0, {
+        "repo": repo,
+        "reviewed": reviewed,
+        "review_state": review_state,
+        "is_draft": bool(final["isDraft"]),
+        "retargeted": retargeted,
+        "delta_file": delta_file,
+    }
+
+
+def _post(args: list[str]) -> int:
+    if len(args) != 1 or not args[0].isdigit():
+        print(f"usage: {sys.argv[0]} post <pr-number>", file=sys.stderr)
+        return 1
+    status, snapshot = _publication_snapshot(
+        args[0], allow_retarget=True, allow_reconciliation=True
+    )
+    if snapshot is None:
+        return status
+
+    reviewed = str(snapshot["reviewed"])
+    context = _read_context()
+    if context is None:
+        return _error("review context is missing; run start again")
+    accepts_candidate = bool(
+        snapshot["retargeted"] and context.get("retarget_candidate_head") == reviewed
+    )
+    reconciliation_note = (
+        "post: a findings COMMENT requires --reconcile\n"
+        if snapshot["review_state"].get("standing_dismissal")
+        and snapshot["review_state"].get("standing_approval_id")
+        else ""
+    )
+    if snapshot["retargeted"] and not accepts_candidate:
         output = (
-            f"post: re-targeted onto {reviewed} — read the delta before posting\n"
-            f"delta: {delta_file}\n"
+            f"post: candidate head {reviewed} — read the delta, then run post again\n"
+            f"delta: {snapshot['delta_file']}\n"
         )
+        records_candidate = True
+    elif snapshot["retargeted"]:
+        output = (
+            f"post: accepted reviewed delta through {reviewed}\n{reconciliation_note}"
+        )
+        records_candidate = False
     else:
-        output = f"post: {reviewed} is still the head you reviewed\n"
+        output = (
+            f"post: {reviewed} is still the head you reviewed\n{reconciliation_note}"
+        )
+        records_candidate = False
     try:
         sys.stdout.write(output)
         sys.stdout.flush()
     except OSError:
         return 1
-    if retargeted:
-        pin_file.write_text(f"{reviewed}\n")
-    if command:
-        return subprocess.run(command, check=False).returncode
+    if records_candidate:
+        context["retarget_candidate_head"] = reviewed
+        _write_private_json(_context_path(), context)
+    if accepts_candidate:
+        _pin_path().write_text(f"{reviewed}\n")
+        context["retarget_candidate_head"] = None
+        _write_private_json(_context_path(), context)
+    return 0
+
+
+def _read_body(path: str) -> str | None:
+    try:
+        return Path(path).read_text()
+    except OSError as error:
+        _error(f"could not read review body {path}: {error}")
+        return None
+
+
+def _body_with_markers(
+    body: str, *, readiness_marker: str | None, complete: bool = False
+) -> str:
+    public = bot_review_state.strip_review_metadata(body).rstrip()
+    markers = []
+    if complete:
+        markers.append(bot_review_state.review_complete_marker())
+    if readiness_marker is not None:
+        markers.append(readiness_marker)
+    return "\n\n".join([part for part in (public, *markers) if part])
+
+
+def _readiness_marker(snapshot: dict[str, Any]) -> str | None:
+    context = _read_context()
+    if context is None:
+        return None
+    event_id = context.get("ready_review_event_id")
+    if not isinstance(event_id, int) or event_id <= 0:
+        return None
+    if event_id in snapshot["review_state"].get("acknowledged_ready_ids", []):
+        return None
+    return bot_review_state.ready_review_marker(event_id)
+
+
+def _new_dismissal_since_start(snapshot: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    live = snapshot["review_state"].get("standing_dismissal") or {}
+    return live.get("event_id") != context.get("standing_dismissal_event_id")
+
+
+def _review_api(
+    repo: str,
+    pr: str,
+    *,
+    payload: dict[str, Any],
+    quiet: bool = False,
+) -> dict[str, Any]:
+    endpoint = f"repos/{repo}/pulls/{pr}/reviews"
+    result = github_cli.json_call(
+        "api",
+        endpoint,
+        "--method",
+        "POST",
+        "--input",
+        "-",
+        input=json.dumps(payload),
+        quiet=quiet,
+    )
+    if not isinstance(result, dict):
+        raise TypeError("review API returned a non-object")
+    return result
+
+
+def _review_id(result: dict[str, Any]) -> int:
+    if not isinstance(result, dict):
+        raise TypeError("review API returned a non-object")
+    review_id = result.get("id")
+    if not isinstance(review_id, int) or review_id <= 0:
+        raise ValueError("review API response has no numeric id")
+    return review_id
+
+
+def _parse_submit(args: list[str]) -> tuple[str, dict[str, str], bool] | None:
+    if not args or not args[0].isdigit():
+        return None
+    options: dict[str, str] = {}
+    reconcile = False
+    rest = args[1:]
+    while rest:
+        option = rest.pop(0)
+        if option == "--reconcile":
+            if reconcile:
+                _error("--reconcile may be passed once")
+                return None
+            reconcile = True
+            continue
+        if option not in {"--event", "--body-file", "--payload-file"}:
+            _error(f"unexpected argument: {option}")
+            return None
+        if option in options or not rest:
+            _error(f"{option} needs one value and may be passed once")
+            return None
+        options[option] = rest.pop(0)
+    return args[0], options, reconcile
+
+
+def _captured_reconciliation_is_live(snapshot: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    live = snapshot["review_state"]
+    dismissal = live.get("standing_dismissal") or {}
+    return bool(
+        context.get("standing_dismissal_event_id") == dismissal.get("event_id")
+        and context.get("standing_approval_id") == live.get("standing_approval_id")
+        and context.get("standing_approval_id")
+    )
+
+
+def _report_api_error(error: subprocess.CalledProcessError) -> int:
+    if error.stderr:
+        sys.stderr.write(error.stderr)
+    return github_cli.exit_code(error)
+
+
+def _discard_pending_reviews(snapshot: dict[str, Any]) -> int:
+    context = _read_context() or {}
+    captured = context.get("pending_review_ids")
+    if not isinstance(captured, list):
+        return 0
+    live = {
+        review.get("id")
+        for review in snapshot["review_state"].get("pending_reviews", [])
+    }
+    # The oldest pending ID anchors the deterministic publication operation.
+    # Delete newer records first so a partial cleanup can reconstruct the same
+    # operation and recognize that its replacement was already submitted.
+    review_ids = sorted(
+        (
+            review_id
+            for review_id in captured
+            if isinstance(review_id, int)
+            and not isinstance(review_id, bool)
+            and review_id > 0
+            and review_id in live
+        ),
+        reverse=True,
+    )
+    for review_id in review_ids:
+        try:
+            github_cli.run(
+                "api",
+                f"repos/{snapshot['repo']}/pulls/{snapshot['pr']}/reviews/{review_id}",
+                "--method",
+                "DELETE",
+            )
+        except subprocess.CalledProcessError as error:
+            return _report_api_error(error)
+    return 0
+
+
+def _matching_pending(pr: str, repo: str, *, operation_id: str) -> int | None:
+    state = bot_review_state.fetch_review_state(pr, repo=repo)
+    matches = [
+        int(review["id"])
+        for review in state.get("pending_reviews", [])
+        if review.get("operation_id") == operation_id
+    ]
+    return matches[-1] if matches else None
+
+
+def _complete(args: list[str]) -> int:
+    if len(args) != 1 or not args[0].isdigit():
+        print(f"usage: {sys.argv[0]} complete <pr-number>", file=sys.stderr)
+        return 1
+    pr = args[0]
+    status, snapshot = _publication_snapshot(
+        pr, allow_retarget=False, allow_covered=True
+    )
+    if snapshot is None:
+        return status
+    if _new_dismissal_since_start(snapshot):
+        return _skip(
+            "a bot review was dismissed after this pass started; run start again"
+        )
+    snapshot["pr"] = pr
+    marker = _readiness_marker(snapshot)
+    body = _body_with_markers("", readiness_marker=marker, complete=True)
+    pending_replacement = _captured_pending_records_are_live(snapshot["review_state"])
+    if pending_replacement:
+        context = _read_context() or {}
+        operation_id = str(context.get("operation_id") or "")
+        try:
+            operation_marker = bot_review_state.review_operation_marker(
+                operation_id, str(context.get("review_mode") or "")
+            )
+        except ValueError as error:
+            return _error(str(error))
+        if operation_id in snapshot["review_state"].get("submitted_operation_ids", []):
+            return _discard_pending_reviews(snapshot)
+        body = f"{body}\n\n{operation_marker}"
+    try:
+        posted = _review_id(
+            _review_api(
+                str(snapshot["repo"]),
+                pr,
+                payload={
+                    "event": "COMMENT",
+                    "commit_id": str(snapshot["reviewed"]),
+                    "body": body,
+                },
+            )
+        )
+    except subprocess.CalledProcessError as error:
+        return _report_api_error(error)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        return _error(str(error))
+    discard_status = _discard_pending_reviews(snapshot)
+    if discard_status:
+        return discard_status
+    print(f"completed: review {posted}")
+    return 0
+
+
+def _submit(args: list[str]) -> int:
+    parsed = _parse_submit(args)
+    if parsed is None:
+        print(
+            f"usage: {sys.argv[0]} submit <pr-number> "
+            "(--event APPROVE [--body-file <path>] | "
+            "--event COMMENT (--body-file <path> | --payload-file <path>) "
+            "[--reconcile])",
+            file=sys.stderr,
+        )
+        return 1
+    pr, options, reconcile = parsed
+    event = options.get("--event")
+    body_path = options.get("--body-file")
+    payload_path = options.get("--payload-file")
+    if event not in {"APPROVE", "COMMENT"}:
+        return _error("--event must be APPROVE or COMMENT")
+    elif payload_path is not None and (event != "COMMENT" or body_path is not None):
+        return _error("--payload-file is exclusive to COMMENT")
+    elif event == "COMMENT" and body_path is None and payload_path is None:
+        return _error("COMMENT requires --body-file or --payload-file")
+    elif reconcile and event != "COMMENT":
+        return _error("--reconcile is exclusive to COMMENT")
+
+    status, snapshot = _publication_snapshot(
+        pr,
+        allow_retarget=False,
+        allow_reconciliation=event == "APPROVE" or reconcile,
+    )
+    if snapshot is None:
+        return status
+    context = _read_context()
+    if reconcile and not _captured_reconciliation_is_live(snapshot):
+        return _skip("review reconciliation state changed; run start again")
+    if event == "APPROVE" and (context or {}).get("review_mode") == "draft":
+        return _skip("review started while PR was a draft; approval requires a new run")
+    if event == "APPROVE" and snapshot["is_draft"]:
+        return _skip("PR became a draft before approval")
+    if event == "APPROVE" and _new_dismissal_since_start(snapshot):
+        return _skip(
+            "a bot review was dismissed after this pass started; run start again"
+        )
+    snapshot["pr"] = pr
+
+    marker = _readiness_marker(snapshot)
+    repo = str(snapshot["repo"])
+    reviewed = str(snapshot["reviewed"])
+
+    public_body = ""
+    comments: list[dict[str, Any]] = []
+    if body_path is not None:
+        body = _read_body(body_path)
+        if body is None:
+            return 1
+        public_body = body
+    elif payload_path is not None:
+        try:
+            payload = json.loads(Path(payload_path).read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            return _error(f"could not read review payload {payload_path}: {error}")
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("body", ""), str
+        ):
+            return _error("review payload must be an object with a string body")
+        raw_comments = payload.get("comments")
+        if (
+            not isinstance(raw_comments, list)
+            or not raw_comments
+            or not all(isinstance(comment, dict) for comment in raw_comments)
+        ):
+            return _error("review payload must contain a non-empty comments list")
+        public_body = str(payload.get("body", ""))
+        comments = raw_comments
+
+    operation_id = str((context or {}).get("operation_id") or "")
+    review_mode = str((context or {}).get("review_mode") or "")
+    pending_replacement = _captured_pending_records_are_live(snapshot["review_state"])
+    durable_operation = reconcile or pending_replacement
+    operation_marker = ""
+    if durable_operation or comments:
+        try:
+            operation_marker = bot_review_state.review_operation_marker(
+                operation_id, review_mode
+            )
+        except ValueError as error:
+            return _error(str(error))
+    if durable_operation and operation_id in snapshot["review_state"].get(
+        "submitted_operation_ids", []
+    ):
+        discard_status = _discard_pending_reviews(snapshot)
+        if discard_status:
+            return discard_status
+        return _skip("review operation was already published")
+
+    final_body = _body_with_markers(
+        public_body,
+        readiness_marker=marker,
+    )
+    if comments and not final_body:
+        final_body = "See the inline findings."
+    stored_body = (
+        "\n\n".join(part for part in (final_body, operation_marker) if part)
+        if durable_operation
+        else final_body
+    )
+    endpoint_payload: dict[str, Any] = {
+        "event": event,
+        "commit_id": reviewed,
+        "body": stored_body,
+    }
+    if comments:
+        endpoint_payload["comments"] = comments
+    if not comments or pending_replacement:
+        try:
+            posted = _review_id(_review_api(repo, pr, payload=endpoint_payload))
+        except subprocess.CalledProcessError as error:
+            return _report_api_error(error)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            return _error(str(error))
+        discard_status = _discard_pending_reviews(snapshot)
+        if discard_status:
+            return discard_status
+        print(f"posted: review {posted}")
+        return 0
+
+    endpoint_payload.pop("event")
+    endpoint_payload["body"] = "\n\n".join(
+        part for part in (final_body, operation_marker) if part
+    )
+    try:
+        posted = _review_id(_review_api(repo, pr, payload=endpoint_payload, quiet=True))
+    except subprocess.CalledProcessError as error:
+        try:
+            pending = _matching_pending(pr, repo, operation_id=operation_id)
+        except (ValueError, TypeError, subprocess.CalledProcessError):
+            pending = None
+        if pending is not None:
+            print(f"recover: pending review {pending}")
+        else:
+            print("uncertain: review submission outcome unknown")
+        return _report_api_error(error)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        return _error(str(error))
+
+    try:
+        finalized = _review_id(
+            github_cli.json_call(
+                "api",
+                f"repos/{repo}/pulls/{pr}/reviews/{posted}/events",
+                "--method",
+                "POST",
+                "--input",
+                "-",
+                input=json.dumps(
+                    {
+                        "event": "COMMENT",
+                        "body": endpoint_payload["body"] if reconcile else final_body,
+                    }
+                ),
+            )
+        )
+    except subprocess.CalledProcessError as error:
+        print(f"recover: pending review {posted}")
+        return _report_api_error(error)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        print(f"recover: pending review {posted}")
+        return _error(str(error))
+    print(f"posted: review {finalized}")
     return 0
 
 
@@ -351,11 +905,14 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if len(args) == 2 and args[0] == "start" and args[1].isdigit():
         return _start(args[1])
+    if args[:1] == ["complete"]:
+        return _complete(args[1:])
     if args[:1] == ["post"]:
         return _post(args[1:])
+    if args[:1] == ["submit"]:
+        return _submit(args[1:])
     print(
-        f"usage: {sys.argv[0]} start <pr-number> | "
-        "post <pr-number> [--edit-review <id>] [-- command ...]",
+        f"usage: {sys.argv[0]} start|post|submit|complete <pr-number> ...",
         file=sys.stderr,
     )
     return 1
@@ -366,3 +923,5 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except subprocess.CalledProcessError as error:
         raise SystemExit(github_cli.exit_code(error)) from None
+    except ValueError as error:
+        raise SystemExit(_error(str(error))) from None

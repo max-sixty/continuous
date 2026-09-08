@@ -10,16 +10,16 @@ name: tend-review
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review, reopened]
+  repository_dispatch:
+    types: [tend-review]
 
 jobs:
   review:
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-      # Preserve pending PR events within GitHub's queue limit: a push must not
-      # replace a ready-for-review run. Runs stay serial so outward actions
-      # cannot race. An override setting `cancel-in-progress: true` must set
-      # `queue: null` too ? GitHub rejects the pair as an invalid workflow file.
-      queue: max
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
+      # Runs stay serial so outward actions cannot race. GitHub keeps the newest
+      # pending run; after it acquires the lock, the review session reconstructs
+      # live state instead of depending on the event that happened to survive.
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment:
@@ -98,6 +98,17 @@ jobs:
             warn "::notice title=Tend disabled::The tend config sets enabled: false; skipping this job"
           end
           RUBY
+      - name: Resolve PR number
+        id: pr
+        if: steps.tend_enabled.outputs.enabled == 'true'
+        env:
+          PR: ${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
+        run: |
+          if [[ ! "$PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::review event did not supply a valid PR number"
+            exit 1
+          fi
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
       - name: React with eyes
         if: steps.tend_enabled.outputs.enabled == 'true'
         run: |
@@ -105,12 +116,12 @@ jobs:
             || echo "::warning::could not add the eyes reaction"
         env:
           REPO: ${{ github.repository }}
-          TARGET: issues/${{ github.event.pull_request.number }}
+          TARGET: issues/${{ steps.pr.outputs.number }}
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
 
-      # Two checkouts: `setup:` runs against the base tree, and the PR's own
-      # tree lands after it. Setup executes as the runner user, outside the
-      # containment the harness builds for the contributor's code.
+      # Two checkouts: `setup:` runs against the trusted event tree, and the
+      # PR's own tree lands after it. Setup executes as the runner user,
+      # outside the containment the harness builds for contributor code.
       - uses: actions/checkout@v7
         if: steps.tend_enabled.outputs.enabled == 'true'
         with:
@@ -131,7 +142,7 @@ jobs:
         if: steps.tend_enabled.outputs.enabled == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ steps.pr.outputs.number }}
         run: |
           if gh api "repos/${{ github.repository }}/git/ref/pull/$PR/merge" --silent 2>/dev/null; then
             echo "ref=refs/pull/$PR/merge" >> "$GITHUB_OUTPUT"
@@ -158,7 +169,7 @@ jobs:
           bot_name: test-bot
           model: opus
           prompt: |2
-            /tend-ci-runner:review ${{ github.event.pull_request.number }}
+            /tend-ci-runner:review ${{ steps.pr.outputs.number }}
 
       - name: Restore local setup actions for POST cleanup
         if: |
@@ -173,6 +184,7 @@ jobs:
         if: |
           always()
           && (steps.tend_enabled.outputs.enabled == 'true')
+          && steps.pr.outputs.number != ''
         run: |
           REACTION_ID=$(gh api --paginate \
             "repos/$REPO/$TARGET/reactions?content=eyes&per_page=100" \
@@ -183,6 +195,6 @@ jobs:
           fi
         env:
           REPO: ${{ github.repository }}
-          TARGET: issues/${{ github.event.pull_request.number }}
+          TARGET: issues/${{ steps.pr.outputs.number }}
           BOT_NAME: test-bot
           GITHUB_TOKEN: ${{ secrets.TEND_BOT_TOKEN }}

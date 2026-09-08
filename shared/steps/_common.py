@@ -103,9 +103,10 @@ def gh_paginated(path: str) -> list[Any]:
 
 
 # Where each event keeps the number of the issue or PR it is about.
-# `repository_dispatch` is tend-mention relaying review events through a
-# secretless job that re-posts them, so its PR number arrives in the dispatch
-# payload — and as a form field, hence a string.
+# `repository_dispatch` normally means tend-mention relaying a review event
+# through a secretless job, so its PR number arrives as the form-encoded `pr`
+# field. The review recovery dispatch uses a numeric `pr_number`; see
+# :func:`subject_number`.
 _SUBJECT_NUMBER_KEYS = {
     "pull_request_target": ("pull_request", "number"),
     "pull_request_review": ("pull_request", "number"),
@@ -182,8 +183,12 @@ def subject_number() -> int | None:
     ``workflow_dispatch``, ``workflow_run``) and for a payload whose shape is
     not the one its event promises.
     """
-    keys = _SUBJECT_NUMBER_KEYS.get(os.environ.get("GITHUB_EVENT_NAME", ""))
-    return as_int(dig(event_payload(), *keys)) if keys else None
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    payload = event_payload()
+    if event_name == "repository_dispatch" and payload.get("action") == "tend-review":
+        return as_int(dig(payload, "client_payload", "pr_number"))
+    keys = _SUBJECT_NUMBER_KEYS.get(event_name)
+    return as_int(dig(payload, *keys)) if keys else None
 
 
 def subject_sha() -> str | None:

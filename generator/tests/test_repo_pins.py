@@ -265,7 +265,7 @@ def test_codex_actions_pin_the_same_cli_version() -> None:
 
 # Every `${{ github.action_path }}/…` reference in the composite actions.
 # Nothing else reads them: the pre-commit actionlint hook is pinned to
-# ^.github/workflows/, so neither action.yaml is linted at all, and no workflow
+# ^.github/workflows/, so action manifests are not linted at all, and no workflow
 # here consumes the actions with `uses: ./` — they pin a released ref, so an
 # edited body first runs in an adopter's job. A path that resolves nowhere fails
 # its step, for every adopter, on the first run after a release.

@@ -2,8 +2,10 @@
 # On a PR, the head checkout contains attacker-controlled files that the CLI
 # reads at startup BEFORE any permission gating — SessionStart hooks, env-var
 # overrides (NODE_OPTIONS, LD_PRELOAD, PATH), MCP servers, apiKeyHelper shell
-# commands. Restore them from the PR base branch, which a maintainer reviewed
-# and merged. Used by both harness actions.
+# commands. Restore them from a trusted configuration ref: the environment-
+# admitted PR base for pull_request_target and review events, or the repository
+# default branch for issue-comment, recovery, and review-relay events. Used by
+# both harness actions.
 #
 # The root list is claude-code-action's restore-config.ts set
 # (src/github/operations/restore-config.ts) minus the instruction files, which
@@ -20,7 +22,7 @@
 # Runs before the credential-isolation handoff: it needs the git credential
 # actions/checkout persisted, which setup_sandbox.py strips.
 #
-# Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME, GITHUB_EVENT_PATH
+# Inputs (env): GITHUB_TOKEN (for gh), GITHUB_EVENT_NAME and GITHUB_EVENT_PATH
 # (from Actions).
 set -eo pipefail
 
@@ -40,7 +42,19 @@ case "$GITHUB_EVENT_NAME" in
       echo "issue_comment on issue (not PR); nothing to restore"
       exit 0
     fi
-    BASE_REF=$(gh api "${PR_URL#https://api.github.com/}" --jq '.base.ref')
+    BASE_REF=$(jq -er \
+      '.repository.default_branch | select(type == "string" and length > 0)' \
+      "$GITHUB_EVENT_PATH")
+    ;;
+  repository_dispatch)
+    ACTION=$(jq -r '.action // empty' "$GITHUB_EVENT_PATH")
+    if [ "$ACTION" != "tend-review" ] && [ "$ACTION" != "tend-mention-review" ]; then
+      echo "Repository dispatch $ACTION does not start on a PR tree; nothing to restore"
+      exit 0
+    fi
+    BASE_REF=$(jq -er \
+      '.repository.default_branch | select(type == "string" and length > 0)' \
+      "$GITHUB_EVENT_PATH")
     ;;
   *)
     echo "Event $GITHUB_EVENT_NAME is not a PR event; nothing to restore"
@@ -49,8 +63,8 @@ case "$GITHUB_EVENT_NAME" in
 esac
 
 if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
-  echo "::warning::Could not determine base ref; skipping config restoration"
-  exit 0
+  echo "::error::Could not determine trusted PR configuration ref"
+  exit 1
 fi
 
 # `--no-recurse-submodules` keeps an attacker-controlled .gitmodules from

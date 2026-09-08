@@ -102,8 +102,19 @@ def test_review_runs_pins_current_state_recovery() -> None:
     assert "complete **Reconcile live work** below, then exit" in skill
     assert "Do not replay historical workflow runs" in skill
     assert "an open issue with no bot response to the latest human activity" in skill
-    assert "whose live head has no bot review" in skill
+    assert "open PR with outstanding review demand" in skill
     assert "failing default-branch CI with no bot fix in progress" in skill
+
+
+def test_recovery_skills_dispatch_reviews_through_the_serialized_workflow() -> None:
+    callers = [
+        _read("plugins", "tend-ci-runner", "skills", name, "SKILL.md")
+        for name in ("notifications", "review-runs")
+    ]
+
+    for skill in callers:
+        assert 'bot_review_state.py" request "$NUMBER"' in skill
+        assert "/tend-ci-runner:review" not in skill
 
 
 def test_outage_tracker_title_stays_in_sync() -> None:
@@ -143,9 +154,8 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     review pins the commit it read: unpinned, GitHub anchors it at whatever is
     live when the POST lands, so the review claims code the session never saw.
 
-    The sha reaches the POST through a file because it cannot reach it any
-    other way — the agent composes the body between reading the head and
-    posting, and shell state does not survive a tool call.
+    The sha reaches the POST through a private pin because the agent composes
+    the body between reading the head and posting.
     """
     skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
     preflight = _read("plugins", "tend-ci-runner", "scripts", "review_preflight.py")
@@ -158,25 +168,25 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
         'Path(os.environ.get("REVIEWED_HEAD_FILE", "/tmp/reviewed-head"))' in preflight
     )
     assert '"REVIEWED_HEAD_FILE", "/tmp/reviewed-head"' in preflight
-    # Read back by both posting recipes, and read *before* the POST: inlined as
-    # `$(cat ...)` a missing file substitutes the empty string and the request
-    # still goes out, which is the unpinned review the pin exists to prevent.
-    assert skill.count("REVIEWED=$(cat /tmp/reviewed-head) || exit 0") == 2
-    assert '-f commit_id="$REVIEWED"' in skill
-    assert '--arg sha "$REVIEWED"' in skill
-    assert skill.count('review_preflight.py" post <number> --') == 3
+    # The script, rather than prose recipes, owns the final state check, pin,
+    # metadata, and API request. Arbitrary commands cannot bypass that contract.
+    assert '"commit_id": reviewed' in preflight
+    assert "review_preflight.py submit" in skill
+    assert skill.count("submit <number>") == 2
+    assert "post <number> --" not in skill
     direct_launches = re.findall(
         r"/usr/bin/python3 -E -s\s+(?:\\\n\s*)?"
         r'"\$\{CLAUDE_PLUGIN_ROOT\}/scripts/review_preflight\.py"',
         skill,
     )
-    assert len(direct_launches) == 6
+    assert len(direct_launches) == 5
     assert (
         'uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/review_preflight.py"'
         not in skill
     )
-    assert "--edit-review <orphan-id> --" in skill
-    assert "shell variables do not\nsurvive between agent tool calls" in skill
+    assert "--edit-review <id>" not in skill
+    assert "recover: pending review <id>" in skill
+    assert "native PENDING review" in skill
 
     # Both logs reach the session in one stream, so the skill names both halves.
     assert "**Read both halves of the delta file as a pair.**" in skill
@@ -190,28 +200,15 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert "Re-compose every `suggestion` block after re-targeting" in skill
 
 
-def test_weekly_approval_pins_the_commit_it_checked() -> None:
-    """Weekly approves dependency PRs, the population `nightly` rewrites on
-    purpose, so an unpinned approval lands on a commit nothing checked. It
-    carries the sha the same way review does, and for the same reason: the
-    body is composed with the Write tool in between."""
+def test_weekly_routes_approval_through_the_serialized_review_workflow() -> None:
+    """Weekly must not grow a second approval state machine."""
     weekly = _read("plugins", "tend-ci-runner", "skills", "weekly", "SKILL.md")
-    state_script = _read("plugins", "tend-ci-runner", "scripts", "bot_review_state.py")
 
-    # Per-PR and cleared up front: step 2 loops over every dependency PR, so a
-    # shared name hands the next PR this one's sha, and the already-approved
-    # branch must not leave a readable file behind.
-    assert "prepare-approval <number>" in weekly
-    assert "pin.unlink(missing_ok=True)" in state_script
-    assert 'pin.write_text(f"{head_sha}\\n")' in state_script
-    assert "CHECKED=$(cat /tmp/checked-head-<number>) || exit 0" in weekly
-    assert '-f commit_id="$CHECKED"' in weekly
-
-    # `gh pr review --approve` cannot pin a commit; both skills post through
-    # the reviews endpoint instead.
-    skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
-    for content in (skill, weekly):
-        assert "gh pr review --approve" not in content
+    assert 'bot_review_state.py"' in weekly
+    assert "request <number>" in weekly
+    assert "prepare-approval" not in weekly
+    assert "event=APPROVE" not in weekly
+    assert "serialized" in weekly
 
 
 def test_review_approval_gates_on_author_stated_readiness() -> None:
@@ -261,6 +258,24 @@ def test_review_second_pass_is_a_submit_precondition() -> None:
     assert "For a review that reached step 5, before submitting" in skill
     assert "Step 1's trivial-increment and dedup close-out paths" in skill
     assert "Run step 5 again over the updated merged tree" in skill
+
+
+def test_pending_reviews_have_a_serialized_daily_backstop() -> None:
+    review = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
+    review_runs = _read(
+        "plugins", "tend-ci-runner", "skills", "review-runs", "SKILL.md"
+    )
+
+    assert "`recovery_pending_review_id`" in review
+    assert "`pending_review_ids`" in review
+    assert "`pending_inline_comments`" in review
+    assert "bypass the already-reviewed and trivial-" in review
+    assert "increment silent exits" in review
+    assert "Do not take an\nordinary prior-feedback silent exit" in review
+    assert "daily `review-runs` live-work reconciliation" in review
+    assert "no finalized bot review" in review_runs
+    assert 'bot_review_state.py" request "$NUMBER"' in review_runs
+    assert "per-PR concurrency group" in review_runs
 
 
 def test_review_reviewers_matrix_covers_consumers() -> None:
@@ -334,11 +349,8 @@ def test_nightly_regen_stages_every_path_init_writes(
 ) -> None:
     """Step 7's `git add -A` pathspecs must cover everything `tend init` writes.
 
-    The recipe names a fixed pathspec while the generator's output set grows —
-    `.github/actionlint.yaml` arrived after the recipe was written, and while
-    the pathspec read `.github/workflows .config` the regeneration PR shipped
-    without it, leaving adopters who lint workflows red and re-creating the
-    file untracked every night.
+    The recipe names a fixed pathspec while the generator's output set can
+    grow, so every generated path must remain covered.
     """
     script = _read("plugins", "tend-ci-runner", "scripts", "nightly_workflow_update.py")
     normalized = re.sub(r"\s+", " ", script)
@@ -367,8 +379,6 @@ def test_nightly_regen_stages_every_path_init_writes(
     written = {
         p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()
     }
-    assert ".github/actionlint.yaml" in written, "review no longer writes the ignore"
-
     uncovered = sorted(
         path
         for path in written

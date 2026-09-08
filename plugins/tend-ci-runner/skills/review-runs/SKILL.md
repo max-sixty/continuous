@@ -87,7 +87,7 @@ The failed-run census and the `tend-outage` issue diagnose availability. Do not 
 As a daily backstop for delayed notifications, retention, edited activity, and repaired subscriptions, inspect the live repository for:
 
 - an open issue with no bot response to the latest human activity;
-- an open PR whose live head has no bot review, or whose latest comment, review, or inline review comment directed at the bot has no response; this includes replies to the bot's review on a fork PR;
+- an open PR with outstanding review demand, including a live head with no finalized bot review, or whose latest comment, review, or inline review comment directed at the bot has no response;
 - failing default-branch CI with no bot fix in progress. A live-state check like the two above it: scoped neither to `ci-fix`'s watched workflows — Dependabot security updates, cron releases and doc builds fail there with no PR attached, and nothing else looks for them — nor to this run's window.
 
   ```bash
@@ -107,8 +107,24 @@ As a daily backstop for delayed notifications, retention, edited activity, and r
 
   Unwindowed on purpose: a failure nobody fixed is still live on the nights after it ran, so anchoring on `/tmp/review-runs-since` would surface each one the night it happened and read as an all-clear afterwards. The page reaches back weeks, so most rows are already fixed and the closure call is what separates them. What it cannot close stays live: Dependabot's security updates have no workflow file, and each run's `name` carries a per-update ID that never recurs, so those rows close only through a fix PR or a tracker. Step 1's census reaches back 49h at most, so skip only the tend rows inside its window — a tend workflow red for longer than that, with no green since, is news here like any other row. Report the scope the claim rests on — "`main` is green" is read later as covering every workflow — naming the workflows checked and how far back the page reached.
 
-Handle live work through the normal triage, review, or CI-fix guidance. Keep
-failed runs in the report as diagnostic evidence.
+Ask the canonical review-state reducer to enqueue outstanding PR work. It
+routes every requested review through `tend-review`'s per-PR concurrency group:
+
+```bash
+set -euo pipefail
+gh api --paginate \
+  "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+  --jq '.[].number' > /tmp/tend-open-pr-numbers
+while read -r NUMBER; do
+  /usr/bin/python3 -E -s \
+    "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" request "$NUMBER"
+done < /tmp/tend-open-pr-numbers
+```
+
+Handle issue and default-branch CI work through the normal triage or CI-fix
+guidance. Answer direct PR conversation that has no review demand without
+submitting a review from this workflow. Keep failed runs in the report as
+diagnostic evidence.
 
 After the exhaustive live scan, find the canonical current outage tracker and
 read every row. The issue body holds the first row and later rows are comments.

@@ -15,7 +15,7 @@ from importlib.metadata import version
 import click
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from jinja2.runtime import Macro
-from ruamel.yaml import YAML, YAMLError
+from ruamel.yaml import YAML
 
 from tend.config import (
     ANTHROPIC_API_KEY_SECRET,
@@ -298,7 +298,7 @@ def generate_review(cfg: Config) -> GeneratedWorkflow:
     wf = cfg.workflows.get("review", WorkflowConfig())
     eff = _effective_cfg(cfg, wf)
     prompt = (wf.prompt or eff.default_prompt("review", "{pr_number}")).replace(
-        "{pr_number}", "${{ github.event.pull_request.number }}"
+        "{pr_number}", "${{ steps.pr.outputs.number }}"
     )
 
     content = _REVIEW_TMPL.render(
@@ -620,118 +620,6 @@ def generate_codex_auth_refresh(cfg: Config) -> GeneratedWorkflow:
     """Weekly single-writer rotation for subscription-backed Codex auth."""
     content = _CODEX_AUTH_REFRESH_TMPL.render(cfg=cfg)
     return GeneratedWorkflow(filename="tend-codex-auth-refresh.yaml", content=content)
-
-
-# ---------------------------------------------------------------------------
-# actionlint config
-# ---------------------------------------------------------------------------
-
-# `concurrency.queue` is valid GitHub Actions syntax that actionlint's schema
-# does not accept, so tend-review.yaml fails every actionlint run an adopter
-# makes — including the required checks on the nightly regen PR, which then
-# cannot merge. Suppressing it at the linter's invocation only covers that one
-# caller (pre-commit's hook args miss MegaLinter's own actionlint, and both
-# miss a direct CLI call); `.github/actionlint.yaml` is read by the binary
-# itself, so it holds however actionlint is run. `paths` needs actionlint
-# >= v1.7.5.
-ACTIONLINT_QUEUE_IGNORE = 'unexpected key "queue" for "concurrency" section'
-
-# Scoped to tend's generated workflow directory and filenames, so the same
-# schema error elsewhere still fails. The leading `**/` lets actionlint match
-# paths handed to it from the repository root or a subdirectory.
-ACTIONLINT_TEND_GLOB = "**/.github/workflows/tend-*.yaml"
-
-
-def actionlint_config(
-    existing: str | None, filename: str = "actionlint.yaml"
-) -> str | None:
-    """Return updated actionlint config content, or None to leave the file be.
-
-    Unlike the workflow files, this one is the adopter's: the ignore is merged
-    into whatever is already there and nothing else is touched. Returns None
-    when the ignore is already present, so the nightly regen produces no diff,
-    and when the file holds a shape this cannot merge into — a config the
-    generator does not understand is left for its owner rather than
-    overwritten.
-    """
-
-    def _bail(what: str) -> None:
-        click.echo(
-            f"Warning: .github/{filename} has {what} — "
-            f"leaving it unchanged. Add this ignore by hand or the generated "
-            f"workflows will fail actionlint:\n"
-            f"  paths:\n"
-            # Quoted because a bare `**` opens a YAML alias — an adopter
-            # pasting an unquoted key gets a scanner error, not a config.
-            f"    '{ACTIONLINT_TEND_GLOB}':\n"
-            f"      ignore:\n"
-            f"        - '{ACTIONLINT_QUEUE_IGNORE}'",
-            err=True,
-        )
-
-    if existing is None or not existing.strip():
-        data = _YAML_BLOCK.load(
-            "# `concurrency.queue` is valid GitHub Actions syntax that\n"
-            "# actionlint's schema rejects. tend writes this ignore so the\n"
-            "# generated workflows lint clean; the glob keeps a real schema\n"
-            "# error in your own workflows failing.\n"
-            "paths:\n"
-        )
-    else:
-        # A file that does not parse is the likeliest form of "a config the
-        # generator does not understand" — conflict markers mid-rebase, a tab
-        # indent. Warn like the shape mismatches below rather than raising out
-        # of `init`, which would leave the workflow files half-regenerated.
-        try:
-            data = _YAML_BLOCK.load(existing)
-        except YAMLError:
-            _bail("YAML the generator cannot parse")
-            return None
-        if data is None:
-            # A comments-only document has no YAML value. Parse it again with
-            # the mapping anchor appended so ruamel keeps the comments when it
-            # writes the new config entry.
-            try:
-                data = _YAML_BLOCK.load(f"{existing.rstrip()}\npaths:\n")
-            except YAMLError:
-                _bail("an unexpected top level")
-                return None
-
-    if not isinstance(data, dict):
-        _bail("an unexpected top level")
-        return None
-
-    paths = data.get("paths")
-    if paths is None:
-        paths = {}
-        data["paths"] = paths
-    if not isinstance(paths, dict):
-        _bail("an unexpected `paths` value")
-        return None
-
-    entry = paths.get(ACTIONLINT_TEND_GLOB)
-    if entry is None:
-        entry = {}
-        paths[ACTIONLINT_TEND_GLOB] = entry
-    if not isinstance(entry, dict):
-        _bail(f"an unexpected `paths` entry for {ACTIONLINT_TEND_GLOB}")
-        return None
-
-    ignores = entry.get("ignore")
-    if ignores is None:
-        ignores = []
-        entry["ignore"] = ignores
-    if not isinstance(ignores, list):
-        _bail(f"an unexpected `ignore` value for {ACTIONLINT_TEND_GLOB}")
-        return None
-
-    if ACTIONLINT_QUEUE_IGNORE in ignores:
-        return None
-    ignores.append(ACTIONLINT_QUEUE_IGNORE)
-
-    buf = io.StringIO()
-    _YAML_BLOCK.dump(data, buf)
-    return buf.getvalue()
 
 
 def generate_all(

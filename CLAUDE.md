@@ -81,9 +81,7 @@ Four pieces:
    the adopter's `.github/workflows/` from `.config/tend.yaml`. Picks the
    right action ref and secret names per `harness`. Generation is
    idempotent — running `init` again overwrites all files from the
-   current config. When the review workflow is generated, it also merges the
-   `concurrency.queue` ignore into the adopter-owned
-   `.github/actionlint.yaml` (see "Concurrency and filtering").
+   current config.
 4. **Config** (`.config/tend.yaml`) — inputs to the generator. Overrides
    from defaults only. `harness: claude | codex` selects the harness
    (default `claude`). A per-workflow `harness:` override (and matching
@@ -283,7 +281,7 @@ Concurrency groups:
 
 | Workflow | Group key | Cancel-in-progress |
 |---|---|---|
-| review | `workflow-PR#` | **no** — killing a session discards a review it can still deliver; `queue: max` holds pending PR events within GitHub's queue limit while it folds the push in and posts |
+| review | `workflow-PR#` | **no** — killing a session discards a review it can still deliver; the newest pending event survives, then reconciles live state after it acquires the lock |
 | mention/relay | none | stateless — secretless job that re-posts review events as a `repository_dispatch` |
 | mention/verify | none | stateless |
 | mention/handle | `workflow-handle-issue#\|PR#` | **no** — each mention runs to completion |
@@ -293,16 +291,16 @@ Concurrency groups:
 | nightly / weekly | none | cron-serialized |
 | codex-auth-refresh (codex only) | `tend-codex-auth-refresh` | **no** — only this workflow may rotate the refresh-token chain, so a second refresher must never race it |
 
-**Fork guard.** Workflows whose triggers can fire from a fork's own
-Actions (`schedule`, `workflow_dispatch`, `workflow_run`, `issues`) carry
-`if: github.repository_owner == '<owner>'` so a fork that's enabled
-Actions but doesn't have the bot/Claude secrets no-ops cleanly. The
-canonical owner is detected at `init` time (via `gh repo view`, walking
-`source.owner.login` if the local repo is itself a fork) and pinned in
-the generated workflow. `tend-review` uses `pull_request_target` (base
-repo only) and `tend-mention`'s review-event paths already filter forks
-via `head.repo.full_name == github.repository`, so neither needs the
-guard.
+**Fork guard.** Jobs reachable from a fork's own Actions admit only the
+canonical repository. Most workflows triggered by `schedule`,
+`workflow_dispatch`, `workflow_run`, `repository_dispatch`, or `issues` carry
+`if: github.repository_owner == '<owner>'`, so a fork with Actions enabled but
+without the bot/Claude secrets no-ops cleanly. The canonical owner is detected
+at `init` time (via `gh repo view`, walking `source.owner.login` if the local
+repo is itself a fork) and pinned in the generated workflow. `tend-review`
+carries the guard because its recovery path uses `repository_dispatch`;
+`tend-mention` filters its review-event paths directly with
+`head.repo.full_name == github.repository`.
 
 **Red branches.** A red default branch fails every push that follows it, each
 on its own commit, so ci-fix keys its group on the branch — a commit-keyed
@@ -312,13 +310,11 @@ commit retried. The watched workflow is in the key too, so a red
 job-level, not workflow-level: most `workflow_run` events are green runs the
 job's `if` skips, and a skipped job never enters the group.
 
-**GHA queue depth.** Review sets `queue: max`, so pending PR events within
-GitHub's queue limit wait and a later push cannot replace `ready_for_review`.
-GitHub accepts the key; actionlint's schema does not, so `init` merges the
-matching ignore into `.github/actionlint.yaml`, which the binary reads for
-every invocation.
-Mention/handle and notifications keep the default one-pending-run queue; when a
-third job arrives while one runs and one queues, the pending job is replaced. For mention,
+**GHA queue depth.** Review, mention/handle, and notifications use the default
+one-pending-run queue: when a third job arrives while one runs and one queues,
+the pending job is replaced. Review reconstructs readiness demand from the PR's
+timeline and checks the bot's review coverage after acquiring the concurrency
+lock, so correctness does not depend on which event survives. For mention,
 mitigation lives in the skill prompts: dedup if the bot already responded to
 the triggering comment; self-heal earlier comments without a bot reply (oldest
 first). The workflow injects the queue-to-run time delta (seconds between event
