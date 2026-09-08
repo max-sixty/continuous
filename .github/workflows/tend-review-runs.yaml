@@ -103,15 +103,13 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
         if: steps.tend_enabled.outputs.enabled == 'true'
 
-      - uses: max-sixty/tend/claude@0.2.0
+      - uses: max-sixty/tend/codex@0.2.0
         if: steps.tend_enabled.outputs.enabled == 'true'
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          memory_gist: "true"
-          memory_gist_id: ${{ secrets.TEND_MEMORY_GIST_ID }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
           bot_name: tend-agent
-          model: opus
+          model: gpt-5.6-sol
           prompt: |2
-            /tend-ci-runner:review-runs
+            $review-runs

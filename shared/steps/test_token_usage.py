@@ -337,6 +337,7 @@ def test_codex_sums_token_counts_across_rollouts(tmp_path: Path) -> None:
     _ndjson(
         sessions / "2026" / "08" / "25" / "rollout-a.jsonl",
         [
+            {"type": "turn_context", "payload": {"model": "gpt-recommended"}},
             {"type": "agent_message", "token_count": {"input_tokens": 100}},
             {
                 "type": "token_count",
@@ -354,7 +355,7 @@ def test_codex_sums_token_counts_across_rollouts(tmp_path: Path) -> None:
     )
 
     usage = token_usage.codex_usage(
-        token_usage.read_all(sorted(sessions.rglob("rollout-*.jsonl"))), "gpt-5"
+        token_usage.read_all(sorted(sessions.rglob("rollout-*.jsonl"))), ""
     )
 
     assert usage == {
@@ -362,7 +363,7 @@ def test_codex_sums_token_counts_across_rollouts(tmp_path: Path) -> None:
         "output_tokens": 37,
         "cached_input_tokens": 90,
         "turns": 2,
-        "model": "gpt-5",
+        "model": "gpt-recommended",
         "cost_usd": 0,
     }
 

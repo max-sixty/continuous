@@ -1989,11 +1989,11 @@ def test_args_render_as_exact_action_arguments(tmp_path: Path, harness: str) -> 
 
 
 def test_codex_default_model(tmp_path: Path) -> None:
-    """Engine = codex without explicit model picks gpt-5.5."""
+    """Generated Codex workflows pin Tend's current Sol-tier default."""
     cfg = Config.load(_minimal_config(tmp_path, "harness: codex"))
-    assert cfg.model == "gpt-5.5"
+    assert cfg.model == "gpt-5.6-sol"
     wf = next(w for w in generate_all(cfg) if w.filename == "tend-triage.yaml")
-    assert "model: gpt-5.5" in wf.content
+    assert "model: gpt-5.6-sol" in wf.content
 
 
 def test_unknown_engine_rejected(tmp_path: Path) -> None:
@@ -2017,7 +2017,6 @@ def test_per_workflow_harness_override_targets_only_named_workflow(
         workflows:
           nightly:
             harness: codex
-            model: gpt-5.5
     """)
     cfg = Config.load(_minimal_config(tmp_path, extra))
     workflows = {wf.filename: wf for wf in generate_all(cfg)}
@@ -2028,6 +2027,7 @@ def test_per_workflow_harness_override_targets_only_named_workflow(
     # The override carries the harness's own secret shape, not the top level's.
     assert "openai_api_key" in nightly.content
     assert "claude_code_oauth_token" not in nightly.content
+    assert "model: gpt-5.6-sol" in nightly.content
 
     # Sibling workflows still use the top-level claude harness.
     review = workflows["tend-review.yaml"]
@@ -2050,14 +2050,13 @@ def test_per_workflow_harness_unknown_rejected(tmp_path: Path) -> None:
 def test_per_workflow_harness_incompatible_model_rejected_codex_target(
     tmp_path: Path,
 ) -> None:
-    """codex (gpt-5.5) → claude per-workflow: top-level model 'gpt-5.5' isn't
-    in claude's allowlist. Fail at config load."""
+    """An explicit per-workflow model must fit its effective harness."""
     extra = dedent("""\
         harness: codex
-        model: gpt-5.5
         workflows:
           nightly:
             harness: claude
+            model: gpt-5.5
     """)
     with pytest.raises(
         click.ClickException,
@@ -2066,27 +2065,37 @@ def test_per_workflow_harness_incompatible_model_rejected_codex_target(
         Config.load(_minimal_config(tmp_path, extra))
 
 
-def test_per_workflow_harness_incompatible_model_rejected_codex_source(
+def test_per_workflow_harness_change_uses_target_default_model(
     tmp_path: Path,
 ) -> None:
-    """Symmetric case: claude (opus) → codex per-workflow without a model
-    override. codex doesn't accept 'opus' but has no allowlist, so the
-    cross-family-source check catches it instead of the target-allowlist
-    check. Reviewer-flagged asymmetry in #612.
-
-    Without this guard, the renderer would emit `model: opus` on a codex
-    action step that codex would reject at runtime."""
+    """A harness change does not carry the other harness's model with it."""
     extra = dedent("""\
         harness: claude
         workflows:
           nightly:
             harness: codex
     """)
-    with pytest.raises(
-        click.ClickException,
-        match=r"workflows.nightly crosses harness families \(claude → codex\)",
-    ):
-        Config.load(_minimal_config(tmp_path, extra))
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    nightly = workflows["tend-nightly.yaml"]
+    assert f"max-sixty/tend/codex@{ACTION_VERSION}" in nightly.content
+    assert "model: gpt-5.6-sol" in nightly.content
+
+
+def test_per_workflow_harness_change_uses_claude_default_model(
+    tmp_path: Path,
+) -> None:
+    extra = dedent("""\
+        harness: codex
+        workflows:
+          nightly:
+            harness: claude
+    """)
+    cfg = Config.load(_minimal_config(tmp_path, extra))
+    workflows = {wf.filename: wf for wf in generate_all(cfg)}
+    nightly = workflows["tend-nightly.yaml"]
+    assert f"max-sixty/tend/claude@{ACTION_VERSION}" in nightly.content
+    assert "model: opus" in nightly.content
 
 
 def test_per_workflow_model_override_unblocks_cross_family(tmp_path: Path) -> None:

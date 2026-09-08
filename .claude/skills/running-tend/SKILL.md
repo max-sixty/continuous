@@ -164,6 +164,13 @@ PR when the change is small enough to make and verify in this run; reserve an
 issue for what needs a maintainer decision or verification CI can't reach,
 linking the release and proposing the change.
 
+Compare the current Codex model catalog with
+`DEFAULT_MODEL_BY_HARNESS["codex"]` and Codex model pins in
+`.config/tend.yaml`. Move each to a newer model only within the same capability
+and price tier (for example, Sol tier to Sol tier), verified from OpenAI's model
+and pricing docs rather than name similarity. A cross-tier change is a product
+decision, not routine maintenance.
+
 ## Weekly: bump pinned versions
 
 Every dependency pin in the repo is in scope — no bot watches this repo, so a

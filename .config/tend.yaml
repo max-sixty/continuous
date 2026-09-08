@@ -7,3 +7,6 @@ setup:
 workflows:
   ci-fix:
     watched_workflows: ["ci"]
+  review-runs:
+    harness: codex
+    model: gpt-5.6-sol

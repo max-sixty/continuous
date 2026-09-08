@@ -487,6 +487,15 @@ def session_usage(
 def codex_usage(events: Iterable[dict[str, Any]], model: str) -> dict[str, Any]:
     """Sum a Codex run's rollout events; no events is the all-zero record."""
     events = list(events)
+    if not model:
+        for event in events:
+            payload = event.get("payload")
+            if event.get("type") != "turn_context" or not isinstance(payload, dict):
+                continue
+            value = payload.get("model")
+            if isinstance(value, str) and value:
+                model = value
+                break
 
     def total(field: str) -> float:
         return sum(number(event.get("token_count"), field) for event in events)

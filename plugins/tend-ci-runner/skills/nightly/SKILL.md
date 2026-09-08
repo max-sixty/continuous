@@ -165,6 +165,18 @@ Otherwise its JSON supplies the title, old and new versions, compare URL, and
 upstream commit subjects. It leaves the prepared worktree and state on disk for
 the shipping command; do not `cd` into it.
 
+Before composing the PR body, inspect `compare_url`'s diff for a new harness
+model default. Update each explicit model pin in the prepared `.config/tend.yaml`
+only when the replacement is a newer model in the same capability and price
+tier, confirmed from the provider's model and pricing docs. Leave the pin
+unchanged when those docs are unreachable or the tier is unclear, and preserve
+cross-tier pins as product choices. After an edit, rerun generation without
+moving this session's cwd:
+
+```bash
+( cd "<worktree from prepare output>" && uv tool run tend@latest init )
+```
+
 Compose the PR body with the Write tool at `/tmp/tend-update-body.md`. Its
 reader is deciding whether to adopt the regenerated workflows, so explain the
 consumer-visible effect of the upgrade rather than inventorying changed files

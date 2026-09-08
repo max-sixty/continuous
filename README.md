@@ -203,8 +203,9 @@ bot_name: my-project-bot
 # Optional runtime switch — every new job skips before checkout or setup
 # enabled: false
 
-# Optional — defaults to "claude"
+# Codex installs pin both values; omit both to use Claude.
 # harness: codex
+# model: gpt-5.6-sol
 # effort: medium   # low | medium | high | xhigh; Claude Opus/Sonnet also support max
 # args: [--max-turns, "40"]   # exact additional CLI arguments
 ```
