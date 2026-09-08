@@ -42,7 +42,7 @@ def covering_pulls(pull_requests: list[dict[str, Any]]) -> dict[str, list[str]]:
     """Map each path an open pull request changes to the pulls changing it."""
     covering: dict[str, list[str]] = {}
     for pull in pull_requests:
-        label = f"#{pull['number']} {pull['author']['login']}"
+        label = f"#{pull['number']} {github_cli.actor_login(pull.get('author'))}"
         for changed in pull["files"]:
             covering.setdefault(changed["path"], []).append(label)
     return covering
