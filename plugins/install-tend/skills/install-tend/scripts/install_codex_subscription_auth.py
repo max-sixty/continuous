@@ -132,7 +132,9 @@ def _verify_secrets(repository: str, required: set[str]) -> None:
     names = {item["name"] for item in json.loads(result.stdout)}
     missing = required - names
     if missing:
-        raise ProvisionError(f"GitHub did not list secret: {', '.join(sorted(missing))}")
+        raise ProvisionError(
+            f"GitHub did not list secret: {', '.join(sorted(missing))}"
+        )
 
 
 def provision(repository: str) -> None:
@@ -177,7 +179,7 @@ def provision(repository: str) -> None:
         )
         _verify_secrets(repository, {FULL_SECRET, CONSUMER_SECRET})
 
-    print(f"Stored {FULL_SECRET} and {CONSUMER_SECRET} for {repository}.")
+    print(f"Installed Codex subscription auth for {repository}.")
 
 
 def store_pat(repository: str, token: str) -> None:
@@ -190,7 +192,7 @@ def store_pat(repository: str, token: str) -> None:
         raise ProvisionError("GitHub CLI `gh` is unavailable")
     _set_secret(repository, REFRESH_PAT_SECRET, token)
     _verify_secrets(repository, {FULL_SECRET, CONSUMER_SECRET, REFRESH_PAT_SECRET})
-    print(f"Stored {REFRESH_PAT_SECRET} for {repository}.")
+    print(f"Installed Codex refresh credential for {repository}.")
 
 
 def main() -> None:
