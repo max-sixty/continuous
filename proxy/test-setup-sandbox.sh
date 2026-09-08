@@ -17,10 +17,13 @@ plant() {
   bin="$HOME/.cargo-install/tend-probe/bin"
   seeded="$HOME/.tend-seeded/bin"
   shared="/opt/tend-sandbox-test-$GITHUB_RUN_ID/bin"
-  TEND_AGENT_WORKSPACE="$RUNNER_TEMP/tend-agent-workspace-1"
+  TEND_AGENT_CONTAINER=$(mktemp -d /tmp/tend-agent-workspace-test.XXXXXX)
+  TEND_AGENT_WORKSPACE="$TEND_AGENT_CONTAINER/checkout"
   TEND_RUNNER_WORKSPACE="$GITHUB_WORKSPACE"
   TEND_TEST_ACTION_PATH="$RUNNER_TEMP/tend-action"
   git clone --no-local --no-hardlinks "$GITHUB_WORKSPACE" "$TEND_AGENT_WORKSPACE"
+  chmod 700 "$TEND_AGENT_WORKSPACE"
+  chmod 711 "$TEND_AGENT_CONTAINER"
   mkdir -p "$TEND_TEST_ACTION_PATH"
   cp -a "$GITHUB_WORKSPACE/proxy" "$GITHUB_WORKSPACE/shared" \
     "$TEND_TEST_ACTION_PATH/"
@@ -64,6 +67,7 @@ plant() {
   ln -s "$bin" "$RUNNER_TEMP/tend-runner-home-alias"
   {
     echo "TEND_AGENT_WORKSPACE=$TEND_AGENT_WORKSPACE"
+    echo "TEND_AGENT_CONTAINER=$TEND_AGENT_CONTAINER"
     echo "TEND_RUNNER_WORKSPACE=$TEND_RUNNER_WORKSPACE"
     echo "TEND_TEST_ACTION_PATH=$TEND_TEST_ACTION_PATH"
   } >> "$GITHUB_ENV"
@@ -488,6 +492,9 @@ cleanup() {
   if [ -n "${SANDBOX:-}" ]; then
     /usr/bin/sudo rm -rf -- "$TEND_AGENT_WORKSPACE"
     /usr/bin/sudo rm -rf -- "$TEND_TEST_ACTION_PATH"
+  fi
+  if [ -n "${TEND_AGENT_CONTAINER:-}" ]; then
+    /usr/bin/sudo rmdir -- "$TEND_AGENT_CONTAINER" 2>/dev/null || true
   fi
   /usr/bin/sudo rm -f /usr/local/bin/tend-probe "$shared/tend-shared" "$shared/uv"
   /usr/bin/sudo rmdir "$shared" "${shared%/bin}" 2>/dev/null || true

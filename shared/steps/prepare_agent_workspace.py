@@ -5,11 +5,12 @@
 """Create the only repository tree the agent is allowed to access.
 
 The Actions checkout is trusted orchestration state.  This step clones the
-same repository into ``RUNNER_TEMP`` without local object sharing, selects the
-event topology with runner/system Git configuration disabled, removes every
-temporary credential, and exports the resulting path as
-``TEND_AGENT_WORKSPACE``.  The runner checkout is never handed to the agent and
-never changes ownership.
+same repository into a dedicated ``/tmp`` container without local object
+sharing, selects the event topology with runner/system Git configuration
+disabled, removes every temporary credential, and exports the resulting path
+as ``TEND_AGENT_WORKSPACE``.  The dedicated parent is traversable but not
+listable by the sandbox UID; ``RUNNER_TEMP`` and the runner checkout are never
+handed to the agent.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
 import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -295,7 +297,6 @@ def clone_workspace(
 def main() -> int:
     try:
         runner_workspace = Path(required("GITHUB_WORKSPACE")).resolve(strict=True)
-        runner_temp = Path(required("RUNNER_TEMP")).resolve(strict=True)
         repository = required("GITHUB_REPOSITORY")
         token = required("GITHUB_TOKEN")
         github_env = Path(required("GITHUB_ENV"))
@@ -305,10 +306,10 @@ def main() -> int:
         )
         if mode not in {"base", "review", "mention"}:
             raise ValueError(f"unsupported checkout mode: {mode}")
-        destination = (
-            runner_temp
-            / f"tend-agent-workspace-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+        workspace_container = Path(
+            tempfile.mkdtemp(prefix="tend-agent-workspace-", dir="/tmp")
         )
+        destination = workspace_container / "checkout"
         if destination == runner_workspace or destination.is_relative_to(
             runner_workspace
         ):
@@ -365,13 +366,20 @@ def main() -> int:
         if "@github.com" in origin or "x-access-token" in origin:
             raise ValueError("agent clone persisted a credential in its origin URL")
 
+        # Keep the checkout private throughout ingress.  Once its temporary
+        # credentials are gone, grant traversal through the dedicated,
+        # otherwise-empty parent.  The later handoff changes ownership of the
+        # checkout itself, not this runner-owned container.
+        destination.chmod(0o700)
+        workspace_container.chmod(0o711)
+
         with github_env.open("a", encoding="utf-8") as stream:
             stream.write(f"TEND_RUNNER_WORKSPACE={runner_workspace}\n")
             stream.write(f"TEND_AGENT_WORKSPACE={destination}\n")
             stream.write(f"TEND_CONFIG_BASE_SHA={config_base_sha}\n")
         log(f"prepared {destination}: {selected}")
         return 0
-    except (OSError, subprocess.CalledProcessError, ValueError) as problem:
+    except (OSError, subprocess.CalledProcessError, TypeError, ValueError) as problem:
         return fail(str(problem))
 
 

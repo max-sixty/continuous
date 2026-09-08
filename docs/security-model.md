@@ -292,11 +292,13 @@ The harness has four states and only four transitions:
 
 Each transition is a bottleneck with one job:
 
-- **Content ingress** creates a full remote clone under `RUNNER_TEMP` with no
-  hardlinks or object-store alternates and with runner/system Git config and
-  attributes disabled. It selects the exact base, PR merge/head, or open-PR
-  head ref, pins startup configuration to the exact chosen base commit, removes
-  the temporary credential, then changes ownership of that clone only.
+- **Content ingress** creates a full remote clone inside a dedicated `/tmp`
+  container with no hardlinks or object-store alternates and with runner/system
+  Git config and attributes disabled. It selects the exact base, PR merge/head,
+  or open-PR head ref, pins startup configuration to the exact chosen base
+  commit, removes the temporary credential, makes the otherwise-empty parent
+  traversable but not listable, then changes ownership of that clone only.
+  `RUNNER_TEMP` remains runner-only.
 - **Launch and lifetime** invokes the adopter's `sandbox_setup:` and the whole
   Claude or Codex turn as one command under the pinned Anthropic Sandbox
   Runtime. Tend supplies absolute `node`, `bwrap`, `socat`, `rg`, and seccomp
