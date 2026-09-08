@@ -66,12 +66,12 @@ have. A ``0`` there would repeat the bug the fallback exists to fix, one field
 down; ``partial`` is what keeps a reconstructed total distinguishable from a
 run that really cost nothing.
 
-Codex has one path: consolidate the sandbox user's rollouts, then sum
-``sessions/**/rollout-*.jsonl``. That schema isn't versioned, so a
-missing field counts as zero — and no rollouts at all is the same computation
-over no events, which yields the all-zero record on its own. Cost stays 0: the
-Codex CLI doesn't surface API list prices and computing them here would mean
-maintaining a price table.
+Codex has one path: consolidate the sandbox user's rollouts, then take the last
+cumulative token count from each ``sessions/**/rollout-*.jsonl``. That schema
+isn't versioned, so a missing field counts as zero — and no rollouts at all is
+the same computation over no events, which yields the all-zero record on its
+own. Cost stays 0: the Codex CLI doesn't surface API list prices and computing
+them here would mean maintaining a price table.
 """
 
 from __future__ import annotations
@@ -298,7 +298,9 @@ def codex_step(model: str) -> tuple[dict[str, Any], Path]:
     if os.environ.get("SANDBOX_REAPED") == "true":
         copy_agent_tree(agent_home / ".codex" / "sessions", logs_dir / "sessions")
     rollouts = sorted((logs_dir / "sessions").rglob("rollout-*.jsonl"))
-    return codex_usage(read_all(rollouts), model), logs_dir
+    return codex_usage(
+        (_common.read_ndjson(path) for path in rollouts), model
+    ), logs_dir
 
 
 def consolidate_logs(logs_dir: Path, runner_temp: Path) -> None:
@@ -484,27 +486,48 @@ def session_usage(
     )
 
 
-def codex_usage(events: Iterable[dict[str, Any]], model: str) -> dict[str, Any]:
-    """Sum a Codex run's rollout events; no events is the all-zero record."""
-    events = list(events)
-    if not model:
-        for event in events:
+def codex_usage(
+    rollouts: Iterable[Iterable[dict[str, Any]]], model: str
+) -> dict[str, Any]:
+    """Account Codex's cumulative usage events across independent rollouts."""
+    final_usage: list[dict[str, Any]] = []
+    turns = 0
+    for rollout in rollouts:
+        last_usage: dict[str, Any] = {}
+        for event in rollout:
             payload = event.get("payload")
-            if event.get("type") != "turn_context" or not isinstance(payload, dict):
+            if not isinstance(payload, dict):
                 continue
-            value = payload.get("model")
-            if isinstance(value, str) and value:
-                model = value
-                break
+            if event.get("type") == "turn_context" and not model:
+                value = payload.get("model")
+                if isinstance(value, str) and value:
+                    model = value
+            if (
+                event.get("type") == "event_msg"
+                and payload.get("type") == "token_count"
+            ):
+                info = payload.get("info")
+                usage = (
+                    info.get("total_token_usage") if isinstance(info, dict) else None
+                )
+                if isinstance(usage, dict):
+                    last_usage = usage
+            if (
+                event.get("type") == "response_item"
+                and payload.get("type") == "message"
+                and payload.get("role") == "assistant"
+            ):
+                turns += 1
+        final_usage.append(last_usage)
 
     def total(field: str) -> float:
-        return sum(number(event.get("token_count"), field) for event in events)
+        return sum(number(usage, field) for usage in final_usage)
 
     return {
         "input_tokens": total("input_tokens"),
         "output_tokens": total("output_tokens"),
         "cached_input_tokens": total("cached_input_tokens"),
-        "turns": sum(1 for event in events if event.get("type") == "agent_message"),
+        "turns": turns,
         "model": model,
         "cost_usd": 0,
     }

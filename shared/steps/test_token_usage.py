@@ -75,6 +75,23 @@ def _assistant(msg_id: str, usage: dict[str, int], *, final: bool) -> dict[str, 
     }
 
 
+def _codex_token_count(**usage: int) -> dict[str, object]:
+    return {
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {"total_token_usage": usage},
+        },
+    }
+
+
+def _codex_message() -> dict[str, object]:
+    return {
+        "type": "response_item",
+        "payload": {"type": "message", "role": "assistant"},
+    }
+
+
 def _ndjson(path: Path, lines: list[dict[str, object]]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(line) + "\n" for line in lines))
@@ -331,31 +348,26 @@ def test_reports_zero_when_the_agent_never_ran(logs_dir: Path) -> None:
     assert usage["partial"] is False
 
 
-def test_codex_sums_token_counts_across_rollouts(tmp_path: Path) -> None:
-    """Codex accounting is the sum over every rollout, turns being its messages."""
-    sessions = tmp_path / "sessions"
-    _ndjson(
-        sessions / "2026" / "08" / "25" / "rollout-a.jsonl",
-        [
-            {"type": "turn_context", "payload": {"model": "gpt-recommended"}},
-            {"type": "agent_message", "token_count": {"input_tokens": 100}},
-            {
-                "type": "token_count",
-                "token_count": {
-                    "input_tokens": 20,
-                    "output_tokens": 30,
-                    "cached_input_tokens": 90,
-                },
-            },
-        ],
-    )
-    _ndjson(
-        sessions / "2026" / "08" / "26" / "rollout-b.jsonl",
-        [{"type": "agent_message", "token_count": {"output_tokens": 7}}],
-    )
-
+def test_codex_sums_final_cumulative_counts_across_rollouts() -> None:
+    """Each rollout's last count is cumulative; independent rollouts are additive."""
     usage = token_usage.codex_usage(
-        token_usage.read_all(sorted(sessions.rglob("rollout-*.jsonl"))), ""
+        [
+            [
+                {"type": "turn_context", "payload": {"model": "gpt-recommended"}},
+                _codex_token_count(
+                    input_tokens=20, output_tokens=5, cached_input_tokens=10
+                ),
+                _codex_message(),
+                _codex_token_count(
+                    input_tokens=100, output_tokens=30, cached_input_tokens=90
+                ),
+            ],
+            [
+                _codex_message(),
+                _codex_token_count(input_tokens=20, output_tokens=7),
+            ],
+        ],
+        "",
     )
 
     assert usage == {
@@ -377,18 +389,19 @@ def test_codex_counts_an_absent_token_count_as_zero() -> None:
     """
     usage = token_usage.codex_usage(
         [
-            {"type": "agent_message"},
-            {"type": "event_msg", "token_count": None},
-            {"type": "turn_context", "token_count": {"input_tokens": None}},
-            {"type": "token_count", "token_count": {"input_tokens": 42}},
+            [
+                {"type": "response_item", "payload": {"type": "reasoning"}},
+                {"type": "event_msg", "payload": {"type": "token_count"}},
+                {"type": "turn_context", "payload": {"model": "gpt-ignored"}},
+            ]
         ],
         "gpt-5",
     )
 
-    assert usage["input_tokens"] == 42
+    assert usage["input_tokens"] == 0
     assert usage["output_tokens"] == 0
     assert usage["cached_input_tokens"] == 0
-    assert usage["turns"] == 1
+    assert usage["turns"] == 0
 
 
 def test_claude_main_publishes_the_record_three_ways(
@@ -471,8 +484,8 @@ def test_codex_main_publishes_the_record_three_ways(
     _ndjson(
         home / ".codex" / "sessions" / "2026" / "08" / "25" / "rollout-a.jsonl",
         [
-            {"type": "agent_message", "token_count": {"input_tokens": 100}},
-            {"type": "token_count", "token_count": {"output_tokens": 30}},
+            _codex_message(),
+            _codex_token_count(input_tokens=100, output_tokens=30),
         ],
     )
     monkeypatch.setenv("AGENT_HOME", str(home))
