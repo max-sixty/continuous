@@ -27,7 +27,6 @@ import pytest
 from tests import BASH, GH_PREAMBLE, fake_bin, tool_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PIN_INSTRUCTION_FILES = REPO_ROOT / "shared" / "steps" / "pin-instruction-files.sh"
 RESTORE_SENSITIVE_CONFIG = (
     REPO_ROOT / "shared" / "steps" / "restore-sensitive-config.sh"
 )
@@ -218,21 +217,6 @@ def _pin(
     )
 
 
-def test_pin_instruction_files_matches_base_for_every_instruction_path(
-    tmp_path: Path,
-) -> None:
-    """Codex harness on a fork PR: every instruction path ends at its base
-    version, fork-added ones are gone, a fork symlink is replaced rather than
-    written or deleted through, and the rest of the PR stays."""
-    repo, outside, event = _tampered_checkout(tmp_path)
-
-    result = _pin(PIN_INSTRUCTION_FILES, repo, event)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _tree(repo) == _PINNED
-    assert _tree(outside) == _OUTSIDE
-
-
 def test_restore_sensitive_config_matches_base_for_every_instruction_path(
     tmp_path: Path,
 ) -> None:
@@ -285,11 +269,8 @@ def test_restore_sensitive_config_pins_relayed_pr_event(
     assert _tree(outside) == _OUTSIDE
 
 
-@pytest.mark.parametrize(
-    "script", [PIN_INSTRUCTION_FILES, RESTORE_SENSITIVE_CONFIG], ids=["codex", "claude"]
-)
 def test_pinning_leaves_a_pr_that_touches_no_instruction_path_alone(
-    tmp_path: Path, script: Path
+    tmp_path: Path,
 ) -> None:
     """The usual PR: nothing the pin covers changed, so there is nothing to
     restore and the step still exits cleanly."""
@@ -299,17 +280,14 @@ def test_pinning_leaves_a_pr_that_touches_no_instruction_path_alone(
         lambda repo: _write(repo / "README.md", "fork readme\n"),
     )
 
-    result = _pin(script, repo, event)
+    result = _pin(RESTORE_SENSITIVE_CONFIG, repo, event)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert _tree(repo) == {"README.md": "fork readme\n"}
 
 
-@pytest.mark.parametrize(
-    "script", [PIN_INSTRUCTION_FILES, RESTORE_SENSITIVE_CONFIG], ids=["codex", "claude"]
-)
 def test_pinning_fails_when_the_base_ref_is_missing(
-    tmp_path: Path, script: Path
+    tmp_path: Path,
 ) -> None:
     """A base the checkout doesn't hold fails the step. The alternative, a diff
     against nothing that lists nothing, would let the agent start on the
@@ -321,7 +299,7 @@ def test_pinning_fails_when_the_base_ref_is_missing(
         base_ref="missing",
     )
 
-    result = _pin(script, repo, event)
+    result = _pin(RESTORE_SENSITIVE_CONFIG, repo, event)
 
     assert result.returncode != 0, result.stdout + result.stderr
 
