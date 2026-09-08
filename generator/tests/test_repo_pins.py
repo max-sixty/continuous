@@ -112,11 +112,49 @@ def test_codex_agent_never_receives_the_pat_or_api_key() -> None:
     assert "CODEX_SANDBOX_MODE" not in run_env
     assert run_env["AUTH_MODE"] == "${{ steps.codex_auth.outputs.mode }}"
     runner = (REPO_ROOT / "codex" / "runner.py").read_text()
-    assert "_sandbox.launch_env" in runner
+    supervisor = (REPO_ROOT / "shared/steps/launch_sandbox_runtime.py").read_text()
+    assert "_sandbox.launch_env" in supervisor
     assert 'model_provider="tend-openai"' in runner
     assert steps["Token usage"]["env"]["SANDBOX_REAPED"] == (
         "${{ steps.codex.outputs.sandbox_reaped }}"
     )
+
+
+def test_sandbox_runtime_pin_is_identical_in_actions_and_hosted_probe() -> None:
+    yaml = YAML(typ="safe", pure=True)
+    versions = {
+        yaml.load((REPO_ROOT / harness / "action.yaml").read_text())["inputs"][
+            "sandbox_runtime_version"
+        ]["default"]
+        for harness in ("claude", "codex")
+    }
+    workflow = yaml.load((REPO_ROOT / ".github/workflows/ci.yaml").read_text())
+    sandbox_steps = workflow["jobs"]["test-sandbox"]["steps"]
+    install = next(
+        step
+        for step in sandbox_steps
+        if step.get("name") == "Install pinned Sandbox Runtime capabilities"
+    )
+    versions.add(install["env"]["SRT_VERSION"])
+
+    assert len(versions) == 1, f"Sandbox Runtime pins diverged: {versions}"
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_disposable_workspace_is_removed_immediately_after_agent_reap(
+    harness: str,
+) -> None:
+    action = YAML(typ="safe", pure=True).load(
+        (REPO_ROOT / harness / "action.yaml").read_text()
+    )
+    steps = action["runs"]["steps"]
+    run_name = "Run Claude" if harness == "claude" else "Run Codex"
+    run_at = next(index for index, step in enumerate(steps) if step["name"] == run_name)
+    cleanup = steps[run_at + 1]
+
+    assert cleanup["name"] == "Dispose disposable agent workspace"
+    assert cleanup["if"] == "always()"
+    assert cleanup["run"].endswith('/dispose_agent_workspace.py"')
 
 
 def test_npm_installs_use_distinct_empty_config_files() -> None:
@@ -139,23 +177,6 @@ def test_npm_installs_use_distinct_empty_config_files() -> None:
     )
     assert '--userconfig "$TEND_NPM_USERCONFIG"' in codex_install
     assert '--globalconfig "$TEND_NPM_GLOBALCONFIG"' in codex_install
-
-
-@pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_sensitive_config_restore_runs_only_in_the_disposable_checkout(
-    harness: str,
-) -> None:
-    action = YAML(typ="safe", pure=True).load(
-        (REPO_ROOT / harness / "action.yaml").read_text()
-    )
-    step = next(
-        item
-        for item in action["runs"]["steps"]
-        if item.get("name") == "Restore sensitive config from base branch (PRs)"
-    )
-
-    assert step["working-directory"] == "${{ env.TEND_AGENT_WORKSPACE }}"
-    assert "GITHUB_TOKEN" not in step.get("env", {})
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])

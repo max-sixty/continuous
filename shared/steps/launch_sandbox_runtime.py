@@ -146,6 +146,7 @@ def main() -> int:
     environment.extend(
         [
             f"GITHUB_OUTPUT={inner_output}",
+            f"GITHUB_STEP_SUMMARY={step_summary_dir / 'step-summary.md'}",
             f"RUNNER_TEMP={run_dir}",
         ]
     )

@@ -220,17 +220,6 @@ runs:
         TEND_CHECKOUT_MODE: ${{ inputs.checkout_mode }}
         TEND_BASE_BRANCH: ${{ inputs.base_branch }}
 
-    # Restore PR-authored sensitive config (.claude, CLAUDE.md, …) from the
-    # exact reviewed base commit to close the startup-RCE surface. Content
-    # ingress already verified that commit, so this step neither re-derives
-    # topology nor receives a credential. Full rationale in the script.
-    - name: Restore sensitive config from base branch (PRs)
-      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-      working-directory: ${{ env.TEND_AGENT_WORKSPACE }}
-      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/bash "${{ github.action_path }}/../shared/steps/restore-sensitive-config.sh"
-      env:
-        BASH_ENV: ""
-
     # Compose the system prompt (shared/system-prompt.md + Claude directives +
     # the adopter's system_prompt_append). SYSTEM_PROMPT_FILE is passed in so
     # the script is path-agnostic; this action lives under claude/, so the
@@ -260,8 +249,8 @@ runs:
     # path resolves. See ../proxy/setup_sandbox.py and
     # ../proxy/inject_credentials.py.
     #
-    # Runs after "Restore sensitive config" and before the Claude lifecycle — install,
-    # plugins, and the run all execute as the sandbox user. Cache the proxy's
+    # Runs after the disposable checkout is prepared and before the Claude
+    # lifecycle — install, plugins, and the run all execute as the sandbox user. Cache the proxy's
     # mitmproxy download (a sizeable dependency) in an isolated uv cache dir,
     # keyed on the pinned version. First run populates; every run after restores
     # in seconds instead of a cold ~20s resolve. This cache belongs only to the
@@ -314,6 +303,7 @@ runs:
           TEND_ANTHROPIC_OAUTH_TOKEN="$TEND_ANTHROPIC_OAUTH_TOKEN" \
           TEND_ANTHROPIC_API_KEY="$TEND_ANTHROPIC_API_KEY" \
           ACTION_PATH="$ACTION_PATH" \
+          TEND_RUNTIME_ROOT="$TEND_RUNTIME_ROOT" \
           MITMPROXY_VERSION="$MITMPROXY_VERSION" \
           TEND_UV_DIR="$TEND_UV_DIR" \
           UV_CACHE_DIR="$UV_CACHE_DIR" \
@@ -451,6 +441,13 @@ runs:
         TEND_SANDBOX_SETUP: ${{ inputs.sandbox_setup }}
         ACTION_PATH: ${{ github.action_path }}/..
       run: /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/launch_sandbox_runtime.py"
+
+    - name: Dispose disposable agent workspace
+      if: always()
+      shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+      run: PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -E -s "${{ github.action_path }}/../shared/steps/dispose_agent_workspace.py"
+      env:
+        BASH_ENV: ""
 
     # The trusted outer supervisor reaps every sandbox process before returning,
     # so this runner-owned save cannot race a surviving agent. Save is best-effort and

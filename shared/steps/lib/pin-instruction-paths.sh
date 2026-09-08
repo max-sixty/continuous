@@ -32,10 +32,12 @@ INSTRUCTION_PATHSPECS=(':(glob)**/CLAUDE.md' ':(glob)**/CLAUDE.local.md' ':(glob
 pin_to_base() {
   local ref=$1
   shift
-  local -a paths
+  local -a paths=()
   local -a restore_paths=()
   local path parent covered
-  mapfile -d '' paths < <(git diff --no-renames --ignore-submodules=none --name-only -z "$ref" -- "$@")
+  while IFS= read -r -d '' path; do
+    paths+=("$path")
+  done < <(git diff --no-renames --ignore-submodules=none --name-only -z "$ref" -- "$@")
   wait "$!"
   for path in "${paths[@]}"; do
     covered=false

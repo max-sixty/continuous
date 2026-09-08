@@ -298,7 +298,9 @@ Each transition is a bottleneck with one job:
   or open-PR head ref, pins startup configuration to the exact chosen base
   commit, removes the temporary credential, makes the otherwise-empty parent
   traversable but not listable, then changes ownership of that clone only.
-  `RUNNER_TEMP` remains runner-only.
+  `RUNNER_TEMP` remains runner-only. SRT, the Codex binaries, and the immutable
+  agent environment live in one dedicated runner-owned, sandbox-readable
+  runtime directory; the sandbox cannot write it.
 - **Launch and lifetime** invokes the adopter's `sandbox_setup:` and the whole
   Claude or Codex turn as one command under the pinned Anthropic Sandbox
   Runtime. Tend supplies absolute `node`, `bwrap`, `socat`, `rg`, and seccomp
@@ -352,10 +354,16 @@ never see, such as the checkout credential in `.git/config`.
 **Setup runs on reviewed code.** Adopter `setup:` steps execute as the runner
 user against the stable Actions checkout: the default branch, or in
 `tend-review` the PR's reviewed base. That tree is never replaced or handed to
-the agent. A contributor's build backend and dependencies therefore execute
-only from the disposable event checkout, through `sandbox_setup:` or the agent
-itself, inside SRT. Both harnesses run `sandbox_setup:` as the non-sudo sandbox
-user in the same SRT process lifetime as the agent.
+the agent, and files `setup:` writes there do not appear in the independent
+agent checkout. A contributor's build backend and dependencies therefore
+execute only from the disposable event checkout, through `sandbox_setup:` or
+the agent itself, inside SRT. Both harnesses run `sandbox_setup:` as the
+non-sudo sandbox user in the same SRT process lifetime as the agent.
+
+After SRT exits, the trusted supervisor kills and verifies the complete sandbox
+UID process tree, then copies only size-bounded fixed outputs. The next fixed
+action step deletes the dedicated `/tmp/tend-agent-workspace-*` container; no
+post-sandbox step executes a file from that checkout.
 
 **Credential isolation.** Both harness actions run the agent as a separate
 non-sudo `tend-sandbox` user, sharing the GitHub proxy machinery under the

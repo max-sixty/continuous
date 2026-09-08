@@ -202,11 +202,12 @@ bot_name: my-project-bot
 # non-sudo user inside Anthropic Sandbox Runtime with a fixed env allowlist.
 # The runner checkout remains on reviewed code for `setup:` and local-action
 # POST cleanup. Shared system/hosted-toolcache paths and independently
-# seeded paths already present under the sandbox home carry over. Changes that
-# `setup:` makes under the runner's home do not: that home may contain
-# credentials, and Tend does not classify its files as tools or secrets. Use
-# `sandbox_setup:` for home-scoped installs or version changes such as
-# `cargo install`, `pip install --user`, or `uv tool install`.
+# seeded paths already present under the sandbox home carry over. Files that
+# `setup:` writes into the runner checkout or runner home do not: the agent
+# receives an independent disposable checkout, and the runner home may contain
+# credentials. Use `sandbox_setup:` for dependencies, generated files, or
+# home-scoped installs the agent needs, such as `cargo install`,
+# `pip install --user`, or `uv tool install`.
 #
 # Tend appends a pinned `uv` fallback after the `setup:` PATH. It installs no
 # other language toolchain. These keys make deliberate additions inside the

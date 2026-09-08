@@ -135,6 +135,7 @@ class Paths:
     workspace: Path
     runner_workspace: Path
     runner_temp: Path
+    runtime_root: Path
     action_path: Path
     tend_uv_dir: Path
     github_env: Path
@@ -142,7 +143,7 @@ class Paths:
 
     @property
     def agent_env_file(self) -> Path:
-        return self.runner_temp / "tend-agent-env"
+        return self.runtime_root / "agent-env"
 
     @property
     def confdir(self) -> Path:
@@ -598,6 +599,7 @@ def main() -> int:
             workspace=workspace,
             runner_workspace=runner_workspace,
             runner_temp=required_path("RUNNER_TEMP"),
+            runtime_root=required_path("TEND_RUNTIME_ROOT"),
             action_path=required_path("ACTION_PATH"),
             tend_uv_dir=required_path("TEND_UV_DIR"),
             github_env=required_path("GITHUB_ENV"),

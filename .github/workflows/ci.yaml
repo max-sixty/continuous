@@ -74,15 +74,14 @@ jobs:
           grep -qF 'HTTP(S) proxy listening at 127.0.0.1:' "$log"
           test -f "$confdir/mitmproxy-ca-cert.pem"
 
-  # setup_sandbox.py and sandbox_setup.py need a second uid, sudo, and a runner
-  # PATH to derive from, so no Python test reaches them. Running them for real
-  # leaves the runner changed — the disposable clone belongs to the sandbox
-  # UID, the proxy CA is in the system trust store, and mitmdump remains on
-  # 8899 — so a later step must expect that state. This job exercises the real
-  # boundary: shared paths cross, runner-home paths do not, same-name system
-  # fallbacks are blocked, Tend preserves a shared uv, and sandbox_setup can
-  # install a required home-scoped tool explicitly. It drives both harness
-  # adapters with stubs and then launches the single SRT lifecycle for real.
+  # setup_sandbox.py and the SRT lifecycle need a second uid, sudo, and a runner
+  # PATH to derive from, so no Python test reaches the full boundary. Running
+  # them for real leaves the runner changed — the disposable clone belongs to
+  # the sandbox UID, the proxy CA is in the system trust store, and mitmdump
+  # remains on 8899 — so a later step must expect that state. This job exercises
+  # the real boundary: shared paths cross, runner-home paths do not, same-name
+  # system fallbacks are blocked, and Tend preserves a shared uv. It then drives
+  # sandbox_setup and both harness adapters inside their real SRT lifecycle.
   test-sandbox:
     runs-on: ubuntu-24.04
     steps:
@@ -99,13 +98,9 @@ jobs:
         run: bash proxy/test-setup-sandbox.sh setup
       - name: Install agent uv fallback
         run: bash proxy/test-setup-sandbox.sh install-agent-uv
-      - name: Verify the boundary and sandbox_setup
+      - name: Verify the prepared UID and PATH boundary
         run: bash proxy/test-setup-sandbox.sh verify
-      - name: Verify the Codex credential crossing
-        run: bash proxy/test-setup-sandbox.sh verify-codex-launch
-      - name: Launch, supervise and tear down the agent
-        run: bash proxy/test-setup-sandbox.sh verify-launch
-      - name: Verify SRT filesystem, network and seccomp boundary
+      - name: Verify complete Claude and Codex SRT lifecycles
         run: bash proxy/test-setup-sandbox.sh verify-srt
       - name: Refuse unsafe sandbox configuration
         run: bash proxy/test-setup-sandbox.sh verify-refusals

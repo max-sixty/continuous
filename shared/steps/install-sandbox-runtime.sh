@@ -33,7 +33,8 @@ if [ "${#missing[@]}" -gt 0 ]; then
   /usr/bin/sudo /usr/bin/apt-get install -y bubblewrap socat ripgrep
 fi
 
-srt_root="$RUNNER_TEMP/tend-srt"
+runtime_root=$(/usr/bin/mktemp -d /tmp/tend-runtime.XXXXXX)
+srt_root="$runtime_root/srt"
 npm_userconfig=$(/usr/bin/mktemp "$RUNNER_TEMP/tend-npm-user.XXXXXX")
 npm_globalconfig=$(/usr/bin/mktemp "$RUNNER_TEMP/tend-npm-global.XXXXXX")
 /usr/bin/env -i \
@@ -48,8 +49,10 @@ srt_seccomp="$srt_package/vendor/seccomp/$srt_arch/apply-seccomp"
 for command in "$srt_entry" "$srt_seccomp" /usr/bin/bwrap /usr/bin/socat /usr/bin/rg; do
   [ -e "$command" ] || { echo "::error::Missing SRT capability: $command"; exit 1; }
 done
+/usr/bin/chmod 755 "$runtime_root"
 {
   echo "NODE_BIN=$node_bin"
+  echo "TEND_RUNTIME_ROOT=$runtime_root"
   echo "TEND_NPM_CLI=$npm_cli"
   echo "TEND_NPM_USERCONFIG=$npm_userconfig"
   echo "TEND_NPM_GLOBALCONFIG=$npm_globalconfig"

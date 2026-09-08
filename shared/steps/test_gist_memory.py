@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import gist_memory
@@ -189,6 +190,31 @@ def test_save_refuses_a_baseline_modified_by_the_agent(
     baseline_path.write_text(json.dumps(baseline))
 
     with pytest.raises(gist_memory.GistMemoryError, match="modified"):
+        gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
+
+
+def test_save_refuses_a_fifo_baseline_without_blocking(
+    tmp_path: Path, fake_gh: FakeGh
+) -> None:
+    memory = tmp_path / "memory"
+    _serve(fake_gh, {"MEMORY.md": "# Memory\n"})
+    gist_memory.restore(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
+    (memory / gist_memory.BASELINE_FILE).unlink()
+    os.mkfifo(memory / gist_memory.BASELINE_FILE)
+
+    with pytest.raises(gist_memory.GistMemoryError, match="missing or malformed"):
+        gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
+
+
+def test_save_bounds_a_local_memory_file_before_reading_it(
+    tmp_path: Path, fake_gh: FakeGh
+) -> None:
+    memory = tmp_path / "memory"
+    _serve(fake_gh, {"MEMORY.md": "# Memory\n"})
+    gist_memory.restore(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
+    (memory / "MEMORY.md").write_bytes(b"x" * (gist_memory.MAX_FILE_BYTES + 1))
+
+    with pytest.raises(gist_memory.GistMemoryError, match="exceeds"):
         gist_memory.save(GIST_ID, REPOSITORY, GIST_OWNER, memory, BASELINE_KEY)
 
 

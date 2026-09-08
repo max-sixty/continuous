@@ -17,10 +17,11 @@
 # those edits reverted for the duration of this run. Same tradeoff
 # claude-code-action makes — narrow UX cost for closing the RCE surface.
 #
-# Runs against the runner-owned disposable clone before its ownership handoff.
-# prepare_agent_workspace.py selects and verifies TEND_CONFIG_BASE_SHA at the
-# content-ingress bottleneck, so this step does not re-derive topology or need a
-# credential.
+# Invoked by prepare_agent_workspace.py against the runner-owned disposable
+# clone before its ownership handoff. That content-ingress bottleneck selects
+# and verifies TEND_CONFIG_BASE_SHA and disables inherited Git configuration,
+# so this script does not re-derive topology, need a credential, or execute a
+# runner-configured filter.
 #
 # Input (env): TEND_CONFIG_BASE_SHA. Empty means this is not a PR worktree.
 set -eo pipefail

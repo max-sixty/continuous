@@ -17,6 +17,8 @@ def _paths(tmp_path: Path) -> setup_sandbox.Paths:
     runner_workspace.mkdir(parents=True)
     runner_temp = tmp_path / "temp"
     runner_temp.mkdir()
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
     workspace = runner_temp / "agent-repo"
     workspace.mkdir()
     action = tmp_path / "action"
@@ -27,6 +29,7 @@ def _paths(tmp_path: Path) -> setup_sandbox.Paths:
         workspace=workspace.resolve(),
         runner_workspace=runner_workspace.resolve(),
         runner_temp=runner_temp.resolve(),
+        runtime_root=runtime_root.resolve(),
         action_path=action.resolve(),
         tend_uv_dir=uv.resolve(),
         github_env=tmp_path / "github-env",

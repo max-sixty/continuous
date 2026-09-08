@@ -36,6 +36,8 @@ case "$1" in
 esac
 """
 OBJECT_ID = re.compile(r"[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\Z")
+RESTORE_SENSITIVE_CONFIG = Path(__file__).with_name("restore-sensitive-config.sh")
+BASH = Path("/usr/bin/bash")
 
 
 def log(message: str) -> None:
@@ -261,6 +263,24 @@ def ensure_commit(workspace: Path, sha: str, token: str) -> None:
         git("fetch", "--no-tags", "origin", sha, cwd=workspace, env=auth_env)
 
 
+def restore_sensitive_config(workspace: Path, base_sha: str) -> None:
+    """Pin startup configuration before leaving the isolated Git ingress."""
+    if not base_sha:
+        return
+    run(
+        [
+            str(BASH),
+            "--noprofile",
+            "--norc",
+            str(RESTORE_SENSITIVE_CONFIG),
+        ],
+        cwd=workspace,
+        env=isolated_git_environment(
+            {"BASH_ENV": "", "TEND_CONFIG_BASE_SHA": base_sha}
+        ),
+    )
+
+
 def clone_workspace(
     *,
     runner_workspace: Path,
@@ -349,6 +369,8 @@ def main() -> int:
             if config_base_sha:
                 ensure_commit(destination, config_base_sha, token)
 
+        restore_sensitive_config(destination, config_base_sha)
+
         git(
             "config",
             "--local",
@@ -376,7 +398,6 @@ def main() -> int:
         with github_env.open("a", encoding="utf-8") as stream:
             stream.write(f"TEND_RUNNER_WORKSPACE={runner_workspace}\n")
             stream.write(f"TEND_AGENT_WORKSPACE={destination}\n")
-            stream.write(f"TEND_CONFIG_BASE_SHA={config_base_sha}\n")
         log(f"prepared {destination}: {selected}")
         return 0
     except (OSError, subprocess.CalledProcessError, TypeError, ValueError) as problem:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -107,6 +108,51 @@ def test_review_checkout_does_not_inherit_runner_git_filters(
 
     assert not Path(f"{hook}.ran").exists()
     assert (destination / "file").read_text() == "feature\n"
+
+
+def test_sensitive_config_restore_stays_in_the_isolated_git_ingress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "agent"
+    command("init", "--initial-branch=main", str(repo), cwd=tmp_path)
+    command("config", "user.email", "test@example.com", cwd=repo)
+    command("config", "user.name", "Test", cwd=repo)
+    (repo / "CLAUDE.md").write_text("reviewed guidance\n")
+    command("add", "CLAUDE.md", cwd=repo)
+    command("commit", "-m", "base", cwd=repo)
+    base = command("rev-parse", "HEAD", cwd=repo)
+    (repo / "CLAUDE.md").write_text("event guidance\n")
+    (repo / ".gitattributes").write_text("CLAUDE.md filter=runner-hook\n")
+    command("add", "CLAUDE.md", ".gitattributes", cwd=repo)
+    command("commit", "-m", "event", cwd=repo)
+
+    hook = tmp_path / "runner-filter"
+    hook.write_text('#!/bin/sh\ncat\n: > "$0.ran"\n')
+    hook.chmod(0o755)
+    runner_config = tmp_path / "runner.gitconfig"
+    command(
+        "config",
+        "--file",
+        str(runner_config),
+        "filter.runner-hook.smudge",
+        str(hook),
+        cwd=tmp_path,
+    )
+    command(
+        "config",
+        "--file",
+        str(runner_config),
+        "filter.runner-hook.required",
+        "true",
+        cwd=tmp_path,
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(runner_config))
+    monkeypatch.setattr(prepare, "BASH", Path(shutil.which("bash") or "/bin/bash"))
+
+    prepare.restore_sensitive_config(repo, base)
+
+    assert (repo / "CLAUDE.md").read_text() == "reviewed guidance\n"
+    assert not Path(f"{hook}.ran").exists()
 
 
 def test_mention_checks_out_the_api_head_with_a_push_upstream(

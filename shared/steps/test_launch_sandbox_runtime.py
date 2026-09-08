@@ -79,6 +79,9 @@ def test_claude_exports_only_fixed_runner_owned_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_dir, output, summary = configure(tmp_path, monkeypatch, harness="claude")
+    monkeypatch.setenv("GITHUB_TOKEN", "runner-token-must-not-cross")
+    monkeypatch.setenv("OPENAI_API_KEY", "runner-key-must-not-cross")
+    monkeypatch.setenv("GITHUB_ACTOR", "octocat")
     calls = fake_runtime(monkeypatch, run_dir, harness="claude")
 
     assert launch.main() == 0
@@ -94,7 +97,12 @@ def test_claude_exports_only_fixed_runner_owned_files(
     assert values.get("stream_json") != "/etc/passwd"
     assert summary.read_bytes() == b"skill result\n\n"
     runtime = next(args for args in calls if "sandbox_runtime.mjs" in args[-1])
+    assert "GITHUB_TOKEN=dummy" in runtime
+    assert "GITHUB_ACTOR=octocat" in runtime
+    assert not any("runner-token-must-not-cross" in arg for arg in runtime)
+    assert not any("runner-key-must-not-cross" in arg for arg in runtime)
     assert f"GITHUB_OUTPUT={run_dir / 'tend-step-output'}" in runtime
+    assert f"GITHUB_STEP_SUMMARY={run_dir.parent / 'step-summary.md'}" in runtime
 
 
 def test_codex_base64_encodes_the_fixed_final_message(

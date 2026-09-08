@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,3 +65,25 @@ def test_fixed_export_read_is_bounded_and_does_not_follow_links(tmp_path: Path) 
     alias.symlink_to(regular)
     with pytest.raises(OSError):
         read_regular_nofollow(alias, max_bytes=100)
+
+
+def test_fixed_export_rejects_a_fifo_without_blocking(tmp_path: Path) -> None:
+    fifo = tmp_path / "blocking-fifo"
+    os.mkfifo(fifo)
+    probe = (
+        "from pathlib import Path; "
+        "from _safe_files import read_regular_nofollow; "
+        "read_regular_nofollow(Path(__import__('sys').argv[1]), max_bytes=100)"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(fifo)],
+        cwd=Path(__file__).parent,
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "not a regular file" in result.stderr

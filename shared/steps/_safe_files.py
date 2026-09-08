@@ -37,7 +37,7 @@ def read_regular_nofollow(path: Path, *, max_bytes: int) -> bytes | None:
         try:
             descriptor = os.open(
                 path.name,
-                os.O_RDONLY | os.O_NOFOLLOW,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                 dir_fd=parent,
             )
         except FileNotFoundError:

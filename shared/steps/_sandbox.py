@@ -1,12 +1,10 @@
-"""The environment the sandbox user is launched with.
+"""Compose the environment at the single runner-to-SRT boundary.
 
-The outer supervisor crosses the UID boundary once with a clean ``env -i``;
-inside SRT, both adopter ``sandbox_setup:`` and the harness child rebuild their
-environment here. This keeps the same context and dummy-credential contract for
-setup and the agent without creating another privilege seam. Trusted setup
+The outer supervisor crosses the UID boundary once with a clean ``env -i``.
+SRT then finalizes proxy variables for its network namespace, and every command
+inside the lifecycle inherits that environment unchanged. Trusted preparation
 commands that run before SRT use :func:`agent_env` and receive no GitHub
-context. Which side of that line a new command falls on is who wrote what runs
-there, not how much context looks useful.
+context.
 
 Pass ``GITHUB_*`` through as a denylist rather than an explicit allowlist: most
 ``GITHUB_*`` vars are informational (``GITHUB_ACTOR``, ``GITHUB_API_URL``,
@@ -72,7 +70,7 @@ def agent_env(agent_env_file: str | os.PathLike[str]) -> list[str]:
 
 
 def launch_env(agent_env_file: str | os.PathLike[str]) -> list[str]:
-    """The ``NAME=VALUE`` arguments for adopter code in the sandbox.
+    """The ``NAME=VALUE`` arguments for the outer SRT launch.
 
     The file's lines (proxy routing, CA trust, dummy credentials, and the
     adopter's own ``sandbox_env:`` additions) come first, then the GitHub
