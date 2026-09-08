@@ -342,6 +342,7 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
         "last_review_sha": pr.reviewed,
         "force_pushed_since": False,
         "incremental_path": context["incremental_path"],
+        "standing_approval_id": None,
         "standing_dismissal": None,
         "ready_review_event_id": None,
         "recovery_pending_review_id": None,
@@ -402,12 +403,90 @@ def test_start_surfaces_a_native_standing_dismissal(pr: Fixture) -> None:
         "event_id": 71,
         "review_id": 1,
         "sha": pr.reviewed,
+        "review_at": "2026-01-01T00:00:00Z",
         "at": "2026-01-02T00:00:00Z",
         "message": "Superseded by another PR.",
         "prior_state": "approved",
         "dismissal_commit_id": "",
     }
     assert json.loads(pr.context.read_text())["standing_dismissal_event_id"] == 71
+
+
+def test_resolved_dismissal_can_publish_a_fresh_approval_over_prior_findings(
+    pr: Fixture,
+) -> None:
+    pr.reviews(
+        {**_review(pr.reviewed, "", state="DISMISSED"), "id": 1},
+        {
+            **_review(pr.reviewed, "Blocking finding."),
+            "id": 2,
+            "submitted_at": "2026-01-01T00:00:01Z",
+        },
+        {**_review(pr.reviewed, "", state="APPROVED"), "id": 3},
+    )
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "event": "review_dismissed",
+                "id": 74,
+                "created_at": "2026-01-02T00:00:00Z",
+                "dismissed_review": {
+                    "review_id": 1,
+                    "state": "approved",
+                    "dismissal_message": "The earlier finding still applied.",
+                },
+            }
+        ],
+    )
+
+    started = pr.start()
+    assert started.returncode == 0, started.stderr
+    assert json.loads(started.stdout)["standing_approval_id"] == 3
+
+    approved = pr.submit("--event", "APPROVE")
+
+    assert approved.returncode == 0, approved.stderr
+    assert approved.stdout == "posted: review 42\n"
+    assert pr.submitted()["event"] == "APPROVE"
+
+
+def test_dismissal_reconciliation_does_not_bypass_comment_dedup(pr: Fixture) -> None:
+    pr.reviews(
+        {**_review(pr.reviewed, "", state="DISMISSED"), "id": 1},
+        {
+            **_review(pr.reviewed, "Blocking finding."),
+            "id": 2,
+            "submitted_at": "2026-01-01T00:00:01Z",
+        },
+        {**_review(pr.reviewed, "", state="APPROVED"), "id": 3},
+    )
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "event": "review_dismissed",
+                "id": 74,
+                "created_at": "2026-01-02T00:00:00Z",
+                "dismissed_review": {
+                    "review_id": 1,
+                    "state": "approved",
+                    "dismissal_message": "The earlier finding still applied.",
+                },
+            }
+        ],
+    )
+    body = pr.tmp_path / "review.md"
+    body.write_text("Repeated finding.")
+
+    started = pr.start()
+    assert started.returncode == 0, started.stderr
+
+    commented = pr.submit("--event", "COMMENT", "--body-file", str(body))
+
+    assert commented.returncode == 0, commented.stderr
+    assert "already carries a COMMENTED review 2" in commented.stdout
+    assert not (pr.tmp_path / "post-input.json").exists()
 
 
 def test_start_captures_the_exact_outstanding_readiness_generation(

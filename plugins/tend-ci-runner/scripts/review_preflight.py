@@ -252,6 +252,7 @@ def _start(pr: str) -> int:
         "last_review_sha": last_review_sha,
         "force_pushed_since": force_pushed,
         "incremental_path": incremental_path,
+        "standing_approval_id": review_state.get("standing_approval_id") or None,
         "standing_dismissal": review_state.get("standing_dismissal"),
         "ready_review_event_id": ready_review_event_id,
         "recovery_pending_review_id": recovery_pending_review_id,
@@ -299,7 +300,11 @@ def _captured_readiness_is_outstanding(review_state: dict[str, Any]) -> bool:
 
 
 def _publication_snapshot(
-    pr: str, *, allow_retarget: bool, allow_covered: bool = False
+    pr: str,
+    *,
+    allow_retarget: bool,
+    allow_covered: bool = False,
+    allow_approval_reconciliation: bool = False,
 ) -> tuple[int, dict[str, Any] | None]:
     repo = github_cli.repository()
     pin_file = _pin_path()
@@ -374,7 +379,12 @@ def _publication_snapshot(
 
     at_head = review_state.get("at_head")
     readiness_outstanding = _captured_readiness_is_outstanding(review_state)
-    if at_head is None or readiness_outstanding:
+    approval_reconciliation = bool(
+        allow_approval_reconciliation
+        and review_state.get("standing_dismissal")
+        and review_state.get("standing_approval_id")
+    )
+    if at_head is None or readiness_outstanding or approval_reconciliation:
         already = ""
     else:
         already = f"already carries a {at_head['state']} review {at_head['id']}"
@@ -407,7 +417,9 @@ def _post(args: list[str]) -> int:
     if len(args) != 1 or not args[0].isdigit():
         print(f"usage: {sys.argv[0]} post <pr-number>", file=sys.stderr)
         return 1
-    status, snapshot = _publication_snapshot(args[0], allow_retarget=True)
+    status, snapshot = _publication_snapshot(
+        args[0], allow_retarget=True, allow_approval_reconciliation=True
+    )
     if snapshot is None:
         return status
 
@@ -633,7 +645,11 @@ def _submit(args: list[str]) -> int:
     elif event == "COMMENT" and body_path is None and payload_path is None:
         return _error("COMMENT requires --body-file or --payload-file")
 
-    status, snapshot = _publication_snapshot(pr, allow_retarget=False)
+    status, snapshot = _publication_snapshot(
+        pr,
+        allow_retarget=False,
+        allow_approval_reconciliation=event == "APPROVE",
+    )
     if snapshot is None:
         return status
     context = _read_context()

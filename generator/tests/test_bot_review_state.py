@@ -226,29 +226,6 @@ def test_request_dispatches_only_canonical_outstanding_demand(
     assert not Path(env["DISPATCH_INPUT"]).exists()
 
 
-def test_prepare_approval_pins_only_an_unapproved_head(env: dict[str, str]) -> None:
-    result = _run_cli(env, "prepare-approval", "7")
-
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
-        "head_sha": HEAD,
-        "already_approved": False,
-    }
-    pin = Path(env["CHECKED_HEAD_DIR"]) / "checked-head-7"
-    assert pin.read_text() == f"{HEAD}\n"
-
-    _write(
-        env,
-        "REVIEWS_JSON",
-        [_review(1, "2026-01-01T00:00:00Z", state="APPROVED")],
-    )
-    result = _run_cli(env, "prepare-approval", "7")
-
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["already_approved"] is True
-    assert not pin.exists()
-
-
 def test_feedback_combines_conversation_reviews_and_inline_comments(
     env: dict[str, str],
 ) -> None:
@@ -598,6 +575,7 @@ def test_a_dismissed_review_no_longer_covers_even_when_its_body_remains(
         "event_id": 1001,
         "review_id": 1,
         "sha": HEAD,
+        "review_at": "2026-01-01T00:00:00Z",
         "at": "2026-01-02T00:00:00Z",
         "message": "Superseded by another PR.",
         "prior_state": "approved",
@@ -704,6 +682,89 @@ def test_same_second_approval_cannot_erase_dismissal_context(
 
     assert state["standing_dismissal"] is not None
     assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+def test_approval_before_a_later_dismissal_cannot_suppress_recovery(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-03T00:00:00Z", "A blocker still applies.")
+
+    state = _state(env)
+
+    assert state["standing_dismissal"] is not None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+def test_same_second_review_submissions_leave_coverage_open_for_retry(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-01T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["standing_dismissal"] is not None
+    assert state["at_head"] is None
+    assert state["needs_review"] is True
+
+
+def test_findings_posted_after_approval_survive_its_later_dismissal(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", body="Blocking finding."),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-03T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 2
+    assert state["needs_review"] is False
+    assert state["standing_dismissal"] is not None
+
+
+def test_findings_cannot_hide_an_approval_that_conflicts_with_a_dismissal(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", body="Blocking finding."),
+            _review(3, "2026-01-03T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-04T00:00:00Z", "The finding still applies.")
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 2
+    assert state["standing_approval_id"] == 3
+    assert state["standing_dismissal"] is not None
+    assert state["needs_review"] is True
 
 
 def test_dismissed_review_without_native_timeline_metadata_fails_closed(
@@ -1457,8 +1518,8 @@ def test_review_skill_defines_every_id_its_dismissal_recipes_use() -> None:
     skill = REVIEW_SKILL.read_text()
 
     assert "$REVIEW_ID" not in skill
-    # Both dismissal sites invoke the same command, so there is one mechanism.
-    assert skill.count("dismiss <number>") == 2
+    # Every dismissal recipe invokes the same command, so there is one mechanism.
+    assert skill.count("dismiss <number>") == 3
     assert "reviews/$STANDING/dismissals" not in skill
 
 

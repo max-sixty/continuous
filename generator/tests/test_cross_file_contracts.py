@@ -200,28 +200,15 @@ def test_review_skill_retargets_a_moved_head_rather_than_discarding_it() -> None
     assert "Re-compose every `suggestion` block after re-targeting" in skill
 
 
-def test_weekly_approval_pins_the_commit_it_checked() -> None:
-    """Weekly approves dependency PRs, the population `nightly` rewrites on
-    purpose, so an unpinned approval lands on a commit nothing checked. It
-    carries the sha the same way review does, and for the same reason: the
-    body is composed with the Write tool in between."""
+def test_weekly_routes_approval_through_the_serialized_review_workflow() -> None:
+    """Weekly must not grow a second approval state machine."""
     weekly = _read("plugins", "tend-ci-runner", "skills", "weekly", "SKILL.md")
-    state_script = _read("plugins", "tend-ci-runner", "scripts", "bot_review_state.py")
 
-    # Per-PR and cleared up front: step 2 loops over every dependency PR, so a
-    # shared name hands the next PR this one's sha, and the already-approved
-    # branch must not leave a readable file behind.
-    assert "prepare-approval <number>" in weekly
-    assert "pin.unlink(missing_ok=True)" in state_script
-    assert 'pin.write_text(f"{head_sha}\\n")' in state_script
-    assert "CHECKED=$(cat /tmp/checked-head-<number>) || exit 0" in weekly
-    assert '-f commit_id="$CHECKED"' in weekly
-
-    # `gh pr review --approve` cannot pin a commit; both skills post through
-    # the reviews endpoint instead.
-    skill = _read("plugins", "tend-ci-runner", "skills", "review", "SKILL.md")
-    for content in (skill, weekly):
-        assert "gh pr review --approve" not in content
+    assert 'bot_review_state.py"' in weekly
+    assert "request <number>" in weekly
+    assert "prepare-approval" not in weekly
+    assert "event=APPROVE" not in weekly
+    assert "serialized" in weekly
 
 
 def test_review_approval_gates_on_author_stated_readiness() -> None:

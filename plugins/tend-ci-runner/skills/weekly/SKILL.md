@@ -24,33 +24,18 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
 
 1. Check CI status: `gh pr checks <number>`
 2. If CI is passing, review the diff for breaking changes (major version bumps, API changes, deprecation warnings)
-3. If the update is safe (patch/minor with green CI), check whether the bot has already approved this commit before approving — a dependabot PR open across multiple weekly runs (or already approved by `tend-review` on creation) would otherwise accumulate redundant approvals on the same `commit_id`:
+3. If the update is safe (patch/minor with green CI), request the serialized
+   review workflow:
+
    ```bash
    uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
-     prepare-approval <number>
+     request <number>
    ```
 
-   **If `already_approved` is true, this PR is done — move to the next one.**
-   Otherwise compose `/tmp/review-body.md` with the Write tool. Give the
-   reviewer the context for the approval: the upgrade's scope and the evidence
-   relevant to its safety. Keep it concise and omit the inspection chronology.
-   Use a file rather than an inline `--body` because a
-   package name written as inline code puts a backtick in a double-quoted
-   argument, and bash runs the span as a command. Then post, re-reading the sha
-   from disk, since shell state didn't survive the Write:
-
-   ```bash
-   # `commit_id` pins the approval to the commit that was checked. Unpinned,
-   # GitHub anchors it at whatever is live when the POST lands — an approval
-   # of code nothing checked, on a PR `nightly` rebases on purpose. Read the
-   # sha first and bail if it isn't there: inlined as `$(cat ...)` a missing
-   # file substitutes the empty string and the POST still runs, which is the
-   # unpinned approval this pins against.
-   CHECKED=$(cat /tmp/checked-head-<number>) || exit 0
-   REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
-   gh api "repos/$REPO/pulls/<number>/reviews" --method POST \
-     -f event=APPROVE -f commit_id="$CHECKED" -F body=@/tmp/review-body.md
-   ```
+   The command dispatches only when the canonical reducer reports outstanding
+   review demand. The review workflow owns the verdict, including head pinning,
+   native dismissal context, duplicate suppression, and the final publication
+   boundary. Move to the next PR whether it prints `requested` or `skip`.
 4. If CI is failing, comment with the failure summary and skip
 5. If a major version bump, comment noting it needs manual review and skip
 6. On either skip path (4 or 5), dismiss an approval that predates the newest rewrite before you leave. Both paths are reachable *because* a rebase changed something, and neither passes through item 3's guard — so the pre-rewrite approval stays the bot's latest review, re-anchored onto the current head, and the PR still reads as bot-approved while you comment that it isn't mergeable:
@@ -67,4 +52,4 @@ Perform any weekly maintenance the loaded `running-tend` overlay defines, follow
 
 ## Step 4: Summary
 
-Report: dependency PRs processed/approved/skipped (with reasons), and repo-specific weekly tasks completed (or "no repo-specific weekly tasks defined" / "no weekly tasks due").
+Report: dependency PRs processed/review-requested/skipped (with reasons), and repo-specific weekly tasks completed (or "no repo-specific weekly tasks defined" / "no weekly tasks due").

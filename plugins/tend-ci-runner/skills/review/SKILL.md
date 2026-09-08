@@ -34,6 +34,7 @@ On `skip`, finish. The JSON fields replace the shell variables named below;
 line counts authored since the last review, excluding base-branch churn.
 `recovery_pending_review_id` is the one current-head private PENDING review
 compatible with this review mode, or null.
+`standing_approval_id` is the bot approval currently deciding the PR, or null.
 `standing_dismissal` is the latest native dismissal of this bot's review which
 has not been superseded by a later bot approval, including GitHub's dismissal
 message and commit fields.
@@ -71,6 +72,25 @@ head without erasing the dismissal context from a later demanded review. A
 COMMENT or silent completion after the dismissal does not supersede it; only a
 later bot approval does. The final approval boundary rejects a dismissal that
 arrived after `start`, forcing a new pass to read it.
+
+If the dismissal reason still applies and `standing_approval_id` is non-null,
+dismiss that conflicting approval:
+
+```bash
+uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
+  dismiss <number> "<why the standing dismissal still applies>"
+```
+
+Then run `start` again before completing or publishing. The new snapshot must
+include the dismissal you just created; do not let a pre-dismissal COMMENT or
+completion suppress that reconciliation.
+
+Whenever both `standing_dismissal` and `standing_approval_id` are non-null,
+bypass the already-reviewed and trivial-increment shortcuts below. Reconcile
+the contradictory decisions in this pass: dismiss the approval when the
+dismissal reason still applies, or submit a fresh APPROVE after the full review
+shows that the reason is resolved. An earlier COMMENT may cover the code, but
+it cannot settle which merge-readiness decision stands.
 
 When `force_full_review` is true, bypass both the already-reviewed and trivial-
 increment shortcuts: becoming ready asks for a full non-draft review.

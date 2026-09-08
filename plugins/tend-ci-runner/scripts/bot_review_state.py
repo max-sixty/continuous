@@ -17,11 +17,9 @@ naming the exact timeline event acknowledges it.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
 import github_cli
@@ -218,6 +216,7 @@ def _bot_review_dismissals(
                 "id": event_id,
                 "review_id": review_id,
                 "sha": review.get("commit_id"),
+                "review_at": review.get("submitted_at") or "",
                 "at": created_at,
                 "message": message or "",
                 "prior_state": prior_state or "",
@@ -253,10 +252,29 @@ def review_state(
     pending = _pending_reviews(reviews, bot)
     dismissals = _bot_review_dismissals(review_dismissal_events or [], mine)
 
-    def review_is_after(review: dict[str, Any], event: dict[str, Any]) -> bool:
-        # GitHub timestamps have one-second precision, so equality cannot prove
-        # which outward action won. Treat it as uncovered and retry.
+    def review_is_after_withdrawn_review(
+        review: dict[str, Any], event: dict[str, Any]
+    ) -> bool:
+        # The dismissal event may occur later: it withdraws this review, not
+        # replacements submitted after it. Equality is ambiguous because
+        # GitHub timestamps have one-second precision, so fail closed and retry.
+        return (review.get("submitted_at") or "") > event["review_at"]
+
+    def review_is_after_dismissal(
+        review: dict[str, Any], event: dict[str, Any]
+    ) -> bool:
+        # Equality cannot establish order against a timeline event. Retaining
+        # the decision is the safe ambiguity: another pass can reconsider it.
         return (review.get("submitted_at") or "") > event["at"]
+
+    def dismissal_invalidates(review: dict[str, Any], event: dict[str, Any]) -> bool:
+        if event["sha"] != review.get("commit_id"):
+            return False
+        if review.get("state") == "APPROVED":
+            # An approval racing ahead of the dismissal did not reconsider the
+            # decision that arrived afterwards.
+            return not review_is_after_dismissal(review, event)
+        return not review_is_after_withdrawn_review(review, event)
 
     def public_body(review: dict[str, Any]) -> str:
         return strip_review_metadata(review.get("body") or "")
@@ -285,11 +303,7 @@ def review_state(
         review
         for review in mine
         if review in coverage_candidates
-        if not any(
-            dismissal["sha"] == review.get("commit_id")
-            and not review_is_after(review, dismissal)
-            for dismissal in dismissals
-        )
+        if not any(dismissal_invalidates(review, dismissal) for dismissal in dismissals)
     ]
     last_covered = covered[-1] if covered else None
     approvals = [review for review in mine if review.get("state") == "APPROVED"]
@@ -324,11 +338,12 @@ def review_state(
         if latest_dismissal
         and not any(
             review.get("state") == "APPROVED"
-            and review_is_after(review, latest_dismissal)
+            and review_is_after_dismissal(review, latest_dismissal)
             for review in mine
         )
         else None
     )
+    conflicting_approval = bool(standing_dismissal and standing_approval)
 
     latest_ready = _latest_ready_for_review(ready_for_review_events)
     acknowledged_ready_ids = sorted(
@@ -393,7 +408,9 @@ def review_state(
         "acknowledged_ready_ids": acknowledged_ready_ids,
         "outstanding_ready_for_review": outstanding_ready,
         "pending_reviews": pending_records,
-        "needs_review": not at_head or outstanding_ready is not None,
+        "needs_review": (
+            not at_head or outstanding_ready is not None or conflicting_approval
+        ),
         "fresh_approval_sha": (
             (fresh_approvals[-1].get("commit_id") or "") if fresh_approvals else ""
         ),
@@ -408,6 +425,7 @@ def review_state(
                 "event_id": standing_dismissal["id"],
                 "review_id": standing_dismissal["review_id"],
                 "sha": standing_dismissal["sha"],
+                "review_at": standing_dismissal["review_at"],
                 "at": standing_dismissal["at"],
                 "message": standing_dismissal["message"],
                 "prior_state": standing_dismissal["prior_state"],
@@ -501,21 +519,6 @@ def dismiss_standing_approval(pr: str, message: str) -> None:
             "-f",
             f"message={message}",
         )
-
-
-def prepare_approval(pr: str) -> dict[str, Any]:
-    """Pin the live head unless the bot already approved that exact commit."""
-    state = fetch_review_state(pr)
-    head_sha = str(state["head_sha"])
-    pin = Path(os.environ.get("CHECKED_HEAD_DIR", "/tmp")) / f"checked-head-{pr}"
-    pin.unlink(missing_ok=True)
-    already_approved = state.get("fresh_approval_sha") == head_sha
-    result = {"head_sha": head_sha, "already_approved": already_approved}
-    github_cli.dump(result)
-    sys.stdout.flush()
-    if not already_approved:
-        pin.write_text(f"{head_sha}\n")
-    return result
 
 
 def dismiss_stale_approval(pr: str, message: str) -> None:
@@ -687,9 +690,6 @@ def main(argv: list[str] | None = None) -> int:
     if len(args) == 3 and args[0] == "dismiss" and args[1].isdigit() and args[2]:
         dismiss_standing_approval(args[1], args[2])
         return 0
-    if len(args) == 2 and args[0] == "prepare-approval" and args[1].isdigit():
-        prepare_approval(args[1])
-        return 0
     if len(args) == 3 and args[0] == "dismiss-stale" and args[1].isdigit() and args[2]:
         dismiss_stale_approval(args[1], args[2])
         return 0
@@ -703,8 +703,7 @@ def main(argv: list[str] | None = None) -> int:
         resolve_thread(args[1])
         return 0
     print(
-        f"usage: {sys.argv[0]} state|request|feedback|threads|prepare-approval "
-        "<pr-number> | "
+        f"usage: {sys.argv[0]} state|request|feedback|threads <pr-number> | "
         "dismiss|dismiss-stale <pr-number> <message> | resolve-thread <thread-id>",
         file=sys.stderr,
     )
