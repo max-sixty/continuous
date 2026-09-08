@@ -266,6 +266,12 @@ A bot `APPROVED` keeps deciding the PR until a dismissal or a `CHANGES_REQUESTED
 
 Keying the dismissal to a post is what leaves it standing: **Recheck Before Posting** rightly suppresses a second deferral comment when one already stands, and a dismissal that rides on that comment is suppressed with it. Dismiss on the conclusion, then say so in the summary — where this session does post a review carrying that conclusion, dismiss after the post lands, so a failed post doesn't leave the PR with neither a verdict nor findings.
 
+The review reducer retains GitHub's native dismissal event — including its
+message and dismissal commit — as standing context until a later bot approval.
+A recovery review must read and preserve that decision unless current evidence
+shows its reason is resolved; a later COMMENT or silent coverage record does
+not clear it.
+
 ```bash
 uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/bot_review_state.py" \
   dismiss <number> "<what invalidated the approval>"

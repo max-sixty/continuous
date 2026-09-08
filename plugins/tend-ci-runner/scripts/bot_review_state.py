@@ -7,8 +7,9 @@
 GitHub's native review fields carry author, commit, state, and submission time.
 A submitted bot review covers its commit when it has reader-facing content, an
 inline finding, an approval, or Tend's marker for a deliberately silent pass.
-Pending reviews never cover. A later dismissed bot review invalidates earlier
-coverage on the same commit, so a failed replacement remains recoverable.
+Pending reviews never cover. GitHub's native dismissal timeline records
+invalidate earlier coverage on the same commit, so a failed replacement remains
+recoverable; a dismissal remains review context until a later bot approval.
 Ready-for-review is a separate generation latch: only a submitted bot review
 naming the exact timeline event acknowledges it.
 """
@@ -171,6 +172,72 @@ def _latest_ready_for_review(
     return max(parsed, key=lambda event: (event["at"], event["id"])) if parsed else None
 
 
+def _bot_review_dismissals(
+    events: list[dict[str, Any]], mine: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    reviews_by_id = {review.get("id"): review for review in mine}
+    parsed = []
+    for event in events:
+        event_id = event.get("id")
+        created_at = event.get("created_at")
+        dismissed = event.get("dismissed_review")
+        if (
+            isinstance(event_id, bool)
+            or not isinstance(event_id, int)
+            or event_id <= 0
+            or not isinstance(created_at, str)
+            or not created_at
+            or not isinstance(dismissed, dict)
+        ):
+            raise ValueError(
+                "review_dismissed timeline event is missing a valid id/time"
+            )
+        raw_review_id = dismissed.get("review_id")
+        if isinstance(raw_review_id, bool) or not (
+            isinstance(raw_review_id, int)
+            or (isinstance(raw_review_id, str) and raw_review_id.isdigit())
+        ):
+            raise ValueError("review_dismissed timeline event has an invalid review id")
+        review_id = int(raw_review_id)
+        if review_id not in reviews_by_id:
+            continue
+        review = reviews_by_id[review_id]
+        message = dismissed.get("dismissal_message")
+        if message is not None and not isinstance(message, str):
+            raise ValueError("review_dismissed timeline event has an invalid message")
+        prior_state = dismissed.get("state")
+        if prior_state is not None and not isinstance(prior_state, str):
+            raise ValueError("review_dismissed timeline event has an invalid state")
+        dismissal_commit_id = dismissed.get("dismissal_commit_id")
+        if dismissal_commit_id is not None and not isinstance(dismissal_commit_id, str):
+            raise ValueError(
+                "review_dismissed timeline event has an invalid dismissal commit"
+            )
+        parsed.append(
+            {
+                "id": event_id,
+                "review_id": review_id,
+                "sha": review.get("commit_id"),
+                "at": created_at,
+                "message": message or "",
+                "prior_state": prior_state or "",
+                "dismissal_commit_id": dismissal_commit_id or "",
+            }
+        )
+    parsed_ids = {event["review_id"] for event in parsed}
+    missing = [
+        review["id"]
+        for review in mine
+        if review.get("state") == "DISMISSED" and review.get("id") not in parsed_ids
+    ]
+    if missing:
+        raise ValueError(
+            "dismissed bot review is missing timeline metadata: "
+            + ", ".join(str(review_id) for review_id in missing)
+        )
+    return sorted(parsed, key=lambda event: (event["at"], event["id"]))
+
+
 def review_state(
     *,
     head_sha: str,
@@ -179,10 +246,17 @@ def review_state(
     force_push_times: list[str],
     ready_for_review_events: list[dict[str, Any]],
     reviews: list[dict[str, Any]],
+    review_dismissal_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Reduce GitHub review records to the state used by Tend's skills."""
     mine = _submitted_bot_reviews(reviews, bot)
     pending = _pending_reviews(reviews, bot)
+    dismissals = _bot_review_dismissals(review_dismissal_events or [], mine)
+
+    def review_is_after(review: dict[str, Any], event: dict[str, Any]) -> bool:
+        # GitHub timestamps have one-second precision, so equality cannot prove
+        # which outward action won. Treat it as uncovered and retry.
+        return (review.get("submitted_at") or "") > event["at"]
 
     def public_body(review: dict[str, Any]) -> str:
         return strip_review_metadata(review.get("body") or "")
@@ -209,12 +283,12 @@ def review_state(
     ]
     covered = [
         review
-        for index, review in enumerate(mine)
+        for review in mine
         if review in coverage_candidates
         if not any(
-            later.get("state") == "DISMISSED"
-            and later.get("commit_id") == review.get("commit_id")
-            for later in mine[index + 1 :]
+            dismissal["sha"] == review.get("commit_id")
+            and not review_is_after(review, dismissal)
+            for dismissal in dismissals
         )
     ]
     last_covered = covered[-1] if covered else None
@@ -242,6 +316,17 @@ def review_state(
     standing_approval = (
         decisions[-1]
         if decisions and decisions[-1].get("state") == "APPROVED"
+        else None
+    )
+    latest_dismissal = dismissals[-1] if dismissals else None
+    standing_dismissal = (
+        latest_dismissal
+        if latest_dismissal
+        and not any(
+            review.get("state") == "APPROVED"
+            and review_is_after(review, latest_dismissal)
+            for review in mine
+        )
         else None
     )
 
@@ -318,6 +403,19 @@ def review_state(
             else ""
         ),
         "standing_approval_id": (standing_approval["id"] if standing_approval else ""),
+        "standing_dismissal": (
+            {
+                "event_id": standing_dismissal["id"],
+                "review_id": standing_dismissal["review_id"],
+                "sha": standing_dismissal["sha"],
+                "at": standing_dismissal["at"],
+                "message": standing_dismissal["message"],
+                "prior_state": standing_dismissal["prior_state"],
+                "dismissal_commit_id": standing_dismissal["dismissal_commit_id"],
+            }
+            if standing_dismissal
+            else None
+        ),
     }
 
 
@@ -337,6 +435,9 @@ def fetch_review_state(pr: str, *, repo: str | None = None) -> dict[str, Any]:
         if comment.get("in_reply_to_id") is None
         and comment.get("pull_request_review_id") is not None
     }
+    reviews = github_cli.paginated(
+        "api", "--paginate", f"repos/{repo}/pulls/{pr}/reviews"
+    )
     timeline = github_cli.paginated(
         "api", "--paginate", f"repos/{repo}/issues/{pr}/timeline"
     )
@@ -348,9 +449,9 @@ def fetch_review_state(pr: str, *, repo: str | None = None) -> dict[str, Any]:
     ready_for_review_events = [
         event for event in timeline if event.get("event") == "ready_for_review"
     ]
-    reviews = github_cli.paginated(
-        "api", "--paginate", f"repos/{repo}/pulls/{pr}/reviews"
-    )
+    review_dismissal_events = [
+        event for event in timeline if event.get("event") == "review_dismissed"
+    ]
     return review_state(
         head_sha=head,
         bot=bot,
@@ -358,6 +459,7 @@ def fetch_review_state(pr: str, *, repo: str | None = None) -> dict[str, Any]:
         force_push_times=force_push_times,
         ready_for_review_events=ready_for_review_events,
         reviews=reviews,
+        review_dismissal_events=review_dismissal_events,
     )
 
 
@@ -614,3 +716,6 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except subprocess.CalledProcessError as error:
         raise SystemExit(github_cli.exit_code(error)) from None
+    except ValueError as error:
+        print(f"bot-review-state: {error}", file=sys.stderr)
+        raise SystemExit(1) from None

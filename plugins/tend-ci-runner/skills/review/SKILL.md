@@ -34,6 +34,9 @@ On `skip`, finish. The JSON fields replace the shell variables named below;
 line counts authored since the last review, excluding base-branch churn.
 `recovery_pending_review_id` is the one current-head private PENDING review
 compatible with this review mode, or null.
+`standing_dismissal` is the latest native dismissal of this bot's review which
+has not been superseded by a later bot approval, including GitHub's dismissal
+message and commit fields.
 
 After a successful `start`, run the command below only when the review pass has
 actually completed and intentionally has no reader-facing review to publish:
@@ -58,6 +61,16 @@ questions and replies outside the code review, has a current outcome.
 When `recovery_pending_review_id` is non-null, bypass the already-reviewed and
 trivial-increment silent exits below. The private pending review has comments to
 reconcile but does not count as a finalized verdict.
+
+When `standing_dismissal` is non-null, treat it as a prior merge-readiness
+decision, not disposable history. Read its native dismissal message and commit
+fields before reviewing. Never approve unless current evidence shows that its
+reason no longer applies. If the reason still applies and no reader-facing
+update is needed, finish the pass with `complete`: that covers the inspected
+head without erasing the dismissal context from a later demanded review. A
+COMMENT or silent completion after the dismissal does not supersede it; only a
+later bot approval does. The final approval boundary rejects a dismissal that
+arrived after `start`, forcing a new pass to read it.
 
 When `force_full_review` is true, bypass both the already-reviewed and trivial-
 increment shortcuts: becoming ready asks for a full non-draft review.

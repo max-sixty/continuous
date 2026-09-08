@@ -133,6 +133,7 @@ class Fixture:
                 {
                     "operation_id": "a" * 32,
                     "review_mode": "full",
+                    "standing_dismissal_event_id": None,
                     "ready_review_event_id": None,
                     "recovery_pending_review_id": None,
                     "pending_review_ids": [],
@@ -341,6 +342,7 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
         "last_review_sha": pr.reviewed,
         "force_pushed_since": False,
         "incremental_path": context["incremental_path"],
+        "standing_dismissal": None,
         "ready_review_event_id": None,
         "recovery_pending_review_id": None,
         "operation_id": context["operation_id"],
@@ -349,6 +351,7 @@ def test_start_records_one_snapshot_and_prepares_the_incremental(pr: Fixture) ->
     assert json.loads(pr.context.read_text()) == {
         "operation_id": context["operation_id"],
         "review_mode": "full",
+        "standing_dismissal_event_id": None,
         "ready_review_event_id": None,
         "recovery_pending_review_id": None,
         "pending_review_ids": [],
@@ -371,6 +374,40 @@ def test_incremental_starts_after_the_last_silent_completed_pass(
     context = json.loads(result.stdout)
     assert context["last_review_sha"] == pr.reviewed
     assert "pr-2" in Path(context["incremental_path"]).read_text()
+
+
+def test_start_surfaces_a_native_standing_dismissal(pr: Fixture) -> None:
+    pr.reviews(_review(pr.reviewed, "", state="DISMISSED"))
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "event": "review_dismissed",
+                "id": 71,
+                "created_at": "2026-01-02T00:00:00Z",
+                "dismissed_review": {
+                    "review_id": 1,
+                    "state": "approved",
+                    "dismissal_message": "Superseded by another PR.",
+                },
+            }
+        ],
+    )
+
+    result = pr.start()
+
+    assert result.returncode == 0, result.stderr
+    context = json.loads(result.stdout)
+    assert context["standing_dismissal"] == {
+        "event_id": 71,
+        "review_id": 1,
+        "sha": pr.reviewed,
+        "at": "2026-01-02T00:00:00Z",
+        "message": "Superseded by another PR.",
+        "prior_state": "approved",
+        "dismissal_commit_id": "",
+    }
+    assert json.loads(pr.context.read_text())["standing_dismissal_event_id"] == 71
 
 
 def test_start_captures_the_exact_outstanding_readiness_generation(
@@ -448,6 +485,39 @@ def test_complete_records_a_silent_pass_without_captured_readiness(
         "commit_id": pr.reviewed,
         "body": "<!-- tend:review-complete -->",
     }
+
+
+@pytest.mark.parametrize("outward_action", ["approve", "complete"])
+def test_a_dismissal_after_start_blocks_a_stale_outward_action(
+    pr: Fixture, outward_action: str
+) -> None:
+    assert pr.start().returncode == 0
+    pr.reviews(_review(pr.reviewed, "", state="DISMISSED"))
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "event": "review_dismissed",
+                "id": 72,
+                "created_at": "2026-01-02T00:00:00Z",
+                "dismissed_review": {
+                    "review_id": 1,
+                    "state": "approved",
+                    "dismissal_message": "Approach was rejected.",
+                },
+            }
+        ],
+    )
+
+    result = (
+        pr.submit("--event", "APPROVE")
+        if outward_action == "approve"
+        else pr.complete()
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "dismissed after this pass started" in result.stdout
+    assert not (pr.tmp_path / "post-input.json").exists()
 
 
 def test_complete_discards_reconciled_private_pending_reviews(pr: Fixture) -> None:
@@ -1121,6 +1191,21 @@ def test_a_failed_post_approval_followup_remains_recoverable(
             ),
             "id": 2,
         },
+    )
+    pr.write(
+        "TIMELINE_JSON",
+        [
+            {
+                "event": "review_dismissed",
+                "id": 73,
+                "created_at": "2026-01-02T00:00:00Z",
+                "dismissed_review": {
+                    "review_id": 2,
+                    "state": "approved",
+                    "dismissal_message": "CI failed.",
+                },
+            }
+        ],
     )
 
     started = pr.start()

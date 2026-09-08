@@ -252,6 +252,7 @@ def _start(pr: str) -> int:
         "last_review_sha": last_review_sha,
         "force_pushed_since": force_pushed,
         "incremental_path": incremental_path,
+        "standing_dismissal": review_state.get("standing_dismissal"),
         "ready_review_event_id": ready_review_event_id,
         "recovery_pending_review_id": recovery_pending_review_id,
         "operation_id": uuid.uuid4().hex,
@@ -263,6 +264,9 @@ def _start(pr: str) -> int:
         {
             "operation_id": context["operation_id"],
             "review_mode": "draft" if bool(initial["isDraft"]) else "full",
+            "standing_dismissal_event_id": (
+                (review_state.get("standing_dismissal") or {}).get("event_id")
+            ),
             "ready_review_event_id": ready_review_event_id,
             "recovery_pending_review_id": recovery_pending_review_id,
             "pending_review_ids": [
@@ -473,6 +477,12 @@ def _readiness_marker(snapshot: dict[str, Any]) -> str | None:
     return bot_review_state.ready_review_marker(event_id)
 
 
+def _new_dismissal_since_start(snapshot: dict[str, Any]) -> bool:
+    context = _read_context() or {}
+    live = snapshot["review_state"].get("standing_dismissal") or {}
+    return live.get("event_id") != context.get("standing_dismissal_event_id")
+
+
 def _review_api(
     repo: str,
     pr: str,
@@ -572,6 +582,10 @@ def _complete(args: list[str]) -> int:
     )
     if snapshot is None:
         return status
+    if _new_dismissal_since_start(snapshot):
+        return _skip(
+            "a bot review was dismissed after this pass started; run start again"
+        )
     snapshot["pr"] = pr
     discard_status = _discard_pending_reviews(snapshot)
     if discard_status:
@@ -627,6 +641,10 @@ def _submit(args: list[str]) -> int:
         return _skip("review started while PR was a draft; approval requires a new run")
     if event == "APPROVE" and snapshot["is_draft"]:
         return _skip("PR became a draft before approval")
+    if event == "APPROVE" and _new_dismissal_since_start(snapshot):
+        return _skip(
+            "a bot review was dismissed after this pass started; run start again"
+        )
     snapshot["pr"] = pr
 
     marker = _readiness_marker(snapshot)
@@ -755,3 +773,5 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except subprocess.CalledProcessError as error:
         raise SystemExit(github_cli.exit_code(error)) from None
+    except ValueError as error:
+        raise SystemExit(_error(str(error))) from None

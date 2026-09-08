@@ -154,6 +154,28 @@ def _ready_at(env: dict[str, str], *events: tuple[int, str]) -> None:
     )
 
 
+def _dismissed_at(
+    env: dict[str, str],
+    review_id: int,
+    at: str,
+    message: str = "The earlier approval no longer applies.",
+) -> None:
+    timeline = json.loads(Path(env["TIMELINE_JSON"]).read_text())
+    timeline.append(
+        {
+            "event": "review_dismissed",
+            "id": 1000 + review_id,
+            "created_at": at,
+            "dismissed_review": {
+                "review_id": review_id,
+                "state": "approved",
+                "dismissal_message": message,
+            },
+        }
+    )
+    _write(env, "TIMELINE_JSON", timeline)
+
+
 # ---------------------------------------------------------------------------
 # Substantive vs. synthetic reply containers
 # ---------------------------------------------------------------------------
@@ -170,6 +192,7 @@ def test_a_clean_pr_reports_nothing_anchored(env: dict[str, str]) -> None:
     assert state["fresh_approval_sha"] == ""
     assert state["stale_approval_id"] == ""
     assert state["standing_approval_id"] == ""
+    assert state["standing_dismissal"] is None
     assert state["force_pushed_since"] is False
     assert state["latest_ready_for_review"] is None
     assert state["acknowledged_ready_ids"] == []
@@ -563,6 +586,7 @@ def test_a_dismissed_review_no_longer_covers_even_when_its_body_remains(
             )
         ],
     )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z", "Superseded by another PR.")
 
     state = _state(env)
 
@@ -570,6 +594,15 @@ def test_a_dismissed_review_no_longer_covers_even_when_its_body_remains(
     assert state["last_covered"] is None
     assert state["at_head"] is None
     assert state["needs_review"] is True
+    assert state["standing_dismissal"] == {
+        "event_id": 1001,
+        "review_id": 1,
+        "sha": HEAD,
+        "at": "2026-01-02T00:00:00Z",
+        "message": "Superseded by another PR.",
+        "prior_state": "approved",
+        "dismissal_commit_id": "",
+    }
 
 
 @pytest.mark.parametrize(
@@ -593,12 +626,99 @@ def test_a_later_dismissal_invalidates_earlier_coverage_on_the_same_head(
             ),
         ],
     )
+    _dismissed_at(env, 2, "2026-01-03T00:00:00Z")
 
     state = _state(env)
 
     assert state["last_covered"] is None
     assert state["at_head"] is None
     assert state["needs_review"] is True
+
+
+def test_silent_completion_does_not_erase_standing_dismissal_context(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-03T00:00:00Z", body=REVIEW_COMPLETE_MARKER),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z", "Approach was rejected.")
+
+    state = _state(env)
+
+    assert state["at_head"]["id"] == 2
+    assert state["needs_review"] is False
+    assert state["standing_dismissal"]["message"] == "Approach was rejected."
+
+
+def test_a_later_bot_approval_supersedes_standing_dismissal_context(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-03T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+
+    assert _state(env)["standing_dismissal"] is None
+
+
+def test_native_dismissal_accepts_githubs_documented_string_review_id(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", state="DISMISSED")],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+    timeline = json.loads(Path(env["TIMELINE_JSON"]).read_text())
+    timeline[0]["dismissed_review"]["review_id"] = "1"
+    _write(env, "TIMELINE_JSON", timeline)
+
+    assert _state(env)["standing_dismissal"]["review_id"] == 1
+
+
+def test_same_second_approval_cannot_erase_dismissal_context(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [
+            _review(1, "2026-01-01T00:00:00Z", state="DISMISSED"),
+            _review(2, "2026-01-02T00:00:00Z", state="APPROVED"),
+        ],
+    )
+    _dismissed_at(env, 1, "2026-01-02T00:00:00Z")
+
+    state = _state(env)
+
+    assert state["standing_dismissal"] is not None
+    assert state["at_head"] is None
+
+
+def test_dismissed_review_without_native_timeline_metadata_fails_closed(
+    env: dict[str, str],
+) -> None:
+    _write(
+        env,
+        "REVIEWS_JSON",
+        [_review(1, "2026-01-01T00:00:00Z", state="DISMISSED")],
+    )
+
+    result = _run_cli(env, "state", "7")
+
+    assert result.returncode != 0
+    assert "dismissed bot review is missing timeline metadata" in result.stderr
 
 
 def test_at_head_uses_native_review_fields_not_prose_identity(
@@ -1129,6 +1249,7 @@ def test_a_dismissed_approval_is_not_re_dismissed(env: dict[str, str]) -> None:
     relies on that to keep a later run from dismissing the same review again."""
     _write(env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="DISMISSED")])
     _rewrite_at(env, "2026-01-02T00:00:00Z")
+    _dismissed_at(env, 3, "2026-01-01T12:00:00Z")
 
     assert _state(env)["stale_approval_id"] == ""
 
@@ -1160,6 +1281,7 @@ def test_a_dismissed_approval_is_not_standing(env: dict[str, str]) -> None:
     """Dismissing rewrites the record's state, so the next run's findings
     review does not dismiss it a second time."""
     _write(env, "REVIEWS_JSON", [_review(3, "2026-01-01T00:00:00Z", state="DISMISSED")])
+    _dismissed_at(env, 3, "2026-01-01T12:00:00Z")
 
     assert _state(env)["standing_approval_id"] == ""
 
