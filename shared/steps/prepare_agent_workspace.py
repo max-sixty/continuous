@@ -210,9 +210,11 @@ def checkout_mention(
 ) -> tuple[str, str]:
     pr = api_json(f"/repos/{repository}/pulls/{number}", token)
     if pr.get("state") != "open":
-        return checkout_base(workspace, base_branch, base_sha), pull_base_sha(
-            pr, number
-        )
+        # The fallback selects the default branch, which is reviewed code — so
+        # there is nothing to pin away, and pinning to the closed PR's base
+        # would revert this tree's instruction files to whatever they were
+        # when that PR opened.  Same answer as an `issue_comment` on an issue.
+        return checkout_base(workspace, base_branch, base_sha), ""
     head = pr.get("head")
     if not isinstance(head, dict) or not isinstance(head.get("repo"), dict):
         raise TypeError(f"PR #{number} has no fetchable head repository")

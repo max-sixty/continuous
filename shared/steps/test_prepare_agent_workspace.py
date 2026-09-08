@@ -226,3 +226,51 @@ def test_issue_comment_targets_pull_request(
     payload: dict[str, object], expected: bool
 ) -> None:
     assert prepare.issue_comment_targets_pull_request(payload) is expected
+
+
+def test_mention_on_a_closed_pr_keeps_the_default_branch_instructions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A closed PR's base commit must not pin the default branch's own tree.
+
+    The fallback checks out the default branch, which is reviewed code. Pinning
+    it to the base the PR opened against reverts every `CLAUDE.md`, `AGENTS.md`
+    and `.claude/**` the branch has gained since — so the session runs on stale
+    repo guidance, and the revert is staged by any later `git add -A`.
+    """
+    origin, runner, base, _head = repository(tmp_path)
+    (runner / "CLAUDE.md").write_text("current guidance\n")
+    command("add", "CLAUDE.md", cwd=runner)
+    command("commit", "-m", "guidance", cwd=runner)
+    tip = command("rev-parse", "HEAD", cwd=runner)
+    command("push", "origin", "main", cwd=runner)
+
+    destination = tmp_path / "agent"
+    prepare.clone_workspace(
+        runner_workspace=runner,
+        destination=destination,
+        repository="owner/repo",
+        token="unused",
+        remote_url=str(origin),
+    )
+    monkeypatch.setattr(
+        prepare,
+        "api_json",
+        lambda _path, _token: {"state": "closed", "base": {"sha": base}},
+    )
+    monkeypatch.setattr(prepare, "BASH", Path(shutil.which("bash") or "/bin/bash"))
+
+    selected, config_base = prepare.checkout_mention(
+        destination,
+        repository="owner/repo",
+        number=7,
+        token="unused",
+        base_branch="main",
+        base_sha=tip,
+    )
+
+    assert selected == f"base branch main at {tip}"
+    assert config_base == ""
+    prepare.restore_sensitive_config(destination, config_base)
+    assert (destination / "CLAUDE.md").read_text() == "current guidance\n"
+    assert command("status", "--porcelain", cwd=destination) == ""
