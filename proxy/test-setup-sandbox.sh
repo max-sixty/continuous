@@ -149,12 +149,24 @@ setup() {
 }
 
 install_agent_uv() {
-  local action_run
+  local action_run harness private_action
+  private_action=$(mktemp -d "$RUNNER_TEMP/tend-private-action.XXXXXX")
+  mkdir -p "$private_action/claude" "$private_action/codex" \
+    "$private_action/shared/steps"
+  cp "$TEND_TEST_ACTION_PATH/shared/steps/install-uv.sh" \
+    "$private_action/shared/steps/"
+  if sudo -u "$SANDBOX" test -r "$private_action/shared/steps/install-uv.sh"; then
+    echo "::error::private action fixture is readable by the sandbox user"
+    exit 1
+  fi
   UV_VERSION=$(yq -e '.inputs.uv_version.default' claude/action.yaml)
   export UV_VERSION
-  action_run=$(yq -er '.runs.steps[] | select(.name == "Install agent uv fallback (sandbox)") | .run' claude/action.yaml)
-  action_run=${action_run//'${{ github.action_path }}'/"$TEND_TEST_ACTION_PATH/claude"}
-  /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run"
+  for harness in claude codex; do
+    action_run=$(yq -er '.runs.steps[] | select(.name == "Install agent uv fallback (sandbox)") | .run' "$harness/action.yaml")
+    action_run=${action_run//'${{ github.action_path }}'/"$private_action/$harness"}
+    /usr/bin/bash --noprofile --norc -eo pipefail -c "$action_run"
+  done
+  rm -rf "$private_action"
 }
 
 verify() {

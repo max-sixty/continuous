@@ -326,6 +326,8 @@ runs:
         CLAUDE_VERSION: ${{ inputs.claude_version }}
 
     # Install a pinned fallback after the adopter PATH, as the sandbox user.
+    # The runner opens the script because its action cache is outside the
+    # sandbox user's traversable paths.
     - name: Install agent uv fallback (sandbox)
       shell: bash
       run: |
@@ -334,7 +336,8 @@ runs:
           PATH=/usr/bin:/bin \
           UV_VERSION="$UV_VERSION" \
           UV_INSTALL_DIR="$TEND_AGENT_UV_DIR" \
-          /usr/bin/bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
+          /usr/bin/bash -s -- \
+          < "${{ github.action_path }}/../shared/steps/install-uv.sh"
       env:
         UV_VERSION: ${{ inputs.uv_version }}
 
