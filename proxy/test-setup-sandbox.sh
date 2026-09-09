@@ -213,7 +213,7 @@ verify_refusals() {
 
 verify_srt() {
   local claude_argv claude_env claude_stub codex_argv codex_env codex_stub dummy_token
-  local github_output probe_info probe_pid probe_port rc runner_summary
+  local github_output private_action probe_info probe_pid probe_port rc runner_summary
   local setup_commands setup_proxy stream_json tool_root
   github_output="$RUNNER_TEMP/srt-github-output"
   runner_summary="$RUNNER_TEMP/srt-step-summary"
@@ -224,6 +224,15 @@ verify_srt() {
   mkdir -p "$tool_root"
   printf '#!/bin/sh\necho tend-srt-tool-ok\n' > "$tool_root/probe"
   chmod +x "$tool_root/probe"
+
+  private_action=$(mktemp -d "$RUNNER_TEMP/tend-private-runtime.XXXXXX")
+  mkdir -p "$private_action/shared" "$private_action/codex"
+  cp -R "$TEND_TEST_ACTION_PATH/shared/steps" "$private_action/shared/"
+  cp "$TEND_TEST_ACTION_PATH/codex/runner.py" "$private_action/codex/"
+  if sudo -u "$SANDBOX" test -r "$private_action/shared/steps/sandbox_runtime.mjs"; then
+    echo "::error::private runtime fixture is readable by the sandbox user"
+    exit 1
+  fi
 
   claude_stub="$TEND_AGENT_WORKSPACE/.tend-explicit/bin/claude"
   claude_env="$TEND_AGENT_WORKSPACE/.tend-claude-env"
@@ -315,9 +324,9 @@ PY
 
   rm -rf -- "$RUNNER_TEMP/tend-agent-export"
   rc=0
-  ACTION_PATH="$TEND_TEST_ACTION_PATH" \
+  ACTION_PATH="$private_action" \
     TEND_HARNESS=claude \
-    TEND_LIFECYCLE="$TEND_TEST_ACTION_PATH/shared/steps/agent_lifecycle.py" \
+    TEND_LIFECYCLE="$private_action/shared/steps/agent_lifecycle.py" \
     TEND_SANDBOX_SETUP="$setup_commands" \
     TEND_BOUNDARY_PROBE_URL="http://127.0.0.1:$probe_port/" \
     TEND_BOUNDARY_PROBE_EXECUTABLE="$tool_root/probe" \
@@ -353,13 +362,14 @@ PY
     sudo -u "$SANDBOX" grep -qxF -- "$want" "$claude_argv"
   done
 
+  rm -rf -- "$TEND_RUNTIME_ROOT/action"
   rm -rf -- "$RUNNER_TEMP/tend-agent-export"
   : > "$github_output"
   rc=0
-  ACTION_PATH="$TEND_TEST_ACTION_PATH" \
+  ACTION_PATH="$private_action" \
     TEND_HARNESS=codex \
-    TEND_LIFECYCLE="$TEND_TEST_ACTION_PATH/shared/steps/agent_lifecycle.py" \
-    TEND_CODEX_RUNNER="$TEND_TEST_ACTION_PATH/codex/runner.py" \
+    TEND_LIFECYCLE="$private_action/shared/steps/agent_lifecycle.py" \
+    TEND_CODEX_RUNNER="$private_action/codex/runner.py" \
     TEND_SANDBOX_SETUP='' \
     TEND_BOUNDARY_PROBE_URL="http://127.0.0.1:$probe_port/" \
     TEND_BOUNDARY_PROBE_EXECUTABLE="$tool_root/probe" \
@@ -373,6 +383,7 @@ PY
     GITHUB_STEP_SUMMARY="$runner_summary" \
     /usr/bin/python3 -E -s \
       "$TEND_TEST_ACTION_PATH/shared/steps/launch_sandbox_runtime.py" || rc=$?
+  rm -rf "$private_action"
   kill "$probe_pid" 2>/dev/null || true
   wait "$probe_pid" 2>/dev/null || true
   test "$rc" -eq 0

@@ -6,6 +6,12 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.2.4
+
+### Fixed
+
+- **Claude and Codex can start from GitHub's private action cache.** The runner stages the trusted lifecycle bundle in a sandbox-traversable runtime directory before changing users, and the hosted sandbox test exercises the same unreadable-cache boundary. ([#1189](https://github.com/max-sixty/tend/pull/1189))
+
 ## 0.2.3
 
 ### Fixed
