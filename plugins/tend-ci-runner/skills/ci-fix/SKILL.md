@@ -49,7 +49,7 @@ gh issue list --state open --author "$BOT_LOGIN" --search "ci-fix: in:title" \
    to diagnose, not a log fetch.
 4. Identify the root cause — don't just fix the symptom
 5. Search for the same pattern elsewhere in the codebase
-6. Reproduce locally using test commands from the project's CLAUDE.md
+6. Reproduce locally using test commands from the project's instruction files
 7. Fix at the right level (shared helper > per-file fix)
 
 A cancellation takes this same diagnostic path; do not presume it is transient

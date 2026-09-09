@@ -7,9 +7,10 @@ description: Sets up tend — an autonomous junior maintainer for a GitHub repo,
 
 Set up tend on the current repo, or change an installation it already has.
 
-When asking the user questions during these steps, use the `AskUserQuestion`
-tool — present concrete options when there are clear choices (e.g.
-secret-migration confirmation, registry token route).
+When asking the user questions during these steps, batch known questions into
+one interaction where the client supports it, and present concrete options
+when there are clear choices (e.g. secret-migration confirmation, registry
+token route).
 
 When a question requires the user to do something off-screen (visit a URL,
 run a command, paste a value back), spell the next step out in the question
@@ -77,7 +78,7 @@ minutes of the user's hands-on time (browser logins, OAuth approvals,
 occasional copy-paste) — the agent drives the rest, ending at a local
 commit (pushing waits for their go-ahead, step 11).
 
-Then one `AskUserQuestion` call with three questions. Answering it is the
+Then ask these three questions together. Answering them is the
 go-ahead — no separate "ready to start?" confirmation. Drop any question the
 user's request or an existing config already answers (a supplied bot name, a
 chosen harness; the auth mode a config-settled harness leaves open is asked
@@ -110,9 +111,9 @@ itself the go-ahead.
      this skill.
    - **Customize…** — pick the areas in a follow-up question.
 
-A **Customize…** answer gets one more `AskUserQuestion`
-(`multiSelect: true`): which areas to change, defaults applying to
-whatever is left unselected (an empty submission included), each option
+A **Customize…** answer gets one more multi-select question: which areas to
+change, defaults applying to whatever is left unselected (an empty submission
+included), each option
 naming its default in its description. Both the defaults description
 and this follow-up list only the areas still open — drop an area the
 user's request settles (the request, not the default, governs its step:
@@ -213,7 +214,7 @@ place. Classify each remaining secret and act now — don't defer:
   rather than passing silently.
 
   Migrate the secret: recreate it on the Environment, delete the
-  repo-level copy (confirm via `AskUserQuestion` first), and set
+  repo-level copy (confirm with the user first), and set
   `environment: <name>` on the publishing job.
 
   Configure the deployment policy. Allow whichever ref classes the
@@ -259,7 +260,7 @@ place. Classify each remaining secret and act now — don't defer:
   is then the only control on that path.
 
   The original repo-level secret value isn't readable (GitHub secrets are
-  write-only), so a fresh token is needed. Ask the user via `AskUserQuestion`
+  write-only), so a fresh token is needed. Ask the user
   how to obtain it; recommend whichever fits the registry:
 
   - **CLI** — if the registry has a token-issuing CLI (e.g., `npm token create`),
@@ -311,8 +312,8 @@ workflows:
 If no CI workflows exist, either skip ci-fix (`enabled: false`) or help the
 user create one first.
 
-If the user picked workflow config at Kickoff, ask via `AskUserQuestion`
-(`multiSelect: true`) which overrides to set — otherwise set none:
+If the user picked workflow config at Kickoff, ask which overrides to set in
+a multi-select question — otherwise set none:
 
 - Setup steps and env vars (system deps, language version, pre-build
   hooks, top-level env vars)
@@ -545,10 +546,22 @@ guidance, opening with the frontmatter below so discovery lists it by
 description rather than by its first heading. An existing overlay without
 frontmatter needs it added in place.
 
-**Do NOT duplicate CLAUDE.md** and **do NOT invent project conventions.**
+**Do not create a second independent copy of project instructions** and **do
+not invent project conventions.** If the repo has only one of `CLAUDE.md` or
+`AGENTS.md`, create a relative symlink at the other name so both harnesses read
+the same content. Preserve both when both already exist, and create neither
+when neither exists:
 
-If the user picked the overlay at Kickoff, ask via `AskUserQuestion`
-(`multiSelect: true`) which tend-specific preferences to capture:
+```bash
+if [ -f CLAUDE.md ] && [ ! -e AGENTS.md ] && [ ! -L AGENTS.md ]; then
+  ln -s CLAUDE.md AGENTS.md
+elif [ -f AGENTS.md ] && [ ! -e CLAUDE.md ] && [ ! -L CLAUDE.md ]; then
+  ln -s AGENTS.md CLAUDE.md
+fi
+```
+
+If the user picked the overlay at Kickoff, ask which tend-specific
+preferences to capture in a multi-select question:
 
 - PR conventions (title format — e.g., conventional commits, Jira ticket
   prefix — and labels the bot should apply)
@@ -567,11 +580,13 @@ description: Project-specific guidance for tend workflows running on this repo.
 ---
 
 No project-specific tend preferences yet. Add guidance here as
-needed — this file is loaded by tend workflows alongside CLAUDE.md.
+needed — this file is loaded by tend workflows alongside the project's
+instruction file.
 ```
 
-Build commands, test commands, code style, and project structure belong
-in CLAUDE.md — tend reads it like any other Claude session.
+Build commands, test commands, code style, and project structure belong in
+the project's `CLAUDE.md` or `AGENTS.md`; Tend reads the applicable project
+instructions like any other agent session.
 
 ## 5. README badge
 
@@ -670,8 +685,8 @@ gh secret list --repo "$REPO" --env tend --json name --jq '.[].name' \
 
 If not set, mint per the auth mode chosen at Kickoff. Absent a Kickoff
 answer — the config records the harness, never the auth mode, so a change
-flow or a resumed install lands here without one — first ask which mode
-via `AskUserQuestion`: the two Claude options from Kickoff question 1.
+flow or a resumed install lands here without one — first ask the user to choose
+between the two Claude options from Kickoff question 1.
 
 For **OAuth token** (`sk-ant-oat01-…` from `claude setup-token`; advertised
 as 1-year), two mint paths, routed by environment rather than asked:
@@ -683,8 +698,8 @@ as 1-year), two mint paths, routed by environment rather than asked:
   `claude setup-token` (OAuth 2.0 PKCE) and prints only the token to
   stdout, so piping straight into `gh` keeps it out of the transcript.
 
-  Launch the command below with the Bash tool's `run_in_background: true`
-  — a foreground call sits blocked with the URL trapped in its pending
+  Launch the command below as a background task — a foreground call sits
+  blocked with the URL trapped in its pending
   result, and times out before the user has anything to click. Start it
   only once the user says they are at the browser: the wrapper prints the
   authorize URL within seconds, then waits — up to 15 minutes — for their
@@ -988,11 +1003,10 @@ bot to do, then reflect that stance in the bot's profile bio (≤160 chars)
 so it's discoverable on the bot's user page. This is advisory — the bot
 doesn't gate behavior on it.
 
-Use the recommended stance below unless the user picked the bio at Kickoff
-or there was no Kickoff round (a change flow) — then ask via
-`AskUserQuestion` which applies. Substitute
-`<owner>/<repo>`. Order options recommended-first and mark the recommended
-one explicitly:
+Use the recommended stance below unless the user picked the bio at Kickoff or
+there was no Kickoff round (a change flow) — then ask which applies. Substitute
+`<owner>/<repo>`. Order options recommended-first and mark the recommended one
+explicitly:
 
 - `tend agent for <owner>/<repo>. I triage issues and help maintain <repo>.` (Recommended — invites issue/PR engagement without inviting open-ended Q&A)
 - `tend agent for <owner>/<repo>. Feel free to ask me questions about <repo>.` (Most permissive — invites contributor questions)
@@ -1057,6 +1071,7 @@ line picks the row that matches the chosen harness):
 - [ ] Immutable releases: enabled before the next release
 - [ ] Release/deploy secrets: environment-protected; the environment's deployment-branch-policies list only the admin-gated refs from §3 (default branch and/or all tags)
 - [ ] Skill overlay: `.claude/skills/running-tend/SKILL.md` (tend-specific only)
+- [ ] Project instructions: `CLAUDE.md` and `AGENTS.md` share one source when only one existed before install
 - [ ] Badge: added to README (unless skipped, or no README)
 - [ ] Bot account: `<bot-name>` exists on GitHub
 - [ ] Harness auth (claude): `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret set

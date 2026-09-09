@@ -8,7 +8,7 @@ metadata:
 
 # Code review
 
-A structured pass over a diff that returns ranked findings. Ported from Claude Code's built-in `/code-review`. The Codex harness has no built-in equivalent, and on Claude the built-in carries `disable-model-invocation`, which no tend prompt lifts. This copy is tend-owned: reachable from the model on either harness.
+A structured, Tend-owned pass over a diff that returns ranked findings on every supported harness.
 
 **Return findings; don't act on them.** No review, comment, commit, or artifact from this skill — the caller folds the findings into its own single review.
 
@@ -16,7 +16,7 @@ A structured pass over a diff that returns ranked findings. Ported from Claude C
 
 If a target was passed (PR number, branch, ref range, path, or a free-form scope instruction), review that. Otherwise run `git diff @{upstream}...HEAD` (falling back to `git diff main...HEAD` or `git diff HEAD~1`); if there are uncommitted changes, or the range diff is empty, also run `git diff HEAD`. That unified diff is the review scope.
 
-Read the CLAUDE.md files that govern the changed code: the repo-root one, plus any `CLAUDE.md`/`CLAUDE.local.md` in a directory that is an ancestor of a changed file (a directory's CLAUDE.md applies only to files at or below it).
+Read the unique project instruction files that govern the changed code: root and nested `CLAUDE.md`, `CLAUDE.local.md`, and `AGENTS.md` files in directories that contain changed files. Read a symlinked source only once. Nested instructions apply only to files at or below their directory.
 
 ## Phase 1 — Find candidates
 
@@ -25,7 +25,7 @@ Work through the angles below. Each surfaces candidates with `file`, `line`, a o
 Scale the fan-out to the change, the same way the caller scales its own depth:
 
 - **Peripheral or mechanical** (docs, config, dependency bumps, test-only): angles A–C plus the cleanup and conventions angles, in one pass, in this context. Up to 4 candidates each.
-- **Core logic**: every angle, up to 6 candidates each. Work through them yourself, in sequence, in one pass — that's the default. Fan out one subagent per angle (`Task`/`Agent`) only where this session permits subagent use; the Claude harness allowlists the tool but its system prompt limits it to user-requested calls. Either way, don't skip angles for lack of fan-out.
+- **Core logic**: every angle, up to 6 candidates each. Work through them yourself, in sequence, in one pass — that's the default. Fan out one subagent per angle only where this session permits subagent use. Either way, don't skip angles for lack of fan-out.
 
 Don't let one angle's conclusions suppress another's: if two angles flag the same line for different reasons, record both. Pass every candidate with a nameable failure scenario through to Phase 2 — finders that silently drop half-believed candidates bypass the verify step and are the dominant cause of misses.
 
@@ -65,11 +65,11 @@ Flag wasted work the diff introduces: redundant computation or repeated I/O, ind
 
 Check that each change is implemented at the right depth, not as a fragile bandaid. Special cases layered on shared infrastructure are a sign the fix isn't deep enough — prefer generalizing the underlying mechanism over adding special cases.
 
-### Conventions (CLAUDE.md)
+### Conventions (project instructions)
 
-Check the diff against the CLAUDE.md files read in Phase 0. Only flag a violation when you can quote the exact rule and the exact line that breaks it — no style preferences, no "spirit of the doc" inferences. Name the CLAUDE.md path and quote the rule so the report can cite it. If no CLAUDE.md applies, return nothing for this angle.
+Check the diff against the project instruction files read in Phase 0. Only flag a violation when you can quote the exact rule and the exact line that breaks it — no style preferences, no "spirit of the doc" inferences. Name the instruction file and quote the rule so the report can cite it. If no project instruction file applies, return nothing for this angle.
 
-Cleanup, altitude, and conventions candidates use the same `file`/`line`/`summary` shape; in `failure_scenario`, state the concrete cost (what is duplicated, wasted, harder to maintain, or which CLAUDE.md rule is broken) instead of a crash. Correctness bugs always outrank cleanup, altitude, and conventions findings when the output cap forces a cut.
+Cleanup, altitude, and conventions candidates use the same `file`/`line`/`summary` shape; in `failure_scenario`, state the concrete cost (what is duplicated, wasted, harder to maintain, or which project rule is broken) instead of a crash. Correctness bugs always outrank cleanup, altitude, and conventions findings when the output cap forces a cut.
 
 ## Phase 2 — Dedup and verify
 
@@ -91,7 +91,7 @@ On a core-logic change, take one more pass as a fresh reviewer holding the verif
 
 ## Output
 
-Return the findings to the caller as a list of at most 10 (at most 4 for a peripheral change), ranked most-severe first, each with `file`, `line`, `summary`, `failure_scenario`, and its verdict. If nothing survives verification, say so in one line. Don't call the `ReportFindings` tool and don't publish an artifact — the caller owns the output.
+Return the findings to the caller as a list of at most 10 (at most 4 for a peripheral change), ranked most-severe first, each with `file`, `line`, `summary`, `failure_scenario`, and its verdict. If nothing survives verification, say so in one line. Don't publish the findings through a separate reporting mechanism or artifact — the caller owns the output.
 
 Tell the caller which mode ran (fanned-out angles with a subagent verify, or a single inline pass) so it can weigh the findings — context for the caller, not content for the review it posts.
 

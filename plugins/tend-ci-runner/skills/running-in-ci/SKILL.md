@@ -11,9 +11,9 @@ metadata:
 
 Tend's bundled skills provide defaults; the consuming repo's `running-tend` skill overlays them. **Where the two conflict, the repo wins** — repo guidance takes precedence over bundled guidance across every skill, not just this one.
 
-If a `running-tend` skill is listed in your available skills, load it with the Skill tool before doing anything else. It typically carries PR title conventions, label policies, custom workflows to watch, and other repo-specific context. It can also define extra tasks for the job you're running — additional nightly or weekly maintenance, repo-specific health checks — which you perform as part of that job, not just keep in mind.
+If a `running-tend` skill is listed in your available skills, read it before doing anything else. It typically carries PR title conventions, label policies, custom workflows to watch, and other repo-specific context. It can also define extra tasks for the job you're running — additional nightly or weekly maintenance, repo-specific health checks — which you perform as part of that job, not just keep in mind.
 
-Repo-local skills are invoked by their unprefixed name — `Skill: running-tend`, not `Skill: tend-ci-runner:running-tend` (that prefix is reserved for this plugin's own skills, and trying it returns `Unknown skill`).
+Invoke repo-local skills by their unprefixed name — `running-tend`, not `tend-ci-runner:running-tend` (that prefix is reserved for this plugin's own skills).
 
 If you are going to propose a code fix for a bug, load `/tend-ci-runner:triage` first — it contains reproduction and testing gates that apply to all fix attempts, not just initial triage.
 
@@ -98,7 +98,7 @@ If a linked PR merged (or the triggering PR itself merged) **after the triggerin
 
 ## End the turn only when work is shipped
 
-Emitting `end_turn` ends the CI session — the runner is discarded, and the harness does not reliably resume it from a background-task completion. If you `end_turn` while a `run_in_background: true` Bash whose result was going to gate the deliverable is still running, the task either finishes invisibly or gets killed when the runner is torn down, and any staged work the maintainer was supposed to see — a committed-but-unpushed branch, a written-but-unsent `/tmp/comment-body.md` — dies with it.
+Returning the final response ends the CI session — the runner is discarded, and the harness does not reliably resume it when a background task completes. If you return while a background command whose result was going to gate the deliverable is still running, the task either finishes invisibly or gets killed when the runner is torn down, and any staged work the maintainer was supposed to see — a committed-but-unpushed branch, a written-but-unsent `/tmp/comment-body.md` — dies with it.
 
 The session is live until the deliverable is **maintainer-visible**: pushed, posted, or opened. Local-only state — a commit nobody else can see, a comment body never sent — does not count and is not recoverable on a follow-up.
 
@@ -296,7 +296,7 @@ uv run --script \
   "${CLAUDE_PLUGIN_ROOT}/scripts/poll_pr_checks.py" poll <number> "$PINNED_SHA"
 ```
 
-Invoke this Bash call in the foreground (no `run_in_background`) with `timeout: 600000` (10 min) — the poll runs up to ~9.5 minutes, and the default 2-min Bash timeout would kill it early.
+Run this command in the foreground and allow at least 10 minutes — the poll runs up to ~9.5 minutes, and a shorter command timeout would kill it early.
 
 Exit 0 is green, judged on the latest run of each check — where one workflow ran twice *independently* on the same SHA, read the earlier run's own conclusion before relying on it. Exit 1 is red, with the failing checks and their run URLs: diagnose with `gh run view <run-id> --log-failed`, fix, commit, push, and poll the new commit. Any other exit is **unverified, not green** — the script prints why. The cap is the whole poll budget — the pending count includes advisory jobs (an hourly benchmark matrix never reaches zero), so don't re-enter the loop; report the still-pending checks as unverified, marking each required or advisory (`gh pr checks <number> --required` lists the required contexts already registered on the commit; an omnibus that hasn't registered yet is required too).
 
@@ -448,10 +448,10 @@ For example, supporting material may use this shape when it helps the next reade
 
 ### Mechanics
 
-**Compose bodies with the Write tool, then post with `--body-file`.** The composed file is reviewable before it ships, quoting and escaping are non-issues, and line wrapping is just file content. The bot writes to `/tmp/` constantly — one more file is cheap. `--body "…"` is fine only for a one-line body containing no backtick, `$`, or `\`. Inside double quotes bash runs a backticked span as a command and substitutes its output, so a markdown inline-code span is silently deleted from the posted comment: `` --body "`some-check` now passes" `` ships as ` now passes`. Inline code appears in nearly every body the bot writes, and single-quoting instead breaks on any apostrophe, so reach for `--body-file` whenever the text is anything but plain prose.
+**Write bodies to a file, then post with `--body-file`.** The composed file is reviewable before it ships, quoting and escaping are non-issues, and line wrapping is just file content. The bot writes to `/tmp/` constantly — one more file is cheap. `--body "…"` is fine only for a one-line body containing no backtick, `$`, or `\`. Inside double quotes bash runs a backticked span as a command and substitutes its output, so a markdown inline-code span is silently deleted from the posted comment: `` --body "`some-check` now passes" `` ships as ` now passes`. Inline code appears in nearly every body the bot writes, and single-quoting instead breaks on any apostrophe, so reach for `--body-file` whenever the text is anything but plain prose.
 
 ```bash
-# After writing /tmp/comment-body.md with the Write tool:
+# After writing /tmp/comment-body.md:
 gh issue comment "$ISSUE" --body-file /tmp/comment-body.md
 ```
 
@@ -472,14 +472,14 @@ It resolves every 40-hex SHA in the body against the API and reports any `#L` an
 
 **Owners it cannot check — read `$GITHUB_REPOSITORY` from the environment, don't hand-type the owner.** The model reliably guesses wrong — past comments have shipped with the wrong owner (e.g. `anthropics/<repo>` on a repo not owned by Anthropic). The script catches a wrong owner on a SHA-pinned link, because that URL does not resolve either; on every other link, scan the body's `github.com/` hits and confirm each owner is either `$GITHUB_REPOSITORY` or a repo the text genuinely means.
 
-**Authoring fenced bodies with backticks.** When a body contains a fenced code block, the model often defensively escapes the inner fence (`` \`\`\`bash ``) "to prevent it from closing the outer fence early"; the same instinct can produce `` \`foo\` `` for inline spans. Those backslashes survive into the rendered body as literal `\` characters. Author with bare backticks. For nested fenced blocks, use a **longer outer fence** — four or five backticks outside, three inside — so the inner three-backtick fence renders intact without escaping. The Write tool preserves data verbatim, so the same authoring rule applies whether you compose with the Write tool or inline; Write just removes shell-quoting from the equation.
+**Authoring fenced bodies with backticks.** When a body contains a fenced code block, the model often defensively escapes the inner fence (`` \`\`\`bash ``) "to prevent it from closing the outer fence early"; the same instinct can produce `` \`foo\` `` for inline spans. Those backslashes survive into the rendered body as literal `\` characters. Author with bare backticks. For nested fenced blocks, use a **longer outer fence** — four or five backticks outside, three inside — so the inner three-backtick fence renders intact without escaping. Writing the body to a file preserves data verbatim and removes shell quoting from the equation.
 
 - **File-level link (no `#L` anchor)**: `blob/main/src/foo.rs` is fine
 - **Line reference**: `blob/<sha>/src/foo.rs#L42` — commit SHA required, never `blob/main/...#L42`
 - **Issues/PRs**: `#123` shorthand
 - **External**: `[text](url)` format
 
-Don't add job links, footers, or authorship sign-offs (e.g. `> _Written by Claude Code on behalf of @maintainer_`) — the bot account already conveys authorship, and the harness suppresses the default Claude Code footer. This covers PR and issue bodies too, not just comments.
+Don't add job links, footers, or authorship sign-offs (e.g. `> _Written by an agent on behalf of @maintainer_`) — the bot account already conveys authorship, and the harness suppresses the client's default footer. This covers PR and issue bodies too, not just comments.
 
 ## Keeping PR Titles and Descriptions Current
 

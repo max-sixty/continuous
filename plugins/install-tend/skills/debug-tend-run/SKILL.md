@@ -85,8 +85,8 @@ After extracting the session trace, reconstruct the decision chain:
    calls and outputs.
 
 Common failure modes:
-- **Wrong skill loaded** (or skill not loaded) — Claude logs a `Skill`
-  tool call; Codex `cat`s/`sed`s a `SKILL.md` path via `exec_command`
+- **Wrong skill loaded** (or skill not loaded) — inspect skill invocations or
+  reads of a `SKILL.md` path in the matching harness log
 - **Stale context** — bot acted on outdated PR state or missed recent commits
 - **Tool error ignored** — a command failed but the bot continued
 - **Hallucinated file/function** — bot referenced something that doesn't exist

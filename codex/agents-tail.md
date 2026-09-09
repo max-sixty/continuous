@@ -1,10 +1,11 @@
 ## Skills (Codex-specific)
 
-The `tend-ci-runner` plugin is installed. Its skills (`review`,
-`code-review`, `triage`, `ci-fix`, `nightly`, `weekly`,
-`notifications`, `review-runs`, `running-in-ci`,
-`review-reviewers`, `resolve-conflicts`) are invocable via `$<skill-name>` mentions in
-prompts.
+The `tend-ci-runner` and `install-tend` plugins are installed. The runner
+skills (`review`, `code-review`, `triage`, `ci-fix`, `nightly`, `weekly`,
+`notifications`, `review-runs`, `running-in-ci`, `review-reviewers`, and
+`resolve-conflicts`) are invocable via `$<skill-name>` mentions in prompts.
+The diagnostic `/install-tend:debug-tend-run` skill is available to runner
+skills that inspect earlier Tend sessions.
 
 **Read each tend skill in full.** When you open a `tend-ci-runner`
 `SKILL.md`, read the entire file with `cat`. Do not read a prefix with

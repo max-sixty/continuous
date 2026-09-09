@@ -4,7 +4,7 @@ Use these recipes when the artifact is `codex-session-logs-*`. `$FILE` is
 the rollout JSONL path set in the skill's download step.
 
 Each JSONL line has a top-level `type` of `session_meta`, `turn_context`,
-`event_msg`, or `response_item`. Substantive content sits under
+`event_msg`, or `response_item`. Response content sits under
 `response_item.payload`, with the variant in `.payload.type`:
 
 - `message` — initial input from `user` or `developer` (system prompt,
@@ -13,33 +13,36 @@ Each JSONL line has a top-level `type` of `session_meta`, `turn_context`,
   `.payload.content[] | select(.type == "input_text") | .text`
 - `agent_message` — text emitted by the model during the turn
   (`.payload.message`)
-- `function_call` — tool invocation; `.payload.name` plus
-  `.payload.arguments` (a JSON-encoded string, parse with `fromjson`)
-- `function_call_output` — paired result; `.payload.call_id` and
-  `.payload.output`
+- `custom_tool_call` — tool invocation; `.payload.name` plus the tool's
+  string input at `.payload.input`
+- `custom_tool_call_output` — paired result; `.payload.call_id` plus text
+  items at `.payload.output[] | select(.type == "input_text") | .text`
 - `reasoning` — opaque encrypted blob; skip
-- `task_started`, `task_complete`, `token_count` — metadata;
-  `task_complete.last_agent_message` carries the final reply
 
-The bot drives shell through one tool, `exec_command`, whose arguments
-parse to `{cmd, workdir, yield_time_ms, max_output_tokens}`. Long-running
-commands also produce `write_stdin` calls. Codex has no dedicated
-Read/Write/Edit tool; file I/O appears as `cat`, `sed`, `tee`,
-`apply_patch`, etc. inside `exec_command`.
+Lifecycle metadata such as `task_started`, `task_complete`, and `token_count`
+sits under `event_msg.payload`. `task_complete.last_agent_message` carries the
+final reply.
+
+The bot drives shell through the `exec` tool. Its `.payload.input` is
+JavaScript that calls nested tools such as `tools.exec_command({...})` and
+`tools.apply_patch(...)`; inspect the string directly rather than parsing it
+with `fromjson`. Long-running commands can also call `tools.write_stdin`.
+Codex has no dedicated Read/Write/Edit tool; file I/O appears inside these
+tool inputs.
 
 ## Overview — what happened
 
 ```bash
 # Skills loaded (Codex reads SKILL.md via shell rather than a dedicated tool)
-jq -r 'select(.payload.type == "function_call" and .payload.name == "exec_command") |
-  .payload.arguments | fromjson | .cmd | select(test("SKILL\\.md"))' "$FILE"
+jq -r 'select(.payload.type == "custom_tool_call" and .payload.name == "exec") |
+  .payload.input | select(test("SKILL\\.md"))' "$FILE"
 
 # Final summary the bot returned
 jq -r 'select(.payload.type == "task_complete") | .payload.last_agent_message' "$FILE"
 
 # Tool calls in order
-jq -r 'select(.payload.type == "function_call") |
-  "\(.payload.name): \(.payload.arguments | fromjson | (.cmd // tostring) | .[0:160])"' "$FILE"
+jq -r 'select(.payload.type == "custom_tool_call") |
+  "\(.payload.name): \(.payload.input | .[0:160])"' "$FILE"
 
 # Interim model narrative (its visible reasoning; the encrypted blob is opaque)
 jq -r 'select(.payload.type == "agent_message") | .payload.message' "$FILE"
@@ -49,23 +52,24 @@ jq -r 'select(.payload.type == "agent_message") | .payload.message' "$FILE"
 
 ```bash
 # All shell commands
-jq -r 'select(.payload.type == "function_call" and .payload.name == "exec_command") |
-  .payload.arguments | fromjson | .cmd' "$FILE"
+jq -r 'select(.payload.type == "custom_tool_call" and .payload.name == "exec") |
+  .payload.input' "$FILE"
 
 # Pair each command with its (truncated) output. Parens are required:
 # jq binds `,` tighter than `|`, so `A | B, C | D` is `A | (B, C) | D`.
-jq -r '(select(.payload.type == "function_call" and .payload.name == "exec_command")
-        | "→ " + (.payload.arguments | fromjson | .cmd)),
-       (select(.payload.type == "function_call_output")
-        | "← " + (.payload.output | .[0:300]))' "$FILE"
+jq -r '(select(.payload.type == "custom_tool_call" and .payload.name == "exec")
+        | "→ " + .payload.input),
+       (select(.payload.type == "custom_tool_call_output")
+        | "← " + ([.payload.output[]? | select(.type == "input_text") | .text]
+                    | join("") | .[0:300]))' "$FILE"
 
 # gh CLI calls (including in variable assignments)
-jq -r 'select(.payload.type == "function_call" and .payload.name == "exec_command") |
-  .payload.arguments | fromjson | .cmd | select(test("\\bgh\\b"))' "$FILE"
+jq -r 'select(.payload.type == "custom_tool_call" and .payload.name == "exec") |
+  .payload.input | select(test("\\bgh\\b"))' "$FILE"
 
 # File writes / edits (apply_patch, tee, sed -i, redirect to absolute path)
-jq -r 'select(.payload.type == "function_call" and .payload.name == "exec_command") |
-  .payload.arguments | fromjson | .cmd |
+jq -r 'select(.payload.type == "custom_tool_call" and .payload.name == "exec") |
+  .payload.input |
   select(test("apply_patch|\\btee\\b|sed -i\\b|>\\s+/"))' "$FILE"
 
 # Initial prompts (AGENTS.md, skill list, triggering event description)
@@ -81,6 +85,6 @@ jq -r 'select(.payload.type == "agent_message") | .payload.message |
   select(test("KEYWORD"; "i"))' "$FILE"
 
 # Commands mentioning a keyword
-jq -r 'select(.payload.type == "function_call" and .payload.name == "exec_command") |
-  .payload.arguments | fromjson | .cmd | select(test("KEYWORD"; "i"))' "$FILE"
+jq -r 'select(.payload.type == "custom_tool_call" and .payload.name == "exec") |
+  .payload.input | select(test("KEYWORD"; "i"))' "$FILE"
 ```

@@ -31,7 +31,7 @@ If no dependency PRs are open, note "0 dependency PRs to process" and continue t
    ```
 
    **If `already_approved` is true, this PR is done — move to the next one.**
-   Otherwise compose `/tmp/review-body.md` with the Write tool. Give the
+   Otherwise compose `/tmp/review-body.md`. Give the
    reviewer the context for the approval: the upgrade's scope and the evidence
    relevant to its safety. Keep it concise and omit the inspection chronology.
    Use a file rather than an inline `--body` because a

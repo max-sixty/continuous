@@ -74,7 +74,7 @@ def test_install_plugin_exports_the_single_sandbox_root(
         str(marketplace),
     ]
     codex_calls = [args for args, _ in calls if "/opt/codex/bin/codex" in args]
-    assert len(codex_calls) == 3
+    assert len(codex_calls) == 4
     assert all(
         args[:5]
         == ["/usr/bin/sudo", "-u", "tend-sandbox", "/usr/bin/env", f"HOME={agent_home}"]
@@ -87,6 +87,8 @@ def test_install_plugin_exports_the_single_sandbox_root(
         "add",
         str(marketplace),
     ]
+    assert codex_calls[1][-3:] == ["plugin", "add", "install-tend@tend"]
+    assert codex_calls[2][-3:] == ["plugin", "add", "tend-ci-runner@tend"]
 
 
 def test_install_plugin_rejects_a_root_outside_the_sandbox_home(

@@ -211,7 +211,7 @@ Improvements target **repo-local** files by default:
 
 - **`.claude/skills/`** — update or create skill overlays with guidance that prevents the identified problem. Prefer updating existing skill files over creating new ones.
 - **`.config/tend.yaml`** — adjust workflow configuration if the problem is structural (e.g., wrong cron schedule, missing setup step).
-- **`CLAUDE.md`** — add project-specific guidance if the problem is about code conventions or patterns the bot keeps getting wrong.
+- **Project instruction file (`CLAUDE.md` or `AGENTS.md`)** — add project-specific guidance if the problem is about code conventions or patterns the bot keeps getting wrong.
 
 **Bundled-skill defects.** If the root cause is a gap or bug in a bundled skill (`plugins/tend-ci-runner/skills/...` in `max-sixty/tend`) — the same pattern would fire in every consumer — file the fix against tend per **Other Repos** in `running-in-ci`. Signal: the fix reads as generic guidance that would apply to any consumer.
 
@@ -223,7 +223,7 @@ Editing `.claude/skills/` requires the read-only-mount workaround (bind-mounted 
 ```bash
 git worktree add "/tmp/review-runs-fix" -b daily/review-runs-$GITHUB_RUN_ID HEAD
 
-# Use the Write tool to author each edited skill file to /tmp/<name>.md.
+# Author each edited skill file at /tmp/<name>.md.
 # Then move the files into place:
 cd "/tmp/review-runs-fix/.claude/skills/running-tend" && mv /tmp/running-tend.md SKILL.md
 # Repeat per skill file being updated.
@@ -240,7 +240,7 @@ cd -
 git worktree remove "/tmp/review-runs-fix" --force
 ```
 
-`.config/tend.yaml` and `CLAUDE.md` are not under the read-only mount, but if you're already in the worktree for a `.claude/skills/` edit, do those edits there too so the branch stays self-contained.
+`.config/tend.yaml` and project instruction files are not under the read-only mount, but if you're already in the worktree for a `.claude/skills/` edit, do those edits there too so the branch stays self-contained.
 
 - **PR** (default): Branch `daily/review-runs-$GITHUB_RUN_ID`, fix, commit, push, create with label `review-runs`. Write the description for a maintainer deciding whether the current change fixes the general behavior gap, following **Reader-facing prose** in `running-in-ci`. Link the tracking issue where it holds prior observations of the same behavior, and carry the evidence that justified promoting this finding — the run IDs, the log excerpt, and the gate assessment — in the body or a `<details>` block.
 - **Issue** (fallback): Only for problems too large or ambiguous to fix directly.
@@ -251,7 +251,7 @@ git worktree remove "/tmp/review-runs-fix" --force
 
 If no problems found (or none passed the gates), report "all clear" with: runs analyzed, sessions reviewed, brief quality assessment, and any below-threshold findings recorded in the tracking issue.
 
-Save the summary to `/tmp/claude/step-summary.md` (a post-Claude step copies this into the GitHub Actions step summary):
+Save the summary to `/tmp/claude/step-summary.md` (a later workflow step copies this into the GitHub Actions step summary):
 
 ```bash
 mkdir -p /tmp/claude
