@@ -6,6 +6,12 @@ published verbatim as that version's GitHub Release notes
 0.1.1 predate this changelog; see the compare views at
 https://github.com/max-sixty/tend/compare for their history.
 
+## 0.2.3
+
+### Fixed
+
+- **Agent uv installation works across the sandbox user boundary on GitHub-hosted runners.** The runner opens the shared installer before passing it to the sandbox shell, so both harnesses can install uv without traversing the private action cache. The hosted sandbox test now exercises this boundary directly. ([#1185](https://github.com/max-sixty/tend/pull/1185))
+
 ## 0.2.2
 
 ### Fixed
