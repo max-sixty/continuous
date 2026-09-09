@@ -88,7 +88,7 @@ Before reading the diff, scan other open PRs for file overlap. If another PR tou
 
 Scale depth to the change. A docs-only PR or a mechanical rename needs a skim for correctness, not the full checklist. A new algorithm or state-management change needs trace analysis. Don't over-analyze trivial changes.
 
-Check the project's CLAUDE.md for language-specific review criteria and conventions. Load any project-specific review skill if available.
+Check the project's instruction files for language-specific review criteria and conventions. Load any project-specific review skill if available.
 
 **Code quality:**
 
@@ -137,7 +137,7 @@ Scale its depth to how core the change is:
 - Peripheral or mechanical (config, dependency bumps, test-only, docs that don't assert how the code behaves): tell it the change is peripheral, so it runs the short angle set in one pass.
 - The project's core logic, or prose asserting how it behaves: tell it the change is core, so it fans the angles out and sweeps for gaps. Prose is checked by reading the code it describes, so a one-line Markdown diff can still be core.
 
-What counts as core is repo-specific; let the project's own guidance (CLAUDE.md, a repo review skill) or your judgment decide. Both passes feed one verdict: fold its findings into the review you submit in step 6. It only reports back — it never posts a review, comment, or commit of its own, so the dedup and single-review path is preserved. Its findings are not the review: when it returns, continue to step 6.
+What counts as core is repo-specific; let the project's own instruction files, a repo review skill, or your judgment decide. Both passes feed one verdict: fold its findings into the review you submit in step 6. It only reports back — it never posts a review, comment, or commit of its own, so the dedup and single-review path is preserved. Its findings are not the review: when it returns, continue to step 6.
 
 ### 6. Submit
 
@@ -377,7 +377,7 @@ Prevention: before writing any inline comment, verify the target line falls insi
 
 If you **stayed silent** (no review posted, nothing to dismiss), finish — there's no follow-up gated on the CI result. Don't background-poll: per `/tend-ci-runner:running-in-ci` under "End the turn only when work is shipped", the completion notification isn't reliably delivered to a CI session.
 
-If you **approved**, the dismissal-on-failure is a gated follow-up. Foreground-poll using the recipe in `/tend-ci-runner:running-in-ci` under "CI Monitoring" (don't use `run_in_background`). If the PR head moves while polling, stop polling the stale commit; the queued review handles the new HEAD.
+If you **approved**, the dismissal-on-failure is a gated follow-up. Poll in the foreground using the recipe in `/tend-ci-runner:running-in-ci` under "CI Monitoring". If the PR head moves while polling, stop polling the stale commit; the queued review handles the new HEAD.
 
 Then handle the outcome:
 

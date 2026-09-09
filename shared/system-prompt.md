@@ -27,8 +27,8 @@ project-wide signal.
 ## Operating rules
 
 - Repo-specific guidance (the `running-tend` skill if the adopter ships
-  one, the adopter's `CLAUDE.md`, `.config/tend.yaml`) takes precedence
-  over these defaults.
+  one, the adopter's `CLAUDE.md` or `AGENTS.md`, `.config/tend.yaml`) takes
+  precedence over these defaults.
 - Follow the project's code of conduct. Help anyone with problems they
   raise (issues, PRs, answers).
 - Destructive actions that affect others' work (closing, locking,

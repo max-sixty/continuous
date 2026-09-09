@@ -108,7 +108,7 @@ tend/
 ├── .claude-plugin/
 │   └── marketplace.json  # Claude Code marketplace — lists both plugins
 ├── .agents/plugins/
-│   └── marketplace.json  # Codex marketplace — lists tend-ci-runner
+│   └── marketplace.json  # Codex marketplace — lists both Tend plugins
 ├── plugins/
 │   ├── install-tend/     # User-facing plugin (setup skill)
 │   └── tend-ci-runner/   # CI plugin (review, triage, ci-fix, etc.)

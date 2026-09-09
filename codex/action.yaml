@@ -32,8 +32,8 @@ inputs:
   prompt:
     required: true
     description: >-
-      The prompt to send to Codex. The tend-ci-runner plugin is installed
-      before invocation, so `$skill-name` mentions resolve to the
+      The prompt to send to Codex. Tend's runner and diagnostic plugins are
+      installed before invocation, so `$skill-name` mentions resolve to the
       corresponding SKILL.md (e.g. `$review`, `$triage`).
   model:
     description: >-
@@ -365,12 +365,12 @@ runs:
           /usr/bin/bash -s -- \
           < "${{ github.action_path }}/../shared/steps/install-uv.sh"
 
-    # Install the tend-ci-runner plugin from the action's own checkout.
+    # Install Tend's runner and diagnostic plugins from the action's checkout.
     # `github.action_path` is .../<runner-cache>/max-sixty/tend/<ref>/codex/;
     # the marketplace manifest at .agents/plugins/marketplace.json (one level
-    # up) registers tend-ci-runner as a local-source plugin. We copy both trees
+    # up) registers both as local-source plugins. We copy both trees
     # into the sandbox home so the sandbox UID can read them, register that
-    # marketplace, then `codex plugin add` installs the plugin so its skills
+    # marketplace, then `codex plugin add` installs the plugins so their skills
     # become discoverable by `codex exec`.
     #
     # We export `CLAUDE_PLUGIN_ROOT` to the install location so skills can
@@ -379,7 +379,7 @@ runs:
     # bundled plugin skill markdown at load time rather than setting it in the
     # shell, so under Claude the literal resolves only inside a bundled skill.
     # One variable name across harnesses — skills stay harness-agnostic.
-    - name: Install tend-ci-runner plugin (sandbox)
+    - name: Install Tend plugins (sandbox)
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}

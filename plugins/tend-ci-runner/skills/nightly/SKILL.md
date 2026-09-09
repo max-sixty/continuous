@@ -92,7 +92,7 @@ git diff ${OLDEST}^..HEAD
 git log --since='24 hours ago' --format='%h %s' main
 ```
 
-Read the project's CLAUDE.md before reviewing. Apply the review checklist below to the diff, focusing on changes rather than unchanged code. Also check whether CLAUDE.md itself needs updating to reflect the new code (e.g., new file paths, changed commands, removed patterns).
+Read the project's instruction files before reviewing. Apply the review checklist below to the diff, focusing on changes rather than unchanged code. Also check whether those instructions need updating to reflect the new code (e.g., new file paths, changed commands, removed patterns).
 
 ## Step 5: Check existing issues
 
@@ -131,7 +131,7 @@ uv run --script \
 
 Skip files that aren't meaningfully reviewable: lock files (`uv.lock`, `Cargo.lock`, `package-lock.json`), binary assets, vendored dependencies, and generated files (build output, compiled protobuf, auto-generated workflow YAML). When unsure, check the file — a quick glance is cheaper than missing something.
 
-Before reviewing files, read the project's CLAUDE.md and any project-specific skills or review criteria it references. Apply the review checklist below to each file in full.
+Before reviewing files, read the project's instruction files and any project-specific skills or review criteria they reference. Apply the review checklist below to each file in full.
 
 ## Review checklist
 
@@ -146,9 +146,9 @@ Used by both Step 4 (applied to recent diffs) and Step 6 (applied to full files)
 
 A bug finding earns a PR only where a caller can reach it. For a defect found by reading rather than from an observed failure, name the in-repo call path that triggers it. If no caller can, the finding is a note in the Step 9 summary, not a PR — public visibility doesn't clear the bar on its own, since an item exported incidentally (a utility module under a default-on feature) promises nothing to anyone. Where it *is* part of a published library's documented surface, the fix stands: say so in the PR body, naming the contract rather than the visibility keyword.
 
-**Convention compliance (from CLAUDE.md and project skills):**
-- Code patterns that violate conventions stated in the project's CLAUDE.md
-- Stale CLAUDE.md entries — conventions that reference renamed files, deleted functions, or outdated patterns
+**Convention compliance (from project instructions and skills):**
+- Code patterns that violate conventions stated in the project's instruction files
+- Stale instructions that reference renamed files, deleted functions, or outdated patterns
 - Skills that have drifted from actual project behavior (instructions that no longer match how the code works)
 
 ## Step 7: Update tend workflows
@@ -177,7 +177,7 @@ moving this session's cwd:
 ( cd "<worktree from prepare output>" && uv tool run tend@latest init )
 ```
 
-Compose the PR body with the Write tool at `/tmp/tend-update-body.md`. Its
+Compose the PR body at `/tmp/tend-update-body.md`. Its
 reader is deciding whether to adopt the regenerated workflows, so explain the
 consumer-visible effect of the upgrade rather than inventorying changed files
 or commits. When the version changed, state the old and new versions,

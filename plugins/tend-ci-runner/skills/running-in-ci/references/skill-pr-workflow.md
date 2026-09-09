@@ -122,7 +122,7 @@ workaround, since bundled skills live under `plugins/` rather than
    git fetch origin "$DEFAULT_BRANCH"
    git worktree add "/tmp/skill-fix" -b "skills/<topic>-$GITHUB_RUN_ID" "origin/$DEFAULT_BRANCH"
 
-   # Use the Write tool to author the new skill file to /tmp/running-tend-new.md.
+   # Author the new skill file at /tmp/running-tend-new.md.
    # Then move it into place from inside the worktree. mkdir -p covers the
    # new-skill case where .claude/skills/<name>/ doesn't yet exist in the
    # default branch:

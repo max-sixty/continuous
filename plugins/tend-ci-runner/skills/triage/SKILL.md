@@ -66,7 +66,7 @@ Record what you found (or didn't find) for use in step 7.
 1. **Understand the report** — What command was run? What was expected? What actually happened?
 2. **Find relevant code** — Search the codebase for the functionality described
 3. **Write a failing test** — Add a test to the appropriate *existing* test file that demonstrates the bug. Don't create new test files.
-4. **Run the test** to confirm it fails. Use the project's test commands from CLAUDE.md.
+4. **Run the test** to confirm it fails. Use the test commands from the project's instruction files.
 
 If the test passes (bug may already be fixed), note this for the comment.
 
@@ -109,7 +109,7 @@ Step 3's duplicate check catches identical fixes. It misses the *same root cause
 ### If fixing
 
 1. Fix the root cause (not just the symptom)
-2. Confirm the reproduction test now passes — that targeted pass plus a clean compile is enough local confidence to ship. Leave the comprehensive suite to PR CI per `/tend-ci-runner:running-in-ci`'s "End the turn only when work is shipped"; backgrounding a long suite before push pushes the agent into mid-wait `end_turn` and the deliverable never ships.
+2. Confirm the reproduction test now passes — that targeted pass plus a clean compile is enough local confidence to ship. Leave the comprehensive suite to PR CI per `/tend-ci-runner:running-in-ci`'s "End the turn only when work is shipped"; backgrounding a long suite before push risks ending the session while the result is still local.
 3. Create branch, commit, push, and create PR:
    ```bash
    git checkout -b fix/issue-$ARGUMENTS
@@ -119,7 +119,7 @@ Step 3's duplicate check catches identical fixes. It misses the *same root cause
    Closes #$ARGUMENTS"
    git push -u origin fix/issue-$ARGUMENTS
    ```
-   Compose the body with the Write tool at `/tmp/pr-body.md`. Write for a maintainer deciding whether the current fix resolves the issue: explain the causal finding, the resulting behavior change, and the reproduction test that now passes. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`, and end with `Closes #$ARGUMENTS — automated triage` so merging closes the issue.
+   Compose the body at `/tmp/pr-body.md`. Write for a maintainer deciding whether the current fix resolves the issue: explain the causal finding, the resulting behavior change, and the reproduction test that now passes. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`, and end with `Closes #$ARGUMENTS — automated triage` so merging closes the issue.
 
    The headings below are one possible shape when they help a reviewer scan the case. They are not a required outline; choose the structure that fits the change.
 
@@ -176,7 +176,7 @@ git commit -m "test: add reproduction for #$ARGUMENTS"
 git push -u origin repro/issue-$ARGUMENTS
 ```
 
-Compose the body with the Write tool at `/tmp/pr-body.md`. Make clear that the PR deliberately adds a failing reproduction without a fix, what behavior it captures, and any causal boundary already established so a maintainer knows what remains to decide. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`, and end with `Automated triage for #$ARGUMENTS`.
+Compose the body at `/tmp/pr-body.md`. Make clear that the PR deliberately adds a failing reproduction without a fix, what behavior it captures, and any causal boundary already established so a maintainer knows what remains to decide. Follow **Reader-facing prose** in `/tend-ci-runner:running-in-ci`, and end with `Automated triage for #$ARGUMENTS`.
 
 ```bash
 gh pr create --title "test: reproduction for #$ARGUMENTS" --body-file /tmp/pr-body.md

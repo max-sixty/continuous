@@ -21,6 +21,78 @@ def _read(*parts: str) -> str:
     return REPO_ROOT.joinpath(*parts).read_text()
 
 
+def test_codex_ci_installs_the_diagnostic_plugin_its_runner_skills_use() -> None:
+    marketplace = json.loads(_read(".agents", "plugins", "marketplace.json"))
+    plugins = {plugin["name"]: plugin for plugin in marketplace["plugins"]}
+
+    assert {"install-tend", "tend-ci-runner"} <= set(plugins)
+    assert plugins["install-tend"]["source"] == {
+        "source": "local",
+        "path": "./plugins/install-tend",
+    }
+    manifest = json.loads(
+        _read("plugins", "install-tend", ".codex-plugin", "plugin.json")
+    )
+    assert manifest["name"] == "install-tend"
+    assert manifest["skills"] == "./skills/"
+
+    for skill_name in ("running-in-ci", "review-runs", "review-reviewers"):
+        skill = _read("plugins", "tend-ci-runner", "skills", skill_name, "SKILL.md")
+        assert "/install-tend:debug-tend-run" in skill
+
+
+def test_codex_log_guidance_matches_the_current_custom_tool_schema() -> None:
+    reference = _read(
+        "plugins",
+        "install-tend",
+        "skills",
+        "debug-tend-run",
+        "references",
+        "codex-logs.md",
+    )
+    reviewer = _read(
+        "plugins", "tend-ci-runner", "skills", "review-reviewers", "SKILL.md"
+    )
+
+    for text in (reference, reviewer):
+        assert "custom_tool_call" in text
+        assert ".payload.input" in text
+        assert 'payload.type == "function_call"' not in text
+        assert ".payload.arguments" not in text
+
+    assert "custom_tool_call_output" in reference
+    assert '.type == "input_text"' in reference
+
+
+def test_install_skill_links_both_project_instruction_names() -> None:
+    install = _read("plugins", "install-tend", "skills", "install-tend", "SKILL.md")
+    prompt = _read("shared", "system-prompt.md")
+
+    assert "ln -s CLAUDE.md AGENTS.md" in install
+    assert "ln -s AGENTS.md CLAUDE.md" in install
+    assert "`CLAUDE.md` or `AGENTS.md`" in prompt
+
+
+def test_tend_skills_avoid_harness_specific_tool_and_model_vocabulary() -> None:
+    skill_root = REPO_ROOT / "plugins" / "tend-ci-runner" / "skills"
+    text = "\n".join(path.read_text() for path in skill_root.rglob("*.md"))
+
+    for phrase in (
+        "Skill tool",
+        "Write tool",
+        "run_in_background",
+        "end_turn",
+        "Haiku / gpt-mini",
+        "`Task`/`Agent`",
+        "ReportFindings tool",
+    ):
+        assert phrase not in text
+
+    install = _read("plugins", "install-tend", "skills", "install-tend", "SKILL.md")
+    assert "AskUserQuestion" not in install
+    assert "Bash tool" not in install
+
+
 def test_notification_skill_uses_one_paginated_cutoff_snapshot() -> None:
     skill = _read("plugins", "tend-ci-runner", "skills", "notifications", "SKILL.md")
 
