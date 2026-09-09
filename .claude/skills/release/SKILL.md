@@ -31,6 +31,8 @@ metadata:
 10. **Wait for the release workflow**: Poll until `uvx tend@X.Y.Z --help` succeeds and the release appears (`gh release view X.Y.Z`).
 11. **Regenerate tend's own workflows**: Stay on the `release` branch (don't create a new one — same as step 7). The squash-merge deleted `origin/release`, so `git fetch && git reset --hard origin/main` to realign with the squashed history. Then `uvx tend@latest init`. `init` rewrites only the generated `tend-*.yaml` files, so follow `running-tend`'s **Nightly: restamp the hand-maintained workflow refs** and restamp the rest onto the new ref in the same commit — otherwise they keep the previous release's pin. Commit, push, and open a PR titled `chore: regenerate workflows with tend X.Y.Z`. Until this merges, tend's deployed workflows lag the just-released generator, so critical fixes (e.g. loop-prevention filters) remain unreachable on tend itself.
 
+    If review blocks this PR on a fix that must release first, wait until the fix reaches `main`. Revert the regeneration commit on `release`, merge `origin/main`, and restart at step 1 for the patch release. Reuse the open PR by updating its title and body; the revert keeps the branch fast-forwardable, and the squash merge keeps the release commit clean. After publication, regenerate again from the patch release.
+
 ## CHANGELOG
 
 `CHANGELOG.md` holds one `## X.Y.Z` section per release, newest first. The header must be exactly `## X.Y.Z` — the release workflow matches it literally to extract the notes.

@@ -357,10 +357,13 @@ runs:
       env:
         UV_VERSION: ${{ inputs.uv_version }}
       run: |
+        # The runner opens the script because its action cache is outside the
+        # sandbox user's traversable paths.
         sudo -u "$SANDBOX" env \
           HOME="$AGENT_HOME" PATH=/usr/bin:/bin \
           UV_VERSION="$UV_VERSION" UV_INSTALL_DIR="$TEND_AGENT_UV_DIR" \
-          /usr/bin/bash "${{ github.action_path }}/../shared/steps/install-uv.sh"
+          /usr/bin/bash -s -- \
+          < "${{ github.action_path }}/../shared/steps/install-uv.sh"
 
     # Install the tend-ci-runner plugin from the action's own checkout.
     # `github.action_path` is .../<runner-cache>/max-sixty/tend/<ref>/codex/;
