@@ -61,6 +61,15 @@ PASSTHROUGH = {
 MAX_FIXED_EXPORT = 64 * 1024 * 1024
 MAX_FINAL_MESSAGE = 256 * 1024
 MAX_STEP_SUMMARY = 512 * 1024
+MAX_RUNTIME_FILE = 2 * 1024 * 1024
+RUNTIME_STEP_FILES = (
+    "_common.py",
+    "_sandbox.py",
+    "agent_lifecycle.py",
+    "run_claude.py",
+    "sandbox_runtime.mjs",
+    "sandbox_setup.py",
+)
 
 
 class Cancelled(BaseException):
@@ -111,18 +120,54 @@ def reap(sandbox: str) -> bool:
     )
 
 
-def write_trusted(path: Path, body: bytes) -> None:
+def write_trusted(path: Path, body: bytes, *, mode: int = 0o600) -> None:
     descriptor = os.open(
         path,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
+        mode,
     )
     try:
+        os.fchmod(descriptor, mode)
         view = memoryview(body)
         while view:
             view = view[os.write(descriptor, view) :]
     finally:
         os.close(descriptor)
+
+
+def mkdir_traversable(path: Path) -> None:
+    path.mkdir(mode=0o755)
+    path.chmod(0o755)
+
+
+def stage_runtime_bundle(runtime_root: Path) -> tuple[Path, Path, Path | None]:
+    """Copy the trusted lifecycle behind a sandbox-traversable path."""
+    source_root = Path(required("ACTION_PATH")).resolve(strict=True)
+    bundle_root = runtime_root / "action"
+    shared_root = bundle_root / "shared"
+    step_root = shared_root / "steps"
+    for directory in (bundle_root, shared_root, step_root):
+        mkdir_traversable(directory)
+    for name in RUNTIME_STEP_FILES:
+        body = read_regular_nofollow(
+            source_root / "shared/steps" / name, max_bytes=MAX_RUNTIME_FILE
+        )
+        if body is None:
+            raise ValueError(f"runtime bundle source is missing: shared/steps/{name}")
+        write_trusted(step_root / name, body, mode=0o644)
+
+    codex_runner: Path | None = None
+    if os.environ.get("TEND_CODEX_RUNNER"):
+        body = read_regular_nofollow(
+            source_root / "codex/runner.py", max_bytes=MAX_RUNTIME_FILE
+        )
+        if body is None:
+            raise ValueError("runtime bundle source is missing: codex/runner.py")
+        codex_runner = bundle_root / "codex/runner.py"
+        mkdir_traversable(codex_runner.parent)
+        write_trusted(codex_runner, body, mode=0o644)
+
+    return bundle_root, step_root / "agent_lifecycle.py", codex_runner
 
 
 def main() -> int:
@@ -133,13 +178,18 @@ def main() -> int:
     export_dir.mkdir(mode=0o700)
     run_dir = Path(required("TEND_RUN_DIR"))
     step_summary_dir = Path(required("TEND_STEP_SUMMARY_DIR"))
+    runtime_root = Path(required("TEND_RUNTIME_ROOT")).resolve(strict=True)
+    bundle_root, lifecycle, codex_runner = stage_runtime_bundle(runtime_root)
 
     environment = _sandbox.launch_env(required("AGENT_ENV_FILE"))
-    environment.extend(
-        f"{name}={os.environ[name]}"
-        for name in sorted(PASSTHROUGH)
-        if os.environ.get(name)
-    )
+    passthrough = {
+        name: os.environ[name] for name in sorted(PASSTHROUGH) if os.environ.get(name)
+    }
+    passthrough["ACTION_PATH"] = str(bundle_root)
+    passthrough["TEND_LIFECYCLE"] = str(lifecycle)
+    if codex_runner is not None:
+        passthrough["TEND_CODEX_RUNNER"] = str(codex_runner)
+    environment.extend(f"{name}={value}" for name, value in passthrough.items())
     environment.extend(
         [
             f"GITHUB_STEP_SUMMARY={step_summary_dir / 'step-summary.md'}",
@@ -154,7 +204,7 @@ def main() -> int:
         "-i",
         *environment,
         required("NODE_BIN"),
-        str(Path(__file__).with_name("sandbox_runtime.mjs")),
+        str(bundle_root / "shared/steps/sandbox_runtime.mjs"),
     ]
 
     status = 1
