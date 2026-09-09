@@ -362,6 +362,7 @@ PY
     sudo -u "$SANDBOX" grep -qxF -- "$want" "$claude_argv"
   done
 
+  rm -rf -- "$TEND_RUNTIME_ROOT/action"
   rm -rf -- "$RUNNER_TEMP/tend-agent-export"
   : > "$github_output"
   rc=0
