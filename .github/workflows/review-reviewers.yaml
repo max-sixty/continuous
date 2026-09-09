@@ -88,7 +88,7 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.TEND_BOT_TOKEN }}
 
-      - uses: max-sixty/tend/claude@0.2.2
+      - uses: max-sixty/tend/claude@0.2.3
         with:
           github_token: ${{ secrets.TEND_BOT_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
